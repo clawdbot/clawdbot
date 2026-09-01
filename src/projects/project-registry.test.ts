@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -12,7 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
-import { materializeProjectClone } from "./project-clone.js";
+import { materializeProjectClone, removeClonedProjectCheckout } from "./project-clone.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
@@ -96,7 +97,7 @@ describe("project registry", () => {
     expect(rows).toEqual([{ name: "projects" }]);
   });
 
-  it("registers, orders, resolves real paths, suffixes collisions, and removes rows", async () => {
+  it("registers, orders, resolves real paths, deduplicates roots, and removes rows", async () => {
     const root = tempDirs.make("openclaw-project-roundtrip-");
     const repo = await initializeRepository(root, "openclaw");
     const alias = path.join(root, "repo-link");
@@ -111,7 +112,7 @@ describe("project registry", () => {
       repoRoot: repo,
       source: "registered",
     });
-    expect(second.id).toBe("openclaw-2");
+    expect(second).toEqual(first);
 
     const cfg = {
       agents: {
@@ -124,8 +125,20 @@ describe("project registry", () => {
     expect(listProjectRegistry(cfg, options).map((project) => project.displayName)).toEqual([
       "alpha",
       "OpenClaw",
-      "OpenClaw",
       "zeta",
+    ]);
+    const sharedWorkspaceCfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: repo },
+          { id: "work", workspace: repo },
+        ],
+      },
+    } as OpenClawConfig;
+    expect(listProjectRegistry(sharedWorkspaceCfg, options).map((project) => project.id)).toEqual([
+      "openclaw",
+      "workspace:main",
+      "workspace:work",
     ]);
     expect(removeProjectRegistry(first.id, options)).toBe(true);
     expect(removeProjectRegistry(first.id, options)).toBe(false);
@@ -189,6 +202,107 @@ describe("project registry", () => {
 
     expect(added).toEqual(registered);
     expect(listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(2);
+  });
+
+  it("serializes an existing cloned-project return with checkout deletion", async () => {
+    const root = tempDirs.make("openclaw-project-existing-delete-race-");
+    const stateDir = path.join(root, "state");
+    const originUrl = "https://github.com/acme/existing-delete-race.git";
+    const checkout = await initializeRepository(
+      path.join(stateDir, "projects", "0123456789abcdef"),
+      "existing-delete-race",
+    );
+    const options = {
+      path: path.join(stateDir, "openclaw.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    };
+    const project = await registerClonedProjectRegistry(
+      { path: checkout, name: "Existing delete race", originUrl },
+      options,
+    );
+    const deletionReady = createDeferred();
+    const releaseDeletion = createDeferred();
+    const deletionError = new ProjectCheckoutError("keep the existing checkout");
+    const deletion = removeClonedProjectCheckout(
+      project,
+      async () => {
+        deletionReady.resolve();
+        await releaseDeletion.promise;
+        throw deletionError;
+      },
+      options,
+    );
+    await deletionReady.promise;
+
+    let additionSettled = false;
+    const addition = materializeProjectClone(
+      { cfg: {} as OpenClawConfig, gitUrl: originUrl },
+      options,
+    ).finally(() => {
+      additionSettled = true;
+    });
+    await Promise.resolve();
+    expect(additionSettled).toBe(false);
+
+    releaseDeletion.resolve();
+    await expect(deletion).rejects.toBe(deletionError);
+    await expect(addition).resolves.toEqual(project);
+    await expect(fs.stat(checkout)).resolves.toBeDefined();
+  });
+
+  it("serializes registration with the final managed-checkout deletion boundary", async () => {
+    const root = tempDirs.make("openclaw-project-delete-race-");
+    const stateDir = path.join(root, "state");
+    const originUrl = "https://github.com/acme/delete-race.git";
+    const checkout = await initializeRepository(
+      path.join(stateDir, "projects", "0123456789abcdef"),
+      "delete-race",
+    );
+    const options = {
+      path: path.join(stateDir, "openclaw.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    };
+    const project = await registerClonedProjectRegistry(
+      { path: checkout, name: "Delete race", originUrl },
+      options,
+    );
+    const deletionReady = createDeferred();
+    const releaseDeletion = createDeferred();
+    const deletion = removeClonedProjectCheckout(
+      project,
+      async () => {
+        deletionReady.resolve();
+        await releaseDeletion.promise;
+      },
+      options,
+    );
+    await deletionReady.promise;
+
+    let registrationSettled = false;
+    const registration = registerProjectRegistry(
+      { path: checkout, name: "Raced registration" },
+      options,
+    ).then(
+      (value) => {
+        registrationSettled = true;
+        return { value };
+      },
+      (error: unknown) => {
+        registrationSettled = true;
+        return { error };
+      },
+    );
+    await Promise.resolve();
+    expect(registrationSettled).toBe(false);
+
+    releaseDeletion.resolve();
+    await expect(deletion).resolves.toBe(true);
+    const registrationResult = await registration;
+    expect(registrationResult).toMatchObject({ error: expect.any(ProjectCheckoutError) });
+    expect(listProjectRegistry({} as OpenClawConfig, options)).toEqual([
+      expect.objectContaining({ source: "workspace" }),
+    ]);
+    await expect(fs.stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("classifies authentication failures without returning credential material", async () => {

@@ -4,6 +4,7 @@ import {
   asFiniteNumberInRange,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -16,6 +17,13 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 const NON_LATIN_RE =
   /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
 const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
+
+export function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
+}
 
 export function sha256Hex(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
@@ -38,17 +46,13 @@ export function redactSensitiveText(text: string, _options?: unknown): string {
   return getAiTransportHost().redactToolPayloadText(text);
 }
 
-export function resolveSecretSentinel(value: string): string {
-  return getAiTransportHost().resolveSecretSentinel(value);
-}
-
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
   if (!model.headers) {
     return model;
   }
   let headers: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
-    const resolved = resolveSecretSentinel(value);
+    const resolved = getAiTransportHost().resolveSecretSentinel(value);
     if (resolved !== value) {
       headers ??= { ...model.headers };
       headers[name] = resolved;

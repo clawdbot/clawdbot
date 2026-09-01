@@ -63,6 +63,27 @@ describe("worker SSH process runner", () => {
     await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
   });
 
+  it("rejects a post-exit ready marker while retaining the final redacted diagnostic", async () => {
+    const child = createChild();
+    spawnMock.mockReturnValue(child);
+    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const bearer = "secret-credential-value";
+
+    child.emit("exit", 255, null);
+    child.stdout.write(`${WORKER_TUNNEL_READY_MARKER}\n`);
+    child.stderr.write(`Authorization: Bearer ${bearer}\nconnection refused`);
+    child.emit("close", 255, null);
+
+    await expect(process.ready).rejects.toThrow("connection refused");
+    const exit = await process.exited;
+    expect(exit).toMatchObject({
+      code: 255,
+      signal: null,
+      stderrTail: expect.stringContaining("connection refused"),
+    });
+    expect(exit.stderrTail).not.toContain(bearer);
+  });
+
   it("fails stop when a SIGKILLed child never reports exit", async () => {
     vi.useFakeTimers();
     const child = createChild();

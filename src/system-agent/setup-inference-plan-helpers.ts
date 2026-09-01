@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -53,14 +54,25 @@ export type SetupInferenceTestPlan = {
   };
 };
 
-export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConfig {
+export function configureCodexCliPreparedAuth(
+  cfg: OpenClawConfig,
+  homeScope: "agent" | "user",
+): Result<OpenClawConfig, string> {
   const entry = cfg.plugins?.entries?.codex;
   const pluginConfig = entry?.config ?? {};
   const appServer =
     pluginConfig.appServer && typeof pluginConfig.appServer === "object"
       ? pluginConfig.appServer
       : {};
-  return {
+  // Prepared sign-in owns a local stdio app-server; silently rewriting an
+  // explicit remote transport would move the credential boundary onto this host.
+  const transport = "transport" in appServer ? appServer.transport : undefined;
+  if (typeof transport === "string" && transport !== "stdio") {
+    return err(
+      `Codex setup needs a local stdio app-server for prepared sign-in, but plugins.entries.codex.config.appServer.transport is "${transport}". Remove that transport override to let setup manage a local Codex, or finish Codex sign-in on the remote app-server host and retry.`,
+    );
+  }
+  return ok({
     ...cfg,
     plugins: {
       ...cfg.plugins,
@@ -70,12 +82,12 @@ export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConf
           ...entry,
           config: {
             ...pluginConfig,
-            appServer: { ...appServer, transport: "stdio", homeScope: "agent" },
+            appServer: { ...appServer, transport: "stdio", homeScope },
           },
         },
       },
     },
-  };
+  });
 }
 
 export async function extractRunWinnerError(
@@ -212,7 +224,7 @@ export function projectSetupTargetModelMetadata(
           : { exists: false },
       ]),
     );
-  const defaultAgentId = agentId ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
+  const defaultAgentId = resolveAmbientOwnerAgentId(config, agentId);
   const agent = listAgentEntries(config).find(
     (entry) => normalizeAgentId(entry.id) === defaultAgentId,
   );
@@ -328,9 +340,7 @@ function copySelectedModelMetadata(params: {
     };
   }
 
-  const defaultAgentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : resolveDefaultAgentId(params.target);
+  const defaultAgentId = resolveAmbientOwnerAgentId(params.target, params.agentId);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );

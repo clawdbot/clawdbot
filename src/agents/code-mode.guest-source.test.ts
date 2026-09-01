@@ -1,0 +1,337 @@
+/** Tests Code Mode guest input and source-validation boundaries. */
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { prepareSource } from "./code-mode-source.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import {
+  resetCodeModeTestState,
+  pluginTool,
+  resultDetails,
+  createCodeModeHarness,
+  runUntilCompleted,
+  testing,
+} from "./code-mode.test-support.js";
+
+const sourceValidationConfig = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+
+function createSourceValidationTools() {
+  const { config, catalogRef, tools } = createCodeModeHarness();
+  applyCodeModeCatalog({
+    tools: [...tools, pluginTool("fake_noop", "Noop")],
+    config,
+    sessionId: "session-code-mode",
+    sessionKey: "agent:main:main",
+    runId: "run-code-mode",
+    catalogRef,
+  });
+  return tools;
+}
+
+describe("Code Mode guest source validation", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetCodeModeTestState();
+  });
+
+  it("accepts command as an exec-compatible code alias", async () => {
+    const tools = createSourceValidationTools();
+    const result = resultDetails(
+      await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-command-alias", {
+        command: "return 7;",
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.value).toBe(7);
+  });
+
+  it("rejects divergent code and command aliases", async () => {
+    const tools = createSourceValidationTools();
+
+    await expect(
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-divergent-alias", {
+        code: "return 1;",
+        command: "return 2;",
+      }),
+    ).rejects.toThrow("code and command must match when both are provided");
+  });
+
+  it.each([
+    { alias: "blank code", args: { code: "", command: "return 7;" } },
+    { alias: "whitespace code", args: { code: "   ", command: "return 7;" } },
+    { alias: "blank command", args: { code: "return 7;", command: "" } },
+    { alias: "whitespace command", args: { code: "return 7;", command: "  \n " } },
+  ])("runs the populated alias when the other is $alias", async ({ args }) => {
+    const tools = createSourceValidationTools();
+    const result = resultDetails(
+      await expectDefined(tools[0], "tools[0] test invariant").execute(
+        "code-call-blank-alias",
+        args,
+      ),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.value).toBe(7);
+  });
+
+  it("still rejects when both aliases are blank", async () => {
+    const tools = createSourceValidationTools();
+
+    await expect(
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-blank-both", {
+        code: "",
+        command: "   ",
+      }),
+    ).rejects.toThrow("code or command must be a non-empty string");
+  });
+
+  it.each([
+    { code: "ls -la /workspace/" },
+    { code: "ls -1" },
+    { command: "ls -la /workspace/" },
+    { code: "pwd", command: "pwd" },
+    { command: "pwd;" },
+    { command: "pwd; // inspect the workspace" },
+    { code: "# inspect the workspace\npwd" },
+    { code: "#!/bin/sh\npwd" },
+    { code: "pwd\nls -la /workspace" },
+    { command: "pwd;ls -la /workspace" },
+    { command: "/bin/ls /workspace/" },
+    { command: "./gradlew test" },
+    { code: ".\\gradlew.bat test" },
+    { command: ".\\script.ps1" },
+    { code: "C:\\workspace\\run.cmd /q" },
+    { code: "/workspace/run.sh --verbose" },
+    { command: "sh -c 'ls /workspace/'" },
+    { command: "git status" },
+    { command: 'git status; const note = "git";' },
+    { command: "ls -1; const metadata = { ls: true };" },
+    { code: "ls -1; const note = 'function ls';" },
+    { command: "ls -1; let ls = 7;" },
+    { command: "npm test" },
+    { command: "NODE_ENV=test npm test" },
+    { code: "NODE_ENV=test\nnpm test" },
+    { code: "FOO=bar ./gradlew test" },
+    { command: 'GREETING="hello world" npm test' },
+    { command: "whoami" },
+    { code: "set -euo pipefail" },
+    { command: "exit" },
+    { command: "if [ -d /workspace ]; then pwd; fi" },
+    { code: "while test -d /workspace; do pwd; done" },
+    { command: 'for ((i=0; i<3; i++)); do echo "$i"; done' },
+    { code: "function task { pwd; }" },
+    { command: "source ./env" },
+    { code: "command ls" },
+    { command: "go test ./..." },
+    { code: "cargo test" },
+    { command: "sort /workspace/file" },
+    { code: "wc -l file" },
+    { command: "jq . file.json" },
+    { code: "exec ls" },
+    { command: "custom-tool --format=json" },
+    { command: "ls > output" },
+    { code: "ls>output" },
+    { command: "ls >output" },
+    { code: "ls >> output" },
+    { command: "cat<input" },
+    { code: "// inspect the workspace\npwd" },
+    { command: "/* inspect the workspace */ pwd;" },
+    { code: "rg code-mode src/agents" },
+  ])("rejects shell source before starting a guest worker: %j", async (args) => {
+    const tools = createSourceValidationTools();
+    const details = resultDetails(
+      await expectDefined(tools[0], "tools[0] test invariant").execute(
+        "code-call-shell-source",
+        args,
+      ),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(details.code).toBe("invalid_input");
+    expect(details.error).toMatch(/JavaScript or TypeScript, not shell commands/);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it.each([
+    { code: "true;", value: null, realGuest: true },
+    { code: "false;", value: null },
+    { code: "return true || false;", value: true },
+    { code: "return -1;", value: -1 },
+    { code: "return /foo/.test('foo');", value: true, realGuest: true },
+    { code: "Infinity -1; return 42;", value: 42 },
+    { code: "eval; return typeof eval;", value: "function" },
+    { code: "if (true) { return -1; }", value: -1 },
+    { code: "for (let i = 0; i < 3; i++) { if (i === 2) { return i; } }", value: 2 },
+    { code: "function task() { return 7; } return task();", value: 7 },
+    { code: "// explain the guest program\nreturn 7;", value: 7 },
+    { code: "const ls = 7; return ls;", value: 7 },
+    { code: "const echo = (value) => value; return echo('hello');", value: "hello" },
+    { code: "test instanceof Function; function test() {}", value: null },
+    { code: "ls -1; function ls() {}", value: null, realGuest: true },
+    { code: "ls -1; function/**/ls() {}", value: null },
+    { code: "ls > limit; function ls() {} var limit = 1;", value: null },
+    { code: "echo `hello`; function echo(parts) { return parts[0]; }", value: null },
+    { code: "pwd; var { pwd } = { pwd: 7 }; return pwd;", value: 7, realGuest: true },
+    { code: "pwd; var [pwd] = [7]; return pwd;", value: 7 },
+    { code: "pwd; for (var pwd of [7]) {} return pwd;", value: 7 },
+    { code: "pwd; var other = 1, pwd = 7; return pwd;", value: 7 },
+    {
+      code: "pwd; function* pwd() { yield 7; } return pwd().next().value;",
+      value: 7,
+      realGuest: true,
+    },
+    { code: "pwd; function/**/pwd() { return 7; } return pwd();", value: 7 },
+    { code: "pwd; var/**/{ pwd } = { pwd: 7 }; return pwd;", value: 7 },
+    { code: "node -version; function/**/node() {}; var version = 1;", value: null },
+  ])(
+    "preserves valid shell-like JavaScript without false rejection: %j",
+    async ({ code, value, realGuest }) => {
+      if (!realGuest) {
+        await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+        return;
+      }
+      const tools = createSourceValidationTools();
+      const details = resultDetails(
+        await expectDefined(tools[0], "tools[0] test invariant").execute(
+          "code-call-valid-shell-like-source",
+          { code },
+        ),
+      );
+
+      expect(details.status).toBe("completed");
+      expect(details.value).toBe(value);
+    },
+  );
+
+  it("allows identifiers and strings that contain import without module access", async () => {
+    const tools = createSourceValidationTools();
+    const details = await runUntilCompleted({
+      execTool: expectDefined(tools[0], "tools[0] test invariant"),
+      waitTool: expectDefined(tools[1], "tools[1] test invariant"),
+      code: `
+        const important = 41;
+        const message = "import docs later";
+        return important + (message.includes("import") ? 1 : 0);
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(42);
+  });
+
+  it.each([
+    {
+      name: "template-literal import text",
+      code: "return `import('node:fs')`;",
+      value: "import('node:fs')",
+      realGuest: true,
+    },
+    {
+      name: "template-literal require text",
+      code: "return `require('node:fs')`;",
+      value: "require('node:fs')",
+    },
+    {
+      name: "nested template-literal module text",
+      code: "return `outer ${`require('node:fs')`}`;",
+      value: "outer require('node:fs')",
+    },
+    {
+      name: "regular-expression module text",
+      code: 'return /import.meta/.test("import.meta");',
+      value: true,
+      realGuest: true,
+    },
+    {
+      name: "regular-expression module text inside interpolation",
+      code: 'return `${/import.meta/.test("import.meta")}`;',
+      value: "true",
+    },
+    {
+      name: "ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api.import(42);",
+      value: 42,
+      realGuest: true,
+    },
+    {
+      name: "ordinary require method",
+      code: "const api = { require(value) { return value; } }; return api.require(42);",
+      value: 42,
+    },
+    {
+      name: "optional ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api?.import?.(42);",
+      value: 42,
+    },
+    {
+      name: "computed ordinary require method",
+      code: 'const api = { require(value) { return value; } }; return api["require"](42);',
+      value: 42,
+    },
+    {
+      name: "ordinary import metadata property",
+      code: "const api = { import: { meta: 42 } }; return api.import.meta;",
+      value: 42,
+    },
+  ])("preserves harmless $name in source validation", async ({ code, value, realGuest }) => {
+    if (!realGuest) {
+      await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+      return;
+    }
+    const tools = createSourceValidationTools();
+    const details = await runUntilCompleted({
+      execTool: expectDefined(tools[0], "tools[0] test invariant"),
+      waitTool: expectDefined(tools[1], "tools[1] test invariant"),
+      code,
+    });
+
+    expect(details).toMatchObject({ status: "completed", value });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it.each([
+    "const fs = require('node:fs'); return fs;",
+    String.raw`return r\u0065quire('node:fs');`,
+    "return require?.('node:fs');",
+    "return (require)('node:fs');",
+    "return (0, require)('node:fs');",
+    "const load = require; return load('node:fs');",
+    "return module.require('node:fs');",
+    "return process.getBuiltinModule('node:fs');",
+    "return import('node:fs');",
+    "return import.meta.url;",
+    "return `${import('node:fs')}`;",
+    "return `${require('node:fs')}`;",
+    "return `${`nested ${import('node:fs')}`}`;",
+    "return `${`nested ${require('node:fs')}`}`;",
+    "return `${({ value: import('node:fs') }).value}`;",
+    "const message = `import('node:fs')`; return require('node:fs');",
+    "const pattern = /import.meta/; return import('node:fs');",
+    "let value = 1; return value++ / import('node:fs');",
+    "let value = 1; return value-- / import('node:fs');",
+    "const value = { of: 1 }; return value.of / import('node:fs');",
+    "const value = { return: 1 }; return value.return / import('node:fs');",
+    "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
+    "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+    "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+    "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
+    "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
+    "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
+  ])("rejects module access: %s", async (code) => {
+    const tools = createSourceValidationTools();
+    const details = resultDetails(
+      await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-import", {
+        code,
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(String(details.error)).toContain("module access is disabled");
+  });
+});

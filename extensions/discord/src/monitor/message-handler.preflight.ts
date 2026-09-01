@@ -31,7 +31,14 @@ import {
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+} from "./message-channel-info.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessage,
+} from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
@@ -64,13 +71,8 @@ import type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 import { resolveDiscordPreflightRoute } from "./message-handler.routing-preflight.js";
-import {
-  resolveDiscordChannelInfo,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-  resolveForwardedMediaList,
-  resolveMediaList,
-} from "./message-utils.js";
+import { resolveForwardedMediaList, resolveMediaList } from "./message-media.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -278,8 +280,10 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+  // Only bot/webhook traffic can be rejected before canonical routing; ordinary
+  // messages should reach the single authoritative binding lookup below.
   const injectedBoundThreadBinding =
-    !isDirectMessage && !isGroupDm
+    !isDirectMessage && !isGroupDm && (webhookId || author.bot)
       ? resolveInjectedBoundThreadLookupRecord({
           threadBindings: params.threadBindings,
           threadId: messageChannelId,
@@ -648,6 +652,8 @@ export async function preflightDiscordMessage(
           id: sender.id,
           name: sender.name,
           tag: sender.tag,
+          isPluralKit: sender.isPluralKit,
+          authorKind: author.bot ? "bot" : "user",
         },
         memberAccessConfigured: hasAccessRestrictions,
         memberAllowed,
@@ -736,16 +742,24 @@ export async function preflightDiscordMessage(
   }
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  const referencedReply = resolveDiscordReferencedReplyMessage(message);
+  const referencedWebhookId = referencedReply ? resolveDiscordWebhookId(referencedReply) : null;
+  const referencedAuthor = referencedReply?.author;
+  const replyTargetsOtherBot =
+    Boolean(botId) &&
+    Boolean(referencedAuthor?.bot) &&
+    referencedAuthor?.id !== botId &&
+    !referencedWebhookId;
   if (
     isGuildMessage &&
     ignoreOtherMentions &&
-    hasUserOrRoleMention &&
+    (hasUserOrRoleMention || replyTargetsOtherBot) &&
     !wasMentioned &&
     !mentionDecision.implicitMention
   ) {
-    logDebug(`[discord-preflight] drop: other-mention`);
+    logDebug(`[discord-preflight] drop: addressed-to-other`);
     logVerbose(
-      `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
+      `discord: drop guild message (addressed to another identity, ignoreOtherMentions=true, botId=${botId})`,
     );
     await recordDiscordPendingHistoryEntry({
       preflight: params,
@@ -819,6 +833,19 @@ export async function preflightDiscordMessage(
     }
   }
 
+  const guildId = isGuildMessage
+    ? (data.guild?.id ?? data.guild_id ?? message.guild_id)
+    : undefined;
+  const conversationAvatar =
+    isDirectMessage || guildId
+      ? params.avatarResolver?.resolve({
+          client: params.client,
+          conversationId: messageChannelId,
+          author,
+          ...(guildId ? { guildId } : {}),
+        })
+      : undefined;
+
   // Discord CDN attachment URLs expire; download now (receipt time) instead
   // of after the run queue, which may delay processing past the URL TTL.
   const mediaResolveOptions = {
@@ -868,6 +895,7 @@ export async function preflightDiscordMessage(
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     preparedMedia,
     wasMentioned,
+    conversationAvatar,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,

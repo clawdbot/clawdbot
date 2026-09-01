@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
@@ -22,6 +24,11 @@ type SessionPlacementSandboxParams = {
 };
 
 export type SessionPlacementAdmissionProvider = {
+  assertCompactionSuccessorAllowed: (params: {
+    currentTarget: SessionTranscriptRuntimeTarget;
+    successorSessionId: string;
+  }) => void;
+  recoverTerminalTurn?: (session: { sessionId: string; sessionKey?: string }) => string | undefined;
   executeLocalTurn: <T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) => Promise<T>;
   executeTurn: (
     claim: LocalTurnPlacementClaim,
@@ -45,6 +52,24 @@ const state = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionPlacementAdmissionState"),
   (): SessionPlacementAdmissionState => ({}),
 );
+// Carry exact local-turn cleanup until the embedded handle captures it; never recover by session id.
+const forcedTerminalSettlement = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"),
+  () => new AsyncLocalStorage<() => Promise<void>>(),
+);
+
+export function withSessionPlacementForcedTerminalSettlement<T>(
+  settle: () => Promise<void>,
+  task: () => Promise<T>,
+): Promise<T> {
+  return forcedTerminalSettlement.run(settle, task);
+}
+
+export function resolveSessionPlacementForcedTerminalSettlement():
+  | (() => Promise<void>)
+  | undefined {
+  return forcedTerminalSettlement.getStore();
+}
 
 export function installSessionPlacementAdmissionProvider(
   provider: SessionPlacementAdmissionProvider,
@@ -54,6 +79,17 @@ export function installSessionPlacementAdmissionProvider(
     if (state.provider === provider) {
       state.provider = undefined;
     }
+  };
+}
+
+/** Captures the exact placement owner, including standalone absence, before awaited work. */
+export function captureSessionPlacementCompactionSuccessorAssertion(): SessionPlacementAdmissionProvider["assertCompactionSuccessorAllowed"] {
+  const provider = state.provider;
+  return (params) => {
+    if (state.provider !== provider) {
+      throw new Error("session placement owner changed during compaction successor acceptance");
+    }
+    provider?.assertCompactionSuccessorAllowed(params);
   };
 }
 
@@ -100,4 +136,12 @@ export async function resolveSessionPlacementSandbox(
   params: SessionPlacementSandboxParams,
 ): Promise<SandboxContext | null> {
   return (await state.provider?.resolveSandbox?.(params)) ?? null;
+}
+
+/** The current placement owner alone can settle a proven terminal worker turn. */
+export function recoverTerminalSessionPlacementTurn(session: {
+  sessionId: string;
+  sessionKey?: string;
+}): string | undefined {
+  return state.provider?.recoverTerminalTurn?.(session);
 }

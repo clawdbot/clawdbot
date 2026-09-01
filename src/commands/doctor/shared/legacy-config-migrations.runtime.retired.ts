@@ -23,7 +23,7 @@ import {
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitChannelEntries } from "./legacy-config-record-shared.js";
+import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -101,28 +101,22 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
     }
   }
 
-  const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
+  visitAgentConfigScopes(raw, (scope, path) => {
     moveKey(
-      getRecord(getRecord(scope?.tools)?.exec),
+      getRecord(getRecord(scope.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
     moveKey(
-      getRecord(getRecord(getRecord(scope?.sandbox)?.browser)),
+      getRecord(getRecord(scope.sandbox)?.browser),
       "enableNoVnc",
       "noVncEnabled",
       `${path}.sandbox.browser`,
       changes,
     );
-  };
-  migrateAgentScope(defaults, "agents.defaults");
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((entry, index) =>
-      migrateAgentScope(getRecord(entry), `agents.list[${index}]`),
-    );
-  }
+  });
   moveKey(
     getRecord(getRecord(raw.tools)?.exec),
     "timeoutSec",
@@ -322,13 +316,9 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
         delete entry.ui;
       }
     }
-    if (Object.hasOwn(entry, "subagentProgress")) {
-      delete entry.subagentProgress;
-      changes.push(`Removed ${path}.subagentProgress.`);
-    }
   });
 
-  let messages = getRecord(raw.messages);
+  const messages = getRecord(raw.messages);
   const statusReactions = getRecord(messages?.statusReactions);
   if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
     delete statusReactions.emojis;
@@ -341,49 +331,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
     moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
-    const ack = getRecord(entry.ackReaction);
-    if (!ack) {
-      return;
-    }
-    messages ??= ensureRecord(raw, "messages");
-    if (messages.ackReaction === undefined) {
-      const legacyAgents = getRecord(raw.agents)?.list;
-      const agentEntries = Array.isArray(legacyAgents)
-        ? legacyAgents.filter((value): value is Record<string, unknown> =>
-            Boolean(getRecord(value)),
-          )
-        : [];
-      const defaultAgent =
-        agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
-      const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
-      messages.ackReaction =
-        typeof ack.emoji === "string"
-          ? ack.emoji
-          : typeof identityEmoji === "string"
-            ? identityEmoji
-            : "👀";
-    }
-    if (messages.ackReactionScope === undefined) {
-      const direct = ack.direct !== false;
-      const group = ack.group ?? "mentions";
-      const scope =
-        direct && group === "always"
-          ? "all"
-          : direct && group === "never"
-            ? "direct"
-            : !direct && group === "always"
-              ? "group-all"
-              : !direct && group === "mentions"
-                ? "group-mentions"
-                : !direct && group === "never"
-                  ? "off"
-                  : undefined;
-      if (scope) {
-        messages.ackReactionScope = scope;
-      }
-    }
-    delete entry.ackReaction;
-    changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
@@ -438,6 +385,21 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     delete controlUi.chatMessageMaxWidth;
     changes.push("Removed gateway.controlUi.chatMessageMaxWidth; chat width is now browser-local.");
   }
+}
+
+function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string[]): void {
+  const ui = getRecord(raw.ui);
+  if (!ui || !Object.hasOwn(ui, "assistant")) {
+    return;
+  }
+
+  // The retired override was presentation-only. Translating it into agent identity
+  // would unexpectedly change outbound channel identity.
+  delete ui.assistant;
+  if (Object.keys(ui).length === 0) {
+    delete raw.ui;
+  }
+  changes.push("Removed retired ui.assistant; configure agents.list[].identity instead.");
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
@@ -555,6 +517,14 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
       }
     },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.ui-assistant-identity",
+    describe: "Remove the retired UI assistant identity override",
+    legacyRules: [
+      rule(["ui", "assistant"], "ui.assistant was retired; use agents.list[].identity instead."),
+    ],
+    apply: removeUiAssistantIdentity,
   }),
   defineLegacyConfigMigration({
     id: "runtime.retired-config-keys",

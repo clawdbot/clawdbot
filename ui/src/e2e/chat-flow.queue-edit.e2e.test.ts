@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -53,16 +54,14 @@ suite.define(() => {
 
       const rowEditor = page.locator(".chat-queue__item").nth(1).locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
+      await rowEditor.press("ControlOrMeta+A");
       expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
       expect(await composer.inputValue()).toBe("a separate composer draft");
       // The row stays where it is, marked as the one being edited.
       expect(await queueText()).toEqual([...QUEUED]);
       expect(await page.locator(".chat-queue__item--editing").count()).toBe(1);
-      expect(
-        await page.locator(".chat-queue__item").nth(1).locator(".chat-queue__badge").textContent(),
-      ).toBe("Editing");
 
-      await rowEditor.fill("then update the docs and the changelog");
+      await page.keyboard.insertText("then update the docs and the changelog");
       await page.locator(".chat-queue__edit-submit").click();
 
       await expect
@@ -97,7 +96,7 @@ suite.define(() => {
 
       await composer.fill("a separate composer draft");
       const row = page.locator(".chat-queue__item").nth(1);
-      await row.locator(".chat-queue__edit").click();
+      await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.fill("a replacement the operator abandons");
@@ -137,7 +136,7 @@ suite.define(() => {
       }
 
       const row = page.locator(".chat-queue__item").nth(1);
-      await row.locator(".chat-queue__edit").click();
+      await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await composer.fill("a separate composer send");
@@ -162,7 +161,10 @@ suite.define(() => {
   });
 
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.queue-edit", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -176,7 +178,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -195,6 +197,28 @@ suite.define(() => {
       const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
+      // The active seed turn is delivered; only the four later turns are queued.
+      const acceptedSession = {
+        key: "agent:main:main",
+        sessionId: "session:agent:main:main",
+        hasActiveRun: true,
+        activeRunIds: [activeRunId],
+        status: "running",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: acceptedSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the first run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
+      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+
       for (const message of ["send first", "edit before send", "remove me", "send last"]) {
         await composer.fill(message);
         await page.getByRole("button", { name: "Queue message" }).click();
@@ -202,17 +226,20 @@ suite.define(() => {
       }
       await gateway.setOnline(false);
       await gateway.closeLatest();
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
-      const editButton = editRow.locator(".chat-queue__edit");
-      expect(await editButton.isDisabled()).toBe(false);
-      await editButton.click();
+      await editRow.dblclick();
       // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
-      await inlineEditor.fill("edited before send");
-      await page.locator(".chat-queue__edit-submit").click();
+      await inlineEditor.press("ControlOrMeta+A");
+      await page.keyboard.insertText("edited before send");
+      await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
 
       const lastGrip = page
@@ -292,7 +319,16 @@ suite.define(() => {
           { capture: true },
         );
       });
-      await row.locator(".chat-queue__remove").dblclick();
+      await row.locator(".chat-queue__remove").click();
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      // Queue reflow can move the next row away from the first click's coordinates.
+      // Aim the native second click at its remove control without another first click.
+      await page
+        .locator(".chat-queue__item", { hasText: "edited before send" })
+        .locator(".chat-queue__remove")
+        .hover();
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.up({ clickCount: 2 });
       expect(
         await page.evaluate(
           () =>
@@ -306,7 +342,6 @@ suite.define(() => {
         { detail: 1, rowText: "remove me" },
         { detail: 2, rowText: "edited before send" },
       ]);
-      await row.waitFor({ state: "detached", timeout: 10_000 });
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       await expect
         .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
@@ -338,19 +373,33 @@ suite.define(() => {
         await page.screenshot({ path: `${artifactDir}/02-duplicate-noop.png`, fullPage: true });
       }
 
+      const terminalSession = {
+        ...acceptedSession,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: activeRunId,
+        status: "done",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: terminalSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the first run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
-        .locator(".agent-chat__offline-hint")
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        activeRunIds: [],
-        agentId: "main",
-        hasActiveRun: false,
-        key: "global",
-        status: "done",
-      });
+      await gateway.emitGatewayEvent("sessions.changed", terminalSession);
 
       const first = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);
       expect(first.message).toBe("send last");

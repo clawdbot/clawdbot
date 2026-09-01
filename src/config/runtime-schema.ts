@@ -1,4 +1,5 @@
 // Builds runtime config schema defaults from agent and workspace state.
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
@@ -16,14 +17,21 @@ function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   });
 }
 
-/** Builds the config schema from the active runtime config and plugin metadata. */
-export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
-  const config = getRuntimeConfig();
-  const registry = loadManifestRegistry(config);
+/** Builds one config schema from an exact manifest registry. */
+export function buildRuntimeConfigSchemaFromRegistry(
+  registry: PluginManifestRegistry,
+): ConfigSchemaResponse {
   return buildConfigSchemaCore({
     plugins: collectPluginSchemaMetadataCore(registry),
     channels: collectChannelSchemaMetadataCore(registry),
   });
+}
+
+/** Builds the config schema from the active runtime config and plugin metadata. */
+export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
+  const config = getRuntimeConfig();
+  const registry = loadManifestRegistry(config);
+  return buildRuntimeConfigSchemaFromRegistry(registry);
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {

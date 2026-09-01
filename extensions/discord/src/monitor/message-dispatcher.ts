@@ -15,17 +15,19 @@ import type {
   DiscordIngressLifecycle,
 } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
+import { createDiscordAvatarResolver } from "./message-avatar.js";
+import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
+import {
+  hasDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   createDiscordMessageRunQueue,
   type DiscordMessageRunQueueTestingHooks,
 } from "./message-run-queue.js";
-import {
-  hasDiscordMessageStickers,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-} from "./message-utils.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type PreflightDiscordMessage =
@@ -83,6 +85,7 @@ export function createDiscordMessageDispatcher(
     testing: params.testing,
   });
   const dispatcherShutdown = new AbortController();
+  const avatarResolver = createDiscordAvatarResolver();
 
   type DiscordDebounceEntry = {
     data: DiscordMessageEvent;
@@ -103,7 +106,11 @@ export function createDiscordMessageDispatcher(
       message,
       eventChannelId: entry.data.channel_id,
     });
-    return channelId ? `discord:${params.accountId}:${channelId}:${authorId}` : null;
+    if (!channelId) {
+      return null;
+    }
+    const replyTargetId = resolveDiscordReferencedReplyMessageId(message);
+    return `discord:${params.accountId}:${channelId}:${authorId}:reply:${replyTargetId ?? "none"}`;
   };
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
@@ -149,6 +156,7 @@ export function createDiscordMessageDispatcher(
                 (await loadMessagePreflightRuntime()).preflightDiscordMessage;
               const ctx = await preflight({
                 ...params,
+                avatarResolver,
                 ackReactionScope,
                 groupPolicy,
                 abortSignal,
@@ -203,6 +211,7 @@ export function createDiscordMessageDispatcher(
               (await loadMessagePreflightRuntime()).preflightDiscordMessage;
             const ctx = await preflight({
               ...params,
+              avatarResolver,
               ackReactionScope,
               groupPolicy,
               abortSignal,

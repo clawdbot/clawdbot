@@ -9,10 +9,11 @@ import {
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
+import {
+  CHAT_SNAPSHOT_DB_NAME,
+  deleteSessionSnapshotDatabaseRecord,
+} from "./session-snapshot-database.ts";
 import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
-
-export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
-export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 
 type ChatSnapshotKeyHost = Pick<UiSessionDefaultsHost, "assistantAgentId" | "agentsList" | "hello">;
 
@@ -58,37 +59,7 @@ function indexedDbFactory(): IDBFactory | null {
 
 export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void> {
   await publishSnapshotInvalidation({ sessionKey });
-  const factory = indexedDbFactory();
-  if (!factory) {
-    return;
-  }
-  try {
-    await new Promise<void>((resolve) => {
-      const request = factory.open(CHAT_SNAPSHOT_DB_NAME);
-      request.addEventListener("error", () => resolve());
-      request.addEventListener("blocked", () => resolve());
-      request.addEventListener("success", () => {
-        const database = request.result;
-        if (!database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME)) {
-          database.close();
-          resolve();
-          return;
-        }
-        const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
-        transaction.addEventListener("complete", () => {
-          database.close();
-          resolve();
-        });
-        const settleFailure = () => {
-          database.close();
-          resolve();
-        };
-        transaction.addEventListener("error", settleFailure);
-        transaction.addEventListener("abort", settleFailure);
-        transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).delete(sessionKey);
-      });
-    });
-  } catch {}
+  await deleteSessionSnapshotDatabaseRecord(sessionKey);
 }
 
 export async function clearStoredChatSnapshotStorage(): Promise<void> {

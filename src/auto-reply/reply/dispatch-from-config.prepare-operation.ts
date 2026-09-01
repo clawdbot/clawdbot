@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { touchConversationBindingRecord } from "../../bindings/records.js";
 import { logVerbose } from "../../globals.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -48,6 +48,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     sessionKey,
     sessionStoreEntry,
     suppressDelivery,
+    turnLedger,
   } = state;
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
   const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -62,7 +63,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     logKind: "fast_abort" | "fast_approve";
   }) => {
     if (pluginOwnedBinding) {
-      touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+      getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
@@ -151,7 +152,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
-  const preDispatchAcquisition = await state.ensureDispatchReplyOperation("pre_dispatch");
+  const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
+    "pre_dispatch",
+    Boolean(pluginOwnedBinding),
+  );
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
@@ -162,11 +166,32 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     };
   }
 
+  const finishPluginBindingDispatch = async (outcome: "handled" | "declined" | "error") => {
+    const settlement = await turnLedger.settleQueued(state.getPreDispatchAbortSignal());
+    if (settlement === "aborted" || isPreDispatchOperationAborted()) {
+      return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+    }
+    markIdle(outcome === "handled" ? "plugin_binding_dispatch" : `plugin_binding_${outcome}`);
+    recordProcessed("completed", { reason: `plugin-bound-${outcome}` });
+    commitInboundDedupeIfClaimed();
+    completeDispatchReplyOperation();
+    return {
+      status: "complete" as const,
+      // Routed replies bypass dispatcher counters. Only settled visible delivery
+      // suppresses the no-reply warning; failed or hook-suppressed sends do not.
+      result: attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+        ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
+      }),
+    };
+  };
+
   if (pluginOwnedBinding) {
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
-    touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+    getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
     params.replyOptions ??= {};
     if (
       shouldBypassPluginOwnedBindingForCommand(
@@ -247,17 +272,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               transcriptOwner,
             );
           }
-          markIdle("plugin_binding_dispatch");
-          recordProcessed("completed", { reason: "plugin-bound-handled" });
-          commitInboundDedupeIfClaimed();
-          completeDispatchReplyOperation();
-          return {
-            status: "complete" as const,
-            result: attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-            }),
-          };
+          return await finishPluginBindingDispatch("handled");
         }
         case "missing_plugin":
         case "no_handler": {
@@ -284,13 +299,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               }),
             };
           }
-          if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
+          if (
+            !hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId, pluginOwnedBinding)
+          ) {
             const didSendNotice = await sendBindingNotice(
               { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
               "additive",
             );
             if (didSendNotice) {
-              markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
+              markPluginBindingFallbackNoticeShown(
+                pluginOwnedBinding.bindingId,
+                pluginOwnedBinding,
+              );
             }
           }
           break;
@@ -302,17 +322,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
-          markIdle("plugin_binding_declined");
-          recordProcessed("completed", { reason: "plugin-bound-declined" });
-          commitInboundDedupeIfClaimed();
-          completeDispatchReplyOperation();
-          return {
-            status: "complete" as const,
-            result: attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-            }),
-          };
+          return await finishPluginBindingDispatch("declined");
         }
         case "error": {
           const transcriptOwner = await persistPluginBindingUserTurn();
@@ -324,17 +334,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
-          markIdle("plugin_binding_error");
-          recordProcessed("completed", { reason: "plugin-bound-error" });
-          commitInboundDedupeIfClaimed();
-          completeDispatchReplyOperation();
-          return {
-            status: "complete" as const,
-            result: attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-            }),
-          };
+          return await finishPluginBindingDispatch("error");
         }
       }
     }

@@ -129,11 +129,18 @@ export type BrowserTab = {
   label?: string;
   title: string;
   url: string;
+  /** Listing-time observation; unavailable URLs stay redacted, not implicitly trusted. */
+  urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
   wsUrl?: string;
   /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
   wsLookup?: BrowserCdpLookup;
   type?: string;
 };
+
+/** Availability and page enumeration returned by the tab-list boundary. */
+export type BrowserTabsResult =
+  | { running: true; tabs: BrowserTab[] }
+  | { running: false; tabs: [] };
 
 /** Internal tab-open result. Browser tools must remove internal metadata before model output. */
 export type BrowserOpenResult = BrowserTab & {

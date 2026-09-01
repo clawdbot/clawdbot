@@ -100,6 +100,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
+    const beforePromptBuild = vi.fn();
     const llmInput = vi.fn();
     const llmOutput = vi.fn();
     const agentEnd = vi.fn();
@@ -108,6 +109,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     onAgentEvent((event) => globalAgentEvents.push(event));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
         { hookName: "llm_input", handler: llmInput },
         { hookName: "llm_output", handler: llmOutput },
         { hookName: "agent_end", handler: agentEnd },
@@ -122,6 +124,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const harness = createStartedThreadHarness();
 
     const params = createParams(sessionFile, workspaceDir);
+    params.sandboxSessionKey = "agent:main:policy";
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
@@ -273,6 +276,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
     expect(agentEndContext.runId).toBe("run-1");
     expect(agentEndContext.sessionId).toBe("session-1");
+    for (const hook of [beforePromptBuild, llmInput, llmOutput, agentEnd]) {
+      expect(hook).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ agentId: "main", sessionKey: params.sessionKey }),
+      );
+    }
   });
 
   it("emits gated model-call content diagnostics for codex turns", async () => {

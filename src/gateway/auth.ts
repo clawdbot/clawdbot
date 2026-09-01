@@ -511,6 +511,12 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "none") {
+    if (
+      ingressAttribution?.kind === "trusted-proxy" &&
+      ingressAttribution.externalTailscaleExposure === "funnel"
+    ) {
+      return { ok: false, reason: "gateway_auth_required" };
+    }
     const originResult = authorizeHttpBrowserOrigin({
       authSurface,
       browserOriginPolicy: params.browserOriginPolicy,

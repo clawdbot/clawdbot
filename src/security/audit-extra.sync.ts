@@ -14,10 +14,12 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "../commands/agents.binding-format.js";
+import { mergeAccountConfig } from "../config/channel-account-config.js";
+import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
+import { resolveGatewayAuthForConfig, type ResolvedGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -73,11 +75,6 @@ function isProbablySyncedPath(p: string): boolean {
     s.includes("googledrive") ||
     s.includes("onedrive")
   );
-}
-
-function looksLikeEnvRef(value: string): boolean {
-  const v = value.trim();
-  return v.startsWith("${") && v.endsWith("}");
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -475,7 +472,10 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
         continue;
       }
       inspectSection(
-        accountValue as Record<string, unknown>,
+        mergeAccountConfig({
+          channelConfig: section,
+          accountConfig: accountValue as Record<string, unknown>,
+        }),
         `channels.${channelId}.accounts.${accountId}`,
       );
     }
@@ -592,7 +592,7 @@ export function collectSyncedFolderFindings(params: {
 export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  if (password && !hasUnresolvedConfigPath(cfg, "gateway.auth.password")) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -605,7 +605,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  if (cfg.hooks?.enabled === true && hooksToken && !hasUnresolvedConfigPath(cfg, "hooks.token")) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
@@ -638,14 +638,14 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  const configGatewayAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const configGatewayAuth = resolveGatewayAuthForConfig({
+    config: cfg,
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
   const overrideGatewayAuth = options.gatewayAuthOverride
-    ? resolveGatewayAuth({
-        authConfig: cfg.gateway?.auth,
+    ? resolveGatewayAuthForConfig({
+        config: cfg,
         authOverride: options.gatewayAuthOverride,
         tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
         env,
@@ -771,8 +771,8 @@ export function collectGatewayHttpNoAuthFindings(
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const auth = resolveGatewayAuthForConfig({
+    config: cfg,
     authOverride: options.gatewayAuthOverride,
     tailscaleMode,
     env,

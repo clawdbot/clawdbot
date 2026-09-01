@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { toQaError } from "./errors.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type { QaProviderMode } from "./model-selection.js";
@@ -31,20 +31,6 @@ type ManualLaneResult = {
   reply: string | null;
   watchUrl: string;
 };
-
-async function stopManualLaneResource(
-  resource: { stop: () => Promise<void> | void } | null | undefined,
-): Promise<Error | undefined> {
-  if (!resource) {
-    return undefined;
-  }
-  try {
-    await resource.stop();
-    return undefined;
-  } catch (error) {
-    return toQaError(error);
-  }
-}
 
 async function stopManualLaneAuxiliaryResources(resources: {
   lab?: { stop: () => Promise<void> | void };
@@ -84,7 +70,7 @@ function resolveManualLaneTimeoutMs(params: {
 
 export async function runQaManualLane(params: QaManualLaneParams) {
   const sessionSuffix = params.primaryModel.replace(/[^a-z0-9._-]+/gi, "-");
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
   let lab: Awaited<ReturnType<typeof startQaLabServer>> | undefined;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
   let transportCleanupBeforeGatewayStop: (() => Promise<void>) | undefined;
@@ -110,7 +96,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     mock = await startQaProviderServer(params.providerMode, {
       modelRefs: [params.primaryModel, params.alternateModel],
     });
-    gateway = await startQaGatewayChild({
+    const gateway = await gatewayOwner.start({
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
       transport,
@@ -174,12 +160,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
             candidate.direction === "outbound" && candidate.conversation.id === "qa-operator",
         )?.text ?? null;
 
-    result = {
-      model: params.primaryModel,
-      waited,
-      reply,
-      watchUrl: lab.baseUrl,
-    };
+    result = { model: params.primaryModel, waited, reply, watchUrl: lab.baseUrl };
   } catch (error) {
     runError = error;
   } finally {
@@ -187,9 +168,15 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     await transportCleanupBeforeGatewayStop?.().catch((error: unknown) => {
       transportCleanupBeforeError = toQaError(error);
     });
-    const gatewayCleanupError = await stopManualLaneResource(gateway);
+    const gatewayStop = await gatewayOwner.stop();
+    const gatewayCleanupError = gatewayStop.errors.length
+      ? new AggregateError(
+          gatewayStop.errors,
+          `qa gateway child cleanup failed: ${gatewayStop.errors.map(formatErrorMessage).join("; ")}`,
+        )
+      : undefined;
     let transportCleanupAfterError: Error | undefined;
-    if (!gatewayCleanupError) {
+    if (gatewayStop.process !== "unconfirmed") {
       await transportCleanupAfterGatewayStop?.().catch((error: unknown) => {
         transportCleanupAfterError = toQaError(error);
       });
@@ -201,6 +188,11 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       transportCleanupAfterError ??
       auxiliaryCleanupError;
   }
+  if (runError && cleanupError) {
+    throw new AggregateError([runError, cleanupError], "qa manual lane and cleanup failed", {
+      cause: runError,
+    });
+  }
   if (runError) {
     throw new Error(formatErrorMessage(runError), { cause: runError });
   }
@@ -208,8 +200,14 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     throw cleanupError;
   }
 
-  if (!result) {
-    throw new Error("manual lane did not produce a result");
+  if (
+    !result?.reply?.trim() ||
+    (result.waited.status === "error"
+      ? result.waited.error?.trim().toLowerCase() !== "completed"
+      : !["ok", "completed", "succeeded"].includes(result.waited.status ?? ""))
+  ) {
+    const providerError = result?.reply?.trim() && result.waited.error;
+    throw new Error(providerError || "manual lane did not produce a successful reply");
   }
   return result;
 }

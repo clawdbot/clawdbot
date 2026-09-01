@@ -175,10 +175,9 @@ describe("minimal npm extended-stable workflow", () => {
     expect(readFileSync(workflowPath, "utf8")).toContain("pluginSdkApi,");
   });
 
-  it("reuses the v1 preflight tarball and guards all three extended-stable gates", () => {
+  it("reuses the prepared tarball and guards all three extended-stable gates", () => {
     const parsed = workflow();
     const raw = readFileSync(workflowPath, "utf8");
-    expect(raw).toContain("version: 1");
     expect(raw).toContain("openclaw-npm-preflight-${{ inputs.tag }}");
     expect(raw.match(/openclaw-npm-extended-stable-release\.mjs validate-request/g)).toHaveLength(
       3,
@@ -273,8 +272,11 @@ describe("minimal npm extended-stable workflow", () => {
     const parsed = workflow();
     const preflight = parsed.jobs?.preflight_openclaw_npm;
     const metadata = step(preflight, "Validate release metadata");
+    const pack = step(preflight, "Pack prepared npm tarball");
     expect(metadata.run).toContain('RELEASE_BRANCH_REF="${RELEASE_SHA}"');
     expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
+    expect(pack.run).toContain('if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]');
+    expect(pack.run).toContain("export OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG=1");
 
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
     expect(step(preflight, "Verify release contents").env).toMatchObject({
@@ -325,11 +327,15 @@ describe("minimal npm extended-stable workflow", () => {
     expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
     expect(buildControlUi.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(step(preflight, "Check").if).toBeUndefined();
-    expect(step(preflight, "Verify release contents").if).toBeUndefined();
+    const verifyReleaseContents = step(preflight, "Verify release contents");
+    expect(verifyReleaseContents.if).toBeUndefined();
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");
+    const setup = step(preflight, "Setup Node environment");
+    expect(setup.with?.["cache-mode"]).toBe("read-write");
     expect(save.uses).toContain("actions/cache/save@");
+    expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
   });
 

@@ -8,7 +8,6 @@ import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -180,47 +179,19 @@ type ProviderMetadataOwners = {
   providerRequests: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
 
-let fallbackProviderMetadataOwnersMemo: ProviderMetadataOwners | undefined;
-
-function clearFallbackProviderMetadataOwnersMemo(): void {
-  fallbackProviderMetadataOwnersMemo = undefined;
-}
-
-// This input-free fallback is process-stable until plugin metadata lifecycle reset.
-// Without the memo, model catalog normalization rescans every manifest per model.
-registerPluginMetadataProcessMemoLifecycleClear(clearFallbackProviderMetadataOwnersMemo);
-
-function resolveFallbackProviderMetadataOwners(): ProviderMetadataOwners {
-  if (fallbackProviderMetadataOwnersMemo) {
-    return fallbackProviderMetadataOwnersMemo;
-  }
-  const fallback = loadPluginMetadataSnapshot({ config: {} }).owners;
-  fallbackProviderMetadataOwnersMemo = {
-    providerEndpoints: fallback.providerEndpoints ?? [],
-    providerRequests: fallback.providerRequests ?? new Map(),
-  };
-  return fallbackProviderMetadataOwnersMemo;
-}
-
 function resolveProviderMetadataOwners(
   prepared?: PluginMetadataSnapshotOwnerMaps,
 ): ProviderMetadataOwners {
-  if (prepared) {
-    return {
-      providerEndpoints: prepared.providerEndpoints ?? [],
-      providerRequests: prepared.providerRequests ?? new Map(),
-    };
-  }
-  const current = getCurrentPluginMetadataSnapshot({
-    allowWorkspaceScopedSnapshot: true,
-  });
-  if (current) {
-    return {
-      providerEndpoints: current.owners?.providerEndpoints ?? [],
-      providerRequests: current.owners?.providerRequests ?? new Map(),
-    };
-  }
-  return resolveFallbackProviderMetadataOwners();
+  const owners =
+    prepared ??
+    getCurrentPluginMetadataSnapshot({
+      allowWorkspaceScopedSnapshot: true,
+    })?.owners ??
+    loadPluginMetadataSnapshot({ config: {} }).owners;
+  return {
+    providerEndpoints: owners.providerEndpoints ?? [],
+    providerRequests: owners.providerRequests ?? new Map(),
+  };
 }
 
 function resolveManifestProviderRequest(params: {

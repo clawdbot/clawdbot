@@ -15,6 +15,15 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    public static func decodeQuestionAnswer(_ data: Data) throws -> QuestionAnswers {
+        struct AnsweredQuestion: Decodable {
+            enum Status: String, Decodable { case answered }
+            let status: Status
+            let answers: QuestionAnswers
+        }
+        return try JSONDecoder().decode(AnsweredQuestion.self, from: data).answers
+    }
+
     private struct AgentWaitResponse: Decodable {
         var status: String?
         var endedAt: Double?
@@ -152,7 +161,10 @@ public enum OpenClawChatGatewayPayloadCodec {
                     agentId: message.agentId,
                     message: canonicalMessage,
                     messageId: message.messageId,
-                    messageSeq: message.messageSeq))
+                    messageSeq: message.messageSeq,
+                    hasActiveRun: message.hasActiveRun,
+                    activeRunIds: message.activeRunIds,
+                    activeRunIdsPresent: message.activeRunIdsPresent))
             }
             return .sessionMessage(message)
         case "agent":
@@ -162,6 +174,13 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawAgentEventPayload.self)
             else { return nil }
             return .agent(agent)
+        case "progressCard.changed":
+            guard let payload = frame.payload,
+                  let event = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: ProgressCardChangedEvent.self)
+            else { return nil }
+            return .progressCardChanged(event)
         default:
             return self.secondaryEvent(from: frame)
         }

@@ -22,6 +22,7 @@ type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;
+  forcedByEnvironment?: true;
 };
 
 type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
@@ -222,7 +223,7 @@ export function resolveModelRuntimePolicy(params: {
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
     if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
-      return { policy: { id: forcedRuntime }, source: "model" };
+      return { policy: { id: forcedRuntime }, source: "model", forcedByEnvironment: true };
     }
   }
 

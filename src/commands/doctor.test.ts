@@ -17,6 +17,7 @@ vi.mock("./doctor-post-upgrade.js", () => ({
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite: mocks.runDoctorSessionSqlite,
+  reconcileDoctorSessionSqlitePublication: vi.fn(),
 }));
 
 vi.mock("./doctor-state-sqlite-compact.js", () => ({
@@ -43,7 +44,8 @@ describe("doctorCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
-      async (params: { run: () => unknown }) => await params.run(),
+      async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
+        await params.run({ assertCurrent() {} }),
     );
   });
 
@@ -163,6 +165,7 @@ describe("doctorCommand", () => {
     expect(mocks.withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env: process.env,
       operation: "session SQLite restore",
+      reconcileHardlink: expect.any(Function),
       run: expect.any(Function),
     });
     expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith({

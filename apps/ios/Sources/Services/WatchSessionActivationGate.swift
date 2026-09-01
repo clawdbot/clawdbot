@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import WatchConnectivity
 
 enum WatchMessageAcknowledgmentError: LocalizedError {
     case rejected(String)
@@ -20,6 +21,39 @@ func requireAcceptedWatchMessageReply(_ reply: [String: Any]) throws {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         throw WatchMessageAcknowledgmentError.rejected(
             reason.flatMap { $0.isEmpty ? nil : $0 } ?? "payload was rejected")
+    }
+}
+
+final class WatchMessageSendCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, any Error>?
+
+    init(_ continuation: CheckedContinuation<Void, any Error>) {
+        self.continuation = continuation
+    }
+
+    func complete(_ result: Result<Void, any Error>) {
+        let continuation = self.lock.withLock { () -> CheckedContinuation<Void, any Error>? in
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume(with: result)
+    }
+}
+
+func sendReachableWatchMessage(_ payload: [String: Any], with session: WCSession) async throws {
+    // WatchConnectivity callbacks use their own executor and can race despite their
+    // documented exactly-once contract; only the first callback owns this continuation.
+    try await withCheckedThrowingContinuation(isolation: nil) { continuation in
+        let completion = WatchMessageSendCompletion(continuation)
+        session.sendMessage(
+            payload,
+            replyHandler: { reply in
+                completion.complete(Result { try requireAcceptedWatchMessageReply(reply) })
+            },
+            errorHandler: { error in
+                completion.complete(.failure(error))
+            })
     }
 }
 

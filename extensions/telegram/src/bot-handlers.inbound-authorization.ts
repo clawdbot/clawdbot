@@ -301,7 +301,7 @@ export function createTelegramHandlerAuthorization({
         accountId,
         chatId,
         isGroup,
-        resolvedThreadId: context.resolvedThreadId,
+        threadSpec: context.threadSpec,
         senderId,
         senderUsername,
       }).isAuthorizedSender;
@@ -458,6 +458,9 @@ export function createTelegramHandlerAuthorization({
         conversation: {
           kind: params.isGroup ? "group" : "direct",
           id: String(params.chatId),
+          ...(params.isGroup && resolvedThreadId != null
+            ? { parentId: String(params.chatId) }
+            : {}),
           ...(resolvedThreadId != null ? { threadId: String(resolvedThreadId) } : {}),
         },
         contextBinding,

@@ -111,6 +111,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.storeCleanup?.();
     this.subscribedStore = this.store;
     this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
+    void this.store.refreshTranscriptIfIdle();
   }
 
   private synchronizeHistoryClient(): void {

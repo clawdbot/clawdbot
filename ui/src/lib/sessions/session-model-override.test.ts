@@ -8,7 +8,48 @@ import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 
 describe("session model override lifecycle", () => {
-  it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
+  it.each(["resolve", "reject"])(
+    "does not resurrect a deleted session's model when its pending patch %s",
+    async (outcome) => {
+      const pending = createDeferred<unknown>();
+      const key = "agent:main:main";
+      let patchCount = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.patch") {
+          return ++patchCount === 1 ? { ok: true, key, entry: {} } : pending.promise;
+        }
+        if (method === "sessions.delete") {
+          return { deleted: true };
+        }
+        if (method === "sessions.list") {
+          return sessionsResult([], 2);
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const sessions = createSessionCapability(gateway);
+      await sessions.patch(key, { model: "openai/gpt-old" }, { deferListRefresh: true });
+      const operation = sessions.patch(
+        key,
+        { model: "openai/gpt-new" },
+        { deferListRefresh: true },
+      );
+      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+      await expect(sessions.delete(key)).resolves.toMatchObject({ deleted: true });
+      expect(sessions.state.modelOverrides).toEqual({});
+      if (outcome === "resolve") {
+        pending.resolve({ ok: true, key, entry: {} });
+        await operation;
+      } else {
+        pending.reject(new Error("model rejected"));
+        await expect(operation).rejects.toThrow("model rejected");
+      }
+      expect(sessions.state.modelOverrides).toEqual({});
+      sessions.dispose();
+    },
+  );
+
+  it("retains a confirmed patch without publishing its retired optimistic state", async () => {
     const stalePatch = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
@@ -27,8 +68,7 @@ describe("session model override lifecycle", () => {
     const sessions = createSessionCapability(gateway);
     const key = "agent:main:main";
     const inactiveKey = "agent:main:inactive";
-    sessions.setModelOverride(key, "openai/gpt-old");
-    sessions.setModelOverride(inactiveKey, "openai/gpt-old-account");
+    const inactiveOperation = sessions.patch(inactiveKey, { model: "openai/gpt-old-account" });
 
     const operation = sessions.patch(key, { model: "openai/gpt-new" });
     expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
@@ -36,10 +76,15 @@ describe("session model override lifecycle", () => {
     publish(false);
     expect(sessions.state.modelOverrides).toEqual({});
     publish(true);
-    stalePatch.resolve({});
+    stalePatch.resolve({ ok: true, path: "", key, entry: {} });
 
-    await expect(operation).resolves.toBeNull();
+    await expect(operation).resolves.toMatchObject({ ok: true, key });
+    await inactiveOperation;
     expect(sessions.state.modelOverrides).toEqual({});
+    expect(sessions.state.error).toContain("completed on the previous connection");
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.list").length,
+    ).toBeGreaterThan(0);
     sessions.dispose();
   });
 
@@ -94,14 +139,13 @@ describe("session model override lifecycle", () => {
     const { gateway, publish } = createGatewayHarness(client);
     const sessions = createSessionCapability(gateway);
     const key = "agent:main:main";
-    sessions.setModelOverride(key, "openai/gpt-old");
 
     const operation = sessions.patch(
       key,
       { model: "openai/gpt-new" },
       { waitFor: priorPatch.promise },
     );
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
 
     publish(false);

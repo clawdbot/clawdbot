@@ -7,6 +7,7 @@
  * (transport error or an `ok:false` payload) so automation never mistakes a
  * silent no-op for success.
  */
+import { rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -72,6 +73,10 @@ export async function sessionsCompactCommand(
   opts: SessionsCompactCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  const agent = opts.agent?.trim();
+  if (opts.agent !== undefined && !agent) {
+    throw new Error("--agent must not be blank");
+  }
   const rpcOpts: SessionsCompactRpcOpts = {
     url: opts.url,
     token: opts.token,
@@ -83,7 +88,7 @@ export async function sessionsCompactCommand(
   };
   const params = {
     key: opts.key,
-    ...(opts.agent ? { agentId: opts.agent } : {}),
+    ...(agent ? { agentId: agent } : {}),
     ...(opts.maxLines !== undefined ? { maxLines: opts.maxLines } : {}),
   };
 
@@ -93,6 +98,7 @@ export async function sessionsCompactCommand(
       defaultTimeoutMs: 10_000,
     })) as SessionsCompactResult;
   } catch (err) {
+    rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (opts.json) {
       writeRuntimeJson(runtime, { ok: false, key: opts.key, error: message });

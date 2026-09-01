@@ -35,12 +35,32 @@ describe("resolveTelegramSessionConversation", () => {
         rawId: "-1001",
       }),
     ).toBeNull();
+    expect(
+      resolveTelegramSessionConversation({
+        kind: "group",
+        rawId: "-1001:direct-topic:77",
+      }),
+    ).toMatchObject({
+      id: "-1001",
+      threadId: "direct-topic:77",
+      baseConversationId: "-1001",
+    });
   });
 });
 
 describe("resolveTelegramSessionTarget", () => {
   it("normalizes group session ids to numeric chat ids", () => {
     expect(resolveTelegramSessionTarget({ kind: "group", id: "-1001" })).toBe("-1001");
+    expect(
+      resolveTelegramSessionTarget({
+        kind: "group",
+        id: "-1001",
+        threadId: "direct-topic:77",
+      }),
+    ).toBe("-1001:direct-topic:77");
+    expect(resolveTelegramSessionTarget({ kind: "group", id: "-1001", threadId: "77" })).toBe(
+      "-1001:topic:77",
+    );
   });
 
   it("normalizes channel session ids to lookup targets", () => {

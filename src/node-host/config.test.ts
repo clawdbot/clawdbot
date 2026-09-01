@@ -4,30 +4,19 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+  readConfigMachineState,
+  readConfigMachineStateWithMetadata,
+  writeConfigMachineState,
+} from "../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { configureNodeHost, loadNodeHostConfig, type NodeHostConfig } from "./config.js";
+  configureNodeHost,
+  loadNodeHostConfig,
+  NODE_HOST_CONFIG_KEY,
+  type NodeHostConfig,
+} from "./config.js";
 
 const fixtureDigest = ["fixture", "digest"].join("-");
-
-function readStoredToken(env: NodeJS.ProcessEnv): string | null | undefined {
-  const database = openOpenClawStateDatabase({ env });
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "node_host_config">>(database.db)
-      .selectFrom("node_host_config")
-      .select("token")
-      .where("config_key", "=", "current"),
-  )?.token;
-}
 
 async function runConcurrentImplicitConfigures(
   stateDir: string,
@@ -194,6 +183,13 @@ describe("node-host SQLite config", () => {
         },
       },
     });
+    expect(readConfigMachineState<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env })).toEqual(
+      configured,
+    );
+    expect(readConfigMachineStateWithMetadata(NODE_HOST_CONFIG_KEY, { env })?.updatedAtMs).toBe(
+      1_234,
+    );
+    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
     closeOpenClawStateDatabaseForTest();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
@@ -221,61 +217,6 @@ describe("node-host SQLite config", () => {
     expect(enabled.installedAppsSharing).toBe(true);
     closeOpenClawStateDatabaseForTest();
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
-  });
-
-  it("adds the gateway context-path column to an existing state database", async () => {
-    const { env } = makeTestEnv();
-    const database = openOpenClawStateDatabase({ env });
-    database.db.exec(`
-      ALTER TABLE node_host_config DROP COLUMN gateway_context_path;
-      PRAGMA user_version = 5;
-      UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
-    `);
-    closeOpenClawStateDatabaseForTest();
-
-    const configured = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: { contextPath: "/upgraded" },
-      env,
-      nowMs: 1,
-      candidateNodeId: "upgraded-node",
-    });
-
-    expect(configured.gateway?.contextPath).toBe("/upgraded");
-    const columns = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(node_host_config)")
-      .all() as Array<{ name?: unknown }>;
-    expect(columns).toContainEqual(expect.objectContaining({ name: "gateway_context_path" }));
-  });
-
-  it("adds the Cloudflare Access column to an existing state database", async () => {
-    const { env } = makeTestEnv();
-    const database = openOpenClawStateDatabase({ env });
-    database.db.exec("ALTER TABLE node_host_config DROP COLUMN gateway_cloudflare_access_json;");
-    closeOpenClawStateDatabaseForTest();
-
-    const configured = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {
-        cloudflareAccess: {
-          clientId: "$CF_ACCESS_CLIENT_ID",
-          clientSecret: "$CF_ACCESS_CLIENT_SECRET",
-        },
-      },
-      env,
-      nowMs: 1,
-    });
-
-    expect(configured.gateway?.cloudflareAccess).toEqual({
-      clientId: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" },
-      clientSecret: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_SECRET" },
-    });
-    const columns = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(node_host_config)")
-      .all() as Array<{ name?: unknown }>;
-    expect(columns).toContainEqual(
-      expect.objectContaining({ name: "gateway_cloudflare_access_json" }),
-    );
   });
 
   it("keeps the first committed implicit node id across processes", async () => {
@@ -323,68 +264,12 @@ describe("node-host SQLite config", () => {
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
     const { env } = makeTestEnv();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "node_host_config">>(db)
-            .insertInto("node_host_config")
-            .values({
-              config_key: "current",
-              version: 2,
-              node_id: "stale-node",
-              token: null,
-              display_name: null,
-              gateway_host: null,
-              gateway_port: null,
-              gateway_tls: null,
-              gateway_tls_fingerprint: null,
-              gateway_context_path: null,
-              gateway_cloudflare_access_json: null,
-              updated_at_ms: 1,
-            }),
-        );
-      },
-      { env },
-    );
+    writeConfigMachineState(NODE_HOST_CONFIG_KEY, { version: 2, nodeId: "stale-node" }, { env });
 
     await expect(loadNodeHostConfig(env)).rejects.toThrow("unsupported version 2");
     await expect(
       configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env }),
     ).rejects.toThrow("unsupported version 2");
-  });
-
-  it("never reads legacy token material and nulls it on every configure", async () => {
-    const { env } = makeTestEnv();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "node_host_config">>(db)
-            .insertInto("node_host_config")
-            .values({
-              config_key: "current",
-              version: 1,
-              node_id: "node-with-token",
-              token: "test-token-placeholder",
-              display_name: null,
-              gateway_host: null,
-              gateway_port: null,
-              gateway_tls: null,
-              gateway_tls_fingerprint: null,
-              gateway_context_path: null,
-              gateway_cloudflare_access_json: null,
-              updated_at_ms: 1,
-            }),
-        );
-      },
-      { env },
-    );
-
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ nodeId: "node-with-token" });
-    expect(readStoredToken(env)).toBe("test-token-placeholder");
-    await configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env, nowMs: 2 });
-    expect(readStoredToken(env)).toBeNull();
   });
 
   it.each(["source", "claim", "dangling-source-symlink"] as const)(

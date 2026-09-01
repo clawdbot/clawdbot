@@ -5,9 +5,11 @@ import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import type { DeviceTokenSummary, InventoryRemovalRequest } from "../../lib/nodes/index.ts";
@@ -36,7 +38,7 @@ function inventorySummary(
   loading: boolean,
 ): string {
   if (loading && groups.length === 0) {
-    return t("common.loading");
+    return "";
   }
   const connected = groups.filter((group) => group.primary.connected).length;
   const parts = [
@@ -65,6 +67,8 @@ export function renderDeviceInventory(props: DevicesProps) {
       ? html`
           <button
             class="btn btn--sm danger"
+            title=${props.canManagePairing ? "" : t("devices.readOnly.pairingRequired")}
+            ?disabled=${!props.canManagePairing}
             @click=${() => props.onInventoryCleanup(stale.map(toRemovalRequest))}
           >
             ${icons.trash} ${t("devices.inventory.cleanupStale", { count: String(stale.length) })}
@@ -85,9 +89,11 @@ export function renderDeviceInventory(props: DevicesProps) {
   const empty = groups.length === 0 && !gatewayPresence;
   const deviceRows = html`
     ${gatewayPresence ? renderPresenceRow({ kind: "gateway", entry: gatewayPresence }) : nothing}
-    ${empty
-      ? renderSettingsEmpty(loading ? t("common.loading") : t("devices.inventory.empty"))
-      : groups.map((group) => renderInventoryGroup(group, props))}
+    ${loading && groups.length === 0
+      ? renderSettingsLoadingSkeleton()
+      : empty
+        ? renderSettingsEmpty(t("devices.inventory.empty"))
+        : groups.map((group) => renderInventoryGroup(group, props))}
   `;
   return html`
     ${props.devicesError ? html`<div class="callout danger">${props.devicesError}</div>` : nothing}
@@ -199,7 +205,7 @@ function entryWarnStatuses(
       </span>`,
     );
   }
-  if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
+  if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
     statuses.push(
       html`<span title=${t("devices.inventory.manualWakeTitle")}>
         ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.manualWake") })}
@@ -299,16 +305,23 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
 }
 
 function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) {
+  const capacity = workerCapacityPresentation({
+    workerSlots: entry.node?.workerSlots,
+    capabilities: entry.node?.caps,
+    commands: entry.node?.commands,
+    unavailable: entry.node?.connected !== true || !isApprovedNodeEntry(entry),
+  });
   const pendingRequestId =
     entry.node?.approvalState === "pending-approval" ||
     entry.node?.approvalState === "pending-reapproval"
       ? entry.node.pendingRequestId
       : undefined;
-  const connectionStatus = entry.connected
-    ? nothing
-    : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
+  const connectionStatus =
+    (entry.node?.connected ?? entry.connected)
+      ? nothing
+      : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
-    <div class="settings-row device-entry">
+    <div class="settings-row device-entry" title=${capacity?.title ?? nothing}>
       ${renderDeviceTile(deviceIcon(entry))}
       <div class="settings-row__text">
         <span class="settings-row__title">${entry.name}</span>
@@ -316,13 +329,22 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
         ${renderEntryDetails(entry, props)}
       </div>
       <div class="settings-row__control">
-        ${connectionStatus} ${entryWarnStatuses(entry, props.gatewayVersion)}
+        ${capacity?.meter ?? nothing} ${connectionStatus}
+        ${entryWarnStatuses(entry, props.gatewayVersion)}
         ${pendingRequestId
           ? html`
-              <button class="btn btn--sm" @click=${() => props.onNodeApprove(pendingRequestId)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${!props.canManagePairing}
+                @click=${() => props.onNodeApprove(pendingRequestId)}
+              >
                 ${t("devices.inventory.approve")}
               </button>
-              <button class="btn btn--sm" @click=${() => props.onNodeReject(pendingRequestId)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${!props.canManagePairing}
+                @click=${() => props.onNodeReject(pendingRequestId)}
+              >
                 ${t("devices.inventory.reject")}
               </button>
             `
@@ -331,6 +353,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           class="btn btn--sm danger"
           aria-label=${t("devices.inventory.removeName", { name: entry.name })}
           title=${t("devices.inventory.remove")}
+          ?disabled=${!props.canManagePairing}
           @click=${() => props.onInventoryRemove(toRemovalRequest(entry))}
         >
           ${icons.x}
@@ -408,6 +431,7 @@ function renderTokenRow(
       <span class="device-entry__token-actions">
         <button
           class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
           @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
         >
           ${t("devices.inventory.rotate")}
@@ -417,6 +441,7 @@ function renderTokenRow(
           : html`
               <button
                 class="btn btn--sm danger"
+                ?disabled=${!props.canManagePairing}
                 @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
               >
                 ${t("devices.inventory.revoke")}

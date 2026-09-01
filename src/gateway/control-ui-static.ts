@@ -40,6 +40,7 @@ const CONTROL_UI_STATIC_ASSET_EXTENSIONS = new Set([
   ".txt",
   ".wasm",
   ".webmanifest",
+  ".woff2",
 ]);
 
 export function isControlUiStaticAssetExtension(extension: string): boolean {
@@ -91,6 +92,8 @@ function contentTypeForExtension(ext: string): string {
       return "application/wasm";
     case ".webmanifest":
       return "application/manifest+json; charset=utf-8";
+    case ".woff2":
+      return "font/woff2";
     default:
       return "application/octet-stream";
   }
@@ -225,7 +228,7 @@ function setControlUiEncodingHeaders(
 function setControlUiFileHeaders(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
 ) {
   const extension = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExtension(extension));
@@ -233,13 +236,51 @@ function setControlUiFileHeaders(
     "Cache-Control",
     options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
   );
+  if (options?.lastModifiedMs !== undefined) {
+    res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
+  }
   setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
+}
+
+/**
+ * `no-cache` responses without a validator force a full re-download on every
+ * revisit; fonts and theme CSS are the heavy unhashed assets that hit this.
+ * HTTP-dates carry whole-second precision, so compare on floored seconds.
+ */
+export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: number): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return false;
+  }
+  const header = req.headers?.["if-modified-since"];
+  const since = typeof header === "string" ? Date.parse(header) : Number.NaN;
+  return Number.isFinite(since) && Math.floor(lastModifiedMs / 1000) * 1000 <= since;
+}
+
+export function respondControlUiNotModified(
+  res: ServerResponse,
+  options: { immutable?: boolean; lastModifiedMs: number },
+) {
+  res.statusCode = 304;
+  // A 304 repeats the caching headers of the 200 it stands in for so caches
+  // refresh their freshness metadata alongside the validator.
+  res.setHeader(
+    "Cache-Control",
+    options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+  );
+  res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
+  res.setHeader("Vary", "Accept-Encoding");
+  res.end();
 }
 
 export function respondHeadForControlUiFile(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; contentLength?: number },
+  options?: {
+    immutable?: boolean;
+    encoding?: ControlUiContentEncoding;
+    contentLength?: number;
+    lastModifiedMs?: number;
+  },
 ) {
   res.statusCode = 200;
   setControlUiFileHeaders(res, filePath, options);
@@ -278,7 +319,7 @@ export async function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
 ) {
   setControlUiFileHeaders(res, filePath, options);
   res.end(body);
@@ -329,28 +370,40 @@ export async function sendControlUiHtmlBody(
   res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
 }
 
-function readOpenedFile(fd: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(fd, (error, data) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(data);
-    });
-  });
-}
-
-// Compression can wait in zlib's worker queue, so release the pinned file as
-// soon as its bytes are loaded instead of retaining descriptors per request.
-export async function readAndCloseControlUiFile(fd: number): Promise<Buffer> {
+// Reuse the stat captured by safe open: another queued fstat adds a full
+// event-loop wait under load. Keep Node readFile's allocation and chunk limits;
+// this read ends at the pinned size, even if the file subsequently grows.
+export async function readAndCloseControlUiFile(file: {
+  fd: number;
+  size: number;
+}): Promise<Buffer> {
   try {
-    return await readOpenedFile(fd);
+    if (file.size > 2 ** 31 - 1) {
+      throw Object.assign(new RangeError("Control UI file exceeds the 2 GiB read limit"), {
+        code: "ERR_FS_FILE_TOO_LARGE",
+      });
+    }
+    const buffer = Buffer.allocUnsafe(file.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const length = Math.min(512 * 1024, buffer.length - offset);
+      const bytesRead = await new Promise<number>((resolve, reject) => {
+        fs.read(file.fd, buffer, offset, length, null, (error, count) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(count);
+          }
+        });
+      });
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    return buffer.subarray(0, offset);
   } finally {
-    fs.closeSync(fd);
+    // Release before compression waits in zlib's worker queue.
+    fs.closeSync(file.fd);
   }
-}
-
-export async function readAndCloseControlUiFileText(fd: number): Promise<string> {
-  return (await readAndCloseControlUiFile(fd)).toString("utf8");
 }

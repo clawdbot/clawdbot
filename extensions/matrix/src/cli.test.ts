@@ -1,8 +1,8 @@
 // Matrix tests cover cli plugin behavior.
 import { Command } from "commander";
+import { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli } from "./cli.js";
-import { formatZonedTimestamp } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
@@ -858,6 +858,62 @@ describe("matrix CLI verification commands", () => {
     await runMatrixCli(["matrix", "verify", "status", "--allow-degraded-local-state"]);
 
     expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), { readiness: "none" });
+  });
+
+  describe.each([false, true])("recovery key output (verbose=%s)", (verbose) => {
+    it.each([
+      { include: false, recoveryKey: undefined },
+      { include: true, recoveryKey: null },
+      { include: true, recoveryKey: "test-recovery-key" },
+    ])(
+      "prints a safe hint for include=$include, key=$recoveryKey",
+      async ({ include, recoveryKey }) => {
+        getMatrixVerificationStatusMock.mockResolvedValue(
+          matrixVerificationStatus({ recoveryKey, recoveryKeyStored: recoveryKey !== null }),
+        );
+        await runMatrixCli([
+          "matrix",
+          "verify",
+          "status",
+          ...(include ? ["--include-recovery-key"] : []),
+          ...(verbose ? ["--verbose"] : []),
+        ]);
+
+        expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
+          includeRecoveryKey: include,
+        });
+        const output = consoleLogMock.mock.calls.flat().join("\n");
+        expect(
+          output.includes(
+            "Recovery key: available (re-run with --json to include the raw key value in output)",
+          ),
+        ).toBe(Boolean(recoveryKey));
+        expect(output).toContain(`Recovery key stored: ${recoveryKey === null ? "no" : "yes"}`);
+        expect(output).not.toContain("test-recovery-key");
+        expect(stdoutWriteMock).not.toHaveBeenCalled();
+        expect(process.exitCode).toBeUndefined();
+      },
+    );
+
+    it.each([false, true])("preserves JSON recovery key opt-in=%s", async (include) => {
+      const status = matrixVerificationStatus(include ? { recoveryKey: "test-recovery-key" } : {});
+      getMatrixVerificationStatusMock.mockResolvedValue(status);
+      await runMatrixCli([
+        "matrix",
+        "verify",
+        "status",
+        "--json",
+        ...(include ? ["--include-recovery-key"] : []),
+        ...(verbose ? ["--verbose"] : []),
+      ]);
+
+      expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
+        includeRecoveryKey: include,
+      });
+      expect(JSON.parse(String(stdoutWriteArg()))).toEqual(status);
+      expect(consoleLogMock).not.toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
+    });
   });
 
   it("passes loaded cfg to all verify subcommands", async () => {

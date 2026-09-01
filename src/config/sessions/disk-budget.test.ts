@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
+import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -30,13 +31,7 @@ async function expectPathExists(targetPath: string): Promise<void> {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function expectBudgetResult(
@@ -98,6 +93,12 @@ describe("enforceSessionDiskBudget", () => {
       // counting them would evict live history to pay for unreclaimable bytes.
       await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
       await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
+      for (const kind of ["branch", "openai-codex"]) {
+        await fs.writeFile(
+          path.join(dir, `legacy.jsonl.pre-doctor-${kind}-repair-2026-08-30T10-20-30-000Z.bak`),
+          Buffer.alloc(4096),
+        );
+      }
 
       const usage = await measureSessionPhysicalDiskUsage(storePath);
 
@@ -351,6 +352,37 @@ describe("enforceSessionDiskBudget", () => {
       expect(result.removedEntries).toBe(1);
       expect(store).toHaveProperty(lockedKey);
       expect(store).not.toHaveProperty(removableKey);
+    });
+  });
+
+  it("does not evict sessions for runtime-only resolved skill catalogs", async () => {
+    await withTestDir({ prefix: "openclaw-disk-budget-runtime-skills-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = "agent:main:subagent:runtime-skills";
+      const resolvedSkills = [
+        createFixtureSkillEntry("demo", { source: "x".repeat(20_000) }).skill,
+      ];
+      const entry: SessionEntry = {
+        sessionId: "runtime-skills",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: "compact prompt",
+          skills: [{ name: "demo" }],
+          resolvedSkills,
+        },
+      };
+      const store = { [sessionKey]: entry };
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: { maxDiskBytes: 2_048, highWaterBytes: 1_024 },
+        warnOnly: false,
+      });
+
+      expect(result).toMatchObject({ overBudget: false, removedEntries: 0 });
+      expect(store[sessionKey]).toBe(entry);
+      expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
     });
   });
 

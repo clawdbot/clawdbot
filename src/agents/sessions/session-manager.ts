@@ -4,16 +4,31 @@
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import {
+  readSessionTranscriptContextMessages,
+  readSessionTranscriptModelContext,
+} from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import {
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
+import type {
+  SessionManagerBoundedContext,
+  SessionManagerBoundedContextLimits,
+  SessionManagerPersistenceTarget,
+} from "./session-manager-core.js";
 import type { AppendPersistenceOptions, FileEntry } from "./session-manager-types.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -46,13 +61,32 @@ export type {
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 
+function withSessionContextAdmission<T>(
+  target: SessionTranscriptRuntimeTarget,
+  admission: UserTurnTranscriptAdmissionReceipt | undefined,
+  read: () => T,
+): T {
+  if (
+    admission &&
+    (target.agentId !== admission.agentId ||
+      target.sessionId !== admission.sessionId ||
+      target.sessionKey !== admission.sessionKey)
+  ) {
+    throw new SessionTranscriptReadFenceError(
+      "Current-turn transcript admission belongs to a different transcript target",
+    );
+  }
+  return runWithSessionTranscriptReadFence(admission, read);
+}
+
 export class SessionManager extends SessionManagerBranching {
   private constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    boundedContext?: SessionManagerBoundedContext,
   ) {
-    super(cwd, persistenceTarget, loadedEntries);
+    super(cwd, persistenceTarget, loadedEntries, boundedContext);
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -75,12 +109,76 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessageWithTranscriptAnchor(message, options);
   }
 
-  static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
+  static open(
+    target: SessionTranscriptRuntimeTarget,
+    cwdOverride?: string,
+    contextLimits?: SessionManagerBoundedContextLimits,
+  ): SessionManager {
+    if (contextLimits) {
+      return SessionManager.openBounded(target, {
+        ...contextLimits,
+        ...(cwdOverride !== undefined ? { cwd: cwdOverride } : {}),
+      });
+    }
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
     return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+  }
+
+  /** Opens only the selected model-context tail while preserving the complete durable transcript. */
+  static openBounded(
+    target: SessionTranscriptRuntimeTarget,
+    options: SessionManagerBoundedContextLimits & { cwd?: string; onTruncated?: () => void },
+  ): SessionManager {
+    const { cwd, onTruncated, ...limits } = options;
+    const context = readSessionTranscriptBoundedActiveContextCore(target, limits);
+    if (context.truncated) {
+      onTruncated?.();
+    }
+    // SAFETY: The accessor returns the same persisted transcript event union consumed by open().
+    const entries = context.events as FileEntry[];
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
+    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), target, entries, {
+      ...context,
+      limits,
+    });
+  }
+
+  /** Detached model view: selected payloads plus lightweight ancestry, never raw replay evidence. */
+  static openModelContext(
+    target: SessionTranscriptRuntimeTarget,
+    options: {
+      cwd?: string;
+      admission?: UserTurnTranscriptAdmissionReceipt;
+    } = {},
+  ): SessionManager {
+    const contextEntries = withSessionContextAdmission(target, options.admission, () =>
+      readSessionTranscriptModelContext(target),
+    );
+    // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
+    const entries = contextEntries as FileEntry[];
+    const header = entries.find((entry) => entry.type === "session");
+    if (entries.length > 0 && (!header || (header.version ?? 1) < CURRENT_SESSION_VERSION)) {
+      throw new Error(
+        "Persisted legacy session transcripts require doctor/import migration before runtime use",
+      );
+    }
+    return new SessionManager(options.cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+  }
+
+  /** Synchronously consumes full-fidelity context; its iterator closes with the read snapshot. */
+  static readSessionContext<T>(
+    target: SessionTranscriptRuntimeTarget,
+    read: (messages: Iterable<AgentMessage>, header: unknown) => T,
+    options: { admission?: UserTurnTranscriptAdmissionReceipt } = {},
+  ): T {
+    return withSessionContextAdmission(target, options.admission, () =>
+      readSessionTranscriptContextMessages(target, read),
+    );
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */
@@ -89,13 +187,17 @@ export class SessionManager extends SessionManagerBranching {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: Pick<AppendPersistenceOptions, "config">,
   ): string {
-    const result = appendTranscriptMessageSync(target, {
+    const outcome = appendTranscriptMessageSync(target, {
       cwd: process.cwd(),
       message,
       ...(options?.config ? { config: options.config } : {}),
     });
+    if (!outcome.ok) {
+      throw new Error("Session transcript message was not persisted", { cause: outcome.error });
+    }
+    const result = outcome.value;
     if (!result) {
-      throw new Error(`Session transcript message was not persisted: ${target.sessionId}`);
+      throw new Error("Session transcript message was not persisted");
     }
     return result.messageId;
   }

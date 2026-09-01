@@ -13,5 +13,8 @@ it("shows Running instead of a past-due next-run time while a run executes", () 
   const container = renderView({ jobs: [running] });
   const row = container.querySelector(".cron-table__row");
   expect(row?.querySelector(".cron-table__running")?.textContent).toBe("Running");
+  expect(row?.querySelector(".cron-table__state--running")?.getAttribute("aria-label")).toBe(
+    "Running",
+  );
   expect(row?.textContent).not.toContain("ago");
 });

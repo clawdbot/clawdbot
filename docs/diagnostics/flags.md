@@ -150,6 +150,12 @@ counts, event-loop delay samples, provider operation names, child-process exit
 state, and startup error names/messages. Treat timeline files as local
 diagnostics artifacts; review before sharing them outside your machine.
 
+Timeline writes batch adjacent events with the same destination into a bounded
+64 KiB buffer, flushed on the next event-loop turn, at capacity, or on normal
+process exit. Event timestamps reflect emission time. Writes remain best-effort;
+a forced kill can lose pending output. External harnesses should read the final
+artifact after the process exits and must not truncate it while the process runs.
+
 ## Where logs go
 
 Flags emit logs into the standard diagnostics log file. By default:

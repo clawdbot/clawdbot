@@ -202,6 +202,50 @@ export const DecisionReceiptV1Schema = closedObject({
   remediation: Type.Array(ExecutionIdentityRemediationV1Schema, { maxItems: 8 }),
 });
 
+const DecisionReceiptDisplayProvenanceV1Schema = Type.Union([
+  closedObject({
+    state: Type.Literal("verified"),
+    producer: Type.Union([
+      Type.Literal("run-admission"),
+      Type.Literal("operator-approval"),
+      Type.Literal("message-delivery"),
+      Type.Literal("cron-lifecycle"),
+      Type.Literal("task-lifecycle"),
+      Type.Literal("flow-lifecycle"),
+    ]),
+  }),
+  closedObject({ state: Type.Literal("unverified") }),
+]);
+
+export const DecisionReceiptDisplayV1Schema = closedObject({
+  schemaVersion: Type.Literal(1),
+  selectorId: ExecutionIdentityRefSchema,
+  occurredAt: Type.Integer({ minimum: 0 }),
+  action: closedObject({
+    family: ExecutionIdentityRefSchema,
+    operation: ExecutionIdentityRefSchema,
+    summary: Type.Optional(Type.String({ maxLength: 512 })),
+  }),
+  decision: closedObject({
+    outcome: Type.Union([
+      Type.Literal("allowed"),
+      Type.Literal("denied"),
+      Type.Literal("not-applicable"),
+      Type.Literal("unknown"),
+    ]),
+    reasonCode: ExecutionIdentityRefSchema,
+  }),
+  enforcement: closedObject({
+    coverageState: ExecutionIdentityDecisionCoverageStateSchema,
+    policyCount: Type.Integer({ minimum: 0, maximum: 16 }),
+    grantCount: Type.Integer({ minimum: 0, maximum: 16 }),
+    contextFieldsUsed: ExecutionIdentityRefArraySchema,
+  }),
+  provenance: DecisionReceiptDisplayProvenanceV1Schema,
+  missingEvidence: ExecutionIdentityRefArraySchema,
+  remediation: Type.Array(ExecutionIdentityRemediationV1Schema, { maxItems: 8 }),
+});
+
 export const AuditRunIdentityPresentV1Schema = closedObject({
   state: Type.Literal("present"),
   context: ExecutionIdentityContextV1Schema,
@@ -284,7 +328,7 @@ export const AuditRunInspectResultSchema = closedObject({
     status: Type.Union([Type.Literal("known"), Type.Literal("unknown")]),
   }),
   identity: AuditRunIdentityV1Schema,
-  decisions: Type.Array(DecisionReceiptV1Schema, { maxItems: 100 }),
+  decisionDisplays: Type.Array(DecisionReceiptDisplayV1Schema, { maxItems: 100 }),
   coverage: closedObject({
     state: ExecutionIdentityDecisionCoverageStateSchema,
     missingEvidence: ExecutionIdentityRefArraySchema,
@@ -296,6 +340,7 @@ export const AuditRunInspectResultSchema = closedObject({
 export type PrincipalRefV1 = Static<typeof PrincipalRefV1Schema>;
 export type ExecutionIdentityContextV1 = Static<typeof ExecutionIdentityContextV1Schema>;
 export type DecisionReceiptV1 = Static<typeof DecisionReceiptV1Schema>;
+export type DecisionReceiptDisplayV1 = Static<typeof DecisionReceiptDisplayV1Schema>;
 export type AuditRunIdentityV1 = Static<typeof AuditRunIdentityV1Schema>;
 type AuditRunDecisionPage = {
   decisionCursor?: string;

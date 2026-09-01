@@ -2,6 +2,8 @@ import Foundation
 
 struct ChatSessionUnreadPatchGuard {
     private var activeSessionKey = ""
+    private var activationObserved = false
+    private var activationMarkedUnreadAt: Double?
     private var requested = false
     private var activeExplicitUnread: Bool?
     private var confirmedUnreadByKey: [String: Bool] = [:]
@@ -21,11 +23,19 @@ struct ChatSessionUnreadPatchGuard {
         }
     }
 
-    mutating func shouldPatch(key: String, unread: Bool?) -> Int? {
+    mutating func shouldPatch(key: String, unread: Bool?, markedUnreadAt: Double?) -> Int? {
         guard !key.isEmpty else { return nil }
         self.activate(key: key)
+        if !self.activationObserved {
+            self.activationObserved = true
+            self.activationMarkedUnreadAt = markedUnreadAt
+        }
         if unread == false {
+            self.activationMarkedUnreadAt = nil
             self.requested = false
+            return nil
+        }
+        if let markedUnreadAt, markedUnreadAt != self.activationMarkedUnreadAt {
             return nil
         }
         guard unread == true, !self.requested else { return nil }
@@ -36,6 +46,8 @@ struct ChatSessionUnreadPatchGuard {
     mutating func activate(key: String) {
         guard key != self.activeSessionKey else { return }
         self.activeSessionKey = key
+        self.activationObserved = false
+        self.activationMarkedUnreadAt = nil
         self.requested = false
         self.activeExplicitUnread = nil
     }
@@ -110,6 +122,7 @@ final class ChatSessionUnreadMutationQueue {
         routeLease: Task<OpenClawChatSessionMutationRouteLease?, Never>,
         queueKey: String,
         routeKey: String,
+        expectedMarkedUnreadAt: Double?? = nil,
         unread: Bool) -> Task<Void, Error>
     {
         let previous = self.tails[queueKey]?.task
@@ -123,6 +136,7 @@ final class ChatSessionUnreadMutationQueue {
             }
             try await resolvedRouteLease.patchSession(
                 key: routeKey,
+                expectedMarkedUnreadAt: expectedMarkedUnreadAt,
                 label: nil,
                 category: nil,
                 pinned: nil,

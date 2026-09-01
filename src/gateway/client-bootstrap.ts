@@ -3,7 +3,6 @@
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import {
   resolveGatewayInteractiveSurfaceAuth,
   resolveGatewayProbeSurfaceAuth,
@@ -196,12 +195,6 @@ export async function resolveGatewayClientBootstrap(params: {
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
   }) => GatewayConnectionDetails;
-  resolveTlsFingerprint?: (params: {
-    config: OpenClawConfig;
-    url: string;
-    urlSource: string;
-    explicitTlsFingerprint?: string;
-  }) => Promise<string | undefined>;
 }): Promise<{
   url: string;
   urlSource: string;
@@ -250,26 +243,22 @@ export async function resolveGatewayClientBootstrap(params: {
         })
       : undefined;
   const tlsUrlSource = configuredTarget?.tlsSource ?? connection.urlSource;
-  const tlsFingerprint = params.resolveTlsFingerprint
-    ? await params.resolveTlsFingerprint({
-        config: params.config,
-        url: connection.url,
-        urlSource: tlsUrlSource,
-        explicitTlsFingerprint: params.explicitTlsFingerprint,
-      })
-    : await resolveGatewayConnectionTlsFingerprint({
-        config: params.config,
-        url: connection.url,
-        urlSource: tlsUrlSource,
-        explicitTlsFingerprint: params.explicitTlsFingerprint,
-        loadGatewayTlsRuntime,
-      });
+  const tlsFingerprint = await resolveGatewayConnectionTlsFingerprint({
+    config: params.config,
+    url: connection.url,
+    urlSource: tlsUrlSource,
+    explicitTlsFingerprint: params.explicitTlsFingerprint,
+  });
   // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived
   // remote URLs are canonical config, not a caller override.
   const surface =
     configuredTarget?.authSurface ??
     params.modeOverride ??
-    (params.config.gateway?.mode === "remote" ? "remote" : "local");
+    (params.localPortOverride !== undefined
+      ? "local"
+      : params.config.gateway?.mode === "remote"
+        ? "remote"
+        : "local");
   let auth: { token?: string; password?: string; failureReason?: string };
   if (params.skipImplicitAuth) {
     auth = explicitAuth;

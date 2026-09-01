@@ -5,6 +5,11 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { validateSecretsResolveResult } from "../../packages/gateway-protocol/src/index.js";
+import {
+  cloneConfigWithResolutionFacts,
+  copyConfigResolutionFactsExcept,
+  resolveConfigSecretRef,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
@@ -276,7 +281,12 @@ function collectConfiguredTargetRefPaths(params: {
       continue;
     }
     const { ref } = resolveSecretInputRef({
-      value: target.value,
+      value: resolveConfigSecretRef({
+        config: params.config,
+        path: target.path,
+        value: target.value,
+        defaults,
+      }),
       refValue: target.refValue,
       defaults,
     });
@@ -310,7 +320,7 @@ function classifyConfiguredTargetRefs(params: {
     env: process.env,
   });
   commandSecretGatewayDeps.collectConfigAssignments({
-    config: structuredClone(params.config),
+    config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
   });
@@ -554,7 +564,7 @@ async function resolveCommandSecretRefsLocally(params: {
   resolutionPolicy: CommandSecretResolutionPolicy;
 }): Promise<ResolveCommandSecretsResult> {
   const sourceConfig = params.config;
-  const resolvedConfig = structuredClone(params.config);
+  const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
   const context = createResolverContext({
     sourceConfig,
     env: process.env,
@@ -567,7 +577,7 @@ async function resolveCommandSecretRefsLocally(params: {
     targetsRuntimeWebPath(target.path),
   );
   commandSecretGatewayDeps.collectConfigAssignments({
-    config: structuredClone(params.config),
+    config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
   });
@@ -783,7 +793,12 @@ async function resolveTargetSecretLocally(params: {
 }): Promise<void> {
   const defaults = params.sourceConfig.secrets?.defaults;
   const { ref } = resolveSecretInputRef({
-    value: params.target.value,
+    value: resolveConfigSecretRef({
+      config: params.sourceConfig,
+      path: params.target.path,
+      value: params.target.value,
+      defaults,
+    }),
     refValue: params.target.refValue,
     defaults,
   });
@@ -821,6 +836,9 @@ async function resolveTargetSecretLocally(params: {
           : `${params.target.path} resolved to an unsupported value type.`,
     });
     setPathExistingStrict(params.resolvedConfig, params.target.pathSegments, resolved);
+    copyConfigResolutionFactsExcept(params.resolvedConfig, params.resolvedConfig, [
+      params.target.path,
+    ]);
   } catch (error) {
     if (!enforcesResolvedSecrets(params.mode)) {
       params.localResolutionDiagnostics.push(
@@ -983,28 +1001,31 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   const gatewayInactiveRefPaths = params.allowedPaths
     ? parsed.inactiveRefPaths.filter((path) => params.allowedPaths?.has(path))
     : parsed.inactiveRefPaths;
-  const resolvedConfig = structuredClone(params.config);
+  const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
   const assignments = params.allowedPaths
     ? parsed.assignments.filter((assignment) => {
         const path = assignment.path ?? assignment.pathSegments.join(".");
         return params.allowedPaths?.has(path);
       })
     : parsed.assignments;
+  const resolvedAssignmentPaths: string[] = [];
   for (const assignment of assignments) {
     const pathSegments = assignment.pathSegments.filter((segment) => segment.length > 0);
     if (pathSegments.length === 0) {
       continue;
     }
+    const path = pathSegments.join(".");
     try {
       setPathExistingStrict(resolvedConfig, pathSegments, assignment.value);
+      resolvedAssignmentPaths.push(path);
     } catch (err) {
-      const path = pathSegments.join(".");
       throw new Error(
         `${params.commandName}: failed to apply resolved secret assignment at ${path} (${formatErrorMessage(err)}).`,
         { cause: err },
       );
     }
   }
+  copyConfigResolutionFactsExcept(resolvedConfig, resolvedConfig, resolvedAssignmentPaths);
   const inactiveRefPaths = new Set(
     gatewayInactiveRefPaths.length > 0
       ? gatewayInactiveRefPaths
@@ -1080,6 +1101,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         handledPaths.add(unresolved.path);
         locallyResolvedPaths.add(unresolved.path);
       }
+      copyConfigResolutionFactsExcept(resolvedConfig, resolvedConfig, [...locallyResolvedPaths]);
       diagnostics = dedupeDiagnostics([...diagnostics, ...localFallback.diagnostics]);
       const stillUnresolved = analyzed.unresolved.filter((entry) => !handledPaths.has(entry.path));
       if (stillUnresolved.length > 0) {

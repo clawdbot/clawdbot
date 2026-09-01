@@ -7,6 +7,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
@@ -18,8 +19,10 @@ import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -103,6 +106,77 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetGlobalHookRunner();
+  });
+
+  it.each(["request", "waitDecision"])(
+    "cancels the gateway approval %s transport when the owning tool lifetime ends",
+    async (phase) => {
+      const controller = new AbortController();
+      const parked = createDeferredCore();
+      const pending = createDeferredCore<Record<string, unknown>>();
+      let transportCancelled = false;
+      mockCallGatewayTool.mockImplementation(async (method, _options, _request, extra) => {
+        if (method !== `plugin.approval.${phase}`) {
+          return { id: "generation-approval", status: "accepted" };
+        }
+        const signal = extra?.signal;
+        const abort = () => {
+          transportCancelled = true;
+          pending.reject(signal?.reason);
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        parked.resolve();
+        try {
+          return await pending.promise;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
+      });
+      const outcome = resolveBeforeToolCallApprovalOutcome({
+        result: {
+          requireApproval: {
+            pluginId: "mcp-policy",
+            title: "MCP write",
+            description: "Approve remote mutation",
+          },
+        },
+        toolName: "mcp_write",
+        baseParams: {},
+        signal: controller.signal,
+      });
+      try {
+        await parked.promise;
+        controller.abort(new Error("Permission change"));
+        expect(transportCancelled).toBe(true);
+        await expect(outcome).resolves.toMatchObject({ blocked: true });
+      } finally {
+        pending.reject(controller.signal.reason);
+        await outcome;
+      }
+    },
+  );
+
+  it("carries the host receipt fence beside the execution identity token", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-receipt-fence");
+    const receiptAuthority = vi.fn(() => true);
+    runBeforeToolCallMock.mockResolvedValue({});
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session",
+        operationalRunInstance: { instanceId: "instance-receipt", runId: "run-receipt-fence" },
+        executionIdentityToken,
+        receiptAuthority,
+      },
+      () => runBeforeToolCallHook({ toolName: "exec", params: { command: "true" } }),
+    );
+
+    const call = requireBeforeToolCall(runBeforeToolCallMock, "receipt-fenced hook invocation");
+    expect(call[2]?.token).toBe(executionIdentityToken);
+    expect(call[2]?.assertAuthority).toEqual(expect.any(Function));
+    expect(call[2]?.assertAuthority()).toBe(true);
+    expect(receiptAuthority).toHaveBeenCalledOnce();
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -210,6 +284,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         pluginId: "test-plugin",
         title: "Needs approval",
         description: "Test approval request",
+        scope: { kind: "external-post", target: "git‮hub", visibility: "public" },
         severity: "info",
         timeoutBehavior: "allow",
         onResolution,
@@ -225,6 +300,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
+    });
+    expect(broker.listPending()[0]?.request.scope).toEqual({
+      kind: "external-post",
+      target: "git\\u{202E}hub",
+      visibility: "public",
     });
 
     broker.stop(new Error("local TUI stopped"));

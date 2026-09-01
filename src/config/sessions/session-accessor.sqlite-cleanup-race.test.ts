@@ -18,11 +18,13 @@ import {
 import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
   afterMaterialize: undefined as (() => void) | undefined,
+  onMaterialize: undefined as ((sessionIds: string[]) => void) | undefined,
 }));
 const archivePublicationHook = vi.hoisted(() => ({
   failNext: undefined as Error | undefined,
@@ -38,6 +40,7 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {
       await archiveMaterializationHook.beforeMaterialize?.();
+      archiveMaterializationHook.onMaterialize?.(args[0].map((plan) => plan.sessionId));
       const result = await actual.materializeSessionStateDeletePlans(...args);
       archiveMaterializationHook.afterMaterialize?.();
       return result;
@@ -77,6 +80,7 @@ describe("SQLite lifecycle cleanup races", () => {
   afterEach(() => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.afterMaterialize = undefined;
+    archiveMaterializationHook.onMaterialize = undefined;
     archivePublicationHook.failNext = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
@@ -800,7 +804,7 @@ describe("SQLite lifecycle cleanup races", () => {
     let materializations = 0;
     archiveMaterializationHook.afterMaterialize = () => {
       materializations += 1;
-      if (materializations !== 2) {
+      if (materializations !== 1) {
         return;
       }
       const changedEntry = { ...entry, label: "changed", updatedAt: 2 };
@@ -823,7 +827,7 @@ describe("SQLite lifecycle cleanup races", () => {
       pruned: 0,
       capped: 0,
     });
-    expect(materializations).toBe(2);
+    expect(materializations).toBe(1);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ label: "changed" });
   });
 
@@ -848,6 +852,108 @@ describe("SQLite lifecycle cleanup races", () => {
       capped: 0,
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("splits byte-limited cleanup into real worker batches", async () => {
+    const batches: string[][] = [];
+    archiveMaterializationHook.onMaterialize = (ids) => void batches.push(ids);
+    const ids = await runByteLimitedArchiveCleanupFixture(storePath);
+    expect(batches.toSorted((left, right) => left[0]!.localeCompare(right[0]!))).toEqual(
+      ids.toSorted((left, right) => left.localeCompare(right)).map((id) => [id]),
+    );
+  });
+  it("commits large maintenance cleanup in bounded retry-safe batches", async () => {
+    const entryCount = 66;
+    const historicalSessionId = "maintenance-batch-historical-session";
+    const sessionKeyById = new Map<string, string>();
+    const sessionKeys = Array.from(
+      { length: entryCount },
+      (_, index) => `agent:main:maintenance-batch-${String(index).padStart(2, "0")}`,
+    );
+    for (const [index, sessionKey] of sessionKeys.entries()) {
+      const sessionId = `maintenance-batch-session-${String(index).padStart(2, "0")}`;
+      sessionKeyById.set(sessionId, sessionKey);
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId, updatedAt: Date.now() + index },
+      );
+      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+        { type: "session", id: sessionId, content: `batch transcript ${index}` },
+      ]);
+    }
+    const historicalOwnerKey = sessionKeys[entryCount - 2] ?? "";
+    await replaceTranscriptEvents(
+      { sessionKey: historicalOwnerKey, sessionId: historicalSessionId, storePath },
+      [{ type: "session", id: historicalSessionId, content: "historical batch transcript" }],
+    );
+
+    const batchSizes: number[] = [];
+    let currentBatchSessionIds: string[] = [];
+    let materializations = 0;
+    archiveMaterializationHook.onMaterialize = (sessionIds) => {
+      currentBatchSessionIds = sessionIds;
+      batchSizes.push(sessionIds.length);
+    };
+    let racedKey: string | undefined;
+    archiveMaterializationHook.afterMaterialize = () => {
+      materializations += 1;
+      if (materializations !== 2) {
+        return;
+      }
+      racedKey = sessionKeyById.get(currentBatchSessionIds[0] ?? "");
+      if (!racedKey) {
+        throw new Error("expected a maintenance entry in the second batch");
+      }
+      const current = loadSessionEntry({ sessionKey: racedKey, storePath });
+      if (!current) {
+        throw new Error("expected the raced maintenance entry to remain");
+      }
+      replaceSessionEntrySync(
+        { sessionKey: racedKey, storePath },
+        { ...current, label: "changed during batch materialization" },
+      );
+    };
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      maintenanceOverride: {
+        mode: "enforce",
+        maxEntries: 1,
+        pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      },
+    });
+
+    expect(batchSizes).toEqual([64, 2]);
+    expect(result).toMatchObject({
+      beforeCount: entryCount,
+      afterCount: 3,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 63,
+    });
+    expect(loadSessionEntry({ sessionKey: racedKey ?? "", storePath })).toMatchObject({
+      label: "changed during batch materialization",
+    });
+    expect(loadSessionEntry({ sessionKey: sessionKeys.at(-1) ?? "", storePath })).toBeDefined();
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: historicalOwnerKey,
+        sessionId: historicalSessionId,
+        storePath,
+      }),
+    ).resolves.toEqual([]);
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    if (!databasePath) {
+      throw new Error("expected maintenance batch database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    expect(
+      database.db
+        .prepare("SELECT 1 AS present FROM session_nodes WHERE session_key = ?")
+        .get(historicalOwnerKey),
+    ).toBeUndefined();
   });
 
   it("retains unplanned historical windows behind a placeholder node", async () => {

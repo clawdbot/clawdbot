@@ -6,6 +6,7 @@ import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import {
   ensurePrivateSqliteCoordinatorDirectory,
+  runWithSqliteCoordinator,
   SqliteCoordinatorError,
 } from "./sqlite-coordinator.js";
 
@@ -22,6 +23,23 @@ type CoordinatorOptions = {
   uid?: number;
   busyTimeoutMs?: number;
 };
+
+export class StateDatabaseCoordinatorContentionError extends SqliteCoordinatorError {
+  constructor(family: CoordinatorFamily) {
+    super(`another OpenClaw process owns ${family}`);
+    this.name = "StateDatabaseCoordinatorContentionError";
+  }
+}
+
+class StateSchemaMutationConflictError extends SqliteCoordinatorError {
+  constructor(databasePath: string, cause: unknown) {
+    super(
+      `OpenClaw refused shared state schema mutation at ${databasePath} because another Gateway owns that state directory. Stop that Gateway or perform the update through its managed restart path, then retry.`,
+      cause,
+    );
+    this.name = "StateSchemaMutationConflictError";
+  }
+}
 
 export function resolveStateLifecycleRuntimeDirectory(): string {
   return process.platform === "win32"
@@ -74,7 +92,7 @@ function acquireLifecycleCoordinator(
       busyTimeoutMs: params.busyTimeoutMs,
     });
     if (!coordinator) {
-      throw new SqliteCoordinatorError(`another OpenClaw process owns ${family}`);
+      throw new StateDatabaseCoordinatorContentionError(family);
     }
     heldCoordinators.set(coordinatorPath, { coordinator, references: 1 });
   }
@@ -111,4 +129,26 @@ export function acquireGatewayLifecycleCoordinator(params: CoordinatorOptions) {
 
 export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
   return acquireLifecycleCoordinator("state-lifecycle", params);
+}
+
+/** Fence schema mutation against another process's live Gateway owner. */
+export function withStateSchemaFence<T>(
+  params: Pick<CoordinatorOptions, "databasePath" | "runtimeDirectory" | "uid">,
+  operation: () => T,
+): T {
+  let coordinator: ReturnType<typeof acquireGatewayLifecycleCoordinator>;
+  try {
+    // Never wait while the caller holds the state-lifecycle coordinator. A
+    // running Gateway must win immediately so lock ordering cannot deadlock.
+    coordinator = acquireGatewayLifecycleCoordinator({
+      ...params,
+      busyTimeoutMs: 0,
+    });
+  } catch (error) {
+    if (error instanceof StateDatabaseCoordinatorContentionError) {
+      throw new StateSchemaMutationConflictError(params.databasePath, error);
+    }
+    throw error;
+  }
+  return runWithSqliteCoordinator(coordinator, "state schema mutation", operation);
 }

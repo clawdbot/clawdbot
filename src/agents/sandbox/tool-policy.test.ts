@@ -1,8 +1,11 @@
 // Sandbox tool policy tests cover effective allow/deny merging and blocked-tool
 // guidance for sandboxed agent sessions.
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
@@ -12,6 +15,8 @@ import {
   isToolAllowed,
   resolveSandboxToolPolicyForAgent as resolveSandboxToolPolicyForAgentBase,
 } from "./tool-policy.js";
+
+const sandboxStoreDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
   return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
@@ -238,6 +243,77 @@ describe("sandbox/tool-policy", () => {
     ).toBe(true);
   });
 
+  it("forces a persisted sandbox requirement even when the agent sandbox mode is off", async () => {
+    const sessionKey = "agent:main:guest";
+    const storePath = path.join(
+      sandboxStoreDirs.make("openclaw-required-sandbox-"),
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const entry = {
+      sessionId: "guest-session",
+      updatedAt: 1,
+      sandbox: "required" as const,
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        defaults: { sandbox: { mode: "off", scope: "session", workspaceAccess: "rw" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
+      sandboxRequired: true,
+      isolationSubject: { kind: "session", sessionKey },
+      sandboxed: true,
+      workspaceAccess: "ro",
+    });
+    const blockedMessage = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey,
+      toolName: "browser",
+    });
+    expect(blockedMessage).toContain("create a new session under an authorized role");
+    expect(blockedMessage).not.toContain("sandbox.mode=off");
+  });
+
+  it("does not apply guest isolation or cap writable access to unstamped sessions", async () => {
+    const sessionKey = "agent:main:maintainer";
+    const storePath = path.join(
+      sandboxStoreDirs.make("openclaw-unstamped-sandbox-"),
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "maintainer-session",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "maintainer-principal" },
+      },
+    );
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        defaults: { sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+
+    expect(runtime).toMatchObject({ sandboxRequired: false, sandboxed: true });
+    expect(runtime.isolationSubject).toBeUndefined();
+    expect(runtime.workspaceAccess).toBeUndefined();
+  });
+
   it("classifies a borrowed runtime key under its own sandbox agent", () => {
     const cfg = {
       agents: {
@@ -294,47 +370,73 @@ describe("sandbox/tool-policy", () => {
     expect(runtime.sandboxed).toBe(false);
   });
 
-  it("rejects a classification agent that conflicts with its session key", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, worker: {} },
-      },
-    } satisfies OpenClawConfig;
+  it.each([
+    { classificationSessionKey: "agent:worker:main", classificationAgentId: "main" },
+    { classificationSessionKey: "global", classificationAgentId: undefined },
+  ])(
+    "rejects ambiguous or conflicting independent classification: $classificationSessionKey",
+    (classification) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, worker: {} },
+        },
+      } satisfies OpenClawConfig;
 
-    expect(() =>
-      resolveSandboxRuntimeStatus({
+      expect(() =>
+        resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          ...classification,
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    },
+  );
+
+  it.each(["agent:work:telegram:default:direct:42", "global"])(
+    "keeps %s ownership as the sandbox classification when none is supplied",
+    (sessionKey) => {
+      const cfg = {
+        session: {
+          store: path.join(
+            sandboxStoreDirs.make("openclaw-owned-sandbox-"),
+            "{agentId}",
+            "sessions.json",
+          ),
+        },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            work: { sandbox: { mode: "all", scope: "agent" } },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const runtime = resolveSandboxRuntimeStatus({
         cfg,
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        classificationSessionKey: "agent:worker:main",
-        classificationAgentId: "main",
-      }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-  });
+        sessionKey,
+        agentId: "work",
+      });
 
-  it("keeps the session identity as the sandbox classification when none is supplied", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: { sandbox: { mode: "non-main", scope: "agent" } } },
-      },
-    } satisfies OpenClawConfig;
-
-    const runtime = resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey: "agent:main:telegram:default:direct:42",
-      agentId: "main",
-    });
-
-    expect(runtime).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:telegram:default:direct:42",
-      classificationAgentId: "main",
-      classificationSessionKey: "agent:main:telegram:default:direct:42",
-      sandboxed: true,
-    });
-  });
+      expect(runtime).toMatchObject({
+        agentId: "work",
+        sessionKey,
+        classificationAgentId: "work",
+        classificationSessionKey: sessionKey,
+        sandboxed: true,
+      });
+      expect(() =>
+        resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey,
+          agentId: "work",
+          classificationSessionKey: "other-bare-session",
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    },
+  );
 
   it("keeps the agent main session sandboxed in all mode", () => {
     const cfg: OpenClawConfig = {

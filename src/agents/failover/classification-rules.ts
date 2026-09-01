@@ -388,7 +388,7 @@ function hasBillingApiErrorType(raw: string): boolean {
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
 }
-export function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
   if (!isBillingErrorMessage(raw)) {
     return false;
   }
@@ -407,13 +407,15 @@ export function isExactUnknownNoDetailsError(raw: string): boolean {
     normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
   );
 }
-export function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
-  // This upstream phrase is generic prose. Provider identity must come from
-  // the runner metadata so other providers cannot inherit Claude CLI policy.
+export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
+  // These upstream phrases overlap generic session/auth wording. Provider identity
+  // must come from runner metadata so other CLIs cannot inherit Claude policy.
   if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
     return false;
   }
-  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+  return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(
+    raw,
+  );
 }
 export function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);

@@ -181,24 +181,23 @@ describe("GatewayChatClient", () => {
     }
   });
 
-  it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
+  it("retries startup-unavailable history only while the backend is active", async () => {
     vi.useFakeTimers();
 
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
+    const startupError = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "chat.history unavailable during gateway startup",
+      details: { method: "chat.history" },
+      retryable: true,
+      retryAfterMs: 250,
+    });
     const request = vi
       .fn()
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "UNAVAILABLE",
-          message: "chat.history unavailable during gateway startup",
-          details: { method: "chat.history" },
-          retryable: true,
-          retryAfterMs: 250,
-        }),
-      )
+      .mockRejectedValueOnce(startupError)
       .mockResolvedValueOnce({ messages: [] });
 
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -208,6 +207,30 @@ describe("GatewayChatClient", () => {
 
     await expect(historyPromise).resolves.toEqual({ messages: [] });
     expect(request).toHaveBeenCalledTimes(2);
+
+    const baselineTimerCount = vi.getTimerCount();
+    request.mockRejectedValueOnce(startupError).mockRejectedValueOnce(startupError);
+    const pendingHistory = Promise.all([
+      client.loadHistory({ sessionKey: "first" }).catch((error: unknown) => error),
+      client.loadHistory({ sessionKey: "second" }).catch((error: unknown) => error),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount + 2);
+
+    await client.stop();
+
+    expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    await expect(pendingHistory).resolves.toEqual([
+      expect.objectContaining({ name: "AbortError" }),
+      expect.objectContaining({ name: "AbortError" }),
+    ]);
+    await expect(client.loadHistory({ sessionKey: "stopped" })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount);
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
@@ -226,6 +249,7 @@ describe("GatewayChatClient", () => {
     });
     await client.loadHistory({ sessionKey: "global", agentId: "work", limit: 50 });
     await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
+    await client.listModels({ agentId: "work" });
 
     expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
       sessionKey: "global",
@@ -246,6 +270,7 @@ describe("GatewayChatClient", () => {
       agentId: "work",
       runId: "run-global-work",
     });
+    expect(request).toHaveBeenNthCalledWith(4, "models.list", { agentId: "work" });
   });
 
   it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {

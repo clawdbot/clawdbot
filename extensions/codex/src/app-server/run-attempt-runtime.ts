@@ -52,6 +52,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     contextSessionKey,
     sandboxSessionKey,
     sessionAgentId,
+    policyAgentId,
     sandbox,
     attemptClientFactory,
     runAbortController,
@@ -85,7 +86,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     : params.provider;
   const effectiveRuntimeModelId = usesSupervisionConnection
     ? (mutable.startupBinding?.model ?? "codex-native")
-    : params.modelId;
+    : (connection.options.runtimeModelId ?? params.modelId);
   const {
     authProfileId: _outerAuthProfileId,
     authoredContextTokenCap: _outerAuthoredContextTokenCap,
@@ -220,7 +221,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
-    { agentId: sessionAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
+    { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
   preDynamicStartupStages.mark("native-tool-surface");
   const nativeProviderWebSearchSupport =

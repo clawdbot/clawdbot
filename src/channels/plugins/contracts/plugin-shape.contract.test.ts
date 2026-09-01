@@ -52,7 +52,7 @@ const PROVIDER_OWNED_READ_GATE_PLUGINS = [
   ["msteams", true],
   ["slack", true],
   ["mattermost", ["read"]],
-  ["telegram", ["react", "edit", "delete"]],
+  ["telegram", ["react", "edit", "delete", "emoji-list"]],
 ] as const;
 
 type ExplicitSessionKeyNormalizer = (

@@ -279,9 +279,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): Promise<string | undefined> => {
-    if (params.payload.isReasoning === true) {
-      return undefined;
-    }
     const replyThreadTs = resolveDeliveryThreadTs(params);
     const deliveryReplyThreadTs =
       replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
@@ -381,9 +378,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     appendSeparator?: boolean;
     taskDisplayMode?: "plan" | "timeline";
   }): Promise<void> => {
-    if (params.payload.isReasoning === true) {
-      return;
-    }
     const reply = resolveSendableOutboundReplyParts(params.payload);
     if (!isStreamingEligible(params.payload)) {
       await deliverNormally({

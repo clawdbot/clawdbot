@@ -2,6 +2,7 @@ import type { WorkerPlacementMoveIntent } from "../worker-environments/placement
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -20,6 +21,8 @@ function projectSessionPlacementFields(params: {
           placement: projectWorkerSessionPlacement(
             placement,
             params.context.workerPlacementDiskSpaceReader?.read(placement),
+            params.context.workerPlacementRunnerAvailabilityReader?.read(placement),
+            readWorkerPlacementIdentity(placement, params.context.workerEnvironmentService),
           ),
         }
       : {}),

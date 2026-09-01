@@ -1,9 +1,14 @@
-import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
+import {
+  CombinedAutocompleteProvider,
+  type AutocompleteItem,
+  type AutocompleteProvider,
+  type SlashCommand,
+} from "@earendil-works/pi-tui";
 import { isTerminalSafeAutocompleteValue, sanitizeRenderableLine } from "./tui-formatters.js";
 
 const originalSafeItem = Symbol("originalSafeItem");
 /** Sanitize autocomplete presentation and omit values unsafe for editor rendering. */
-export function sanitizeAutocompleteProvider(inner: AutocompleteProvider): AutocompleteProvider {
+function sanitizeAutocompleteProvider(inner: AutocompleteProvider): AutocompleteProvider {
   return {
     triggerCharacters: inner.triggerCharacters,
     async getSuggestions(...args) {
@@ -47,4 +52,25 @@ export function sanitizeAutocompleteProvider(inner: AutocompleteProvider): Autoc
       ? (...args) => inner.shouldTriggerFileCompletion!(...args)
       : undefined,
   };
+}
+
+export function createTuiAutocompleteProvider(
+  commands: SlashCommand[],
+  basePath: string,
+  fdPath?: string,
+): AutocompleteProvider {
+  const inner = new CombinedAutocompleteProvider(commands, basePath, fdPath);
+  return sanitizeAutocompleteProvider({
+    getSuggestions(lines, cursorLine, cursorCol, options) {
+      const textBeforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+      const isAttachment = /(?:^|[\s='"])@(?:"[^"]*|[^\s='"]*)$/u.test(textBeforeCursor);
+      const isNaturalCompletion = isAttachment || textBeforeCursor.startsWith("/");
+      if (!options.force && !isNaturalCompletion) {
+        return Promise.resolve(null);
+      }
+      return inner.getSuggestions(lines, cursorLine, cursorCol, options);
+    },
+    applyCompletion: (...args) => inner.applyCompletion(...args),
+    shouldTriggerFileCompletion: (...args) => inner.shouldTriggerFileCompletion(...args),
+  });
 }

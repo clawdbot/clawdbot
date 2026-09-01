@@ -4,6 +4,16 @@ const { assertNativeGeneratedArtifactsIsolated, shouldRunNativeI18n, shouldStric
   await import("../../scripts/ci-changed-scope.mjs");
 
 describe("native i18n changed scope", () => {
+  it.each([
+    "scripts/android-app-i18n.ts",
+    "scripts/apple-app-i18n.ts",
+    "scripts/native-app-i18n.ts",
+    "scripts/native-i18n-locales.ts",
+  ])("routes native locale source %s without requiring generated parity", (sourcePath) => {
+    expect(shouldRunNativeI18n([sourcePath])).toBe(true);
+    expect(shouldStrictNativeI18n([sourcePath])).toBe(false);
+  });
+
   it("routes Android flavor sources through native i18n", () => {
     expect(
       shouldRunNativeI18n([

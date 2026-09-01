@@ -3,14 +3,14 @@ import {
   AgentSelectionRequiredError,
   listAgentEntries,
   resolveDefaultAgentId,
-  resolveSystemAgentTargetAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { materializeLegacyDefaultAgentRoles } from "../../../config/legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-runner.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../../talk/agent-target.js";
+import { resolveTalkSessionAgentId } from "../../../talk/agent-target.js";
 
 function materializeDefaultAgentRoles(cfg: OpenClawConfig) {
   if (listAgentEntries(cfg).length < 2) {
@@ -42,7 +42,7 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
     heartbeat: resolveHeartbeatAgents(cfg).map((entry) => entry.agentId),
     consult: (() => {
       try {
-        return resolveSystemAgentTargetAgentId(cfg);
+        return resolveAmbientOwnerAgentId(cfg);
       } catch (error) {
         if (error instanceof AgentSelectionRequiredError) {
           return null;
@@ -50,7 +50,7 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
         throw error;
       }
     })(),
-    voice: resolveTalkTargetAgentId(cfg),
+    voice: resolveTalkSessionAgentId(cfg),
     cron: resolveCronJobEffectiveAgentId({}, defaultAgentId),
     cli: defaultAgentId,
   };

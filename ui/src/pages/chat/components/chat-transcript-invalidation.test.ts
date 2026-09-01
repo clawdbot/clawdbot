@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
@@ -21,6 +22,7 @@ import {
 } from "./chat-message-media.ts";
 import { resetTranscriptSession } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
+import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -31,6 +33,26 @@ import {
 describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("does not normalize historical messages again when their transcript is projected", () => {
+    const messages = Array.from({ length: 30 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Historical message ${index}`,
+      timestamp: index + 1,
+      __openclaw: { id: `message-${index}` },
+    }));
+    const transcript = {
+      setContentReady: vi.fn(),
+      syncMessageRows: vi.fn(),
+    } as unknown as Parameters<typeof projectChatTranscript>[1];
+    const props = threadProps("pane-offscreen-history", "agent:main:main", messages);
+    projectChatTranscript(props, transcript);
+
+    const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
+    projectChatTranscript(props, transcript);
+
+    expect(normalizeSpy.mock.calls.some(([message]) => message === messages[0])).toBe(false);
+  });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -267,7 +289,7 @@ describe("chat transcript invalidation", () => {
     expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(
-      container.querySelector(".chat-assistant-attachment-card__reason")?.textContent,
+      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
     ).toContain("Outside allowed folders");
 
     configPane.applyApplicationConfig({
@@ -280,14 +302,15 @@ describe("chat transcript invalidation", () => {
       "assistant-attachment",
       `::test-auth-token::${source}`,
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
+    const metadataCalls = fetchMock.mock.calls.filter(([input]) => input.includes("meta=1"));
+    expect(metadataCalls).toHaveLength(2);
+    expect(new Headers(metadataCalls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-auth-token",
     );
     expect(isChatMediaResourceCurrent(restoredResource)).toBe(true);
     expect(restoredResource.subscribers.size).toBe(1);
     expect(
-      container.querySelector(".chat-assistant-attachment-card__link")?.getAttribute("href"),
+      container.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
     ).toContain("mediaTicket=root-restored-ticket");
 
     releaseChatMediaResourceSubscriber(renderPane);

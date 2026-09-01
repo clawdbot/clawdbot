@@ -1,6 +1,7 @@
 // Locates root memory files that seed agent context.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMissingPathError } from "../infra/errno.js";
 
 /** Canonical root memory file name used by current workspaces. */
 export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
@@ -50,7 +51,11 @@ export async function resolveCanonicalRootMemoryFile(workspaceDir: string): Prom
         return path.join(workspaceDir, entry.name);
       }
     }
-  } catch {}
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
   return null;
 }
 

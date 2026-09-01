@@ -15,7 +15,7 @@ import {
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { ExitError, type RuntimeEnv } from "../../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -328,10 +328,11 @@ export async function ensureConfigReady(
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
-    import("../../config/issue-format.js"),
-    import("../../config/issue-location.js"),
-  ]);
+  const [{ formatConfigIssueLines, normalizeConfigIssues }, { renderConfigValidationIssueLines }] =
+    await Promise.all([
+      import("../../config/issue-format.js"),
+      import("../../config/issue-location.js"),
+    ]);
   const issues =
     snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
   const legacyIssues =
@@ -399,6 +400,16 @@ export async function ensureConfigReady(
       "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ),
   );
+  if (
+    mustBlockInvalid &&
+    (await import("../json-output-mode.js")).isJsonOutputModeActive(process.argv)
+  ) {
+    const { formatCliJsonFailure } = await import("../failure-output.js");
+    writeRuntimeJson(params.runtime, {
+      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
+      issues: normalizeConfigIssues(snapshot.issues),
+    });
+  }
   if (isPluginPackagingFailure && isGatewayStartup) {
     params.runtime.exit(78);
     return;

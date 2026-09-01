@@ -45,6 +45,7 @@ const createForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const deleteMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const editForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const editMessageTelegramHoisted = vi.hoisted(() => vi.fn());
+const editMessageReplyMarkupTelegramHoisted = vi.hoisted(() => vi.fn());
 const reactMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const sendMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const sendPollTelegramHoisted = vi.hoisted(() => vi.fn());
@@ -64,6 +65,7 @@ const buildModelsProviderDataHoisted = vi.hoisted(() =>
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-test" },
     modelNames: new Map<string, string>(),
+    modelCatalog: [],
   })),
 );
 const listSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(() => []));
@@ -109,6 +111,7 @@ const resolveAgentWorkspaceDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/works
 const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
+const resolveHumanDelayConfigHoisted = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
 );
@@ -128,6 +131,7 @@ const createForumTopicTelegram = createForumTopicTelegramHoisted;
 const deleteMessageTelegram = deleteMessageTelegramHoisted;
 const editForumTopicTelegram = editForumTopicTelegramHoisted;
 export const editMessageTelegram = editMessageTelegramHoisted;
+export const editMessageReplyMarkupTelegram = editMessageReplyMarkupTelegramHoisted;
 const reactMessageTelegram = reactMessageTelegramHoisted;
 export const sendMessageTelegram = sendMessageTelegramHoisted;
 const sendPollTelegram = sendPollTelegramHoisted;
@@ -152,6 +156,7 @@ const findModelInCatalog = findModelInCatalogHoisted;
 const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
+export const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
@@ -231,6 +236,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
                 const providerInfo = {
                   ...info,
                   onPlatformSendDispatch: async () => undefined,
+                  assertPlatformSendAuthorized: () => undefined,
                 };
                 return delivery.deliverWithProviderMessageSending(payload, providerInfo);
               },
@@ -239,6 +245,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
             replyResolver: resolved.replyResolver,
+            dispatchReplyFromConfig: resolved.dispatchReplyFromConfig,
           });
           return withTelegramTestSettledReceipt(dispatchResult);
         },
@@ -273,6 +280,7 @@ vi.mock("./send.js", () => ({
   createForumTopicTelegram: createForumTopicTelegramHoisted,
   deleteMessageTelegram: deleteMessageTelegramHoisted,
   editForumTopicTelegram: editForumTopicTelegramHoisted,
+  editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,
   reactMessageTelegram: reactMessageTelegramHoisted,
   sendMessageTelegram: sendMessageTelegramHoisted,
@@ -297,6 +305,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveAgentDir: resolveAgentDirHoisted,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirHoisted,
   resolveDefaultModelForAgent: resolveDefaultModelForAgentHoisted,
+  resolveHumanDelayConfig: resolveHumanDelayConfigHoisted,
 }));
 
 vi.mock("./sticker-cache.js", () => ({
@@ -378,6 +387,7 @@ function resetTelegramDispatchTestState() {
   deleteMessageTelegram.mockReset();
   editForumTopicTelegram.mockReset();
   editMessageTelegram.mockReset();
+  editMessageReplyMarkupTelegram.mockReset();
   reactMessageTelegram.mockReset();
   sendMessageTelegram.mockReset();
   sendPollTelegram.mockReset();
@@ -406,6 +416,7 @@ function resetTelegramDispatchTestState() {
   modelSupportsVision.mockReset();
   resolveAgentDir.mockReset();
   resolveDefaultModelForAgent.mockReset();
+  resolveHumanDelayConfig.mockReset();
   loadConfig.mockReturnValue({});
   dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
     queuedFinal: false,
@@ -422,6 +433,7 @@ function resetTelegramDispatchTestState() {
   deleteMessageTelegram.mockResolvedValue(true);
   editForumTopicTelegram.mockResolvedValue(true);
   editMessageTelegram.mockResolvedValue({ ok: true });
+  editMessageReplyMarkupTelegram.mockResolvedValue({ ok: true });
   reactMessageTelegram.mockResolvedValue(true);
   sendMessageTelegram.mockResolvedValue({ message_id: 1001 });
   sendPollTelegram.mockResolvedValue({ message_id: 1001 });
@@ -432,12 +444,6 @@ function resetTelegramDispatchTestState() {
     created: true,
   });
   enqueueSystemEvent.mockResolvedValue(undefined);
-  buildModelsProviderData.mockResolvedValue({
-    byProvider: new Map<string, Set<string>>(),
-    providers: [],
-    resolvedDefault: { provider: "openai", model: "gpt-test" },
-    modelNames: new Map<string, string>(),
-  });
   listSkillCommandsForAgents.mockReturnValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,
@@ -467,6 +473,7 @@ function resetTelegramDispatchTestState() {
     provider: "openai",
     model: "gpt-test",
   });
+  resolveHumanDelayConfig.mockReturnValue(undefined);
   getGlobalHookRunner.mockReturnValue(null);
 }
 
@@ -668,6 +675,7 @@ export async function dispatchWithContext(params: {
   textLimit?: number;
   turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
   runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
+  opts?: Parameters<typeof dispatchTelegramMessage>[0]["opts"];
 }) {
   const bot = params.bot ?? createBot();
   return await dispatchTelegramMessage({
@@ -680,7 +688,7 @@ export async function dispatchWithContext(params: {
     textLimit: params.textLimit ?? 4096,
     telegramCfg: params.telegramCfg ?? {},
     telegramDeps: params.telegramDeps ?? telegramDepsForTest,
-    opts: { token: "token" },
+    opts: params.opts ?? { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
     turnAdoptionLifecycle: params.turnAdoptionLifecycle,

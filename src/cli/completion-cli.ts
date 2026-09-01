@@ -7,6 +7,9 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import {
   collectShellCompletionCommandTree,
+  commandNameVariants,
+  completionFlags,
+  visibleCompletionCommands,
   type ShellCompletionContext,
 } from "./completion-command-tree.js";
 import {
@@ -41,22 +44,12 @@ export function getCompletionScript(shell: CompletionShell, program: Command): s
   return generateFishCompletion(program);
 }
 
-function completionFlags(option: Option): string[] {
-  return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
-}
-
 function preferredCompletionFlag(option: Option): string {
   return option.long ?? option.short ?? option.flags;
 }
 
 function fishWords(values: readonly string[]): string {
   return values.join(" ");
-}
-
-// Aliases are typeable command words; every completion surface must offer them
-// alongside the canonical name or advertised commands appear nonexistent.
-function commandNameVariants(cmd: Command): string[] {
-  return [cmd.name(), ...cmd.aliases()];
 }
 
 function generateFishPathHelper(rootCmd: string, contexts: ShellCompletionContext[]): string {
@@ -203,7 +196,7 @@ export function registerCompletionCli(program: Command) {
       // introduce unrelated plugin failures before the cache can be checked or installed.
       if (options.install && !options.writeState) {
         const targetShell = options.shell ?? resolveShellFromEnv();
-        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        await installCompletion(targetShell, false, program.name());
         return;
       }
 
@@ -239,7 +232,7 @@ export function registerCompletionCli(program: Command) {
 
       if (options.install) {
         const targetShell = options.shell ?? resolveShellFromEnv();
-        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        await installCompletion(targetShell, false, program.name());
         return;
       }
 
@@ -307,6 +300,8 @@ function generateZshArgs(cmd: Command): string {
       const flags = completionFlags(opt);
       const name = preferredCompletionFlag(opt);
       const alternate = flags.find((flag) => flag !== name);
+      // `_arguments` hides `!` specs but still skips their values when locating subcommands.
+      const visibility = opt.hidden ? "!" : "";
       const desc = escapeZshDoubleQuotedDescription(opt.description);
       const choices = opt.argChoices?.map(escapeZshCompletionChoice).join(" ");
       const argument =
@@ -314,9 +309,9 @@ function generateZshArgs(cmd: Command): string {
           ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
           : "";
       if (alternate) {
-        return `"(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
+        return `"${visibility}(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
       }
-      return `"${name}[${desc}]${argument}"`;
+      return `"${visibility}${name}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
 }
@@ -327,7 +322,7 @@ function escapeZshCompletionChoice(choice: string): string {
 }
 
 function generateZshSubcmdList(cmd: Command): string {
-  const list = cmd.commands
+  const list = visibleCompletionCommands(cmd)
     .flatMap((c) => {
       const desc = c
         .description()
@@ -715,7 +710,7 @@ function generateFishCompletion(program: Command): string {
     );
     for (const condition of conditions) {
       // Subcommands (canonical names and aliases)
-      for (const sub of cmd.commands) {
+      for (const sub of visibleCompletionCommands(cmd)) {
         for (const name of commandNameVariants(sub)) {
           segments.push(
             buildFishSubcommandCompletionLine({
@@ -728,7 +723,7 @@ function generateFishCompletion(program: Command): string {
         }
       }
       // Options
-      for (const opt of cmd.options) {
+      for (const opt of cmd.options.filter((option) => !option.hidden)) {
         segments.push(
           buildFishOptionCompletionLine({
             rootCmd,

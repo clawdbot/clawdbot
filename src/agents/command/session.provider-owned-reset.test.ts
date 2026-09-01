@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
@@ -8,7 +8,11 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesCore: () =>
+  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+    const entry = hoisted.store[sessionKey];
+    return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
+  },
+  listSessionEntriesReadOnly: () =>
     Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
@@ -79,6 +83,7 @@ describe("command resolveSession provider-owned daily reset", () => {
         pendingTranscriptRepair: [
           { id: "predecessor-repair", text: "old reply", createdAt: startedAt },
         ],
+        lastRunId: "settled-old-run",
       },
     };
 
@@ -91,6 +96,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("old-session-id");
     expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
+    expect(result.sessionEntry?.lastRunId).toBeUndefined();
   });
 
   it("keeps a model-locked session across the daily boundary", () => {

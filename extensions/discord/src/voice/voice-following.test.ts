@@ -751,6 +751,25 @@ defineDiscordVoiceTests(
       expectConnectedStatus(manager, "1001");
     });
 
+    it("does not rejoin an empty occupancy-managed target after the bot is moved", async () => {
+      const manager = createManager(
+        makeVoiceConfig({
+          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+          allowedChannels: [{ guildId: "g1", channelId: "1001" }],
+        }),
+        undefined,
+        {},
+        "default",
+        "bot-user",
+      );
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      await updateVoiceState(manager, "bot-user", "1002");
+
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+      expect(manager.status()).toEqual([]);
+    });
+
     it("skips destroying stale tracked voice connections that are already destroyed", async () => {
       const staleConnection = createConnectionMock();
       staleConnection.state.status = "destroyed";

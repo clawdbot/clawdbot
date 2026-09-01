@@ -1,12 +1,10 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
-import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -27,100 +25,40 @@ import {
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, resolveReadPath } from "./path-utils.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
-import type { ReadToolDetails, ReadToolTruncationDetails } from "./tool-contracts.js";
-import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  truncateHead,
-  type TruncationResult,
-} from "./truncate.js";
-
-const readSchema = Type.Object({
-  path: Type.String({ description: "File path; relative/absolute." }),
-  offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
-  limit: Type.Optional(Type.Number({ description: "Max lines." })),
-});
-
-const ReadTruncationOutputSchema = Type.Object(
-  {
-    truncated: Type.Literal(true),
-    truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes")]),
-    totalLines: Type.Integer({ minimum: 0 }),
-    totalBytes: Type.Integer({ minimum: 0 }),
-    outputLines: Type.Integer({ minimum: 0 }),
-    outputBytes: Type.Integer({ minimum: 0 }),
-    lastLinePartial: Type.Boolean(),
-    firstLineExceedsLimit: Type.Boolean(),
-    maxLines: Type.Integer({ minimum: 1 }),
-    maxBytes: Type.Integer({ minimum: 1 }),
-  },
-  { additionalProperties: false },
-);
-
-const ReadToolOutputSchema = Type.Union([
-  Type.Object(
-    { kind: Type.Literal("text"), content: Type.String() },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("image"),
-      content: Type.String(),
-      mimeType: Type.String(),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("truncated"),
-      content: Type.String(),
-      truncation: ReadTruncationOutputSchema,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("not_found"),
-      status: Type.Literal("not_found"),
-      path: Type.String(),
-      optional: Type.Literal(true),
-    },
-    { additionalProperties: false },
-  ),
-]);
-
-function withoutTruncationContent(truncation: TruncationResult): ReadToolTruncationDetails {
-  const { content: _content, ...details } = truncation;
-  return details;
-}
-
-function createReadDetails(
-  content: (TextContent | ImageContent)[],
-  truncation?: TruncationResult,
-): ReadToolDetails {
-  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
-  const image = content.find((part): part is ImageContent => part.type === "image");
-  if (image) {
-    return { kind: "image", content: text, mimeType: image.mimeType };
-  }
-  if (truncation) {
-    return {
-      kind: "truncated",
-      content: text,
-      truncation: withoutTruncationContent(truncation),
-    };
-  }
-  return { kind: "text", content: text };
-}
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeysResolution,
+} from "./file-mutation-queue.js";
+import { normalizePositiveLimit } from "./limits.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
+import { createBoundedReadTextPage } from "./read-page.js";
+import {
+  createReadToolDetails,
+  readToolInputSchema,
+  readToolOutputSchema,
+} from "./read-tool-contract.js";
+import {
+  getTextOutput,
+  invalidArgText,
+  replaceTabs,
+  reuseTextComponent,
+  shortenPath,
+  str,
+  trimTrailingEmptyLines,
+} from "./render-utils.js";
+import type { ReadToolDetails } from "./tool-contracts.js";
+import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
@@ -180,6 +118,8 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Override these to delegate file reading to remote systems (for example SSH).
  */
 export interface ReadOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
@@ -218,9 +158,21 @@ export interface ReadToolOptions {
   autoResizeImages?: boolean;
   /** Custom operations for file reading. Default: local filesystem */
   operations?: ReadOperations;
+  /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
+  maxBytes?: number;
+  /** Prepared text budget; standalone readers retain their byte-only allowance. */
+  modelBudget?: ToolResultBudget;
+  /** Prepared capability for embedded calls, which carry no extension model context. */
+  modelHasVision?: boolean;
 }
 
-type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
+type ReadRenderArgs = {
+  path?: string;
+  file_path?: string;
+  offset?: number;
+  limit?: number;
+  cursor?: number;
+};
 
 function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
   if (args?.offset === undefined && args?.limit === undefined) {
@@ -240,25 +192,6 @@ function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string 
   const pathDisplay =
     path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
   return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
-}
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
-}
-
-function getNonVisionImageNote(model: Model | undefined): string | undefined {
-  if (!model || model.input.includes("image")) {
-    return undefined;
-  }
-  return "[Current model does not support images. The image will be omitted from this request.]";
-}
-
-function quotePosixShellArg(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function getOpenClawDocsClassification(
@@ -291,7 +224,7 @@ function getCompactReadClassification(
     return undefined;
   }
 
-  const absolutePath = resolveReadPath(rawPath, cwd);
+  const absolutePath = resolveToCwd(rawPath, cwd);
   const fileName = basename(absolutePath);
   if (fileName === "SKILL.md") {
     return { kind: "skill", label: basename(dirname(absolutePath)) || fileName };
@@ -314,15 +247,21 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveReadPath(filePath, cwd);
+  return resolveLocalPathToCwd(filePath, cwd);
 }
 
-async function resolveReadToolPath(
+async function resolveReadToolInputPath(
   ops: ReadOperations,
   filePath: string,
   cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
+
+async function resolveReadToolPathFromAbsolute(
+  ops: ReadOperations,
+  absolutePath: string,
 ): Promise<{ absolutePath: string; note?: string }> {
-  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
   try {
     await ops.access(absolutePath);
     return { absolutePath };
@@ -435,20 +374,27 @@ function formatReadResult(
 export function createReadToolDefinition(
   cwd: string,
   options?: ReadToolOptions,
-): ToolDefinition<typeof readSchema, ReadToolDetails> {
+): ToolDefinition<typeof readToolInputSchema, ReadToolDetails> {
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
+  const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
   return {
     name: "read",
     label: "read",
-    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Large/full file: continue offset/limit.`,
+    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
     promptSnippet: "Read file contents",
-    promptGuidelines: ["Use read to examine files instead of cat or sed."],
-    parameters: readSchema,
-    outputSchema: ReadToolOutputSchema,
+    promptGuidelines: ["Use read to examine files and its offset, limit, or cursor to continue."],
+    parameters: readToolInputSchema,
+    outputSchema: readToolOutputSchema,
     async execute(
       toolCallId,
-      { path, offset, limit }: { path: string; offset?: number; limit?: number },
+      {
+        path,
+        offset,
+        limit,
+        cursor,
+        optional,
+      }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -457,6 +403,9 @@ export function createReadToolDefinition(
       void onUpdate;
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
+      }
+      if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+        throw new Error("Cursor must be an integer at least 0");
       }
       return new Promise<{
         content: (TextContent | ImageContent)[];
@@ -475,15 +424,70 @@ export function createReadToolDefinition(
 
         void (async () => {
           try {
-            const { absolutePath, note } = await resolveReadToolPath(ops, path, cwd);
-            if (aborted) {
+            let absolutePath: string;
+            let note: string | undefined;
+            let buffer: Buffer;
+            try {
+              // Share write/edit ordering through byte capture only. Decode the
+              // immutable snapshot below after releasing the path queue.
+              const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
+              const queueKeysResolution = inputPathResolution.then(
+                async (absoluteInputPath) =>
+                  await Promise.all(
+                    getReadQueuePaths(absoluteInputPath).map(
+                      async (candidate) =>
+                        await resolveFileMutationQueueKey(candidate, ops.resolveQueueKey, signal),
+                    ),
+                  ),
+              );
+              const snapshot = await withFileMutationQueueKeysResolution(
+                queueKeysResolution,
+                async () => {
+                  const absoluteInputPath = await inputPathResolution;
+                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  if (aborted) {
+                    return undefined;
+                  }
+                  return {
+                    ...resolved,
+                    buffer: await ops.readFile(resolved.absolutePath),
+                  };
+                },
+              );
+              if (!snapshot) {
+                return;
+              }
+              ({ absolutePath, note, buffer } = snapshot);
+            } catch (error) {
+              if (aborted) {
+                return;
+              }
+              if (
+                optional !== true ||
+                (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
+              ) {
+                throw error;
+              }
+              signal?.removeEventListener("abort", onAbort);
+              resolve({
+                content: [{ type: "text", text: `Optional file not found: ${path}.` }],
+                details: {
+                  kind: "not_found",
+                  status: "not_found",
+                  path,
+                  optional: true,
+                },
+              });
               return;
             }
-            const buffer = await ops.readFile(absolutePath);
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
-            let truncationDetails: TruncationResult | undefined;
-            const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+            let truncated: Parameters<typeof createReadToolDetails>[1];
+            const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
+            const nonVisionImageNote =
+              modelHasVision === false
+                ? "[Current model does not support images. The image will be omitted from this request.]"
+                : undefined;
             if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
@@ -504,7 +508,10 @@ export function createReadToolDefinition(
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
                 }
-                content = [{ type: "text", text: textNote }, processed.image];
+                content = [{ type: "text", text: textNote }];
+                if (!nonVisionImageNote) {
+                  content.push(processed.image);
+                }
               }
             } else {
               const decodedText =
@@ -528,7 +535,23 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
+              } else if (cursor !== undefined && cursor >= allLines[startLine]!.length) {
+                const nextLine =
+                  startLine + 1 < totalFileLines
+                    ? ` Use offset=${startLineDisplay + 1} to continue.`
+                    : "";
+                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${allLines[startLine]!.length} characters).${nextLine}`;
               } else {
+                const firstLine = allLines[startLine]!;
+                if (
+                  cursor !== undefined &&
+                  cursor > 0 &&
+                  firstLine.codePointAt(cursor - 1)! > 0xffff
+                ) {
+                  throw new Error(
+                    `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
+                  );
+                }
                 const endLine =
                   limit === undefined
                     ? totalFileLines
@@ -537,6 +560,9 @@ export function createReadToolDefinition(
                         totalFileLines,
                       );
                 const selectedLines = allLines.slice(startLine, endLine);
+                if (cursor !== undefined) {
+                  selectedLines[0] = firstLine.slice(cursor);
+                }
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
                 if (selectedLines.every((line) => line.length === 0)) {
                   const selectedLineCount = selectedLines.length;
@@ -552,33 +578,23 @@ export function createReadToolDefinition(
                   if (endLine === totalFileLines && textContent.endsWith("\n")) {
                     selectedContent += "\n";
                   }
-                  const truncation = truncateHead(selectedContent);
-                  if (truncation.firstLineExceedsLimit) {
-                    const lineBreak = selectedContent.indexOf("\n");
-                    const firstLine =
-                      lineBreak === -1 ? selectedContent : selectedContent.slice(0, lineBreak);
-                    const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
-                    outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
-                    truncationDetails = { ...truncation, totalLines: totalFileLines };
-                  } else if (truncation.truncated) {
-                    const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
-                    const nextOffset = endLineDisplay + 1;
-                    outputText = truncation.content;
-                    if (truncation.truncatedBy === "lines") {
-                      outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
-                    } else {
-                      outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
-                    }
-                    truncationDetails = { ...truncation, totalLines: totalFileLines };
-                  } else if (
-                    userLimitedLines !== undefined &&
-                    startLine + userLimitedLines < totalFileLines
-                  ) {
-                    const remaining = totalFileLines - (startLine + userLimitedLines);
-                    const nextOffset = startLine + userLimitedLines + 1;
-                    outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
-                  } else {
-                    outputText = truncation.content;
+                  const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
+                  const page = createBoundedReadTextPage({
+                    content: selectedContent,
+                    startLine: startLineDisplay,
+                    endLine,
+                    totalLines: totalFileLines,
+                    cursor,
+                    limit: userLimitedLines,
+                    maxBytes,
+                    modelBudget: options?.modelBudget,
+                    prefix: note ? `${note}\n` : undefined,
+                    pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
+                    adaptive: options?.maxBytes !== undefined,
+                  });
+                  outputText = page.content;
+                  if (page.kind === "truncated") {
+                    truncated = page;
                   }
                 }
               }
@@ -596,7 +612,7 @@ export function createReadToolDefinition(
               return;
             }
             signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadDetails(content, truncationDetails) });
+            resolve({ content, details: createReadToolDetails(content, truncated) });
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
@@ -607,31 +623,25 @@ export function createReadToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const classification = !context.expanded
         ? getCompactReadClassification(args, context.cwd)
         : undefined;
-      text.setText(
-        classification
-          ? formatCompactReadCall(classification, args, theme)
-          : formatReadCall(args, theme),
-      );
-      return text;
+      const content = classification
+        ? formatCompactReadCall(classification, args, theme)
+        : formatReadCall(args, theme);
+      return reuseTextComponent(context.lastComponent, content);
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(
-        formatReadResult(
-          context.args,
-          result,
-          optionsLocal,
-          theme,
-          context.showImages,
-          context.cwd,
-          context.isError,
-        ),
+      const content = formatReadResult(
+        context.args,
+        result,
+        optionsLocal,
+        theme,
+        context.showImages,
+        context.cwd,
+        context.isError,
       );
-      return text;
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }
@@ -639,6 +649,6 @@ export function createReadToolDefinition(
 export function createReadTool(
   cwd: string,
   options?: ReadToolOptions,
-): AgentTool<typeof readSchema> {
+): AgentTool<typeof readToolInputSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

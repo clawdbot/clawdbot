@@ -1,19 +1,22 @@
 // Control UI tests prove trusted-proxy and browser-origin auth through real transports.
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayServer } from "../../../src/gateway/server.js";
-import { waitForActiveGatewayRootWork } from "../../../src/process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -34,6 +37,9 @@ const artifactDir = path.resolve(
 );
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
+const configProofIdentifier = "9223372036854775807";
+const configProofPrefixBefore = "proof-before";
+const configProofPrefixAfter = "proof-after";
 const controlUiSettleTimeoutMs = 60_000;
 const originProxyHeaderBlocklist = new Set([
   "connection",
@@ -66,6 +72,8 @@ type ProxyConnectionEvidence = {
   browserOrigin: string | null;
   gatewayResult?: GatewayResultEvidence;
   identityInjected: boolean;
+  requestTarget: string;
+  requestMethods: string[];
   requiredHeaderInjected: boolean;
   route: ProxyRoute;
   upstreamHandshakeStatus?: number;
@@ -74,6 +82,7 @@ type ProxyConnectionEvidence = {
 type RealTransportProxy = {
   close: () => Promise<void>;
   evidence: ProxyConnectionEvidence[];
+  ipv4TrustedUrl: string;
   port: number;
   trustedUrl: string;
   untrustedUrl: string;
@@ -81,6 +90,7 @@ type RealTransportProxy = {
 
 type RealGateway = {
   cleanup: () => Promise<void>;
+  httpUrl: string;
   port: number;
   server: GatewayServer;
   state: OpenClawTestState;
@@ -165,6 +175,8 @@ function sanitizeProxyEvidence(evidence: ProxyConnectionEvidence) {
     browserOriginPresent: Boolean(evidence.browserOrigin),
     gatewayResult: evidence.gatewayResult,
     identityInjected: evidence.identityInjected,
+    requestTarget: evidence.requestTarget,
+    requestMethods: evidence.requestMethods,
     requiredHeaderInjected: evidence.requiredHeaderInjected,
     route: evidence.route,
     upstreamHandshakeStatus: evidence.upstreamHandshakeStatus,
@@ -199,6 +211,10 @@ function startProxyConnection(
     const frame = parseJsonFrame(data);
     if (frame) {
       connectRequestId = captureBrowserConnect(evidence, frame) ?? connectRequestId;
+      const method = frame.type === "req" ? stringValue(frame.method) : null;
+      if (method && method !== "connect") {
+        evidence.requestMethods.push(method);
+      }
     }
     if (upstream.readyState === WebSocket.OPEN) {
       upstream.send(data, { binary: isBinary });
@@ -280,6 +296,8 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
       const connectionEvidence: ProxyConnectionEvidence = {
         browserOrigin: stringValue(request.headers.origin),
         identityInjected: route === "trusted",
+        requestTarget: request.url ?? "",
+        requestMethods: [],
         requiredHeaderInjected: route === "trusted",
         route,
       };
@@ -310,6 +328,7 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
       });
     },
     evidence,
+    ipv4TrustedUrl: `ws://127.0.0.1:${address.port}/trusted`,
     port: address.port,
     trustedUrl: `${baseUrl}/trusted`,
     untrustedUrl: `${baseUrl}/untrusted`,
@@ -377,6 +396,7 @@ async function getFreePort(): Promise<number> {
 
 async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
   const port = await getFreePort();
+  const httpUrl = `http://127.0.0.1:${port}/`;
   const state = await createOpenClawTestState({
     label: "control-ui-auth-transports",
     layout: "home",
@@ -398,20 +418,33 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
     allowUsers: [trustedProxyUser],
     deviceAutoApprove: {
       enabled: true,
-      scopes: ["operator.approvals", "operator.questions", "operator.read", "operator.write"],
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.write",
+      ],
     },
     requiredHeaders: ["x-forwarded-proto"],
     userHeader: "x-forwarded-user",
   };
   await state.writeConfig({
+    messages: { responsePrefix: configProofPrefixBefore },
+    tools: {
+      elevated: {
+        allowFrom: { discord: [configProofIdentifier] },
+      },
+    },
     gateway: {
       auth: {
         mode: "trusted-proxy",
         trustedProxy,
       },
       controlUi: {
-        allowedOrigins: [allowedOrigin],
-        enabled: false,
+        allowedOrigins: [allowedOrigin, new URL(httpUrl).origin],
+        enabled: true,
+        root: path.resolve("dist/control-ui"),
       },
       port,
       trustedProxies: ["127.0.0.1", "::1"],
@@ -426,7 +459,7 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
         trustedProxy,
       },
       bind: "loopback",
-      controlUiEnabled: false,
+      controlUiEnabled: true,
       sidecarStartup: "defer",
     });
     return {
@@ -434,6 +467,7 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
         await server.close({ reason: "control ui auth transports test cleanup" });
         await state.cleanup();
       },
+      httpUrl,
       port,
       server,
       state,
@@ -478,8 +512,8 @@ async function createBrowserPage(
     waitUntil: "domcontentloaded",
   });
   expect(response?.status()).toBe(200);
-  // Source-served UI startup shares CI shard CPU. Bound navigation and the
-  // first rendered interaction separately; transport assertions stay narrow.
+  // Browser startup shares CI shard CPU. Bound navigation and the first
+  // rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
   await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
@@ -502,7 +536,7 @@ async function closeConnectedContext(context: BrowserContext): Promise<void> {
   await closeContext(context);
   // UI requests intentionally outlive socket teardown. Drain their admitted work
   // before another browser interaction so lazy handler imports cannot starve it.
-  await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ active: 0, drained: true });
+  await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
 }
 
 async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
@@ -521,6 +555,105 @@ async function captureChromiumScreenshot(page: Page, fileName: string): Promise<
     await writeFile(path.join(artifactDir, fileName), Buffer.from(result.data, "base64"));
   } finally {
     await session.detach();
+  }
+}
+
+async function verifyGatewayServedControlUiBundle(httpUrl: string): Promise<{
+  assetPath: string;
+  assetSha256: string;
+}> {
+  const distRoot = path.resolve("dist/control-ui");
+  const builtIndex = await readFile(path.join(distRoot, "index.html"), "utf8");
+  const assetPath = builtIndex.match(/<script[^>]+src="\.\/(assets\/[^"]+\.js)"/u)?.[1];
+  if (!assetPath) {
+    throw new Error("built Control UI index has no JavaScript asset path");
+  }
+  const servedIndexResponse = await fetch(httpUrl);
+  expect(servedIndexResponse.status).toBe(200);
+  expect(await servedIndexResponse.text()).toContain(`src="/${assetPath}"`);
+  const servedAssetResponse = await fetch(new URL(assetPath, httpUrl));
+  expect(servedAssetResponse.status).toBe(200);
+  const servedAsset = Buffer.from(await servedAssetResponse.arrayBuffer());
+  const builtAsset = await readFile(path.join(distRoot, assetPath));
+  const hash = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+  const assetSha256 = hash(builtAsset);
+  expect(hash(servedAsset)).toBe(assetSha256);
+  return { assetPath, assetSha256 };
+}
+
+async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix: string | null }> {
+  const config = asNullableRecord(JSON.parse(await readFile(gateway.state.configPath, "utf8")));
+  const messages = asNullableRecord(config?.messages);
+  const tools = asNullableRecord(config?.tools);
+  const elevated = asNullableRecord(tools?.elevated);
+  const allowFrom = asNullableRecord(elevated?.allowFrom);
+  const discord = Array.isArray(allowFrom?.discord) ? allowFrom.discord : [];
+  return {
+    identifier: discord[0],
+    prefix: stringValue(messages?.responsePrefix),
+  };
+}
+
+async function captureConfigReadbackFailure(page: Page): Promise<void> {
+  const deadline = new AbortController();
+  try {
+    // Capture fixed name/connection facts, never label text or auth/config state.
+    // The separate deadline must not hide the original click failure.
+    const snapshot = await Promise.race([
+      Promise.all([
+        page.evaluate(() => {
+          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+            "openclaw-app",
+          );
+          const phase = app?.runtime?.context.gateway.snapshot.phase;
+          const phases = [
+            "stopped",
+            "connecting",
+            "starting",
+            "connected",
+            "reconnecting",
+            "reload-required",
+            "offline",
+          ];
+          return {
+            pathname: location.pathname.slice(0, 160),
+            navigationAgeMs: Math.round(performance.now()),
+            gatewayPhase: phases.includes(phase ?? "") ? phase : "unknown",
+            mainInert: document.querySelector("main")?.inert ?? null,
+            outletInert:
+              document.querySelector<HTMLElement>("openclaw-router-outlet")?.inert ?? null,
+            rawButtons: [
+              ...document.querySelectorAll<HTMLButtonElement>(".config-mode-toggle button"),
+            ]
+              .filter((button) => button.textContent?.trim() === "Raw")
+              .slice(0, 3)
+              .map((button) => ({
+                disabled: button.disabled,
+                hasLayout: button.getClientRects().length > 0,
+                inertAncestor: button.closest("[inert]") !== null,
+                label: !button.hasAttribute("aria-label")
+                  ? "absent"
+                  : button.getAttribute("aria-label") === "Raw"
+                    ? "raw"
+                    : "other",
+                labelledBy: button.hasAttribute("aria-labelledby"),
+              })),
+          };
+        }),
+        page.getByRole("button", { name: "Raw", exact: true }).count(),
+        page.getByRole("button", { name: "Raw", exact: true, includeHidden: true }).count(),
+      ])
+        .then(([state, roleMatches, roleMatchesIncludingHidden]) => ({
+          ...state,
+          roleMatches,
+          roleMatchesIncludingHidden,
+        }))
+        .catch(() => "unavailable"),
+      delay(1_000, "timed-out", { signal: deadline.signal }),
+    ]);
+    console.error(`[real-config-readback-failure] ${JSON.stringify(snapshot)}`);
+  } finally {
+    deadline.abort();
   }
 }
 
@@ -563,6 +696,7 @@ async function isPortClosed(host: string, port: number): Promise<boolean> {
 
 describeControlUiE2e("Control UI real auth transports E2E", () => {
   beforeAll(async () => {
+    console.info("[real-config-id-proof] setup-start");
     if (!chromiumAvailable) {
       throw new Error(
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
@@ -576,6 +710,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     gateway = await startRealGateway(new URL(allowedUi.baseUrl).origin);
     proxy = await startRealTransportProxy(gateway.url);
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    console.info("[real-config-id-proof] setup-ready");
   }, 120_000);
 
   afterAll(async () => {
@@ -612,6 +747,96 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   afterEach(async () => {
     await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
     openContexts.clear();
+  });
+
+  it("preserves a 64-bit identifier through a real Gateway form save", async () => {
+    const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
+    const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
+    await connected.page
+      .locator("openclaw-app-shell")
+      .waitFor({ timeout: controlUiSettleTimeoutMs });
+    const servedAssetLoaded = await connected.page.evaluate(
+      (assetPath) =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => new URL(entry.name).pathname.endsWith(`/${assetPath}`)),
+      servedBundle.assetPath,
+    );
+    expect(servedAssetLoaded).toBe(true);
+
+    const rawSettingsUrl = new URL("settings/advanced", gateway.httpUrl);
+    rawSettingsUrl.searchParams.set("section", "env");
+    expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
+    await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    const rawEditorBefore = connected.page.locator(".config-raw-field textarea");
+    await rawEditorBefore.waitFor();
+    await expect.poll(() => rawEditorBefore.inputValue()).toContain(`"${configProofIdentifier}"`);
+    await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
+    await rawEditorBefore.scrollIntoViewIfNeeded();
+    await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
+
+    const settingsUrl = new URL("settings/communications", gateway.httpUrl);
+    settingsUrl.searchParams.set("section", "messages");
+    expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
+    const prefix = connected.page.getByRole("textbox", {
+      name: "Outbound Response Prefix",
+      exact: true,
+    });
+    await expect.poll(() => prefix.inputValue()).toBe(configProofPrefixBefore);
+    const configSetCount = () =>
+      proxy.evidence
+        .slice(connected.evidenceStartIndex)
+        .flatMap((entry) => entry.requestMethods)
+        .filter((method) => method === "config.set").length;
+    const configSetCountBefore = configSetCount();
+    await prefix.fill(configProofPrefixAfter);
+
+    await expect.poll(configSetCount, { timeout: 15_000 }).toBeGreaterThan(configSetCountBefore);
+    await expect
+      .poll(async () => (await readConfigProofSnapshot()).prefix)
+      .toBe(configProofPrefixAfter);
+    const persisted = await readConfigProofSnapshot();
+    expect(persisted.identifier).toBe(configProofIdentifier);
+    expect(typeof persisted.identifier).toBe("string");
+
+    await connected.page.reload({ waitUntil: "domcontentloaded" });
+    await connected.page
+      .locator("openclaw-app-shell")
+      .waitFor({ timeout: controlUiSettleTimeoutMs });
+    expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
+    try {
+      await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    } catch (error) {
+      await captureConfigReadbackFailure(connected.page).catch(() => {});
+      throw error;
+    }
+    const rawEditor = connected.page.locator(".config-raw-field textarea");
+    await rawEditor.waitFor();
+    await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
+    await expect.poll(() => rawEditor.inputValue()).toContain(configProofPrefixAfter);
+    await rawEditor.scrollIntoViewIfNeeded();
+
+    const proof = {
+      configSetRequests: configSetCount() - configSetCountBefore,
+      identifierMatches: persisted.identifier === configProofIdentifier,
+      identifierType: typeof persisted.identifier,
+      method: "config.set",
+      persistedPrefix: persisted.prefix,
+      rawReadbackQuoted: true,
+      servedAssetLoaded,
+      servedAssetPath: servedBundle.assetPath,
+      servedAssetSha256: servedBundle.assetSha256,
+      uiSource: "gateway-dist-control-ui",
+    };
+    await writeFile(
+      path.join(artifactDir, "real-gateway-config-id-proof.json"),
+      `${JSON.stringify(proof, null, 2)}\n`,
+      "utf8",
+    );
+    console.info(`[real-config-id-proof] ${JSON.stringify(proof)}`);
+    await captureChromiumScreenshot(connected.page, "02-real-config-id-after.png");
+    expect(connected.errors).toEqual([]);
+    await closeConnectedContext(connected.context);
   });
 
   it("connects through the trusted path and rejects the untrusted proxy path", async () => {
@@ -673,6 +898,93 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       )}\n`,
       "utf8",
     );
+  });
+
+  it("does not forward prior Gateway credentials across URL scopes", async () => {
+    const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
+    await connected.page
+      .locator("openclaw-app-shell")
+      .waitFor({ timeout: controlUiSettleTimeoutMs });
+
+    const seededEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({
+        gatewayUrl,
+        token: "prior-gateway-token",
+        password: "prior-gateway-password",
+        bootstrapToken: "prior-gateway-bootstrap",
+      });
+    }, proxy.trustedUrl);
+    await waitForConnectionEvidence(
+      (entry) =>
+        entry.requestTarget === "/trusted" &&
+        entry.browserConnect?.authFields.includes("bootstrapToken") === true,
+      seededEvidenceStart,
+    );
+
+    const queryScopedUrl = `${proxy.trustedUrl}?credential-scope=next`;
+    const queryEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({ gatewayUrl });
+    }, queryScopedUrl);
+    const queryEvidence = await waitForConnectionEvidence(
+      (entry) =>
+        entry.requestTarget === "/trusted?credential-scope=next" &&
+        entry.browserConnect !== undefined,
+      queryEvidenceStart,
+    );
+    expect(queryEvidence.browserConnect?.authFields).toEqual(["token"]);
+
+    const originEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({ gatewayUrl });
+    }, proxy.ipv4TrustedUrl);
+    const originEvidence = await waitForConnectionEvidence(
+      (entry) => entry.requestTarget === "/trusted" && entry.gatewayResult?.ok === true,
+      originEvidenceStart,
+    );
+    expect(originEvidence.browserConnect?.authFields).toEqual([]);
+
+    const proof = {
+      differentOrigin: {
+        emittedAuthFields: originEvidence.browserConnect?.authFields ?? [],
+        priorApplicationCredentialsAbsent: true,
+        requestTarget: originEvidence.requestTarget,
+      },
+      queryOnly: {
+        emittedAuthFields: queryEvidence.browserConnect?.authFields ?? [],
+        passwordBootstrapAndDeviceTokenAbsent: true,
+        requestTarget: queryEvidence.requestTarget,
+        tokenOriginScopePreserved: true,
+      },
+      source: "built-control-ui-browser-to-real-gateway-proxy",
+    };
+    await writeFile(
+      path.join(artifactDir, "gateway-credential-rescope-proof.json"),
+      `${JSON.stringify(proof, null, 2)}\n`,
+      "utf8",
+    );
+    console.info(`[gateway-credential-rescope-proof] ${JSON.stringify(proof)}`);
+    expect(connected.errors).toEqual([]);
+    await closeConnectedContext(connected.context);
   });
 
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {

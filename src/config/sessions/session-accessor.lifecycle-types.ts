@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
+import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleArtifactCleanupParams = {
@@ -59,7 +60,7 @@ export type ResetSessionEntryLifecycleParams = {
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
   /** Atomically append this boundary with the reset entry mutation. */
-  resetBoundaryReason?: SessionResetBoundaryReason;
+  resetBoundary?: SessionResetBoundaryRequest;
   /** Explicit store target for SQLite session ownership. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -75,6 +76,8 @@ export type DeleteSessionEntryLifecycleResult = {
 };
 
 export type DeleteSessionEntryLifecycleParams = {
+  /** Revalidate caller and external lifecycle owners at each synchronous deletion boundary. */
+  commitGuard?: () => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
@@ -130,9 +133,20 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
       }
   );
 
+export class SessionEntryLifecycleUpsertConflictError extends Error {
+  constructor(readonly sessionKey: string) {
+    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+    this.name = "SessionEntryLifecycleUpsertConflictError";
+  }
+}
+
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
-  resetBoundaryReason?: SessionResetBoundaryReason;
+  /** Apply this upsert only when the named removal was projected in the same mutation. */
+  requiresRemovalSessionKey?: string;
+  /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
+  routeContext?: ConversationRouteContext | null;
+  resetBoundary?: SessionResetBoundaryRequest;
 } & (
   | {
       entry: SessionEntry;
@@ -142,7 +156,6 @@ export type SessionEntryLifecycleUpsert = {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
         sessionKey: string;
-        store: Record<string, SessionEntry>;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;
     }
@@ -157,6 +170,7 @@ export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;
   removedEntries: number;
   removedSessionKeys: string[];
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;

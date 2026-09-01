@@ -119,6 +119,40 @@ describe("profile avatar HTTP endpoint", () => {
     expect(getProfileAvatar).not.toHaveBeenCalled();
   });
 
+  it("authenticates and claims a malformed configured-base avatar route without profile lookup", async () => {
+    const res = response();
+    const pathname = "/control/api/users/profile-1/avatar/extra";
+
+    const handled = await handleUserProfileAvatarHttpRequest(
+      request(pathname),
+      res.response,
+      pathname,
+      { auth: {} as never, basePath: "/control" },
+    );
+
+    expect(handled).toBe(true);
+    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledOnce();
+    expect(res.response.statusCode).toBe(404);
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+    expect(getProfileAvatar).not.toHaveBeenCalled();
+    expect(getUserProfileListItem).not.toHaveBeenCalled();
+  });
+
+  it("leaves unrelated paths unhandled", async () => {
+    const res = response();
+
+    const handled = await handleUserProfileAvatarHttpRequest(
+      request("/__openclaw__/workspace-icon/one"),
+      res.response,
+      "/__openclaw__/workspace-icon/one",
+      { auth: {} as never, basePath: "/control" },
+    );
+
+    expect(handled).toBe(false);
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
+    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+  });
+
   it("answers a matching ETag without a body", async () => {
     getProfileAvatar.mockReturnValue({
       bytes: new Uint8Array([1]),

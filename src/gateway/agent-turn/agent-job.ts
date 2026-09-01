@@ -59,7 +59,7 @@ type AgentRunObservation = AgentJobTerminalSnapshot & {
 type AgentRunSnapshot = AgentRunObservation & { cachedAt: number };
 type PendingAgentRunTerminal = {
   snapshot: AgentRunObservation;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 };
 type AgentJobRecord = {
   cachedAt: number;
@@ -195,12 +195,6 @@ function mergeSnapshot(
   };
 }
 
-function notifyAgentRunWaiters(runId: string) {
-  for (const waiter of agentRunWaiters.get(runId) ?? []) {
-    waiter();
-  }
-}
-
 function recordAgentRunSnapshot(
   snapshot: Omit<AgentRunObservation, "version">,
   version = nextAgentRunVersion(),
@@ -218,31 +212,24 @@ function recordAgentRunSnapshot(
     snapshotsBySource,
   });
   enforceAgentRunCacheMaxEntries();
-  notifyAgentRunWaiters(entry.runId);
+  for (const waiter of agentRunWaiters.get(entry.runId) ?? []) {
+    waiter();
+  }
 }
 
-function clearPendingAgentRunError(runId: string) {
-  const pending = pendingAgentRunErrors.get(runId);
-  if (!pending) {
-    return;
+function clearPendingAgentRunTerminals(runId: string) {
+  for (const pendingRuns of [pendingAgentRunErrors, pendingAgentRunTimeouts]) {
+    const pending = pendingRuns.get(runId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingRuns.delete(runId);
+    }
   }
-  clearTimeout(pending.timer);
-  pendingAgentRunErrors.delete(runId);
-}
-
-function clearPendingAgentRunTimeout(runId: string) {
-  const pending = pendingAgentRunTimeouts.get(runId);
-  if (!pending) {
-    return;
-  }
-  clearTimeout(pending.timer);
-  pendingAgentRunTimeouts.delete(runId);
 }
 
 function beginAgentJob(runId: string, startedAt?: number) {
   nextAgentRunVersion();
-  clearPendingAgentRunError(runId);
-  clearPendingAgentRunTimeout(runId);
+  clearPendingAgentRunTerminals(runId);
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
@@ -267,11 +254,20 @@ function schedulePendingAgentRunTerminal(
     terminalSnapshot.version = snapshot.version;
     return;
   }
-  clearPendingAgentRunError(snapshot.runId);
-  clearPendingAgentRunTimeout(snapshot.runId);
+  const replacesPendingTimeout = pendingAgentRunTimeouts.has(snapshot.runId);
+  clearPendingAgentRunTerminals(snapshot.runId);
   const timer = setSafeTimeout(() => {
     const pending = pendingRuns.get(snapshot.runId);
     if (!pending || pending.timer !== timer) {
+      return;
+    }
+    if (
+      pendingRuns === pendingAgentRunErrors &&
+      !replacesPendingTimeout &&
+      terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
+      agentRunWaiters.has(snapshot.runId)
+    ) {
+      pending.timer = undefined;
       return;
     }
     pendingRuns.delete(snapshot.runId);
@@ -375,8 +371,7 @@ function ensureAgentRunListener() {
       return;
     }
     const terminalSnapshot = mergePendingAgentRunTerminal(snapshot);
-    clearPendingAgentRunError(evt.runId);
-    clearPendingAgentRunTimeout(evt.runId);
+    clearPendingAgentRunTerminals(evt.runId);
     recordAgentRunSnapshot(terminalSnapshot, snapshot.version);
   });
 }
@@ -564,6 +559,11 @@ function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
     waiters.delete(waiter);
     if (waiters.size === 0) {
       agentRunWaiters.delete(runId);
+      const pendingError = pendingAgentRunErrors.get(runId);
+      if (pendingError && !pendingError.timer) {
+        pendingAgentRunErrors.delete(runId);
+        recordAgentRunSnapshot(pendingError.snapshot, pendingError.snapshot.version);
+      }
     }
   };
 }
@@ -635,10 +635,12 @@ export async function waitForAgentJob(params: {
     removeWaiter = addAgentRunWaiter(params.runId, onWake);
     const timeoutHandle = setSafeTimeout(() => {
       if (!params.source) {
-        const pendingError = pendingAgentRunErrors.get(params.runId)?.snapshot;
+        const pending = pendingAgentRunErrors.get(params.runId);
+        const pendingError = pending?.snapshot;
         if (pendingError && pendingError.version > afterVersion) {
           finish(
-            isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
+            !pending.timer ||
+              isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
               ? publicSnapshot(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );

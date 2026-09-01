@@ -9,8 +9,6 @@
 // Collector-boundary cases run owned mode, which now composes private providers and never
 // registers global SDK state; teardown still restores the preloaded globals for trace cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type IncomingHttpHeaders } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
@@ -33,15 +31,14 @@ import {
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import {
-  runModelCallAndCaptureTraceparent,
-  startLocalOtlpReceiver,
-} from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
+import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,
   emitRealSdkSignals,
   startOtelService,
+  startOtlpReceiver,
   stopStartedOtelServices,
 } from "./service.test-helpers.js";
 
@@ -201,43 +198,6 @@ function captureOtelDiagnostics(): string[] {
   return messages;
 }
 
-async function startOtlpReceiver() {
-  const requests: Array<{
-    contentType: string | undefined;
-    headers: IncomingHttpHeaders;
-    method: string | undefined;
-    url: string;
-  }> = [];
-  const server = createServer((request, response) => {
-    request.resume();
-    request.on("end", () => {
-      requests.push({
-        contentType: request.headers["content-type"],
-        headers: request.headers,
-        method: request.method,
-        url: request.url ?? "",
-      });
-      response.writeHead(200, { "content-type": "application/x-protobuf" });
-      response.end();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
-  return {
-    endpoint: `http://127.0.0.1:${port}`,
-    requests,
-    async close() {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeIdleConnections();
-      });
-    },
-  };
-}
-
 function releasePreloadedOtelGlobals() {
   context.disable();
   logs.disable();
@@ -276,11 +236,42 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
       "/api/public/otel/v1/logs",
     ],
   },
+  {
+    label: "signal-qualified path with trailing slash",
+    suffix: "/api/public/otel/v1/traces/",
+    expected: [
+      "/api/public/otel/v1/traces",
+      "/api/public/otel/v1/metrics",
+      "/api/public/otel/v1/logs",
+    ],
+  },
+  {
+    label: "custom path with query slash",
+    suffix: "/api/public/otel/?tenant=team/",
+    expected: [
+      "/api/public/otel/v1/traces?tenant=team/",
+      "/api/public/otel/v1/metrics?tenant=team/",
+      "/api/public/otel/v1/logs?tenant=team/",
+    ],
+  },
+  {
+    label: "signal path with query slash",
+    suffix: "/api/public/otel/v1/traces/?tenant=team/",
+    expected: [
+      "/api/public/otel/v1/traces/?tenant=team/",
+      "/api/public/otel/v1/metrics?tenant=team/",
+      "/api/public/otel/v1/logs?tenant=team/",
+    ],
+  },
 ] as const;
 
-test.each(SHARED_ENDPOINT_ROUTING_CASES)(
-  "routes real exporters from a shared $label endpoint",
-  async ({ suffix, expected }) => {
+test.each(
+  SHARED_ENDPOINT_ROUTING_CASES.flatMap((entry) =>
+    (["config", "environment"] as const).map((source) => Object.assign({ source }, entry)),
+  ),
+)(
+  "routes real exporters from a shared $label endpoint in $source",
+  async ({ suffix, expected, source }) => {
     const receiver = await startOtlpReceiver();
     releasePreloadedOtelGlobals();
     const { service, ctx } = await startOtelService({
@@ -288,6 +279,12 @@ test.each(SHARED_ENDPOINT_ROUTING_CASES)(
       traces: true,
       metrics: true,
       logs: true,
+      configure: (serviceContext) => {
+        if (source === "environment") {
+          delete serviceContext.config.diagnostics!.otel!.endpoint;
+          process.env.OTEL_EXPORTER_OTLP_ENDPOINT = `${receiver.endpoint}${suffix}`;
+        }
+      },
     });
 
     try {

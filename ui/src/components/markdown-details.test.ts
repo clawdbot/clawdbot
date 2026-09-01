@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
 function htmlFragment(html: string): DocumentFragment {
   return document.createRange().createContextualFragment(html);
@@ -117,9 +117,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("keeps an unterminated details block in the repaired streaming tail", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "Intro\n\n<details open>\n<summary>More</summary>\n\n**partial body",
-    );
+    ).join("");
     const fragment = htmlFragment(html);
     const details = fragment.querySelector("details");
 
@@ -133,7 +133,7 @@ describe("model-authored details blocks", () => {
   });
 
   it("repairs an unterminated summary while streaming", () => {
-    const html = toStreamingMarkdownHtml("<details>\n<summary>Still arriving");
+    const html = toStreamingMarkdownParts("<details>\n<summary>Still arriving").join("");
     const fragment = htmlFragment(html);
 
     expect(fragment.querySelector("details summary")?.textContent).toBe("Still arriving");
@@ -141,9 +141,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("keeps completed code fences inside an open details streaming tail", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "<details>\n<summary>Logs</summary>\n\n~~~ts\nconst value = 1;\n~~~\n\nstill streaming",
-    );
+    ).join("");
     const fragment = htmlFragment(html);
     const details = fragment.querySelector("details");
 
@@ -153,9 +153,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("repairs prose after a closed fence and details block without a blank line", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "<details>\n<summary>Logs</summary>\n\n```ts\nconst value = 1;\n```\n</details>\ncontinuing **now",
-    );
+    ).join("");
     const fragment = htmlFragment(html);
 
     expect(fragment.querySelector("details code.language-ts")?.textContent).toContain(
@@ -165,9 +165,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("repairs an unterminated summary after a closed fence and details block", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "<details>\n<summary>Logs</summary>\n\n```ts\nconst value = 1;\n```\n</details>\n<details>\n<summary>Still arriving",
-    );
+    ).join("");
     const details = htmlFragment(html).querySelectorAll("details");
 
     expect(details).toHaveLength(2);
@@ -176,9 +176,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("stabilizes a completed details block before the live markdown tail", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "<details><summary>Done</summary>fixed</details>\n\ncontinuing **now",
-    );
+    ).join("");
     const fragment = htmlFragment(html);
 
     expect(fragment.querySelector("details summary")?.textContent).toBe("Done");
@@ -187,9 +187,9 @@ describe("model-authored details blocks", () => {
   });
 
   it("keeps a closed disclosure and its continuation in the same list item", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "- <details>\n  <summary>Logs</summary>\n\n  body\n  </details>\n  continuing **now",
-    );
+    ).join("");
     const fragment = htmlFragment(html);
     const listItem = fragment.querySelector("li");
 
@@ -350,9 +350,9 @@ describe("details line-start contract", () => {
 
   it("keeps an open streaming details block intact across inline code", () => {
     const code = "`literal </details> marker`";
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       `<details>\n<summary>Example</summary>\n${code}\n\nstill inside`,
-    );
+    ).join("");
     const fragment = htmlFragment(html);
     const details = fragment.querySelector("details");
 
@@ -385,7 +385,7 @@ describe("details line-start contract", () => {
   });
 
   it("does not repair disclosure-shaped indented code while streaming", () => {
-    const html = toStreamingMarkdownHtml("before\n\n    <details>\n    <summary>literal");
+    const html = toStreamingMarkdownParts("before\n\n    <details>\n    <summary>literal").join("");
     const code = htmlFragment(html).querySelector("code");
 
     expect(code?.textContent).toBe("<details>\n<summary>literal\n");
@@ -393,9 +393,9 @@ describe("details line-start contract", () => {
   });
 
   it("keeps streaming details intact across an inline prose close tag", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "<details>\n<summary>A</summary>\nliteral </details> text\n\nstill inside",
-    );
+    ).join("");
     const fragment = htmlFragment(html);
     const details = fragment.querySelector("details");
 
@@ -408,7 +408,7 @@ describe("details line-start contract", () => {
     ["list item", "- <details>\n  <summary>A</summary>\n\n  still inside"],
     ["blockquote", "> <details>\n> <summary>A</summary>\n>\n> still inside"],
   ])("keeps streaming details intact inside a %s container", (_name, markdown) => {
-    const html = toStreamingMarkdownHtml(markdown);
+    const html = toStreamingMarkdownParts(markdown).join("");
     const details = htmlFragment(html).querySelector("details");
 
     expect(details?.querySelector("summary")?.textContent).toBe("A");
@@ -417,9 +417,9 @@ describe("details line-start contract", () => {
   });
 
   it("keeps streaming details intact on a wide list continuation indent", () => {
-    const html = toStreamingMarkdownHtml(
+    const html = toStreamingMarkdownParts(
       "1.  item\n    <details>\n    <summary>A</summary>\n\n    still inside",
-    );
+    ).join("");
     const details = htmlFragment(html).querySelector("details");
 
     expect(details?.querySelector("summary")?.textContent).toBe("A");

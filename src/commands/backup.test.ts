@@ -41,6 +41,7 @@ type CapturedBackupManifest = {
     configPath: string;
     oauthDir: string;
     workspaceDirs: string[];
+    agentRoots: Array<{ agentId: string; sourcePath: string }>;
   };
   assets: Array<Pick<BackupAsset, "kind" | "sourcePath" | "archivePath">>;
   skipped: Array<{ kind: string; sourcePath: string; reason: string; coveredBy?: string }>;
@@ -310,6 +311,7 @@ describe("backup commands", () => {
         configPath,
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [externalWorkspace],
+        agentRoots: [],
       });
       expect(manifest.assets).toEqual(
         result.assets.map((asset) => ({
@@ -364,7 +366,12 @@ describe("backup commands", () => {
       const runtime = createBackupTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
-        (options: { filter?: (entryPath: string) => boolean }, entryPaths: string[]) =>
+        (
+          options: {
+            filter?: (entryPath: string, entryStat: { isDirectory: () => boolean }) => boolean;
+          },
+          entryPaths: string[],
+        ) =>
           createMockTarStream({
             beforeRead: () => {
               const manifestPath = entryPaths[0];
@@ -372,9 +379,13 @@ describe("backup commands", () => {
               if (!manifestPath || !stateRoot) {
                 throw new Error("backup test expected manifest and state entries");
               }
-              expect(options.filter?.(manifestPath)).toBe(true);
+              const fileStat = { isDirectory: () => false };
+              expect(options.filter?.(manifestPath, fileStat)).toBe(true);
               expect(
-                options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
+                options.filter?.(
+                  path.join(stateRoot, "agents", "main", "sessions", "s.jsonl"),
+                  fileStat,
+                ),
               ).toBe(false);
             },
           }),
@@ -607,6 +618,43 @@ describe("backup commands", () => {
       });
       expectOnlyAssetKind(configOnly.assets, "config");
     });
+  });
+
+  it("discovers workspaces through the stable upgrade compatibility view", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "stable-openclaw.json");
+    const workspaceDir = path.join(tempHome.home, "stable-workspace");
+    const stableConfig = {
+      meta: {
+        lastTouchedAt: "2026-08-01T00:00:00.000Z",
+        lastTouchedVersion: "2026.7.1-2",
+      },
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { skipWhenBusy: true },
+        },
+      },
+      gateway: { mode: "local" },
+    };
+    const originalRaw = `${JSON.stringify(stableConfig, null, 2)}\n`;
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(configPath, originalRaw, "utf8");
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      const plan = await resolveBackupPlanFromDisk({ nowMs: 123 });
+
+      expect(plan.included).toContainEqual(
+        expect.objectContaining({ kind: "workspace", sourcePath: canonicalWorkspaceDir }),
+      );
+      expect(await fs.readFile(configPath, "utf8")).toBe(originalRaw);
+      expect(plan.configPath).toBe(configPath);
+      expect(plan.stateDir).toBe(stateDir);
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("backs up only the active config file when --only-config is requested", async () => {

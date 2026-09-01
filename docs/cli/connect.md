@@ -47,6 +47,16 @@ npx openclaw connect https://gateway.example/j/<shortcode> --display-name "Build
 
 The node stays in the foreground until you stop it.
 
+To let that foreground process host full worker sessions, give explicit local
+consent with `--session-host`:
+
+```bash
+npx openclaw connect https://gateway.example/j/<shortcode> --session-host
+```
+
+Foreground consent applies only to that process. It does not change
+`openclaw.json`, so the next normal node-host start remains non-hosting.
+
 ## Environment-managed cloud nodes
 
 Worker providers use `--ephemeral` for disposable cloud machines:
@@ -55,7 +65,7 @@ Worker providers use `--ephemeral` for disposable cloud machines:
 npx openclaw connect <setup-code> --ephemeral
 ```
 
-This process hosts worker sessions even when the machine's durable node config has worker hosting disabled. It does not install a service and cannot be combined with `--service`. The Gateway owns the setup identity and paired-node lifetime: provider replay resumes the persisted device token after the one-shot setup credential is consumed, and environment teardown removes the node role after releasing the cloud lease.
+This process hosts worker sessions even when the machine's durable node config has worker hosting disabled. It does not install a service and cannot be combined with `--service` or `--session-host`. The Gateway owns the setup identity and paired-node lifetime: provider replay resumes the persisted device token after the one-shot setup credential is consumed, and environment teardown removes the node role after releasing the cloud lease.
 
 `--ephemeral` is intended for provider-managed state directories on throwaway machines, not as a shortcut for enrolling a personal device.
 
@@ -74,6 +84,20 @@ or node-host configuration; later starts use the durable paired-device token.
 Use [`openclaw node status`](/cli/node#service-background) to inspect the
 installed service.
 
+The service does not host worker sessions by default. To consent to full
+worker-session hosting, add `--session-host`:
+
+```bash
+npx openclaw connect https://gateway.example/j/<shortcode> --service --session-host
+```
+
+The one-shot bootstrap connection authenticates and saves the durable device
+identity without advertising worker hosting. Only after that connection
+succeeds does OpenClaw persist `nodeHost.workerRuns.enabled=true`, preserving
+the rest of the config, and install the service. If the config write fails,
+service installation does not start. The installed service advertises worker
+hosting and exact capacity from this durable consent when it starts.
+
 ## Accepted targets
 
 `openclaw connect <target>` accepts:
@@ -82,13 +106,19 @@ installed service.
 - an `oc-pair://<setup-code>` URL;
 - a bare base64url setup code.
 
+`--target-file <path>` reads the target from a private file and removes that file
+after reading it. The dormant installer wrapper uses this handoff to keep the
+single-use target out of child-process arguments.
+
 Join URLs must use HTTPS. Plain HTTP is accepted only for loopback Gateway URLs
 such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the
 Gateway TLS certificate fingerprint, which lets the node host pin a self-signed
 Gateway certificate after decoding the payload.
 
 The payload determines the saved host, port, TLS mode, WebSocket context path,
-and ordered fallback endpoints. No additional `openclaw.json` keys are created.
+and ordered fallback endpoints. Normal and foreground connections do not add
+`openclaw.json` keys; `--service --session-host` explicitly persists the worker
+hosting consent described above.
 
 ## Revocation behavior
 

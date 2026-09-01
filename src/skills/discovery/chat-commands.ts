@@ -12,6 +12,7 @@ import {
 } from "../../agents/exec-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
@@ -35,6 +36,7 @@ export function listSkillCommandsForWorkspace(params: {
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
   includeAllowlistHidden?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): SkillCommandSpec[] {
   const nodeSkills = resolveNodeExecEligibility({
     cfg: params.cfg,
@@ -48,7 +50,11 @@ export function listSkillCommandsForWorkspace(params: {
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
   };
   const entries = params.includeAllowlistHidden
-    ? loadWorkspaceSkills(params.workspaceDir, { config: params.cfg, eligibility })
+    ? loadWorkspaceSkills(params.workspaceDir, {
+        config: params.cfg,
+        eligibility,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      })
     : undefined;
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
@@ -56,6 +62,7 @@ export function listSkillCommandsForWorkspace(params: {
     skillFilter: params.skillFilter,
     includeAllowlistHidden: params.includeAllowlistHidden,
     eligibility,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     ...(entries ? { entries } : {}),
     reservedNames: listReservedChatSlashCommandNames(),
   });

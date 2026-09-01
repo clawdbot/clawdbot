@@ -5,6 +5,7 @@
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
+  normalizeQuestionTimeoutSeconds,
   resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -141,8 +142,8 @@ function formatDynamicToolTimeoutDetails(params: {
 }
 
 /**
- * Runs a dynamic tool call with run-abort and per-call timeout handling,
- * returning a Codex protocol response instead of throwing.
+ * Runs a dynamic tool call with run-abort and the budget prepared by
+ * resolveDynamicToolCallTimeoutMs, preserving tool-specific completion grace.
  */
 export async function handleDynamicToolCallWithTimeout(params: {
   call: CodexDynamicToolCallParams;
@@ -255,7 +256,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     resolveAbort = resolve;
   });
   const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-    const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
+    const { timeoutMs } = params;
     timeout = setTimeout(() => {
       timedOut = true;
       const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -340,17 +341,23 @@ export function toCodexDynamicToolProgressResponse(
 ): CodexDynamicToolCallResponse & {
   details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
 } {
-  const transcriptDetails = response.transcriptDetails;
-  if (response.asyncStarted !== true && transcriptDetails === undefined) {
+  const transcriptDetails = isJsonObject(response.transcriptDetails)
+    ? response.transcriptDetails
+    : undefined;
+  const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
+    ? transcriptDetails.mcpAppPreview
+    : undefined;
+  const progressDetails = mcpAppPreview ? { mcpAppPreview } : undefined;
+  if (response.asyncStarted !== true && progressDetails === undefined) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    ...(transcriptDetails ? { details: transcriptDetails } : {}),
+    ...(progressDetails ? { details: progressDetails } : {}),
     ...(response.asyncStarted === true
       ? {
           details: {
-            ...transcriptDetails,
+            ...progressDetails,
             async: true as const,
             status: "started" as const,
           },
@@ -498,6 +505,23 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
 }): number {
+  const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (
+    params.call.tool === "ask_user" ||
+    (params.call.tool === "secrets" && args?.action === "request")
+  ) {
+    try {
+      // Human entry owns a validated wait longer than ordinary tool execution.
+      // Leave grace for registration, cancellation, and the structured no_answer result.
+      return (
+        normalizeQuestionTimeoutSeconds(args?.timeoutSeconds) * 1_000 +
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
+      );
+    } catch {
+      // Invalid input still reaches the tool's validation under the ordinary watchdog.
+      return CODEX_DYNAMIC_TOOL_TIMEOUT_MS;
+    }
+  }
   if (params.call.tool === "computer") {
     return clampDynamicToolTimeoutMs(readComputerToolTimeoutMs(params.call.arguments));
   }
@@ -528,6 +552,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+/** Transport guard stays outside the handler's bounded tool wait and completion grace. */
+export function resolveDynamicToolServerRequestTimeoutMs(
+  call?: CodexDynamicToolCallParams,
+): number {
+  return (
+    Math.max(
+      CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+    ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }
 

@@ -1,7 +1,40 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildSessionsCsv } from "./query.ts";
+import {
+  addQueryToken,
+  applySuggestionToQuery,
+  buildQuerySuggestions,
+  buildSessionsCsv,
+  removeQueryToken,
+  setQueryTokensForKey,
+} from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
+
+describe("usage query token mutations", () => {
+  const quotedLabel = 'label:"Team  Planning"';
+
+  it("preserves quoted phrases when adding or replacing categorical tokens", () => {
+    expect(addQueryToken(`${quotedLabel} provider:openai`, "provider:anthropic")).toBe(
+      `${quotedLabel} provider:openai provider:anthropic `,
+    );
+    expect(setQueryTokensForKey(`${quotedLabel} provider:openai`, "provider", ["anthropic"])).toBe(
+      `${quotedLabel} provider:anthropic `,
+    );
+  });
+
+  it("removes an entire quoted term without leaving phrase fragments", () => {
+    expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe(
+      "provider:openai ",
+    );
+  });
+
+  it("preserves quoted phrases when accepting a query suggestion", () => {
+    expect(applySuggestionToQuery(`${quotedLabel} provider:o`, "provider:openai")).toBe(
+      `${quotedLabel} provider:openai `,
+    );
+    expect(buildQuerySuggestions(quotedLabel, [])).toEqual([]);
+  });
+});
 
 describe("usage query CSV export", () => {
   it("omits invalid session updated timestamps instead of throwing", () => {

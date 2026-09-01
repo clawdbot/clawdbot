@@ -89,9 +89,11 @@ export async function generateNarrationWithUtilityModel(params: {
 }): Promise<{ text: string | null; error?: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
-  const onOuterAbort = () => controller.abort();
-  params.abortSignal?.addEventListener("abort", onOuterAbort, { once: true });
+  const signal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, controller.signal])
+    : controller.signal;
   try {
+    signal.throwIfAborted();
     const result = await completeWithPreparedSimpleCompletionModel({
       model: params.prepared.model,
       auth: params.prepared.auth,
@@ -109,7 +111,7 @@ export async function generateNarrationWithUtilityModel(params: {
       options: {
         maxTokens: Math.min(NARRATION_MAX_TOKENS, Math.floor(params.prepared.model.maxTokens)),
         temperature: 0.3,
-        signal: controller.signal,
+        signal,
       },
     });
     if (result.stopReason === "error") {
@@ -128,6 +130,5 @@ export async function generateNarrationWithUtilityModel(params: {
     return { text: null, error: String(err) };
   } finally {
     clearTimeout(timeout);
-    params.abortSignal?.removeEventListener("abort", onOuterAbort);
   }
 }

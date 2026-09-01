@@ -14,6 +14,7 @@ export async function buildStatusCommandReportLines(params: {
   overviewRows: Array<{ Item: string; Value: string }>;
   showTaskMaintenanceHint: boolean;
   taskMaintenanceHint: string;
+  taskRegistryMigrationHint?: string | null;
   retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
@@ -36,25 +37,28 @@ export async function buildStatusCommandReportLines(params: {
   appendStatusReportSections({
     lines,
     heading: params.heading,
+    width: params.width,
+    renderTable: params.renderTable,
     sections: [
       {
         kind: "table",
         title: "Overview",
-        width: params.width,
-        renderTable: params.renderTable,
         columns: [...statusOverviewTableColumns],
         rows: params.overviewRows,
       },
       {
         kind: "raw",
         body:
-          params.showTaskMaintenanceHint || params.retainedLostTaskLine
+          params.showTaskMaintenanceHint ||
+          params.taskRegistryMigrationHint ||
+          params.retainedLostTaskLine
             ? [
                 "",
                 // Raw section keeps maintenance hints directly below the overview table.
                 ...(params.showTaskMaintenanceHint
                   ? [params.muted(params.taskMaintenanceHint)]
                   : []),
+                ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
                 ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
               ]
             : [],
@@ -91,8 +95,6 @@ export async function buildStatusCommandReportLines(params: {
         : {
             kind: "table",
             title: "Channels",
-            width: params.width,
-            renderTable: params.renderTable,
             columns: [...params.channelsColumns],
             rows: params.channelsRows,
           },
@@ -105,16 +107,12 @@ export async function buildStatusCommandReportLines(params: {
         : {
             kind: "table",
             title: "Sessions",
-            width: params.width,
-            renderTable: params.renderTable,
             columns: [...params.sessionsColumns],
             rows: params.sessionsRows,
           },
       {
         kind: "table",
         title: "System events",
-        width: params.width,
-        renderTable: params.renderTable,
         columns: [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
         rows: params.systemEventsRows ?? [],
         trailer: params.systemEventsTrailer,
@@ -123,8 +121,6 @@ export async function buildStatusCommandReportLines(params: {
       {
         kind: "table",
         title: "Health",
-        width: params.width,
-        renderTable: params.renderTable,
         columns: [...(params.healthColumns ?? [])],
         rows: params.healthRows ?? [],
         skipIfEmpty: true,

@@ -13,3 +13,4 @@ export * from "../utils/reasoning-tag-text-partitioner.js";
 export * from "../utils/sanitize-unicode.js";
 export * from "../utils/stream-first-event-timeout.js";
 export * from "../utils/streaming-byte-guard.js";
+export { parseTerminalToolCallArguments } from "../transports/transport-stream-shared.js";

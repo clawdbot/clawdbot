@@ -4,10 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { formatCliOperatorError } from "../cli/failure-output.js";
 import { backupGitCreateCommand } from "../commands/backup-git.js";
 import { readBackupFreshness } from "../commands/backup-health.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -19,7 +21,10 @@ import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup, initializeGitBackupRepository } from "./git-backup.js";
 
-const mocks = vi.hoisted(() => ({ pushDiagnostic: undefined as string | undefined }));
+const mocks = vi.hoisted(() => ({
+  pushDiagnostic: undefined as string | undefined,
+  snapshotRepositoryError: undefined as Error | undefined,
+}));
 
 vi.mock("../infra/git-exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/git-exec.js")>();
@@ -29,9 +34,32 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.executeGitCommand>
     ): ReturnType<typeof actual.executeGitCommand> => {
       if (args[1][0] === "push" && mocks.pushDiagnostic) {
-        return { code: 1, stdout: "", stderr: mocks.pushDiagnostic };
+        return {
+          code: 1,
+          stdout: "",
+          stderr: mocks.pushDiagnostic,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
+        };
       }
       return await actual.executeGitCommand(...args);
+    },
+  };
+});
+
+vi.mock("./local-repository.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./local-repository.js")>();
+  return {
+    ...actual,
+    ensurePrivateSnapshotRepositoryRoot: async (
+      ...args: Parameters<typeof actual.ensurePrivateSnapshotRepositoryRoot>
+    ) => {
+      if (mocks.snapshotRepositoryError) {
+        throw mocks.snapshotRepositoryError;
+      }
+      return await actual.ensurePrivateSnapshotRepositoryRoot(...args);
     },
   };
 });
@@ -46,6 +74,8 @@ async function tempRoot(): Promise<string> {
 
 afterEach(async () => {
   mocks.pushDiagnostic = undefined;
+  mocks.snapshotRepositoryError = undefined;
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   await Promise.all(
     roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
@@ -279,6 +309,50 @@ describe("Git-backed SQLite snapshots", () => {
     expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
+  it("backs up a configured external agent database for explicit and all scopes", async () => {
+    const root = await fs.realpath(await tempRoot());
+    const { stateDir } = createStateDatabaseFixture(root);
+    const agentDir = path.join(root, "external-agent");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(agentDir, { recursive: true });
+    const { closeOpenClawAgentDatabaseByPath, openOpenClawAgentDatabase } =
+      await import("../state/openclaw-agent-db.js");
+    const agentDatabase = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    closeOpenClawAgentDatabaseByPath(agentDatabase.path);
+    await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { main: { agentDir } } } }));
+
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      async () => {
+        for (const { scope, selection } of [
+          { scope: "explicit", selection: { agents: ["main"] } },
+          { scope: "all", selection: { all: true } },
+        ]) {
+          const repositoryPath = path.join(root, `${scope}-repository`);
+          const result = await backupGitCreateCommand(createTestRuntime(), {
+            repository: repositoryPath,
+            ...selection,
+          });
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(repositoryPath, "agents", "main", "manifest.json"), "utf8"),
+          ) as { identity: { role: string; agentId: string } };
+
+          expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
+          expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
+          if (scope === "all") {
+            await expect(
+              fs.stat(path.join(repositoryPath, "global", "manifest.json")),
+            ).resolves.toBeDefined();
+          }
+        }
+      },
+    );
+  });
+
   it("stages only backup-owned paths in an adopted repository", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
@@ -382,6 +456,29 @@ describe("Git-backed SQLite snapshots", () => {
       );
     },
   );
+
+  it("gives Windows ACL remediation instead of a POSIX chmod command", async () => {
+    const root = await tempRoot();
+    const stateDir = path.join(root, "state");
+    const repositoryPath = path.join(root, "repository");
+    await fs.mkdir(stateDir);
+    mocks.snapshotRepositoryError = new Error(
+      "Windows ACL permits untrusted SQLite staging access on repository root: path=C:\\backups principal=S-1-1-0 rights=FullControl.",
+    );
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    const error = await initializeGitBackupRepository({ repositoryPath, stateDir }).catch(
+      (reason: unknown) => reason,
+    );
+
+    const output = formatCliOperatorError(error, { argv: [], env: {} });
+
+    expect(output).toContain("Windows ACL permits untrusted SQLite staging access");
+    expect(output).toContain("path=C:\\backups principal=S-1-1-0 rights=FullControl");
+    expect(output).toContain("Remove non-user ACL grants");
+    expect(output).toContain("Do not use a shared or synced folder");
+    expect(output).not.toContain("chmod 700");
+  });
 
   it("accepts a private adopted root", async () => {
     const root = await tempRoot();
@@ -638,6 +735,65 @@ describe("Git-backed SQLite snapshots", () => {
     } finally {
       restoredDatabase.close();
     }
+  });
+
+  it("redacts secret machine-state keys while retaining ordinary machine state", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const nodeSecret = "synthetic-node-host-gateway-secret";
+    const pushSecret = "synthetic-web-push-private-key";
+    writeConfigMachineState("nodeHost.config", { gateway: { token: nodeSecret } }, { env });
+    writeConfigMachineState("nodeHost.otherSecret", { token: nodeSecret }, { env });
+    writeConfigMachineState("webPush.vapidKeys", { privateKey: pushSecret }, { env });
+    const authSecret = "synthetic-shared-auth-profile-secret";
+    writeConfigMachineState("authProfiles.store", { profiles: { openai: authSecret } }, { env });
+    writeConfigMachineState("authProfiles.state", { active: authSecret }, { env });
+    writeConfigMachineState("sidebar.sectionOrder", ["first", "second"], { env });
+    closeOpenClawStateDatabaseForTest();
+
+    const outputPath = path.join(root, "dump");
+    const manifest = await dumpGitBackupDatabase({
+      snapshotPath: database.path,
+      outputPath,
+      identity: { role: "global" },
+      excludeSecrets: true,
+    });
+    const rows = await fs.readFile(
+      path.join(outputPath, "tables", "config_machine_state.jsonl"),
+      "utf8",
+    );
+    const manifestJson = await fs.readFile(path.join(outputPath, "manifest.json"), "utf8");
+
+    expect(manifest).toMatchObject({
+      excludedConfigStateKeyPrefixes: ["authProfiles.", "nodeHost.", "webPush.vapidKeys"],
+      tables: { config_machine_state: { rows: 1 } },
+    });
+    expect(rows).toContain("sidebar.sectionOrder");
+    expect(rows).toContain("first");
+    expect(rows).not.toContain("nodeHost.");
+    expect(rows).not.toContain("webPush.vapidKeys");
+    expect(rows).not.toContain(nodeSecret);
+    expect(rows).not.toContain("authProfiles.");
+    expect(rows).not.toContain(authSecret);
+    expect(rows).not.toContain(pushSecret);
+    expect(manifestJson).not.toContain(nodeSecret);
+    expect(manifestJson).not.toContain(pushSecret);
+    expect(manifestJson).not.toContain(authSecret);
+
+    const restoredPath = path.join(root, "restored.sqlite");
+    const restored = await restoreGitBackupDirectory({
+      sourcePath: outputPath,
+      targetPath: restoredPath,
+      expectedIdentity: { role: "global" },
+    });
+    // Restore must disclose the intentionally omitted machine-state prefixes so
+    // operators cannot mistake a redacted restore for a complete one.
+    expect(restored.excludedConfigStateKeyPrefixes).toEqual([
+      "authProfiles.",
+      "nodeHost.",
+      "webPush.vapidKeys",
+    ]);
   });
 
   it("rejects a restored global database without canonical ownership metadata", async () => {

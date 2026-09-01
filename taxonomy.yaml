@@ -336,13 +336,12 @@ surfaces:
             description: Canvas and other plugin HTTP surfaces served by the Gateway.
           - name: Canvas and A2UI routes
             coverageIds: [gateway.canvas-and-a2ui-routes]
-            description: Canvas documents, A2UI transport, and browser-hosted plugin routes under the Gateway HTTP server.
+            description: Hosted widget documents, A2UI renderer assets, and browser-hosted plugin routes under the Gateway HTTP server.
         docs:
           - docs/gateway/index.md
           - docs/concepts/architecture.md
           - docs/web/control-ui.md
           - docs/web/webchat.md
-          - docs/refactor/canvas.md
         search_anchors:
           - hosted web surface
           - control ui gateway
@@ -603,7 +602,6 @@ surfaces:
           - docs/gateway/protocol.md
           - docs/concepts/architecture.md
           - docs/concepts/typebox.md
-          - docs/gateway/bridge-protocol.md
         search_anchors:
           - gateway runtime and websocket protocol protocol typing and compatibility
           - protocol typing and compatibility
@@ -1090,27 +1088,23 @@ surfaces:
       - name: Canvas plugin
         id: canvas-plugin
         features:
-          - name: Hosted Canvas and A2UI surfaces
+          - name: Hosted widget and A2UI surfaces
             coverageIds: [plugins.hosted-canvas-and-a2ui-surfaces]
-            description: Canvas plugin registers authenticated Gateway HTTP and WebSocket routes for hosted Canvas documents and A2UI runtime surfaces.
+            description: Canvas plugin registers authenticated A2UI renderer assets and presents core-hosted widget documents on macOS panels.
           - name: Agent canvas tool
             coverageIds: [plugins.agent-canvas-tool]
-            description: Canvas plugin registers the agent-facing `canvas` tool for present, hide, navigate, eval, snapshot, and A2UI control.
+            description: Canvas plugin registers the agent-facing `canvas` tool for present, hide, and navigate panel control.
           - name: Node Canvas commands
             coverageIds: [plugins.node-canvas-commands]
-            description: Canvas plugin owns node invoke policy for `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, and `canvas.a2ui.*` commands.
+            description: Canvas plugin owns macOS node invoke policy for `canvas.present`, `canvas.hide`, and `canvas.navigate`.
           - name: Control UI embeds
             coverageIds: [plugins.control-ui-embeds]
             description: Assistant output can embed hosted Canvas document URLs in Control UI and WebChat sessions.
           - name: Canvas documents
             coverageIds: [plugins.canvas-documents]
-            description: Canvas plugin materializes hosted document files and `/__openclaw__/canvas/documents/...` URLs.
-          - name: A2UI transport and snapshots
-            coverageIds: [plugins.a2ui-transport-and-snapshots]
-            description: Canvas plugin groups A2UI push, reset, and JSONL transport with snapshot capture and node-rendered Canvas state.
+            description: The core widget host materializes `/__openclaw__/canvas/documents/...` URLs and the Canvas plugin presents them on eligible Macs.
         docs:
           - docs/plugins/reference/canvas.md
-          - docs/refactor/canvas.md
           - docs/gateway/configuration-reference.md
         search_anchors:
           - Canvas plugin
@@ -3458,10 +3452,8 @@ surfaces:
           - docs/channels/troubleshooting.md
           - docs/channels/imessage-from-bluebubbles.md
           - docs/automation/cron-jobs.md#gmail-pubsub-integration
-          - docs/automation/gmail-pubsub.md
           - docs/cli/webhooks.md
           - docs/automation/cron-jobs.md#webhooks
-          - docs/automation/webhook.md
         search_anchors:
           - Telegram long polling
           - Telegram webhook mode
@@ -3648,7 +3640,6 @@ surfaces:
             coverageIds: [automation.process-input-controls]
             description: Covers Process input controls across `openclaw message poll`, channel poll adapters, poll parameter normalization, Teams/Matrix/Telegram poll support, and related message polls and process polling behavior.
         docs:
-          - docs/automation/poll.md
           - docs/cli/message.md
           - docs/channels/telegram.md
           - docs/channels/msteams.md
@@ -5406,15 +5397,12 @@ surfaces:
       - name: Canvas
         id: canvas
         features:
-          - name: Canvas panel open/hide/navigate/eval/snapshot
+          - name: Widget panel present/hide/navigate
             coverageIds: [macos-app.canvas-controls]
-            description: Canvas panel open/hide/navigate/eval/snapshot behavior, status, and operator-visible verification.
+            description: Widget panel present/hide/navigate behavior, status, and operator-visible verification.
           - name: Local custom URL scheme
             coverageIds: [macos-app.local-custom-url-scheme]
             description: Local custom URL scheme and session-root file serving
-          - name: A2UI host auto-navigation
-            coverageIds: [macos-app.a2ui-host-auto-navigation]
-            description: A2UI host auto-navigation, push/reset, and action bridge
           - name: Canvas enable/disable setting
             coverageIds: [macos-app.canvas-enable-disable-setting]
             description: Canvas enable/disable setting and node command behavior
@@ -5423,8 +5411,8 @@ surfaces:
           - docs/platforms/macos.md
           - docs/web/webchat.md
         search_anchors:
-          - macos companion app canvas and a2ui
-          - canvas and a2ui
+          - macos companion app widget panel
+          - hosted widget document panel
         category_note: canvas-a2ui.md
         human_lts_override: false
       - name: Local Setup
@@ -5454,7 +5442,6 @@ surfaces:
         docs:
           - docs/platforms/mac/bundled-gateway.md
           - docs/platforms/macos.md
-          - docs/platforms/mac/child-process.md
           - docs/platforms/mac/dev-setup.md
         search_anchors:
           - macos companion app local gateway and launchagent
@@ -6521,9 +6508,6 @@ surfaces:
           - name: Screen and media capture
             coverageIds: [windows-app.screen-and-media-capture]
             description: Screen snapshot, recording, and native media capture affordances.
-          - name: Canvas host behavior
-            coverageIds: [windows-app.canvas-host-behavior]
-            description: Canvas and A2UI host behavior in a native Windows companion app.
           - name: Windows shell integrations
             coverageIds: [windows-app.windows-shell-integrations]
             description: Windows shell and PowerToys-style desktop integrations.
@@ -6709,21 +6693,6 @@ surfaces:
           - photo library
           - Share Extension
         category_note: camera-media-photos-and-share-extension.md
-        human_lts_override: false
-      - name: Canvas and Screen
-        id: canvas-and-screen
-        features:
-          - name: Canvas present/hide/navigate/eval/snapshot
-            coverageIds: [ios.canvas-present-hide-navigate-eval-snapshot]
-            description: Canvas present/hide/navigate/eval/snapshot, A2UI reset/push/pushJSONL, WKWebView scaffold loading, trusted A2UI action bridge, screen recording, foreground command gates, and Gateway Canvas host URL handling
-        docs:
-          - docs/platforms/ios.md
-          - docs/plugins/reference/canvas.md
-        search_anchors:
-          - Canvas
-          - A2UI
-          - WKWebView
-        category_note: canvas-screen-and-a2ui.md
         human_lts_override: false
       - name: Chat and Sessions
         id: chat-and-sessions
@@ -9063,7 +9032,7 @@ surfaces:
           - docs/tools/reactions.md
           - docs/tools/slash-commands.md
           - docs/gateway/config-agents.md
-          - docs/concepts/message-lifecycle-refactor.md
+          - docs/plugins/sdk-channel-outbound.md
         search_anchors:
           - Inbound attachments
           - Outbound media replies
@@ -9149,9 +9118,6 @@ surfaces:
           - name: Persisted Matrix thread routing managers
             coverageIds: [matrix.persisted-matrix-thread-routing-managers]
             description: Persisted Matrix thread binding managers, child session binding, and activity tracking.
-          - name: ACP/subagent spawn hooks
-            coverageIds: [matrix.acp-subagent-spawn-hooks]
-            description: ACP/subagent spawn hooks and Matrix delivery targets for child sessions
         docs:
           - docs/channels/matrix.md
           - docs/channels/groups.md
@@ -9159,8 +9125,6 @@ surfaces:
         search_anchors:
           - matrix dm room routing and access policy
           - dm room routing and access policy
-          - matrix threads, acp, and subagent bindings
-          - threads, acp, and subagent bindings
         category_note: dm-room-routing-and-access-policy.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
@@ -9174,7 +9138,7 @@ surfaces:
         search_anchors:
           - matrix conversation routing and delivery
           - conversation routing and delivery
-        category_note: threads-acp-and-subagent-bindings.md
+        category_note: conversation-routing-and-delivery.md
         human_lts_override: false
       - name: Media and Rich Content
         id: media-and-rich-content
@@ -9730,7 +9694,7 @@ surfaces:
           - docs/concepts/models.md
           - docs/concepts/oauth.md
           - docs/plugins/codex-harness-reference.md
-          - docs/automation/auth-monitoring.md
+          - docs/gateway/authentication.md
         search_anchors:
           - Canonical OpenAI Model Routing
           - Catalog

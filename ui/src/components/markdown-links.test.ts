@@ -1,7 +1,7 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
 import { describe, expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -174,7 +174,7 @@ describe("toSanitizedMarkdownHtml links", () => {
     it("links http:// URLs", () => {
       const html = toSanitizedMarkdownHtml("Visit http://github.com/openclaw");
       expect(html).toBe(
-        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" rel="noreferrer noopener" target="_blank">http://github.com/openclaw</a></p>\n',
+        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw" rel="noreferrer noopener" target="_blank">github.com/openclaw</a></p>\n',
       );
     });
 
@@ -514,6 +514,40 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
   });
 
+  describe("link favicon placeholders", () => {
+    it("emits no favicon markup unless explicitly enabled", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a)"));
+
+      expect(fragment.querySelector("img.markdown-link-favicon")).toBeNull();
+    });
+
+    it("emits an inert hostname-only placeholder for enabled web links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a?secret=1#fragment)", {
+          linkFavicons: true,
+        }),
+      );
+
+      const image = fragment.querySelector<HTMLImageElement>("img.markdown-link-favicon");
+      expect(image?.dataset.linkFaviconHost).toBe("docs.example.com");
+      expect(image?.hasAttribute("src")).toBe(false);
+      expect(image?.alt).toBe("");
+    });
+
+    it("keeps the bundled GitHub mark and skips image-only links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
+          { linkFavicons: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a.markdown-github-link")).not.toBeNull();
+      expect(fragment.querySelector("a.markdown-github-link img.markdown-link-favicon")).toBeNull();
+      expect(fragment.querySelectorAll("img.markdown-link-favicon")).toHaveLength(0);
+    });
+  });
+
   describe("session links", () => {
     const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
 
@@ -565,9 +599,9 @@ describe("toSanitizedMarkdownHtml links", () => {
 
     it("stays deterministic across streaming tail renders", () => {
       const options = { sessionLinks: true } as const;
-      const first = htmlFragment(toStreamingMarkdownHtml(`Open ${sessionKey}`, options));
+      const first = htmlFragment(toStreamingMarkdownParts(`Open ${sessionKey}`, options).join(""));
       const extended = htmlFragment(
-        toStreamingMarkdownHtml(`Open ${sessionKey} and continue`, options),
+        toStreamingMarkdownParts(`Open ${sessionKey} and continue`, options).join(""),
       );
       expect(first.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
       expect(extended.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
@@ -596,11 +630,14 @@ describe("toSanitizedMarkdownHtml links", () => {
 
   describe("github link marks", () => {
     it.each([
-      ["bare autolink", "https://github.com/openclaw/openclaw/pull/3434", "openclaw/openclaw#3434"],
+      ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434"],
+      ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435"],
+      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw"],
+      ["repository file", "https://github.com/blader/humanizer/blob/main/SKILL.md", "SKILL.md"],
       [
-        "bare issue autolink",
-        "https://github.com/openclaw/openclaw/issues/3435",
-        "openclaw/openclaw#3435",
+        "other path",
+        "https://github.com/openclaw/openclaw/actions/runs/123",
+        "github.com/actions/runs/123",
       ],
       ["issue shorthand", "[#3434](https://github.com/openclaw/openclaw/pull/3434)", "#3434"],
       ["labelled link", "[the fix](https://github.com/openclaw/openclaw/pull/3434)", "the fix"],
@@ -621,10 +658,18 @@ describe("toSanitizedMarkdownHtml links", () => {
         ),
       );
       const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.textContent).toBe(
-        "a-very-long-organization-name/a-very-long-repository-name#3434",
-      );
+      expect(link?.textContent).toBe("#3434");
       expect(link?.classList.contains("markdown-bare-url")).toBe(true);
+    });
+
+    it("keeps the specific destination addressable after shortening its label", () => {
+      const input = "https://github.com/blader/humanizer/blob/main/SKILL.md";
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.classList.contains("markdown-github-link")).toBe(true);
+      expect(link?.textContent).toBe("SKILL.md");
+      expect(link?.getAttribute("href")).toBe(input);
+      expect(link?.getAttribute("title")).toBe(input);
     });
 
     it.each([

@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  stateMigrations,
+} from "./doctor-contract-api.js";
 
 const migration = stateMigrations[0];
 const canvasDoctorWorkspaceRoot = resolvePreferredOpenClawTmpDir();
@@ -19,6 +23,47 @@ function createCanvasDoctorWorkspace(kind: "state" | "custom") {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("Canvas doctor config repair", () => {
+  it("flags and removes retired file-host settings", () => {
+    expect(legacyConfigRules.map((rule) => rule.path)).toEqual([
+      ["canvasHost"],
+      ["plugins", "entries", "canvas", "config", "host", "root"],
+      ["plugins", "entries", "canvas", "config", "host", "port"],
+      ["plugins", "entries", "canvas", "config", "host", "liveReload"],
+    ]);
+    expect(legacyConfigRules.every((rule) => rule.message.includes("doctor --fix"))).toBe(true);
+    const cfg = {
+      plugins: {
+        entries: {
+          canvas: {
+            enabled: true,
+            config: {
+              host: { enabled: false, root: "~/canvas", port: 18793, liveReload: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.config.plugins?.entries?.canvas).toEqual({
+      enabled: true,
+      config: { host: { enabled: false } },
+    });
+    expect(result.changes).toEqual([
+      "Removed retired Canvas host config: plugins.entries.canvas.config.host.root, plugins.entries.canvas.config.host.port, plugins.entries.canvas.config.host.liveReload.",
+    ]);
+    expect(cfg.plugins?.entries?.canvas?.config).toEqual({
+      host: { enabled: false, root: "~/canvas", port: 18793, liveReload: true },
+    });
+    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
 });
 
 function migrationParams(params: {

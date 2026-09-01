@@ -41,31 +41,28 @@ class QuestionButton extends Button {
     try {
       await interaction.acknowledge();
     } catch {}
-    let result: Awaited<ReturnType<QuestionResolver>>;
+    let content: string;
     try {
-      result = await this.ctx.resolveQuestion({
+      const result = await this.ctx.resolveQuestion({
         cfg: this.ctx.cfg,
         questionId: callback.questionId,
         optionIndex: callback.optionIndex,
         senderId: interaction.userId,
         clientDisplayName: `Discord question (${this.ctx.accountId})`,
       });
+      content =
+        result.status === "answered" ? "Answer submitted." : "This question was already answered.";
     } catch {
-      try {
-        await interaction.followUp({ content: "Could not submit this answer.", ephemeral: true });
-      } catch {}
-      return;
+      content = "Could not submit this answer.";
     }
     try {
-      await interaction.followUp({
-        content:
-          result.status === "answered"
-            ? "Answer submitted."
-            : "This question was already answered.",
-        ephemeral: true,
-      });
+      const feedback = { content, ephemeral: true };
+      // A rejected acknowledgement leaves the initial callback available, not the webhook.
+      await (interaction.responseState === "unacknowledged"
+        ? interaction.reply(feedback)
+        : interaction.followUp(feedback));
     } catch {
-      // Gateway state already committed; receipt delivery is best-effort.
+      // Gateway state may already be committed; receipt delivery is best-effort.
     }
   }
 }

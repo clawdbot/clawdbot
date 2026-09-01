@@ -4,18 +4,17 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
-import { applyDefaultModelPrimaryUpdate, updateConfig } from "./shared.js";
+import { updateDefaultModelPrimaryConfig } from "./shared.js";
 
 /** Sets agents.defaults.model.primary and repairs provider runtime plugin installs when needed. */
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
-  const updated = await updateConfig((cfg, context) => {
-    return applyDefaultModelPrimaryUpdate({
-      cfg,
-      resolveCfg: context.runtimeConfig,
-      modelRaw,
-      field: "model",
-    });
+  const { updated, warning: catalogWarning } = await updateDefaultModelPrimaryConfig({
+    modelRaw,
+    field: "model",
   });
+  if (catalogWarning) {
+    runtime.error?.(catalogWarning);
+  }
   const selectedModel = resolveAgentModelPrimaryValue(updated.agents?.defaults?.model) ?? modelRaw;
   const repaired = await repairCodexRuntimePluginInstallForModelSelection({
     cfg: updated,

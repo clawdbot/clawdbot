@@ -18,17 +18,28 @@ export function bindCloudWorkerSetupCompletion(params: {
     params.db,
     kysely
       .selectFrom("worker_environments")
-      .select(["environment_id", "node_device_id", "updated_at_ms"])
+      .select([
+        "environment_id",
+        "state",
+        "destroy_requested_at_ms",
+        "node_device_id",
+        "updated_at_ms",
+      ])
       .where("node_setup_id", "=", params.completion.setupId),
   );
   if (!environment) {
     throw new Error("Cloud worker setup completion has no owning environment");
   }
+  const isFirstProvisioningDevice =
+    environment.state === "provisioning" && environment.node_device_id === null;
+  const isSameLiveDevice =
+    environment.node_device_id === params.completion.deviceId &&
+    ["provisioning", "bootstrapping", "ready", "idle", "attached"].includes(environment.state);
   if (
-    environment.node_device_id !== null &&
-    environment.node_device_id !== params.completion.deviceId
+    environment.destroy_requested_at_ms !== null ||
+    (!isFirstProvisioningDevice && !isSameLiveDevice)
   ) {
-    throw new Error("Cloud worker setup completion identity changed");
+    throw new Error("Cloud worker setup completion owner is no longer pending");
   }
   executeSqliteQuerySync(
     params.db,

@@ -36,7 +36,11 @@ describe("session-memory automatic reset", () => {
           type: "message",
           id: `${reason}-user`,
           parentId: null,
-          message: { role: "user", content: `Remember the ${reason} rollover` },
+          message: {
+            role: "user",
+            content: `Remember the ${reason} rollover`,
+            __openclaw: { senderIsOwner: true },
+          },
         },
         {
           type: "message",

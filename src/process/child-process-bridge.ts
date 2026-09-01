@@ -13,7 +13,7 @@ const defaultSignals: NodeJS.Signals[] =
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 
-/** Forwards process termination signals to a child and detaches on child exit/error. */
+/** Forwards process termination signals to a child and detaches on terminal lifecycle events. */
 export function attachChildProcessBridge(
   child: ChildProcess,
   { signals = defaultSignals, onSignal }: ChildProcessBridgeOptions = {},
@@ -43,8 +43,10 @@ export function attachChildProcessBridge(
     listeners.clear();
   };
 
+  // Child errors can report failed signal/IPC operations while the PID stays live.
+  // Keep forwarding until exit, with close covering failed spawn and final handle cleanup.
   child.once("exit", detach);
-  child.once("error", detach);
+  child.once("close", detach);
 
   return { detach };
 }

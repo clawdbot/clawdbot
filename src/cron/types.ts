@@ -1,16 +1,25 @@
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
+export type {
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
+} from "./scheduled-tool-policy.js";
+export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
 export type CronSchedule =
@@ -149,6 +158,15 @@ export type CronFailureNotificationDelivery = {
   error?: string;
 };
 
+/** Resolved delivery state recorded with a completed cron run. */
+export type CronResolvedDeliveryState = {
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  failureNotification: CronFailureNotificationDelivery;
+};
+
 /** Human-readable delivery target preview for list/detail surfaces. */
 export type CronDeliveryPreview = {
   label: string;
@@ -206,7 +224,17 @@ export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" };
 
-/** Execution result persisted on cron state, run logs, and isolated turn results. */
+/** Closed producer-authored facts allowed in operator-facing failure notifications. */
+export type CronFailureNotificationDetail =
+  | { kind: "command-exit"; exitCode: number }
+  | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
+  | {
+      kind: "script-failure";
+      source: "payload" | "trigger";
+      code: CronTriggerFailureCode;
+    };
+
+/** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -215,6 +243,8 @@ export type CronRunOutcome = {
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
+  /** Transient internal detail; never project into persisted or public cron events. */
+  failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -235,6 +265,8 @@ export type CronAgentExecutionStarted = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** True when this runner belongs to a later candidate in the same fallback chain. */
+  isFallback?: boolean;
   phase?: CronAgentExecutionPhase;
   provider?: string;
   model?: string;
@@ -277,7 +309,10 @@ export type CronPayload =
   | (CronScriptPayload & CronPayloadToolAllow)
   // System-owned heartbeat monitor: execution requests an interval heartbeat
   // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | ({ kind: "heartbeat" } & CronPayloadToolAllow)
+  // System-owned skill collection review: execution invokes the workshop
+  // runner. Gateway-converged only; not accepted from client create/patch APIs.
+  | ({ kind: "skillCollectionReview" } & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
@@ -287,7 +322,14 @@ export type CronPayloadPatch =
   | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
   // Representable so the service can reject it with a typed boundary error;
   // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
+  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch)
+  | ({ kind: "skillCollectionReview" } & CronPayloadToolAllowPatch);
+
+export function isSystemOwnedCronPayloadKind(
+  kind: unknown,
+): kind is "heartbeat" | "skillCollectionReview" {
+  return typeof kind === "string" && (kind === "heartbeat" || kind === "skillCollectionReview");
+}
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
@@ -430,6 +472,8 @@ export type CronJobState = {
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
   lastDeliveryError?: string;
+  /** Intentional non-delivery reason for the last run, when recorded by the dispatcher. */
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
   /** Whether the last failed run's failure notification was delivered to the target channel. */
@@ -440,7 +484,7 @@ export type CronJobState = {
   lastFailureNotificationDeliveryError?: string;
 };
 
-export type CronTrigger = {
+type CronTrigger = {
   script: string;
   once?: boolean;
 };
@@ -500,7 +544,12 @@ export type CronToolsAllowProvenance = {
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Immutable creator provenance stamped by the trusted cron creation seam. */
+  createdActor?: SessionCreatedActor;
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  /** Exact expected pin for jobs created from a verified host-owned exec projection. */
+  toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
   /** Runtime-private authority omitted from public Gateway and wire contracts. */
   runtimeAuthority?: CronRuntimeAuthority;
   /** Authority was explicitly cleared and must be reauthorized before app reuse. */

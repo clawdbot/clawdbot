@@ -43,9 +43,9 @@ import {
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import {
   listPluginSdkDistArtifacts,
-  listPackagedPrivatePluginSdkRuntimeArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mts";
+import { listStaticExtensionAssetOutputs } from "./lib/static-extension-assets.mts";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -56,16 +56,12 @@ import {
   normalizeInstalledBinaryVersion,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
-import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type ReleaseCheckExecOptions = ExecFileSyncOptions & {
   windowsVerbatimArguments?: boolean;
 };
-
-export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mts";
 
 export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
   "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
@@ -84,12 +80,19 @@ const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs
 const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDirs].map(
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
+// Trusted tooling can validate an older release checkout. Its SDK inventory
+// belongs to that target, including release-only compatibility entrypoints.
+const targetPluginSdkEntries = JSON.parse(
+  readFileSync(resolve("scripts/lib/plugin-sdk-entrypoints.json"), "utf8"),
+) as string[];
+const targetPrivatePluginSdkEntries = JSON.parse(
+  readFileSync(resolve("scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "utf8"),
+) as string[];
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
-  ...listPluginSdkDistArtifacts(),
-  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
+  ...listPluginSdkDistArtifacts(targetPluginSdkEntries, targetPrivatePluginSdkEntries),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -113,7 +116,7 @@ const requiredPathGroups = [
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/agents/prepared-model-catalog.worker.js",
-  "dist/audit/audit-event-writer.worker.js",
+  "dist/extensions/memory-core/memory-search-knn.child.js",
   "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
@@ -146,7 +149,10 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/compat.",
   "dist/plugin-sdk/root-alias.",
   "dist/extensionAPI.",
-  ...listUnpackagedPrivatePluginSdkDistArtifacts(),
+  ...listUnpackagedPrivatePluginSdkDistArtifacts(
+    targetPluginSdkEntries,
+    targetPrivatePluginSdkEntries,
+  ),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
@@ -200,8 +206,10 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "--shell",
   "zsh",
 ] as const;
-const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
-  "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+// The checker owns fixture bytes; the target checkout supplies package metadata.
+const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
+  "./fixtures/packed-plugin-sdk-type-smoke.ts",
+  import.meta.url,
 );
 
 export function runReleaseCheckCommand(
@@ -865,7 +873,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
           },
         },
         channels: {
-          matrix: {
+          telegram: {
             enabled: true,
           },
         },
@@ -881,7 +889,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
         plugins: {
           enabled: true,
           entries: {
-            matrix: {
+            telegram: {
               enabled: true,
             },
           },
@@ -1159,8 +1167,6 @@ export function collectForbiddenPackContentPaths(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
-
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = escapeRegExp(tag);
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
@@ -1391,14 +1397,7 @@ async function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  const missing = collectMissingPackPaths(paths);
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths);
   const sizeErrors = collectNpmPackUnpackedSizeErrors(results);

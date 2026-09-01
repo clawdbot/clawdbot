@@ -1,14 +1,17 @@
 // Compaction handler tests cover session-store reconciliation and lifecycle
 // logging for automatic and manual embedded run compactions.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import {
   readCompactionCount,
   seedSessionStore,
-  waitForCompactionCount,
 } from "./embedded-agent-subscribe.compaction-test-helpers.js";
+import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
   handleCompactionEnd,
   handleCompactionStart,
@@ -24,6 +27,7 @@ function createCompactionContext(params: {
   agentId?: string;
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
 }): EmbeddedAgentSubscribeContext {
   // Minimal context preserves only the compaction counters and callbacks the
@@ -46,7 +50,7 @@ function createCompactionContext(params: {
     log: {
       debug: vi.fn(),
       info: params.info ?? vi.fn(),
-      warn: vi.fn(),
+      warn: params.warn ?? vi.fn(),
     },
     ensureCompactionPromise: vi.fn(),
     noteCompactionRetry: vi.fn(),
@@ -102,14 +106,15 @@ function makeCompactionSummaryMessage(timestamp?: number): AgentMessage {
   } as AgentMessage;
 }
 
-function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
-  handleCompactionEnd(ctx, {
+const completedCompactionEnd = () =>
+  ({
     type: "compaction_end",
     reason: "threshold",
-    result: { kept: 12 },
-    willRetry: false,
-    aborted: false,
-  });
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: false },
+  }) as const;
+
+function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
+  handleCompactionEnd(ctx, completedCompactionEnd());
 }
 
 function loggedInfoMetaAt(info: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
@@ -199,13 +204,7 @@ describe("compaction lifecycle logging", () => {
       type: "compaction_start",
       reason: "threshold",
     });
-    handleCompactionEnd(ctx, {
-      type: "compaction_end",
-      reason: "threshold",
-      result: { kept: 12 },
-      willRetry: false,
-      aborted: false,
-    });
+    handleCompactionEnd(ctx, completedCompactionEnd());
 
     expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
@@ -228,7 +227,7 @@ describe("compaction lifecycle logging", () => {
     );
   });
 
-  it("logs manual compaction as incomplete when no result is produced", async () => {
+  it("logs a benign manual skip at info", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -252,9 +251,7 @@ describe("compaction lifecycle logging", () => {
     handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "manual",
-      result: undefined,
-      willRetry: false,
-      aborted: false,
+      outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
     });
 
     expect(loggedInfoMessageAt(info, 0)).toBe("embedded run manual compaction start");
@@ -266,19 +263,49 @@ describe("compaction lifecycle logging", () => {
       "embedded run manual compaction start: runId=run-test reason=manual",
     );
 
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run manual compaction incomplete");
+    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run manual compaction skipped");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("manual");
+    expect(endMeta.outcome).toBe("skipped");
     expect(endMeta.runId).toBe("run-test");
     expect(endMeta.completed).toBe(false);
-    expect(endMeta.aborted).toBe(false);
+    expect(endMeta.reasonClass).toBe("no_compactable_entries");
     expect(endMeta.consoleMessage).toBe(
-      "embedded run manual compaction incomplete: runId=run-test reason=manual aborted=false willRetry=false",
+      "embedded run manual compaction skipped: runId=run-test reason=no_compactable_entries",
     );
   });
 
-  it("defaults legacy synthetic compaction events to threshold logs", async () => {
+  it("warns with classified, bounded metadata for failed compaction", () => {
+    const warn = vi.fn();
+    const ctx = createCompactionContext({
+      storePath: path.join(os.tmpdir(), "openclaw-compaction-failed-log", "sessions.json"),
+      sessionKey: "main",
+      initialCount: 0,
+      warn,
+    });
+    const reason = `Provider unavailable: ${"provider detail ".repeat(100)}`;
+
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "overflow",
+      outcome: { status: "failed", reason },
+    });
+
+    expect(warn).toHaveBeenCalledOnce();
+    const metadata = loggedInfoMetaAt(warn, 0);
+    expect(metadata).toMatchObject({
+      event: "embedded_run_compaction_end",
+      reason: "overflow",
+      outcome: "failed",
+      reasonClass: "unknown",
+      outcomeReason: reason,
+    });
+    expect(String(metadata.reasonDetail)).toHaveLength(100);
+    expect(String(metadata.consoleMessage)).not.toContain("provider detail provider detail");
+  });
+
+  it("defaults an unknown synthetic compaction start to threshold logs", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -298,12 +325,7 @@ describe("compaction lifecycle logging", () => {
     handleCompactionStart(ctx, {
       type: "compaction_start",
     });
-    handleCompactionEnd(ctx, {
-      type: "compaction_end",
-      result: { kept: 12 },
-      willRetry: false,
-      aborted: false,
-    });
+    handleCompactionEnd(ctx, completedCompactionEnd());
 
     expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
@@ -328,38 +350,90 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
-  it("reconciles the session store after a successful compaction end event", async () => {
+  it.each([
+    {
+      name: "default subscription floor",
+      options: {},
+      expectedCount: 2,
+      expectedEventCount: 2,
+    },
+    {
+      name: "explicit subscription floor",
+      options: { compactionCountOwner: "subscription" },
+      expectedCount: 2,
+      expectedEventCount: 2,
+    },
+    {
+      name: "caller-owned accounting",
+      options: { compactionCountOwner: "caller" },
+      expectedCount: 1,
+      expectedEventCount: 2,
+    },
+    {
+      name: "detached subscription",
+      options: { sessionPersistence: "detached" },
+      expectedCount: 1,
+      expectedEventCount: 0,
+    },
+  ] as const)("preserves local compaction facts under $name", async (testCase) => {
+    const { options, expectedCount, expectedEventCount } = testCase;
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      compactionCount: 1,
-    });
+    const agentId = "test-agent";
+    const runId = `run-compaction-owner-${randomUUID()}`;
+    const sessionKey = `agent:${agentId}:${runId}`;
+    try {
+      await seedSessionStore({ storePath, sessionKey, compactionCount: 1 });
+      const before = structuredClone(
+        loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+      );
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        ...options,
+        runId,
+        sessionId: "session-1",
+        sessionKey,
+        agentId,
+        config: { session: { store: storePath } },
+        sessionExtras: { messages: [] },
+        onAgentEvent,
+      });
+      try {
+        emit(completedCompactionEnd());
+        emit(completedCompactionEnd());
+        await subscription.waitForPendingEvents();
+        await vi.dynamicImportSettled();
+        // Join the writer queue after detached imports without advancing the seeded floor.
+        await reconcileSessionStoreCompactionCountAfterSuccess({
+          sessionKey,
+          agentId,
+          configStore: storePath,
+          observedCompactionCount: 1,
+        });
 
-    const ctx = createCompactionContext({
-      storePath,
-      sessionKey,
-      initialCount: 1,
-    });
-
-    handleCompactionEnd(ctx, {
-      type: "compaction_end",
-      reason: "threshold",
-      result: { kept: 12 },
-      willRetry: false,
-      aborted: false,
-    });
-
-    await waitForCompactionCount({
-      storePath,
-      sessionKey,
-      expected: 2,
-    });
-
-    expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
-    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
+        expect(subscription.getCompactionCount()).toBe(2);
+        expect(subscription.getLastCompactionTokensAfter()).toBe(50);
+        expect(onAgentEvent).toHaveBeenCalledTimes(2);
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "compaction",
+          data: { phase: "end", completed: true, willRetry: false, outcome: "completed" },
+        });
+        const events = listSessionStateEventsSince(sessionKey, agentId, 0).events.filter(
+          (event) => event.runId === runId,
+        );
+        expect(events).toHaveLength(expectedEventCount);
+        expect(events.every((event) => event.kind === "compacted")).toBe(true);
+        const after = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+        expect(after?.compactionCount).toBe(expectedCount);
+        if (expectedCount === 1) {
+          expect(after).toEqual(before);
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("clears stale assistant usage before compaction and preserves fresh usage after it", async () => {
@@ -401,8 +475,8 @@ describe("handleCompactionEnd", () => {
     // A failed/aborted end never rewrote history; zeroing usage here would
     // disable the persistent-error compaction trigger for degraded sessions.
     const failureEnds = [
-      { name: "failed", result: undefined, aborted: false },
-      { name: "aborted", result: { kept: 12 }, aborted: true },
+      { name: "failed", outcome: { status: "failed", reason: "summary failed" } },
+      { name: "aborted", outcome: { status: "aborted" } },
     ] as const;
     for (const failure of failureEnds) {
       const liveUsage = makeUsageSnapshot(123_000);
@@ -425,9 +499,7 @@ describe("handleCompactionEnd", () => {
       handleCompactionEnd(ctx, {
         type: "compaction_end",
         reason: "threshold",
-        result: failure.result,
-        willRetry: false,
-        aborted: failure.aborted,
+        outcome: failure.outcome,
       });
 
       const liveAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;

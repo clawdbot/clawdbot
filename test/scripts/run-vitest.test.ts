@@ -11,6 +11,10 @@ import {
   resolveTestProjectsRunnerSpawnParams,
 } from "../../scripts/lib/test-projects-delegation.mts";
 import {
+  createVitestUnhandledErrorDetector,
+  writeVitestUnhandledErrorSummary,
+} from "../../scripts/lib/vitest-unhandled-errors.mts";
+import {
   DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   TOOLING_EXCLUDED_TESTS,
@@ -40,13 +44,19 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
-  it("ends argument failures with the stable failure trailer", () => {
-    const result = spawnSync(process.execPath, [nodePath.resolve("scripts/run-vitest.mjs")], {
-      encoding: "utf8",
-    });
+  it.each(["mjs", "mts"])("ends %s argument failures with one final trailer", (extension) => {
+    const result = spawnSync(
+      process.execPath,
+      [nodePath.resolve(`scripts/run-vitest.${extension}`)],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+    const trailer = `[${extension === "mjs" ? "test" : "vitest"}] FAILED (exit 1)`;
+    expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([trailer]);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
   });
 
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
@@ -182,18 +192,18 @@ describe("scripts/run-vitest", () => {
   });
 
   it("isolates mixed explicit directory targets across Vitest projects", () => {
-    expect(resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host"])).toEqual([
-      "extensions/linux-canvas",
+    expect(resolveImplicitVitestArgs(["extensions/canvas", "src/node-host"])).toEqual([
+      "extensions/canvas",
       "src/node-host",
       "--isolate",
     ]);
     expect(resolveImplicitVitestArgs(["src/node-host"])).toEqual(["src/node-host"]);
     expect(
-      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--no-isolate"]),
-    ).toEqual(["extensions/linux-canvas", "src/node-host", "--no-isolate"]);
+      resolveImplicitVitestArgs(["extensions/canvas", "src/node-host", "--no-isolate"]),
+    ).toEqual(["extensions/canvas", "src/node-host", "--no-isolate"]);
     expect(
-      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--", "--no-isolate"]),
-    ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
+      resolveImplicitVitestArgs(["extensions/canvas", "src/node-host", "--", "--no-isolate"]),
+    ).toEqual(["extensions/canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
   });
 
   it("bounds config-only Gateway server runs in fresh worker processes", () => {
@@ -249,6 +259,45 @@ describe("scripts/run-vitest", () => {
         },
       ),
     ).toHaveLength(2);
+  });
+
+  it("bounds the complete E2E selection without multiplying configured workers", () => {
+    const argv = ["run", "--config", "test/vitest/vitest.e2e.config.ts", "--maxWorkers", "2"];
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([
+      [...argv, "--shard=1/4"],
+      [...argv, "--shard=2/4"],
+      [...argv, "--shard=3/4"],
+      [...argv, "--shard=4/4"],
+    ]);
+  });
+
+  it.each([
+    ["doctor"],
+    ["src/commands"],
+    ["src/commands/doctor.e2e.test.ts"],
+    ["--", "doctor"],
+    ["--shard=2/3"],
+    ["--shard", "2/3"],
+    ["--watch"],
+    ["--run=false"],
+    ["--no-run"],
+    ["--bail", "1"],
+    ["--coverage"],
+    ["--outputFile", "report.json"],
+    ["--reporter=json"],
+    ["--listTags"],
+    ["--listTags=json"],
+    ["--clearCache"],
+    ["--standalone"],
+    ["--testNamePattern", "doctor"],
+    ["-t", "doctor"],
+    ["--exclude", "src/**"],
+    ["--root", "/other"],
+    ["--project", "other"],
+    ["--help"],
+  ])("preserves explicit E2E selection or execution options %j", (...options) => {
+    const argv = ["run", "--config", "test/vitest/vitest.e2e.config.ts", ...options];
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
   });
 
   it.each([
@@ -570,6 +619,27 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it.each([
+    [
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"],
+      "test/vitest/vitest.ui-browser.config.ts",
+    ],
+    [["ui/src/components/form-controls.browser.test.ts"], "test/vitest/vitest.ui.config.ts"],
+    [
+      [
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+        "ui/src/components/form-controls.browser.test.ts",
+      ],
+      null,
+    ],
+    [["ui/src/**/*.browser.test.ts"], null],
+    [["ui/src/components", "ui/src/pages/chat/chat-message-markdown.browser.test.ts"], null],
+  ])("preserves browser ownership for implicit targets %j", (targets, config) => {
+    expect(resolveImplicitVitestArgs(["run", ...targets])).toEqual(
+      config ? ["run", "--config", config, ...targets] : ["run", ...targets],
+    );
+  });
+
   it("allows opting back into Maglev explicitly", () => {
     expect(
       resolveVitestNodeArgs({
@@ -639,6 +709,29 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("keeps mapped configs at their measured silence floor when env is smaller", () => {
+    expect(
+      resolveRunVitestSpawnEnv(
+        { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000", PATH: "/usr/bin" },
+        ["run", "--config", "test/vitest/vitest.extension-codex.config.ts"],
+      ),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2400000",
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv(
+        { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000", PATH: "/usr/bin" },
+        ["run", "--config", "test/vitest/vitest.unit.config.ts"],
+      ),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("disables an inherited Node compile cache for every Vitest child", () => {
     expect(
       resolveRunVitestSpawnEnv(
@@ -661,6 +754,17 @@ describe("scripts/run-vitest", () => {
         "--coverage=false",
       ]),
     ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toEqual({ CI: "true", NODE_DISABLE_COMPILE_CACHE: "1", PATH: "/usr/bin" });
   });
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
@@ -1037,6 +1141,63 @@ describe("scripts/run-vitest", () => {
     expect(shouldSuppressVitestStderrLine("real failure output\n")).toBe(false);
   });
 
+  it.each([
+    {
+      name: "plain output",
+      output: [
+        "⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯",
+        "Vitest caught 1 unhandled error during the test run.",
+        "⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯",
+        "TypeError: request failed",
+      ].join("\n"),
+      expected: { count: 1, errorFirstLine: "TypeError: request failed", origin: undefined },
+    },
+    {
+      name: "ANSI-colored output with an origin",
+      output: [
+        "\u001b[41m⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯\u001b[0m",
+        "\u001b[31mVitest caught 2 unhandled errors during the test run.\u001b[0m",
+        "\u001b[41m⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯\u001b[0m",
+        "\u001b[31mReferenceError: ResizeObserver is not defined\u001b[0m",
+        'This error originated in "src/app/app-host.dock-suppression.test.ts" test file.',
+      ].join("\n"),
+      expected: {
+        count: 2,
+        errorFirstLine: "ReferenceError: ResizeObserver is not defined",
+        origin: "src/app/app-host.dock-suppression.test.ts",
+      },
+    },
+    {
+      name: "ordinary test output",
+      output: "✓ unit src/app/app-host.dock-suppression.test.ts (1 test)\n",
+      expected: null,
+    },
+  ])("detects unhandled errors in $name", ({ output, expected }) => {
+    const detector = createVitestUnhandledErrorDetector();
+    detector.observe(output);
+
+    expect(detector.finish()).toEqual(expected);
+  });
+
+  it("only emits a workflow annotation under GitHub Actions", () => {
+    const result = {
+      count: 2,
+      origin: "src/app/app-host.dock-suppression.test.ts",
+      errorFirstLine: "ReferenceError: ResizeObserver is not defined",
+    };
+    const localLog = vi.fn();
+    const actionsLog = vi.fn();
+
+    writeVitestUnhandledErrorSummary(result, {}, localLog);
+    writeVitestUnhandledErrorSummary(result, { GITHUB_ACTIONS: "true" }, actionsLog);
+
+    const summary =
+      "[vitest] UNHANDLED ERRORS (2): src/app/app-host.dock-suppression.test.ts — ReferenceError: ResizeObserver is not defined";
+    expect(localLog).toHaveBeenCalledOnce();
+    expect(localLog).toHaveBeenCalledWith(summary);
+    expect(actionsLog.mock.calls).toEqual([[`::error::${summary}`], [summary]]);
+  });
+
   it("kills silent vitest runs after the configured idle timeout", () => {
     vi.useFakeTimers();
     try {
@@ -1143,30 +1304,6 @@ describe("scripts/run-vitest", () => {
       expect(timeoutSpy).toHaveBeenCalledTimes(1);
       expect(logSpy).toHaveBeenCalledWith(
         "[vitest] no output for 1000ms; terminating stalled Vitest process group.",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("includes the runner label in watchdog logs when provided", () => {
-    vi.useFakeTimers();
-    try {
-      const stdout = new EventEmitter();
-      const logSpy = vi.fn();
-
-      installVitestNoOutputWatchdog({
-        streams: [stdout],
-        timeoutMs: 1000,
-        forceKillAfterMs: 0,
-        label: "run --config test/vitest/vitest.secrets.config.ts",
-        log: logSpy,
-        onTimeout: () => {},
-      });
-
-      vi.advanceTimersByTime(1000);
-      expect(logSpy).toHaveBeenCalledWith(
-        "[vitest] no output for 1000ms; terminating stalled Vitest process group (run --config test/vitest/vitest.secrets.config.ts).",
       );
     } finally {
       vi.useRealTimers();

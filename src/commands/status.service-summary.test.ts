@@ -9,6 +9,7 @@ import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
+import { getStatusOverviewRowValue } from "./status.test-support.ts";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
   return createMockGatewayService({
@@ -58,14 +59,72 @@ describe("readServiceStatusSummary", () => {
     expect(summary.loadedText).toBe("running (externally managed)");
   });
 
-  it("keeps missing services as not installed when nothing is running", async () => {
-    const summary = await readServiceStatusSummary(createService({}), "Daemon");
+  it.each([{ status: "stopped" }, { status: "unknown", missingUnit: true }])(
+    "keeps missing services as not installed with runtime $status",
+    async (runtime) => {
+      const summary = await readServiceStatusSummary(
+        createService({ readRuntime: vi.fn(async () => runtime) }),
+        "Daemon",
+      );
 
-    expect(summary.installed).toBe(false);
-    expect(summary.managedByOpenClaw).toBe(false);
-    expect(summary.externallyManaged).toBe(false);
-    expect(summary.loadedText).toBe("disabled");
-  });
+      expect(summary.installed).toBe(false);
+      expect(summary.managedByOpenClaw).toBe(false);
+      expect(summary.externallyManaged).toBe(false);
+      expect(summary.loadedText).toBe("disabled");
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
+        "systemd not installed",
+      );
+    },
+  );
+
+  it.each(["load", "runtime", "runtime with missing unit"])(
+    "reports %s inspection failures without a readable definition",
+    async (probe) => {
+      const failInspection = vi.fn(async () => {
+        throw new Error("service manager permission denied");
+      });
+      const summary = await readServiceStatusSummary(
+        createService(
+          probe === "load"
+            ? { isLoaded: failInspection }
+            : {
+                readRuntime:
+                  probe === "runtime"
+                    ? failInspection
+                    : vi.fn(async () => ({
+                        status: "unknown",
+                        detail: "Error: service manager permission denied",
+                        missingUnit: true,
+                      })),
+              },
+        ),
+        "Daemon",
+      );
+
+      expect(summary.installed).toBe(false);
+      expect(summary.loadState).toEqual(
+        probe === "load"
+          ? {
+              status: "unknown",
+              detail: "Error: service manager permission denied",
+            }
+          : { status: "not-loaded" },
+      );
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
+        probe === "load"
+          ? "systemd unknown (inspection failed: Error: service manager permission denied) · stopped"
+          : probe === "runtime"
+            ? "systemd disabled (inspection failed: service runtime inspection failed) · unknown"
+            : "systemd disabled (inspection failed: Error: service manager permission denied) · unknown",
+      );
+      if (probe === "runtime") {
+        expect(summary.runtime?.inspectionFailure).toEqual({
+          code: "service-runtime-inspection-failed",
+          detail: "service manager permission denied",
+        });
+      }
+    },
+  );
 
   it("preserves running service state when optional layout diagnostics fail", async () => {
     const layoutSpy = vi
@@ -86,7 +145,7 @@ describe("readServiceStatusSummary", () => {
       expect(summary).toMatchObject({
         label: "systemd",
         installed: true,
-        loaded: true,
+        loadState: { status: "loaded" },
         managedByOpenClaw: true,
         externallyManaged: false,
         loadedText: "enabled",
@@ -104,10 +163,13 @@ describe("readServiceStatusSummary", () => {
 
       expect(summary.label).toBe("Gateway service");
       expect(summary.installed).toBe(false);
-      expect(summary.loaded).toBe(false);
+      expect(summary.loadState).toEqual({
+        status: "unknown",
+        detail: "Error: Gateway service install not supported on aix",
+      });
       expect(summary.managedByOpenClaw).toBe(false);
       expect(summary.externallyManaged).toBe(false);
-      expect(summary.loadedText).toBe("not installed");
+      expect(summary.loadedText).toBe("unknown");
       expect(summary.runtime).toEqual({
         status: "unknown",
         detail: "Gateway service install not supported on aix",
@@ -140,7 +202,7 @@ describe("readServiceStatusSummary", () => {
     const runtimeEnv = requireMockArg(readRuntime, "readRuntime") as NodeJS.ProcessEnv;
     expect(runtimeEnv?.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(summary.installed).toBe(true);
-    expect(summary.loaded).toBe(true);
+    expect(summary.loadState).toEqual({ status: "loaded" });
     expect(summary.runtime?.status).toBe("running");
   });
 

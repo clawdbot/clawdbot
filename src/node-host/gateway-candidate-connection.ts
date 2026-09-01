@@ -1,4 +1,7 @@
-import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GatewayClient,
   type GatewayClientCloseInfo,
@@ -16,7 +19,7 @@ type CandidateConnectionOptions = Omit<
   GatewayClientOptions,
   | "url"
   | "tlsFingerprint"
-  | "cloudflareAccess"
+  | "edgeAuthHeaders"
   | "onEvent"
   | "onHelloOk"
   | "onConnectError"
@@ -83,7 +86,9 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
       ...params.clientOptions,
       url,
       tlsFingerprint: candidate.tlsFingerprint,
-      ...(cloudflareAccess ? { cloudflareAccess } : {}),
+      ...(cloudflareAccess
+        ? { edgeAuthHeaders: buildCloudflareAccessHeaders(cloudflareAccess) }
+        : {}),
       onEvent: (event) => {
         if (currentCandidateIndex === candidateIndex) {
           params.onEvent(event);

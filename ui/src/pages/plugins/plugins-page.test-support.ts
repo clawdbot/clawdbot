@@ -9,20 +9,32 @@ import type {
 import { t } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
-  PluginInstallRequest,
   PluginListResult,
   PluginMutationResult,
   PluginSearchResult,
+  PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { PluginsConsentController } from "./plugins-consent-controller.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import type { PluginRowMessage } from "./view.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
+
+const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
+  "config.set",
+  "plugins.inspect",
+  "plugins.install",
+  "plugins.list",
+  "plugins.search",
+  "plugins.setEnabled",
+  "plugins.uninstall",
+]);
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -39,7 +51,7 @@ type TestPluginsPage = HTMLElement & {
   activeTab: "installed" | "discover";
   searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
-  install: (request: PluginInstallRequest, installIdentity: string) => Promise<void>;
+  consentController: Pick<PluginsConsentController, "install">;
   refreshCatalog: () => Promise<void>;
   updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
   uninstall: (pluginId: string, rowKey: string) => Promise<void>;
@@ -68,6 +80,42 @@ export function createPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
 
 export function createResult(plugin = createPlugin()): PluginListResult {
   return { plugins: [plugin], diagnostics: [], mutationAllowed: true };
+}
+
+export function createInspectResult(
+  overrides: Partial<PluginsInspectResult> = {},
+): PluginsInspectResult {
+  return {
+    ok: true,
+    reviewToken: "review-token-workboard",
+    plugin: {
+      id: "workboard",
+      name: "Workboard",
+      origin: "global",
+      installed: true,
+      enabled: false,
+    },
+    source: { kind: "npm", packageName: "workboard" },
+    declared: {
+      channels: [],
+      providers: [],
+      tools: [],
+      contracts: [],
+      hooks: [],
+      mcpServers: [],
+      cliCommands: [],
+      cliBackends: [],
+      skills: [],
+      dangerousConfigFlags: [],
+    },
+    grants: {
+      hooks: {
+        allowPromptInjection: { effective: true },
+        allowConversationAccess: { effective: false },
+      },
+    },
+    ...overrides,
+  };
 }
 
 export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLocation {
@@ -104,11 +152,7 @@ function createSnapshot(
     phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
-    },
+    hello: PLUGINS_GATEWAY_HELLO,
     assistantAgentId: "main",
     sessionKey: "main",
     lastError: null,
@@ -124,6 +168,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
       return snapshot;
     },
     connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,
@@ -249,6 +294,7 @@ export function createContext(
   return {
     gateway,
     basePath: "",
+    resourceBasePath: "",
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),

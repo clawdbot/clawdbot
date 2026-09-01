@@ -1,8 +1,7 @@
 // Integrates with the local Tailscale CLI for tailnet setup and sharing.
 import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -17,10 +16,13 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
 } from "./tailscale-route-owner-protocol.js";
+import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
 
 const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
@@ -219,25 +221,19 @@ type TailscaleRouteClaim = {
   stop: () => Promise<void>;
 };
 
-function resolveTailscaleRouteOwnerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(path.join(distRoot, "infra", "tailscale-route-owner.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./tailscale-route-owner.worker${extension}`, currentModuleUrl);
-}
-
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
   "code" | "stdout" | "stderr"
 >;
 
+function isPort443RouteConflict(message: TailscaleRouteOwnerFailure): boolean {
+  return /listener already exists for port 443/i.test(`${message.stderr}\n${message.stdout}`);
+}
+
 function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
+  if (isPort443RouteConflict(message)) {
+    return new TailscaleRouteOwnershipConflictError();
+  }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
     code: message.code,
@@ -264,7 +260,7 @@ function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boo
 }
 
 async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteClaim> {
-  const workerUrl = resolveTailscaleRouteOwnerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = fork(
     fileURLToPath(workerUrl),
@@ -397,11 +393,7 @@ export async function claimTailscaleRoute(
     if (!isPermissionDeniedError(error)) {
       throw error;
     }
-    try {
-      return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
-    } catch {
-      throw error;
-    }
+    return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
   }
 }
 

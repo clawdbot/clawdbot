@@ -7,77 +7,55 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import type { RuntimeEnv } from "../runtime.js";
 
-type DisplayConfig<T> = {
-  emptyMessage: string;
-  title: string;
-  renderItem: (item: T, runtime: RuntimeEnv) => void;
-};
-
-function displayItems<T>(items: T[], config: DisplayConfig<T>, runtime: RuntimeEnv): void {
-  if (items.length === 0) {
-    runtime.log(config.emptyMessage);
+export function displayContainers(containers: SandboxContainerInfo[], runtime: RuntimeEnv): void {
+  if (containers.length === 0) {
+    runtime.log("No sandbox runtimes found.");
     return;
   }
 
-  runtime.log(`\n${config.title}\n`);
-  for (const item of items) {
-    config.renderItem(item, runtime);
+  runtime.log("\n📦 Sandbox Runtimes:\n");
+  for (const container of containers) {
+    runtime.log(`  ${container.runtimeLabel ?? container.containerName}`);
+    runtime.log(`    Status:  ${container.running ? "🟢 running" : "⚫ stopped"}`);
+    runtime.log(
+      `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${container.imageMatch ? "✓" : "⚠️  mismatch"}`,
+    );
+    runtime.log(`    Backend: ${container.backendId ?? "docker"}`);
+    runtime.log(
+      `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
+    );
+    runtime.log(
+      `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
+    );
+    runtime.log(`    Session: ${container.sessionKey}`);
+    runtime.log("");
   }
 }
 
-export function displayContainers(containers: SandboxContainerInfo[], runtime: RuntimeEnv): void {
-  displayItems(
-    containers,
-    {
-      emptyMessage: "No sandbox runtimes found.",
-      title: "📦 Sandbox Runtimes:",
-      renderItem: (container, rt) => {
-        rt.log(`  ${container.runtimeLabel ?? container.containerName}`);
-        rt.log(`    Status:  ${container.running ? "🟢 running" : "⚫ stopped"}`);
-        rt.log(
-          `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${container.imageMatch ? "✓" : "⚠️  mismatch"}`,
-        );
-        rt.log(`    Backend: ${container.backendId ?? "docker"}`);
-        rt.log(
-          `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
-        );
-        rt.log(
-          `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
-        );
-        rt.log(`    Session: ${container.sessionKey}`);
-        rt.log("");
-      },
-    },
-    runtime,
-  );
-}
-
 export function displayBrowsers(browsers: SandboxBrowserInfo[], runtime: RuntimeEnv): void {
-  displayItems(
-    browsers,
-    {
-      emptyMessage: "No sandbox browser containers found.",
-      title: "🌐 Sandbox Browser Containers:",
-      renderItem: (browser, rt) => {
-        rt.log(`  ${browser.containerName}`);
-        rt.log(`    Status:  ${browser.running ? "🟢 running" : "⚫ stopped"}`);
-        rt.log(`    Image:   ${browser.image} ${browser.imageMatch ? "✓" : "⚠️  mismatch"}`);
-        rt.log(`    CDP:     ${browser.cdpPort}`);
-        if (browser.noVncPort) {
-          rt.log(`    noVNC:   ${browser.noVncPort}`);
-        }
-        rt.log(
-          `    Age:     ${formatDurationCompact(Date.now() - browser.createdAtMs, { spaced: true }) ?? "0s"}`,
-        );
-        rt.log(
-          `    Idle:    ${formatDurationCompact(Date.now() - browser.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
-        );
-        rt.log(`    Session: ${browser.sessionKey}`);
-        rt.log("");
-      },
-    },
-    runtime,
-  );
+  if (browsers.length === 0) {
+    runtime.log("No sandbox browser containers found.");
+    return;
+  }
+
+  runtime.log("\n🌐 Sandbox Browser Containers:\n");
+  for (const browser of browsers) {
+    runtime.log(`  ${browser.containerName}`);
+    runtime.log(`    Status:  ${browser.running ? "🟢 running" : "⚫ stopped"}`);
+    runtime.log(`    Image:   ${browser.image} ${browser.imageMatch ? "✓" : "⚠️  mismatch"}`);
+    runtime.log(`    CDP:     ${browser.cdpPort}`);
+    if (browser.noVncPort) {
+      runtime.log(`    noVNC:   ${browser.noVncPort}`);
+    }
+    runtime.log(
+      `    Age:     ${formatDurationCompact(Date.now() - browser.createdAtMs, { spaced: true }) ?? "0s"}`,
+    );
+    runtime.log(
+      `    Idle:    ${formatDurationCompact(Date.now() - browser.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
+    );
+    runtime.log(`    Session: ${browser.sessionKey}`);
+    runtime.log("");
+  }
 }
 
 export function displaySummary(

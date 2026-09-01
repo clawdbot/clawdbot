@@ -1,4 +1,31 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
+
+/** Count Desktop transport lifecycle calls without opening a real RFB socket. */
+export async function installDesktopClientFake(panel: Locator): Promise<void> {
+  await panel.evaluate((element) => {
+    (
+      element as HTMLElement & {
+        desktopClientFactory: () => {
+          connect(options: { credentials?: { username?: string; password?: string } }): Promise<{
+            disconnect(): void;
+          }>;
+        };
+      }
+    ).desktopClientFactory = () => ({
+      async connect(options) {
+        element.dataset.connectCount = String(Number(element.dataset.connectCount ?? "0") + 1);
+        element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
+        return {
+          disconnect() {
+            element.dataset.disconnectCount = String(
+              Number(element.dataset.disconnectCount ?? "0") + 1,
+            );
+          },
+        };
+      },
+    });
+  });
+}
 
 /** Install the scripted RFB 3.8 endpoint used by Desktop's canonical noVNC E2E. */
 export async function installScriptedRfbServer(page: Page): Promise<void> {

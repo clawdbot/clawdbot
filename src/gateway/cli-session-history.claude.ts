@@ -8,6 +8,10 @@ import {
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  readCliImageTurnContext,
+  stripCliImageTurnContext,
+} from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
@@ -34,6 +38,7 @@ export type ClaudeCliProjectEntry = {
   isSidechain?: unknown;
   isMeta?: unknown;
   isCompactSummary?: unknown;
+  isVisibleInTranscriptOnly?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -274,11 +279,17 @@ type ClaudeCliPromptTextCandidate = {
   blockIndex?: number;
 };
 
+// Claude keeps compact summaries and transcript-only rows as visible harness
+// context. isMeta rows are private injections and never reach this projection.
+function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean {
+  return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
+}
+
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
 ): ClaudeCliPromptTextCandidate[] {
-  if (entry.isMeta === true || entry.isCompactSummary === true) {
+  if (entry.isMeta === true || isClaudeCliVisibleHarnessContext(entry)) {
     return [];
   }
   if (typeof content === "string") {
@@ -314,7 +325,12 @@ export function parseClaudeCliHistoryEntry(
     reseedState?: ReseedImportState;
   },
 ): TranscriptLikeMessage | null {
-  if (entry.isSidechain === true || !entry.message || typeof entry.message !== "object") {
+  if (
+    entry.isSidechain === true ||
+    entry.isMeta === true ||
+    !entry.message ||
+    typeof entry.message !== "object"
+  ) {
     return null;
   }
   const type = typeof entry.type === "string" ? entry.type : undefined;
@@ -396,13 +412,24 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    const cliImageTurnKey =
+      typeof content === "string" ? readCliImageTurnContext(content) : undefined;
+    if (cliImageTurnKey && typeof content === "string") {
+      content = stripCliImageTurnContext(content, cliImageTurnKey);
+    }
+    // Record provenance here, where the native flags are known, so downstream
+    // display never has to infer operator authorship from message text.
+    const harnessInjected = isClaudeCliVisibleHarnessContext(entry);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
+        ...(harnessInjected
+          ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
+          : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
-      baseMeta,
+      { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
     ) as TranscriptLikeMessage;
   }
 

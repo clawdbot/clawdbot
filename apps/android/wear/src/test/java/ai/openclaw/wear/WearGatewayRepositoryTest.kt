@@ -157,7 +157,7 @@ class WearGatewayRepositoryTest {
           when (method) {
             WearRpcMethod.SessionsList ->
               json.parseToJsonElement(
-                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true}""",
+                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true,"hasMore":true,"nextOffset":35}""",
               )
             WearRpcMethod.ChatHistory ->
               json.parseToJsonElement(
@@ -171,7 +171,13 @@ class WearGatewayRepositoryTest {
       val sessions =
         repository.sessions(
           selectedSessionKey = "agent:main",
-          capabilities = setOf(WearProxyCapability.SessionSelectionLookup),
+          offset = 5,
+          search = "older",
+          capabilities =
+            setOf(
+              WearProxyCapability.SessionSelectionLookup,
+              WearProxyCapability.SessionSearchPagination,
+            ),
         )
       val history = repository.history("agent:main", sessions.phoneNodeId)
 
@@ -189,7 +195,9 @@ class WearGatewayRepositoryTest {
       assertEquals("working", history.activeText)
       assertEquals("openai/gpt-test", history.selectedModelRef)
       assertEquals(7L, history.eventSequence)
-      assertEquals(setOf("limit", "selectedSessionKey"), requester.calls[0].second.keys)
+      assertTrue(sessions.hasMore)
+      assertEquals(35, sessions.nextOffset)
+      assertEquals(setOf("limit", "offset", "search", "selectedSessionKey"), requester.calls[0].second.keys)
       assertEquals(setOf("sessionKey", "limit", "maxChars"), requester.calls[1].second.keys)
     }
 
@@ -207,7 +215,7 @@ class WearGatewayRepositoryTest {
             WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
             WearRpcMethod.GatewayDisconnect ->
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","session-selection-lookup","agent-pulse","attempt-scoped-realtime-audio"]}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
               )
             else -> error("unexpected $method")
           }
@@ -275,7 +283,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","session-selection-lookup","agent-pulse","attempt-scoped-realtime-audio"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
           )
         }
 
@@ -287,12 +295,14 @@ class WearGatewayRepositoryTest {
   @Test
   fun modelSelectionKeepsTheSelectedSessionAndUsesThePreferredPhone() =
     runTest {
-      val capabilities = setOf(WearProxyCapability.ModelControls)
+      val capabilities =
+        setOf(WearProxyCapability.ModelControls, WearProxyCapability.ModelCatalogSearch)
       val requester =
         RecordingRequester { method, params ->
           when (method) {
             WearRpcMethod.ModelsList -> {
               assertEquals("openai/gpt-a", params.getValue("selectedModelRef").jsonPrimitive.content)
+              assertEquals("anthropic", params.getValue("query").jsonPrimitive.content)
               json.parseToJsonElement(
                 """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}]}""",
               )
@@ -309,7 +319,13 @@ class WearGatewayRepositoryTest {
         }
       val repository = WearGatewayRepository(requester)
 
-      val models = repository.models("phone-a", capabilities, selectedModelRef = "openai/gpt-a")
+      val models =
+        repository.models(
+          "phone-a",
+          capabilities,
+          selectedModelRef = "openai/gpt-a",
+          query = "anthropic",
+        )
       val selected =
         repository.selectModel(
           sessionKey = "agent:main:thread-7",
@@ -325,6 +341,40 @@ class WearGatewayRepositoryTest {
       assertEquals(listOf(WearRpcMethod.ModelsList, WearRpcMethod.ModelsSelect), requester.calls.map { it.first })
       assertTrue(requester.expectedNodeIds.all { it == "phone-a" })
       assertTrue(requester.requirePreferredNodes.all { it })
+    }
+
+  @Test
+  fun oldPhoneCapabilitiesDoNotReceivePickerSearchFields() =
+    runTest {
+      val requester =
+        RecordingRequester { method, params ->
+          when (method) {
+            WearRpcMethod.ModelsList -> {
+              assertEquals(setOf("selectedModelRef"), params.keys)
+              json.parseToJsonElement("""{"models":[]}""")
+            }
+            WearRpcMethod.SessionsList -> {
+              assertEquals(setOf("limit", "selectedSessionKey"), params.keys)
+              json.parseToJsonElement("""{"sessions":[]}""")
+            }
+            else -> error("unexpected $method")
+          }
+        }
+      val repository = WearGatewayRepository(requester)
+
+      repository.models(
+        expectedNodeId = "phone-a",
+        capabilities = setOf(WearProxyCapability.ModelControls),
+        selectedModelRef = "openai/gpt-a",
+        query = "anthropic",
+      )
+      repository.sessions(
+        expectedNodeId = "phone-a",
+        selectedSessionKey = "agent:main",
+        capabilities = setOf(WearProxyCapability.SessionSelectionLookup),
+        offset = 50,
+        search = "older",
+      )
     }
 
   @Test

@@ -1250,6 +1250,9 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplyOnly: true,
       toolsAllow: ["message"],
+      // The delegation gate lives in resolveGatewayScopedTools, so dropping
+      // this field at the HTTP mapping silently disables it for CLI backends.
+      delegationCapability: "report_only",
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
@@ -1810,6 +1813,43 @@ describe("mcp loopback server", () => {
     expect(withoutExec.toolSchema.map((tool) => tool.name)).not.toContain("exec");
     expect(withExec.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("never reuses loopback tools across session permissions or effective exec modes", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = makeMcpToolCacheParams();
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+      const params = input as ScopedToolsCall;
+      const unrestricted =
+        params.execSession?.permissionMode === "full" || params.execOverrides?.mode === "full";
+      return {
+        agentId: "main",
+        tools: unrestricted
+          ? [makeMessageTool(), makeMockTool({ name: "exec" })]
+          : [makeMessageTool()],
+      };
+    });
+
+    const readOnly = cache.resolve({
+      ...baseParams,
+      execSession: { permissionMode: "read-only" },
+    });
+    const fullSession = cache.resolve({
+      ...baseParams,
+      execSession: { permissionMode: "full" },
+    });
+    const deniedOverride = cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } });
+    const fullOverride = cache.resolve({ ...baseParams, execOverrides: { mode: "full" } });
+
+    expect(readOnly.toolSchema.map((tool) => tool.name)).not.toContain("exec");
+    expect(fullSession.toolSchema.map((tool) => tool.name)).toContain("exec");
+    expect(deniedOverride.toolSchema.map((tool) => tool.name)).not.toContain("exec");
+    expect(fullOverride.toolSchema.map((tool) => tool.name)).toContain("exec");
+    expect(cache.resolve({ ...baseParams, execSession: { permissionMode: "read-only" } })).toBe(
+      readOnly,
+    );
+    expect(cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } })).toBe(deniedOverride);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
   });
 
   it("keeps model policy identity cache-bound", () => {

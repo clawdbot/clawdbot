@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
 import { loggingState } from "../logging/state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -40,6 +41,8 @@ type OpenClawStateLeaseOptions = {
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
+  /** Renew this exact owner synchronously before another blocking phase. */
+  renew?(): void;
   /** Verify that this exact owner holds a non-expired lease at this instant. */
   assertOwned(): void;
   /** Verify ownership using the caller's active write transaction. */
@@ -180,29 +183,6 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
   };
 }
 
-function readBusyTimeout(database: DatabaseSync): number {
-  const row = database // sqlite-allow-raw -- Narrow connection primitive for bounded lease admission.
-    .prepare("PRAGMA busy_timeout")
-    .get() as { busy_timeout?: unknown; timeout?: unknown } | undefined;
-  const value = row?.busy_timeout ?? row?.timeout;
-  return typeof value === "bigint" ? Number(value) : Number(value ?? 0);
-}
-
-function withBusyTimeout<T>(database: DatabaseSync, busyTimeoutMs: number, run: () => T): T {
-  const previousBusyTimeoutMs = readBusyTimeout(database);
-  if (previousBusyTimeoutMs === busyTimeoutMs) {
-    return run();
-  }
-  database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`); // sqlite-allow-raw -- Bound synchronous lease admission to waitMs.
-  try {
-    return run();
-  } finally {
-    if (database.isOpen) {
-      database.exec(`PRAGMA busy_timeout = ${previousBusyTimeoutMs}`); // sqlite-allow-raw -- Restore canonical connection policy.
-    }
-  }
-}
-
 function withLeaseWriteTransaction<T>(
   database: OpenClawStateLeaseDatabase,
   operationLabel: string,
@@ -216,7 +196,7 @@ function withLeaseWriteTransaction<T>(
       database.options,
       { operationLabel, busyTimeoutMs },
     );
-  return withBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
+  return runWithSqliteBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
 }
 
 function withLeaseRead<T>(
@@ -568,6 +548,21 @@ export async function withOpenClawStateLease<T>(
     }
     verifyLeaseOwnership({ ...identity, transaction: database });
   };
+  const renewOperation = () => {
+    if (leaseLost.signal.aborted) {
+      throw leaseLost.signal.reason;
+    }
+    if (validated.signal?.aborted) {
+      throw abortError(validated.signal, "operation", validated.leaseLabel);
+    }
+    confirmedExpiresAt = renew({
+      ...identity,
+      database: validated.database,
+      operationLabel: validated.operationLabel,
+      leaseMs: validated.leaseMs,
+    });
+    scheduleExpiry();
+  };
 
   try {
     let result: T;
@@ -577,6 +572,7 @@ export async function withOpenClawStateLease<T>(
       assertOperationOwned();
       result = await run({
         signal: operationSignal,
+        renew: renewOperation,
         assertOwned: assertOperationOwned,
         assertOwnedInTransaction: assertOperationOwnedInTransaction,
       });

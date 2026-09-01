@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
+  getGatewayPluginMetadataSnapshot: vi.fn(),
   getCurrentPluginMetadataSnapshot: vi.fn(),
   listOpenClawPluginManifestMetadata: vi.fn(),
   loadPluginManifest: vi.fn(),
   loadPluginManifestRegistryCore: vi.fn(),
+}));
+
+vi.mock("../../plugins/current-plugin-metadata-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-state.js")>()),
+  getGatewayPluginMetadataSnapshot: manifestMocks.getGatewayPluginMetadataSnapshot,
 }));
 const providerMocks = vi.hoisted(() => ({
   normalizePluginDiscoveryResult: vi.fn(),
@@ -17,8 +24,10 @@ const providerMocks = vi.hoisted(() => ({
   runProviderStaticCatalog: vi.fn(),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: manifestMocks.getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
@@ -78,12 +87,15 @@ function createMistralManifestPlugin() {
       },
       discovery: { mistral: "static" },
     },
-  };
+  } satisfies Partial<PluginManifestRecord>;
 }
 
-function setCurrentManifestPlugins(plugins: unknown[]) {
-  const snapshot = { plugins, manifestRegistry: { plugins } };
+function setCurrentManifestPlugins(
+  plugins: Array<Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">>,
+) {
+  const snapshot = createPluginMetadataSnapshotFixture({ plugins });
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+  return snapshot;
 }
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -191,10 +203,9 @@ describe("bundled static model catalog snapshot cache", () => {
         },
       },
     };
-    const capturedSnapshot = {
+    const capturedSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [capturedPlugin],
-      manifestRegistry: { plugins: [capturedPlugin] },
-    } as unknown as PluginMetadataSnapshot;
+    });
     const resolveModel = createBundledStaticCatalogModelResolver({
       cfg,
       metadataSnapshot: capturedSnapshot,
@@ -284,6 +295,24 @@ describe("bundled static model catalog snapshot cache", () => {
     );
     expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledWith(env);
     expect(manifestMocks.loadPluginManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the Gateway inventory even when a run supplies its own environment", () => {
+    const plugin = createMistralManifestPlugin();
+    manifestMocks.getGatewayPluginMetadataSnapshot.mockReturnValue(
+      setCurrentManifestPlugins([plugin]),
+    );
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        cfg: {},
+        env: { HOME: "/run-home" },
+        workspaceDir: "/run-workspace",
+      })?.id,
+    ).toBe("mistral-medium-3-5");
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });
 
   it("refreshes the no-snapshot memo only at the plugin metadata lifecycle boundary", () => {

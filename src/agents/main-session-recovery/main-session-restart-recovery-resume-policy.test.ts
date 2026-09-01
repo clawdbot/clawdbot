@@ -28,6 +28,16 @@ function progressMessage(text: string, itemId: string): Record<string, unknown> 
   };
 }
 
+function asyncDeliveryMessage(text: string, itemId: string): Record<string, unknown> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "stop",
+    phase: "final_answer",
+    openclawAsyncDelivery: { itemId },
+  };
+}
+
 function resolvePolicy(params: {
   messages?: unknown[];
   beforeAgentReplyState?:
@@ -244,7 +254,16 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
     ).toEqual({ action: "resume", forceRestartSafeTools: false });
   });
 
-  it("retains replay restrictions when progress follows a side-effecting tool call", () => {
+  it("keeps durable async delivery visible without treating it as the terminal answer", () => {
+    expect(
+      resolveMainSessionResumePolicy([
+        { role: "user", content: "finish the interrupted work" },
+        asyncDeliveryMessage("A background agent completed.", "async-agent-1"),
+      ]),
+    ).toEqual({ action: "resume", forceRestartSafeTools: false });
+  });
+
+  it("retains replay restrictions when final-phase async delivery follows a side-effecting call", () => {
     expect(
       resolveMainSessionResumePolicy([
         { role: "user", content: "finish the interrupted work" },
@@ -255,7 +274,7 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
             { type: "toolCall", id: "call-bash", name: "bash", arguments: { command: "true" } },
           ],
         },
-        progressMessage("Waiting for the command.", "progress-exec"),
+        asyncDeliveryMessage("The background check finished.", "async-after-exec"),
       ]),
     ).toEqual({ action: "resume", forceRestartSafeTools: true });
   });
@@ -281,6 +300,19 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
         {
           ...progressMessage("The work is complete.", "final-item"),
           phase: "final_answer",
+        },
+      ]),
+    ).toEqual({ action: "resume", forceRestartSafeTools: false });
+
+    expect(
+      resolveMainSessionResumePolicy([
+        { role: "user", content: "finish the interrupted work" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "The work is complete." }],
+          stopReason: "stop",
+          phase: "final_answer",
+          openclawAsyncDelivery: { itemId: " " },
         },
       ]),
     ).toEqual({ action: "resume", forceRestartSafeTools: false });

@@ -300,7 +300,10 @@ final class ChannelsStore {
     var configSchemaReloadPending = false
     var configLoading = false
     var configLoadingSourceKey: String?
-    var configForceReloadPending = false
+    /// Coalesced re-load request while a config fetch is in flight: `refresh`
+    /// refetches without overwriting a dirty local draft; `force` overwrites it.
+    enum ConfigReloadRequest { case none, refresh, force }
+    var configReloadPending: ConfigReloadRequest = .none
     var configDraft: [String: Any] = [:]
     var configDirty = false
 
@@ -308,6 +311,7 @@ final class ChannelsStore {
     let isPreview: Bool
     var startCount = 0
     var pollTask: Task<Void, Never>?
+    var gatewayPushTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
     var configSourceKey: String?

@@ -9,6 +9,7 @@ import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { registerSecretStoreCli } from "./secrets-store-cli.js";
 
@@ -143,6 +144,7 @@ export function registerSecretsCli(program: Command): void {
       }
       defaultRuntime.log("Secrets reloaded.");
     } catch (err) {
+      rethrowExpectedCliError(err);
       defaultRuntime.error(
         danger(
           formatGatewayCommandFailure({

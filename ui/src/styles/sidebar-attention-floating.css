@@ -1,0 +1,54 @@
+/* Floating footer controls clear collapsed chrome and feed their resting width
+   back into the first-row safe edge. */
+.shell--nav-collapsed:has(openclaw-sidebar-attention.sidebar-attention--floating) {
+  --shell-attention-width: 40px;
+}
+
+openclaw-sidebar-attention.sidebar-attention--floating {
+  --sidebar-bg: var(--bg-content, var(--bg));
+
+  position: fixed;
+  top: 10px;
+  left: calc(var(--shell-chrome-controls-inset) + var(--shell-controls-width) + 8px);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: var(--shell-chrome-controls-gap);
+}
+
+/* Native navigation hides the web controls. */
+html.openclaw-native-nav openclaw-sidebar-attention.sidebar-attention--floating {
+  left: calc(var(--shell-chrome-controls-inset) + 6px);
+}
+
+html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floating {
+  top: 52px;
+}
+
+/* Web-hosted titlebar controls occupy the native row instead of sitting below it. */
+html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--floating {
+  top: calc((var(--openclaw-native-titlebar-height, 50px) - var(--shell-chrome-control-size)) / 2);
+  left: calc(
+    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+      var(--shell-chrome-controls-gap)
+  );
+}
+
+:is(.shell--onboarding, .shell--settings) openclaw-sidebar-attention.sidebar-attention--floating {
+  inset: auto auto max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+
+/* A stale-client refresh card shares the collapsed overlay strip's row; drop it
+   below the fixed attention cluster instead of rendering both at the origin. */
+.sidebar-attention--floating ~ .sidebar-update-card--floating .sidebar-update-card {
+  margin-top: 50px;
+}
+
+/* Footer buttons need opaque chrome when they float over arbitrary page content. */
+:where(openclaw-sidebar-attention.sidebar-attention--floating) .sidebar-issues-button {
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}

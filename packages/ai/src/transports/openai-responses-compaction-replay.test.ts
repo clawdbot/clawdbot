@@ -137,6 +137,30 @@ function responseMessage(id: string, text: string) {
 }
 
 describe("OpenAI Responses compaction replay", () => {
+  it.each(responseConverters)("$name skips invalid reasoning signatures", ({ convert }) => {
+    const invalidSignatures = [
+      ["truncated JSON", '{"type":"reasoning"'],
+      ["null", "null"],
+      ["array", "[]"],
+      ["wrong item type", '{"type":"message"}'],
+    ] as const;
+
+    for (const [caseName, thinkingSignature] of invalidSignatures) {
+      const input = convert({
+        messages: [
+          createAssistant([
+            { type: "thinking", thinking: "invalid", thinkingSignature },
+            { type: "text", text: "session continues" },
+          ]),
+        ],
+      });
+
+      expect(input, caseName).toEqual([
+        expect.objectContaining({ type: "message", role: "assistant" }),
+      ]);
+    }
+  });
+
   it("strips only exact compaction checkpoints with structural sharing", () => {
     const unchanged = createOutput();
     expect(stripCompactionReplayCheckpoint(unchanged)).toBe(unchanged);

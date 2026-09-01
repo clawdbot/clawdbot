@@ -4,7 +4,6 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentTool,
-  CompactionResult,
   ThinkingLevel,
 } from "../runtime/index.js";
 import type {
@@ -23,6 +22,18 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
+type AgentSessionCompactionOutcome =
+  | { status: "completed"; tokensBefore: number; tokensAfter: number; willRetry: boolean }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; reason: string }
+  | { status: "aborted" };
+
+type AgentSessionCompactionEndEvent = {
+  type: "compaction_end";
+  reason: "manual" | "threshold" | "overflow";
+  outcome: AgentSessionCompactionOutcome;
+};
+
 export type AgentSessionEvent =
   | Exclude<AgentEvent, { type: "agent_end" }>
   | {
@@ -32,17 +43,12 @@ export type AgentSessionEvent =
       assistantEntryId?: string;
     }
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
+  | { type: "agent_settled" }
+  | { type: "agent_handoff" }
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
-  | {
-      type: "compaction_end";
-      reason: "manual" | "threshold" | "overflow";
-      result: CompactionResult | undefined;
-      aborted: boolean;
-      willRetry: boolean;
-      errorMessage?: string;
-    }
+  | AgentSessionCompactionEndEvent
   | {
       type: "auto_retry_start";
       attempt: number;
@@ -107,6 +113,8 @@ export interface PromptOptions {
   source?: InputSource;
   /** Internal RPC hook for prompt preflight acceptance or rejection. */
   preflightResult?: (success: boolean) => void;
+  /** Internal identity for a current user turn that is already durable. */
+  persistedUserIdempotencyKey?: string;
 }
 
 /** Result from cycling the active model. */

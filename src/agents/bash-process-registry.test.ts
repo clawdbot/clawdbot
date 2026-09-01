@@ -10,17 +10,15 @@ import {
   addSession,
   appendOutput,
   deleteSession,
-  drainFinishedSession,
-  drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
-  getFinishedSessionForProcess,
   isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
   markExited,
   markTerminalPollObserved,
+  prepareSessionPoll,
   recordNotifyOnExitRemoval,
   setJobTtlMs,
   tail,
@@ -28,6 +26,8 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createSessionSlug } from "./session-slug.js";
+
+const drainSession = (session: ProcessSession) => prepareSessionPoll(session, undefined);
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),
@@ -208,34 +208,21 @@ describe("bash process registry", () => {
     addSession(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(0);
+    expect(session.endedAt).toBeUndefined();
 
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     const finishedSessions = listFinishedSessions();
     const endedAt = finishedSessions[0]?.endedAt;
     expect(endedAt).toEqual(expect.any(Number));
-    expect(finishedSessions).toStrictEqual([
-      {
-        id: "sess",
-        command: "echo test",
-        scopeKey: undefined,
-        startedAt: session.startedAt,
-        endedAt,
-        cwd: "/tmp",
-        status: "completed",
-        exitCode: 0,
-        exitSignal: null,
-        exitReason: undefined,
-        aggregated: "",
-        tail: "",
-        truncated: false,
-        totalOutputChars: 0,
-        unreadOutput: { output: "", outputDropped: false },
-      },
-    ]);
+    expect(finishedSessions).toEqual([session]);
+    expect(session.terminalStatus).toBe("completed");
+    deleteSession(session.id);
+    expect(session.endedAt).toBe(endedAt);
+    expect(listFinishedSessions()).toHaveLength(0);
   });
 
-  it("moves unread output into the exact finished snapshot and consumes it once", () => {
+  it("retains unread output on its exact process and consumes it once", () => {
     const session = createRegistrySession({
       id: "exact-finished-output",
       maxOutputChars: 100,
@@ -246,10 +233,9 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "terminal output\n");
     markExited(session, 0, null, "completed");
 
-    const finished = getFinishedSessionForProcess(session);
-    expect(finished).toBe(getFinishedSession(session.id));
-    expect(finished && drainFinishedSession(finished).output).toBe("terminal output\n");
-    expect(finished && drainFinishedSession(finished).output).toBe("");
+    const finished = getFinishedSession(session.id);
+    expect(finished).toBe(session);
+    expect(finished && drainSession(finished).output).toBe("terminal output\n");
     expect(drainSession(session).output).toBe("");
   });
 
@@ -369,6 +355,7 @@ describe("bash process registry", () => {
 
     addSession(session);
     markBackgrounded(session);
+    session.backgrounded = false;
     deleteSession(session.id);
 
     expect(listRunningSessions()).toHaveLength(0);
@@ -378,23 +365,28 @@ describe("bash process registry", () => {
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   });
 
-  it("keeps a hidden active session id reserved until exit", () => {
-    const session = createRegistrySession({
-      id: "amber-atlas",
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-    });
+  it.each([false, true])(
+    "keeps a hidden active session id reserved until exit (backgrounded=%s)",
+    (backgrounded) => {
+      const session = createRegistrySession({
+        id: "amber-atlas",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: false,
+      });
 
-    addSession(session);
-    markBackgrounded(session);
-    deleteSession(session.id);
-    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
+      addSession(session);
+      if (backgrounded) {
+        markBackgrounded(session);
+      }
+      deleteSession(session.id);
+      expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
 
-    session.backgrounded = false;
-    markExited(session, 0, null, "completed");
-    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
-  });
+      session.backgrounded = false;
+      markExited(session, 0, null, "completed");
+      expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
+    },
+  );
 
   it("clears background activity in the test reset", () => {
     const session = createRegistrySession({
@@ -409,6 +401,34 @@ describe("bash process registry", () => {
 
     resetProcessRegistryForTests();
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  });
+
+  it("resets its own registry after another module instance replaces the global test API", async () => {
+    const testApiKey = Symbol.for("openclaw.bashProcessRegistryTestApi");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const originalTestApi = globalStore[testApiKey];
+    const session = createRegistrySession({
+      id: "original-registry-session",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    addSession(session);
+
+    try {
+      const registrySpecifier = "./bash-process-registry.js?reset-owner-regression";
+      const reloadedRegistry = (await import(
+        registrySpecifier
+      )) as typeof import("./bash-process-registry.js");
+      expect(globalStore[testApiKey]).not.toBe(originalTestApi);
+      expect(reloadedRegistry.listRunningSessions()).toEqual([]);
+
+      resetProcessRegistryForTests();
+      expect(listRunningSessions()).toEqual([]);
+    } finally {
+      globalStore[testApiKey] = originalTestApi;
+      resetProcessRegistryForTests();
+    }
   });
 
   it("clamps a zero retention TTL to one minute", () => {

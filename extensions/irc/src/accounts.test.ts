@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -103,6 +103,18 @@ describe("resolveDefaultIrcAccountId", () => {
 });
 
 describe("resolveIrcAccount", () => {
+  let fixtureDirectory: string;
+  let fixturePasswordFile: string;
+
+  beforeAll(() => {
+    fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-password-"));
+    fixturePasswordFile = path.join(fixtureDirectory, "password.txt");
+    fs.writeFileSync(fixturePasswordFile, "file\n", "utf8");
+  });
+
+  afterAll(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
+  afterEach(() => vi.unstubAllEnvs());
+
   it("matches normalized configured account ids", () => {
     const account = resolveIrcAccount({
       cfg: asConfig({
@@ -128,24 +140,108 @@ describe("resolveIrcAccount", () => {
 
   it("parses delimited IRC_CHANNELS env values for the default account", () => {
     vi.stubEnv("IRC_CHANNELS", "alpha, beta\ngamma; delta");
+    const account = resolveIrcAccount({
+      cfg: asConfig({
+        channels: {
+          irc: {
+            host: "irc.example.com",
+            nick: "claw",
+          },
+        },
+      }),
+    });
 
-    try {
+    expect(account.config.channels).toEqual(["alpha", "beta", "gamma", "delta"]);
+  });
+
+  it.each([
+    { accountId: "default", credential: "password" },
+    { accountId: "work", credential: "password" },
+    { accountId: "default", credential: "nickserv" },
+    { accountId: "work", credential: "nickserv" },
+    { accountId: "default", credential: "nickserv", enabled: false },
+  ])(
+    "isolates an unavailable $credential SecretRef for $accountId only when enabled=$enabled",
+    ({ accountId, credential, enabled }) => {
+      vi.stubEnv("IRC_PASSWORD", "ambient-server-secret");
+      vi.stubEnv("IRC_NICKSERV_PASSWORD", "ambient-nickserv-secret");
+
+      const ref = { source: "env", provider: "default", id: "IRC_UNAVAILABLE_EXPLICIT_SECRET" };
       const account = resolveIrcAccount({
         cfg: asConfig({
           channels: {
             irc: {
-              host: "irc.example.com",
-              nick: "claw",
+              accounts: {
+                [accountId]: {
+                  host: "irc.example.com",
+                  nick: "openclaw",
+                  ...(credential === "password"
+                    ? { password: ref, passwordFile: fixturePasswordFile }
+                    : { nickserv: { enabled, password: ref, passwordFile: fixturePasswordFile } }),
+                },
+              },
             },
           },
         }),
+        accountId,
       });
 
-      expect(account.config.channels).toEqual(["alpha", "beta", "gamma", "delta"]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
+      expect(account.configured).toBe(true);
+      expect(account.tokenStatus).toBe(enabled === false ? "available" : "configured_unavailable");
+      if (credential === "password") {
+        expect(account.password).toBe("");
+        expect(account.passwordSource).toBe("config");
+      } else {
+        expect(account.config.nickserv?.password).toBeUndefined();
+      }
+    },
+  );
+
+  it.each<[string, string, string, string, boolean, string, boolean?]>([
+    ["password", "default", "plain", "env", true, "env"],
+    ["password", "default", "plain", "", true, "file"],
+    ["password", "work", "plain", "env", true, "file"],
+    ["password", "work", "plain", "env", false, "plain"],
+    ["nickserv", "default", "plain", "env", true, "plain"],
+    ["nickserv", "default", "", "env", true, "env"],
+    ["nickserv", "default", "", "", true, "file"],
+    ["nickserv", "work", "plain", "env", true, "plain"],
+    ["nickserv", "work", "", "env", true, "file"],
+    ["nickserv", "default", "plain", "env", true, "plain", false],
+  ])(
+    "preserves %s precedence for %s (plaintext=%s, env=%s, file=%s => %s)",
+    (credential, accountId, plaintext, env, file, expected, enabled) => {
+      vi.stubEnv(credential === "password" ? "IRC_PASSWORD" : "IRC_NICKSERV_PASSWORD", env);
+
+      const credentialConfig = {
+        password: plaintext,
+        ...(file ? { passwordFile: fixturePasswordFile } : {}),
+      };
+      const account = resolveIrcAccount({
+        cfg: asConfig({
+          channels: {
+            irc: {
+              accounts: {
+                [accountId]: {
+                  host: "irc.example.com",
+                  nick: "openclaw",
+                  ...(credential === "password"
+                    ? credentialConfig
+                    : { nickserv: { ...credentialConfig, ...(enabled === false && { enabled }) } }),
+                },
+              },
+            },
+          },
+        }),
+        accountId,
+      });
+
+      expect(credential === "password" ? account.password : account.config.nickserv?.password).toBe(
+        expected,
+      );
+      expect(account.tokenStatus).toBe("available");
+    },
+  );
 
   it.runIf(process.platform !== "win32")("isolates symlinked password files", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-account-"));

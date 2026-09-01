@@ -56,13 +56,11 @@ export async function gradiumTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "Gradium API error");
 
-    return Buffer.from(
-      await readProviderBinaryResponse(response, "Gradium API error", "audio", {
-        maxBytes,
-        onOverflow: ({ maxBytes: maxBytesLocal }) =>
-          new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
-      }),
-    );
+    return await readProviderBinaryResponse(response, "Gradium API error", "audio", {
+      maxBytes,
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
   } finally {
     await release();
   }

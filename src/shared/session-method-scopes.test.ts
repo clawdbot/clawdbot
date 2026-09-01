@@ -60,8 +60,12 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     },
     {
       name: "CAS envelope",
-      patch: { expectedSessionId: "session-1", expectedLifecycleRevision: "revision-1" },
+      patch: {
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
+      },
     },
+    { name: "automatic read envelope", patch: { expectedMarkedUnreadAt: 10 } },
   ])("keeps $name write-scoped", ({ patch }) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {
@@ -192,6 +196,62 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
         "operator.admin",
       );
     }
+  });
+
+  it.each([
+    [{ key: "agent:main:thread", profileId: "development" }, "operator.admin"],
+    [{ key: "agent:main:thread", profileId: "   " }, "operator.admin"],
+    [{ key: "agent:main:thread", deviceId: "device-1" }, "operator.write"],
+    [{ key: "agent:main:thread", autoDevice: true }, "operator.write"],
+    [
+      { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
+      "operator.write",
+    ],
+  ] as const)("classifies dispatch target %j as %s", (params, expected) => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.dispatch", params)).toBe(expected);
+  });
+
+  const moveExpected = {
+    generation: 1,
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+  };
+  it.each([
+    [
+      { key: "agent:main:thread", expected: moveExpected, target: { kind: "gateway" } },
+      "operator.write",
+    ],
+    [
+      {
+        key: "agent:main:thread",
+        expected: moveExpected,
+        target: { kind: "gateway" },
+        abandonSource: true,
+      },
+      "operator.write",
+    ],
+    [
+      {
+        key: "agent:main:thread",
+        expected: moveExpected,
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      "operator.write",
+    ],
+    [
+      {
+        key: "agent:main:thread",
+        expected: moveExpected,
+        target: { kind: "profile", profileId: "development" },
+      },
+      "operator.admin",
+    ],
+    [
+      { key: "agent:main:thread", target: { kind: "profile", profileId: "development" } },
+      "operator.write",
+    ],
+  ] as const)("classifies move target %j as %s", (params, expected) => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.move", params)).toBe(expected);
   });
 
   it("does not duplicate static method policy from the core descriptor table", () => {

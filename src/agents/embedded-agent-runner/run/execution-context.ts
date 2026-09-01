@@ -17,6 +17,7 @@ export type PreparedEmbeddedRunInput = {
   agentDir: string;
   workspaceResolution: ReturnType<typeof resolveRunWorkspaceDir>;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   globalLane: string;
   hookRunner: ReturnType<typeof getGlobalHookRunner>;

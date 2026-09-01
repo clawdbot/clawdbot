@@ -25,7 +25,7 @@ removed; uninstall it via npm/pnpm separately.
 | `--dry-run`         | `false` | Print planned actions without removing files.        |
 
 With no scope flags, an interactive multiselect prompts for which components
-to remove (defaults to service, state, workspace preselected).
+to remove (defaults to the Gateway service only).
 
 ## Examples
 
@@ -39,6 +39,8 @@ openclaw uninstall --dry-run
 ```
 
 ## Notes
+
+Uninstall reports each requested scope and exits nonzero if any requested cleanup fails or is blocked. A failed gateway service inspection, stop, or uninstall blocks state and workspace mutation, but independent macOS app cleanup is still attempted. After service teardown is safe, other permitted scopes continue so failures can be reported together. On non-macOS systems, `--app` reports that the scope is not applicable.
 
 - Run `openclaw backup create` first for a restorable snapshot before removing
   state or workspaces.

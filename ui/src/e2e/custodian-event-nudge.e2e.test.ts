@@ -1,9 +1,9 @@
 // Control UI tests cover event-reactive custodian presence against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "custodian-event-nudge",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("custodian-event-nudge");
+  }
+});
 
 async function settleUi(page: Page): Promise<void> {
   await page.evaluate(
@@ -68,9 +68,6 @@ suite.define(() => {
   });
 
   it("shows one consequential nudge and sends its canonical message", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -167,9 +164,6 @@ suite.define(() => {
   });
 
   it("keeps a blocking startup error next to the composer", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -320,9 +314,6 @@ suite.define(() => {
   });
 
   it("renders rich wizard controls and sends typed answers", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -376,7 +367,7 @@ suite.define(() => {
         const optionRestingStyle = await twitchOption.evaluate(readInteractionStyle);
         await twitchOption.hover();
         const optionHoverStyle = await twitchOption.evaluate(readInteractionStyle);
-        expect(optionRestingStyle.cursor).toBe("pointer");
+        expect(optionRestingStyle.cursor).toBe("default");
         expect(optionHoverStyle.borderColor).not.toBe(optionRestingStyle.borderColor);
 
         const disabledContinueStyle = await continueButton.evaluate(readInteractionStyle);
@@ -384,7 +375,7 @@ suite.define(() => {
         expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
         expect(disabledContinueStyle.cursor).toBe("not-allowed");
         expect(await cancelButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
-          "pointer",
+          "default",
         );
         expect(
           await Promise.all(
@@ -453,7 +444,7 @@ suite.define(() => {
         });
         await page.getByLabel("Twitch").check();
         expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
-          "pointer",
+          "default",
         );
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByLabel("Announcements").waitFor();

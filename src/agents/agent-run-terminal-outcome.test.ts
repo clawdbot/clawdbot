@@ -4,6 +4,7 @@ import {
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isDefinitiveRunLifecycle,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunAttemptTerminal,
   mergeAgentRunTerminalOutcome,
@@ -26,6 +27,21 @@ describe("agent run terminal outcome", () => {
     ["failed", "failure"],
   ] as const)("classifies %s as %s", (reason, classification) => {
     expect(classifyAgentRunTerminalOutcome({ reason })).toBe(classification);
+  });
+
+  it.each([
+    { label: "retryable provider failure", data: { error: "provider failed" }, definitive: false },
+    {
+      label: "exhausted provider failure",
+      data: { error: "provider failed", fallbackExhaustedFailure: true },
+      definitive: true,
+    },
+    { label: "blocked run", data: { livenessState: "blocked" }, definitive: true },
+    { label: "abandoned run", data: { livenessState: "abandoned" }, definitive: true },
+    { label: "explicit cancellation", data: { aborted: true }, definitive: true },
+    { label: "provider timeout", data: { timeoutPhase: "provider" }, definitive: true },
+  ])("recognizes whether $label is a definitive lifecycle error", ({ data, definitive }) => {
+    expect(isDefinitiveRunLifecycle({ phase: "error", data })).toBe(definitive);
   });
 
   it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {

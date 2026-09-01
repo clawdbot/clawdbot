@@ -55,21 +55,6 @@ describe("backoff helpers", () => {
     expect(error.cause).toBe(controller.signal.reason);
   });
 
-  it("advances with fake timers", async () => {
-    vi.useFakeTimers();
-    try {
-      const sleeper = sleepWithAbort(50);
-      await vi.advanceTimersByTimeAsync(49);
-      await expect(
-        Promise.race([sleeper.then(() => "done"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(sleeper).resolves.toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("removes the abort listener after the sleep completes", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
@@ -77,11 +62,15 @@ describe("backoff helpers", () => {
     const removeEventListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
     try {
       const sleeper = sleepWithAbort(50, controller.signal);
+      const onSettled = vi.fn();
+      void sleeper.then(onSettled);
       const abortListener = addEventListenerSpy.mock.calls[0]?.[1];
 
       expect(abortListener).toBeDefined();
       expect(vi.getTimerCount()).toBe(1);
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(49);
+      expect(onSettled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       await expect(sleeper).resolves.toBeUndefined();
 
       expect(removeEventListenerSpy).toHaveBeenCalledWith("abort", abortListener);

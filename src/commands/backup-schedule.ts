@@ -1,16 +1,18 @@
-import path from "node:path";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import {
   callGatewayFromCli,
   isImplicitLocalGatewayTargetFromCli,
   type GatewayRpcOpts,
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { CronJob } from "../cron/types.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
+import { resolveRequiredBackupPath } from "./backup-shared.js";
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 const LOCAL_GATEWAY_REQUIRED_ERROR =
@@ -42,23 +44,24 @@ function resolveScheduledRedaction(options: BackupScheduleOptions): boolean {
   return options.includeSecrets !== true;
 }
 
-function resolveRepository(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    throw new Error("Missing required --repository value.");
-  }
-  return path.resolve(resolveUserPath(trimmed));
-}
-
 function buildScheduledArgv(
   options: BackupScheduleOptions,
   repositoryPath: string,
   redactSecrets: boolean,
 ): string[] {
   const agent = options.agent?.trim();
+  if (options.agent !== undefined && !agent) {
+    throw new Error("--agent must not be blank");
+  }
   if (options.globalOnly && agent) {
     throw new Error("Use either --global-only or --agent <id>, not both.");
   }
+  const agentId = agent
+    ? resolveConfiguredAgentId(
+        getRuntimeConfig({ skipPluginValidation: true }),
+        normalizeAgentId(agent),
+      )
+    : undefined;
   return [
     "openclaw",
     "backup",
@@ -66,11 +69,7 @@ function buildScheduledArgv(
     "create",
     "--repository",
     repositoryPath,
-    ...(options.globalOnly
-      ? ["--global"]
-      : agent
-        ? ["--agent", normalizeAgentId(agent)]
-        : ["--all"]),
+    ...(options.globalOnly ? ["--global"] : agentId ? ["--agent", agentId] : ["--all"]),
     ...(options.push ? ["--push"] : []),
     ...(redactSecrets ? ["--exclude-secrets"] : []),
   ];
@@ -99,7 +98,7 @@ export async function backupEnableCommand(
   options: BackupScheduleOptions,
 ): Promise<{ id: string; updated: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const repositoryPath = resolveRepository(options.repository);
+  const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const every = options.every?.trim() || "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {

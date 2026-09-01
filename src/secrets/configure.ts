@@ -265,11 +265,11 @@ async function promptOptionalPositiveInt(params: {
 }
 
 function configureCandidateKey(candidate: {
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "openclaw.json" | "auth-profile-store";
   path: string;
   agentId?: string;
 }): string {
-  if (candidate.configFile === "auth-profiles.json") {
+  if (candidate.configFile === "auth-profile-store") {
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
   return `openclaw:${candidate.path}`;
@@ -374,7 +374,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
       path: `profiles.${profileIdTrimmed}.token`,
       pathSegments: ["profiles", profileIdTrimmed, "token"],
       label: `profiles.${profileIdTrimmed}.token (auth profile, agent ${agentId})`,
-      configFile: "auth-profiles.json",
+      configFile: "auth-profile-store",
       agentId,
       authProfileProvider: providerTrimmed,
       expectedResolvedValue: "string",
@@ -385,7 +385,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
     path: `profiles.${profileIdTrimmed}.key`,
     pathSegments: ["profiles", profileIdTrimmed, "key"],
     label: `profiles.${profileIdTrimmed}.key (auth profile, agent ${agentId})`,
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     agentId,
     authProfileProvider: providerTrimmed,
     expectedResolvedValue: "string",
@@ -862,7 +862,9 @@ export async function runSecretsConfigureInteractive(
         value: configureCandidateKey(candidate),
         label: candidate.label,
         hint: [
-          candidate.configFile === "auth-profiles.json" ? "auth-profiles.json" : "openclaw.json",
+          // Auth profiles live in the agent's SQLite store; naming the retired
+          // JSON file here sent operators looking for a file that no longer exists.
+          candidate.configFile === "auth-profile-store" ? "auth profile store" : "openclaw.json",
           candidate.isDerived === true ? "derived" : undefined,
         ]
           .filter(Boolean)

@@ -16,6 +16,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
+  threadTs?: string;
   eventKind: string;
   eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
@@ -43,6 +44,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelType: auth.channelType,
     senderId,
+    threadTs: auth.channelType === "im" ? undefined : params.threadTs,
     eventScope: params.eventScope,
   });
   return {

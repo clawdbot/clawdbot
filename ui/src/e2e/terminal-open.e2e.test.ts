@@ -34,6 +34,15 @@ async function settleTerminalPaint(page: Page): Promise<void> {
   );
 }
 
+async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "System") {
+  const sidebar = page.locator("openclaw-app-sidebar");
+  const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
+  if (!(await toggle.isVisible())) {
+    await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  }
+  await toggle.click();
+}
+
 suite.define(() => {
   it("opens against the shared mock and renders echoed terminal output", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
@@ -62,6 +71,52 @@ suite.define(() => {
         .toContain(sentinel);
       await expect.poll(() => canvasDigest(canvas)).not.toBe(bannerDigest);
     });
+  });
+
+  it("keeps an open side-panel terminal synchronized with light and dark mode", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        serviceWorkers: "block",
+        viewport: { height: 800, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.startup", "terminal.open"],
+          terminalEnabled: true,
+        });
+
+        const panel = await openTerminalSidePanel(page);
+        await gateway.waitForRequest("terminal.open");
+        const canvas = panel.locator(".tp-host canvas");
+        await canvas.waitFor({ state: "visible" });
+        await canvas.evaluate((element) => {
+          element.dataset.themeSyncIdentity = "original";
+        });
+        await cycleThemeMode(page, "System");
+        await cycleThemeMode(page, "Light");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+        await expect
+          .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
+          .toBe("dark");
+
+        await cycleThemeMode(page, "Dark");
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+        await expect
+          .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
+          .toBe("light");
+        expect(await canvas.getAttribute("data-theme-sync-identity")).toBe("original");
+
+        await page.locator(".chat-side-panel-toggle").click();
+        await expect.poll(() => canvas.isVisible()).toBe(false);
+        await page.locator(".chat-side-panel-toggle").click();
+        await canvas.waitFor({ state: "visible" });
+        await expect
+          .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
+          .toBe("light");
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+      },
+    );
   });
 
   it("names a missing field and retries the open successfully", async () => {

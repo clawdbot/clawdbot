@@ -1,4 +1,10 @@
+import * as participants from "./session-participant.js";
 import * as sessionsCatalog from "./sessions-catalog.js";
+import {
+  SessionsResolveCandidateSchema,
+  SessionsResolveParamsSchema,
+  SessionsResolveResultSchema,
+} from "./sessions-resolve.js";
 import * as sessions from "./sessions.js";
 
 export const SessionCoreProtocolSchemas = {
@@ -24,13 +30,18 @@ export const SessionCoreProtocolSchemas = {
   SessionsCleanupParams: sessions.SessionsCleanupParamsSchema,
   SessionsPreviewParams: sessions.SessionsPreviewParamsSchema,
   SessionsDescribeParams: sessions.SessionsDescribeParamsSchema,
-  SessionsResolveParams: sessions.SessionsResolveParamsSchema,
+  SessionsResolveCandidate: SessionsResolveCandidateSchema,
+  SessionsResolveParams: SessionsResolveParamsSchema,
+  SessionsResolveResult: SessionsResolveResultSchema,
   SessionsSearchHit: sessions.SessionsSearchHitSchema,
   SessionsSearchParams: sessions.SessionsSearchParamsSchema,
   SessionsSearchResult: sessions.SessionsSearchResultSchema,
   SessionCompactionCheckpoint: sessions.SessionCompactionCheckpointSchema,
   SessionOperationEvent: sessions.SessionOperationEventSchema,
   SessionCreatedActor: sessions.SessionCreatedActorSchema,
+  SessionParticipantIdentity: participants.SessionParticipantIdentitySchema,
+  SessionParticipant: participants.SessionParticipantSchema,
+  SessionPerson: participants.SessionPersonSchema,
   SessionOwner: sessions.SessionOwnerSchema,
   SessionObserverHealth: sessions.SessionObserverHealthSchema,
   SessionObserverPlanProgress: sessions.SessionObserverPlanProgressSchema,

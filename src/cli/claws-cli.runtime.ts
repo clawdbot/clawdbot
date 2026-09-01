@@ -58,6 +58,7 @@ import {
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
+import { formatClawDiagnostics, logClawExperimentalWarning } from "./claws-cli-output.js";
 import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
@@ -68,21 +69,6 @@ import type {
 } from "./claws-cli.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-
-type DiagnosticLike = { level: string; code: string; path: string; message: string };
-
-function formatDiagnostics(diagnostics: DiagnosticLike[]): string {
-  return diagnostics
-    .map(
-      (diagnostic) =>
-        `${diagnostic.level.toUpperCase()} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
-    )
-    .join("\n");
-}
-
-function logExperimentalWarning(runtime: RuntimeEnv): void {
-  runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
-}
 
 function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
@@ -215,7 +201,7 @@ export async function runClawsInspectCommand(
         diagnostics: result.diagnostics,
       });
     } else {
-      runtime.error(formatDiagnostics(result.diagnostics));
+      runtime.error(formatClawDiagnostics(result.diagnostics));
     }
     runtime.exit(1);
     return;
@@ -253,7 +239,7 @@ export async function runClawsInspectCommand(
     }
     return;
   }
-  logExperimentalWarning(runtime);
+  logClawExperimentalWarning(runtime);
   runtime.log(`Claw: ${result.source.name}@${result.source.version}`);
   runtime.log(`Agent: ${result.manifest.agent.name ?? result.manifest.agent.id}`);
   runtime.log(`Packages: ${result.manifest.packages.length}`);
@@ -266,7 +252,7 @@ export async function runClawsInspectCommand(
   runtime.log(`MCP servers: ${Object.keys(result.manifest.mcpServers).length}`);
   runtime.log(`Cron jobs: ${result.manifest.cronJobs.length}`);
   if (!valid) {
-    runtime.error(formatDiagnostics(diagnostics));
+    runtime.error(formatClawDiagnostics(diagnostics));
     runtime.exit(1);
   }
 }
@@ -296,7 +282,7 @@ export async function runClawsAddCommand(
         diagnostics: result.diagnostics,
       });
     } else {
-      runtime.error(formatDiagnostics(result.diagnostics));
+      runtime.error(formatClawDiagnostics(result.diagnostics));
     }
     runtime.exit(1);
     return;
@@ -460,9 +446,9 @@ export async function runClawsAddCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
-      logExperimentalWarning(runtime);
+      logClawExperimentalWarning(runtime);
       logClawAddPlanSummary(plan, runtime);
-      runtime.error(formatDiagnostics(plan.blockers));
+      runtime.error(formatClawDiagnostics(plan.blockers));
     }
     runtime.exit(1);
     return;
@@ -472,7 +458,7 @@ export async function runClawsAddCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
-      logExperimentalWarning(runtime);
+      logClawExperimentalWarning(runtime);
       runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
       logClawAddPlanSummary(plan, runtime);
     }
@@ -499,7 +485,7 @@ export async function runClawsAddCommand(
 
   let addResult;
   if (!opts.json) {
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
   }
   try {
     addResult = await applyClawAddPlan(plan, {
@@ -553,7 +539,7 @@ export async function runClawsStatusCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, status);
   } else {
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Installed Claws: ${status.summary.claws}`);
     for (const record of status.records) {
       runtime.log(
@@ -605,7 +591,7 @@ export async function runClawsRemoveCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
-      logExperimentalWarning(runtime);
+      logClawExperimentalWarning(runtime);
       runtime.log(`Remove actions: ${plan.actions.length}`);
       runtime.log(`Plan integrity: ${plan.planIntegrity}`);
       for (const action of plan.actions.filter((candidate) => candidate.kind === "packageRef")) {
@@ -639,7 +625,7 @@ export async function runClawsRemoveCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, result);
     } else {
-      logExperimentalWarning(runtime);
+      logClawExperimentalWarning(runtime);
       runtime.log(`Removed agent: ${result.agentId}`);
       runtime.log(`Status: ${result.status}`);
       for (const pkg of result.packages) {
@@ -689,7 +675,7 @@ export async function runClawsExportCommand(
       writeRuntimeJson(runtime, result);
       return;
     }
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Exported agent: ${result.agentId}`);
     runtime.log(`Package directory: ${result.outputDirectory}`);
     runtime.log(

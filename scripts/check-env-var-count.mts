@@ -2,6 +2,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  enforceRatchetScalar,
+  loadRatchetReference,
+  loadRatchetSnapshot,
+  loadRatchetSources,
+  parseRatchetScalar,
+  reportRatchetSuccess,
+} from "./lib/shrink-ratchet.mts";
 
 const BUDGET_PATH = "config/env-var-count-budget.txt";
 const SOURCE_ROOTS = ["src", "packages", "extensions"];
@@ -46,11 +54,10 @@ export function collectEnvVarNames(root = process.cwd(), options: { staged?: boo
     .split("\0")
     .filter(isCountedSourcePath)
     .filter((file) => staged || fs.existsSync(path.join(root, file)));
+  const sources = staged ? loadRatchetSources(root, files).values() : files;
   const names = new Set<string>();
-  for (const file of files) {
-    const source = staged
-      ? execFileSync("git", ["show", `:${file}`], { cwd: root, encoding: "utf8" })
-      : fs.readFileSync(path.join(root, file), "utf8");
+  for (const entry of sources) {
+    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
     for (const match of source.matchAll(ENV_VAR_PATTERN)) {
       names.add(match[0]);
     }
@@ -58,16 +65,8 @@ export function collectEnvVarNames(root = process.cwd(), options: { staged?: boo
   return [...names].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
-export function parseBudget(source: string) {
-  const values = source
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"));
-  const value = values[0];
-  if (values.length !== 1 || value === undefined || !/^\d+$/u.test(value)) {
-    throw new Error(`${BUDGET_PATH} must contain exactly one non-negative integer`);
-  }
-  return Number(value);
+function parseBudget(source: string) {
+  return parseRatchetScalar(source, BUDGET_PATH);
 }
 
 function readBaseBudget(root: string, ref: string) {
@@ -95,19 +94,7 @@ function readBaseBudget(root: string, ref: string) {
   if (mergeBase.status !== 0 || !baselineRef) {
     throw new Error(`Could not resolve env-var count merge base for: ${ref}`);
   }
-  const entry = execFileSync("git", ["ls-tree", "--name-only", baselineRef, "--", BUDGET_PATH], {
-    cwd: root,
-    encoding: "utf8",
-  }).trim();
-  if (!entry) {
-    return null;
-  }
-  return parseBudget(
-    execFileSync("git", ["show", `${baselineRef}:${BUDGET_PATH}`], {
-      cwd: root,
-      encoding: "utf8",
-    }),
-  );
+  return loadRatchetReference(root, baselineRef, BUDGET_PATH, parseBudget);
 }
 
 export function main(argv: string[] = process.argv.slice(2), root = process.cwd()) {
@@ -120,24 +107,19 @@ export function main(argv: string[] = process.argv.slice(2), root = process.cwd(
       "Usage: node --import tsx scripts/check-env-var-count.mts [--staged] [--base <git-ref>]",
     );
   }
-  const budgetSource = staged
-    ? execFileSync("git", ["show", `:${BUDGET_PATH}`], { cwd: root, encoding: "utf8" })
-    : fs.readFileSync(path.join(root, BUDGET_PATH), "utf8");
-  const budget = parseBudget(budgetSource);
+  const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
   const baseBudget = readBaseBudget(root, baseRef);
-  const approvedGrowth =
-    (baseBudget === 501 && budget === 502) || (baseBudget === 502 && budget === 503);
-  if (baseBudget !== null && budget > baseBudget && !approvedGrowth) {
-    throw new Error(`OPENCLAW_* budget grew from ${baseBudget} to ${budget}`);
+  if (baseBudget !== null) {
+    enforceRatchetScalar(budget, baseBudget, {
+      increased: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
+    });
   }
   const names = collectEnvVarNames(root, { staged });
-  if (names.length !== budget) {
-    const direction = names.length > budget ? "exceeds" : "is below";
-    throw new Error(
-      `OPENCLAW_* count ${names.length} ${direction} budget ${budget}; update ${BUDGET_PATH}`,
-    );
-  }
-  console.log(`OPENCLAW_* count ${names.length}/${budget}`);
+  enforceRatchetScalar(names.length, budget, {
+    decreased: `OPENCLAW_* count ${names.length} is below budget ${budget}; update ${BUDGET_PATH}`,
+    increased: `OPENCLAW_* count ${names.length} exceeds budget ${budget}; update ${BUDGET_PATH}`,
+  });
+  reportRatchetSuccess(`OPENCLAW_* count ${names.length}/${budget}`);
   return names.length;
 }
 

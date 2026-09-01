@@ -4,7 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mts";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;
@@ -101,6 +101,7 @@ describe("check-dependency-pins", () => {
       `overrides:
   exact: 1.2.3
   alias: "npm:@scope/real-package@2.3.4"
+  parent>unused-adapter: "-"
 packageExtensions:
   parent@1.0.0:
     dependencies:
@@ -124,6 +125,7 @@ packageExtensions:
         tag: "latest",
         broad: ">=1 <2",
         gitFloating: "github:owner/repo#main",
+        invalidRemoval: "-",
       },
     });
     writeJson(path.join(dir, "extensions", "demo", "package.json"), {
@@ -163,6 +165,7 @@ packageExtensions:
         name: "gitFloating",
         spec: "github:owner/repo#main",
       },
+      { file: "package.json", section: "dependencies", name: "invalidRemoval", spec: "-" },
     ]);
   });
 

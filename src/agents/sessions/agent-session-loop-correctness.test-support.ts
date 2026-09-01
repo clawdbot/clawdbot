@@ -148,7 +148,7 @@ export async function createTestSession(
       })
     : await createAgentSession(sessionOptions);
   sessions.push(result.session);
-  return { ...result, settingsManager, sessionManager };
+  return { ...result, modelRegistry, settingsManager, sessionManager };
 }
 
 export function appendHistory(sessionManager: SessionManager, assistant: AssistantMessage): void {

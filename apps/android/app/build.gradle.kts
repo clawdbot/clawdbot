@@ -1,27 +1,14 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
-import org.gradle.api.DefaultTask
-import org.gradle.api.file.ConfigurableFileCollection
-import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.tasks.Exec
-import org.gradle.api.tasks.InputFiles
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.PathSensitive
-import org.gradle.api.tasks.PathSensitivity
-import org.gradle.api.tasks.TaskAction
-import org.gradle.process.ExecOperations
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
-import javax.inject.Inject
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
-val openClawRepositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
-val canvasA2uiAssetsDir = layout.buildDirectory.dir("generated/canvasA2uiAssets")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
@@ -133,58 +120,6 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.ksp)
 }
-
-abstract class StageCanvasA2uiTask
-  @Inject
-  constructor(
-    private val execOperations: ExecOperations,
-  ) : DefaultTask() {
-    @get:Internal abstract val repoRoot: DirectoryProperty
-
-    @get:InputFiles
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val sourceFiles: ConfigurableFileCollection
-
-    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
-
-    @TaskAction
-    fun stage() {
-      val root = repoRoot.get().asFile
-      execOperations.exec {
-        workingDir(root)
-        commandLine(
-          "node",
-          "--import",
-          "tsx",
-          "scripts/sync-native-a2ui.mts",
-          "--write",
-          "--output",
-          outputDirectory
-            .get()
-            .dir("CanvasA2UI")
-            .asFile.absolutePath,
-        )
-      }
-    }
-  }
-
-val stageCanvasA2ui =
-  tasks.register<StageCanvasA2uiTask>("stageCanvasA2ui") {
-    group = "build"
-    description = "Stages the plugin-owned Canvas A2UI renderer for native apps."
-    repoRoot.set(openClawRepositoryRoot)
-    sourceFiles.from(
-      openClawRepositoryRoot.resolve("package.json"),
-      openClawRepositoryRoot.resolve("pnpm-lock.yaml"),
-      openClawRepositoryRoot.resolve("scripts/bundle-a2ui.mts"),
-      openClawRepositoryRoot.resolve("scripts/sync-native-a2ui.mts"),
-      openClawRepositoryRoot.resolve("extensions/canvas/package.json"),
-      openClawRepositoryRoot.resolve("extensions/canvas/scripts/bundle-a2ui.mjs"),
-      openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui/index.html"),
-    )
-    sourceFiles.from(openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui-app"))
-    outputDirectory.set(canvasA2uiAssetsDir)
-  }
 
 ksp {
   arg("room.schemaLocation", "$projectDir/schemas")
@@ -342,10 +277,6 @@ android {
 androidComponents {
   val adbExecutable = sdkComponents.adb
   onVariants { variant ->
-    variant.sources.assets?.addGeneratedSourceDirectory(
-      stageCanvasA2ui,
-      StageCanvasA2uiTask::outputDirectory,
-    )
     variant.outputs
       .filterIsInstance<VariantOutputImpl>()
       .forEach { output ->

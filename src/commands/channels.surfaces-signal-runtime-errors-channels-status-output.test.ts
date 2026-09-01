@@ -37,6 +37,14 @@ describe("channels command", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
+  it("guides operators when no channels are configured", () => {
+    const lines = formatGatewayChannelsStatusLines({ channelAccounts: {} });
+
+    expect(lines).toContain(
+      "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
+    );
+  });
+
   it("surfaces Signal runtime errors in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelLabels: {

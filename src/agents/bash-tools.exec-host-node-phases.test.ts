@@ -3,7 +3,7 @@ import {
   formatNodeInvokeFailureFollowup,
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
-import { invokeNodeSystemRunDirect } from "./bash-tools.exec-host-node-phases.js";
+import { dispatchNodeSystemRun } from "./bash-tools.exec-host-node-phases.js";
 
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
 
@@ -115,10 +115,15 @@ describe("invokeNodeSystemRun failure classification", () => {
   });
 });
 
-type DirectNodeRun = Parameters<typeof invokeNodeSystemRunDirect>[0];
+type DirectNodeRun = Parameters<typeof dispatchNodeSystemRun>[0];
 
 function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
   return {
+    invoke: {
+      nodeId: "node-1",
+      command: "system.run",
+      params: { command: ["tool", "--version"], rawCommand: "tool --version" },
+    },
     request: {
       command: "tool --version",
       workdir: "/tmp/work",
@@ -150,9 +155,31 @@ describe("direct node run", () => {
     });
   });
 
+  it.each(["timeout", "malformed response"])("keeps %s outcomes ambiguous", async (kind) => {
+    if (kind === "timeout") {
+      callGatewayToolMock.mockRejectedValueOnce(
+        gatewayNodeInvokeError({
+          code: "TIMEOUT",
+          nodeCommandDispatched: true,
+        }),
+      );
+    } else {
+      callGatewayToolMock.mockResolvedValueOnce({ payload: { stdout: "partial" } });
+    }
+    const result = await dispatchNodeSystemRun(createDirectNodeRun());
+    expect(result.details).toMatchObject({ status: "failed", reason: "outcome-unknown" });
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining(
+          "The command may have executed. Do not rerun it automatically.",
+        ),
+      }),
+    ]);
+  });
+
   it("forwards the original cancellation signal to the gateway", async () => {
     const controller = new AbortController();
-    await invokeNodeSystemRunDirect(createDirectNodeRun(controller.signal));
+    await dispatchNodeSystemRun(createDirectNodeRun(controller.signal));
 
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
@@ -176,11 +203,37 @@ describe("direct node run", () => {
       },
     });
 
-    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const result = await dispatchNodeSystemRun(createDirectNodeRun());
     const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
 
-    expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}`);
+    expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}\n(Command exited with code 1)`);
     expect(result.details).toMatchObject({ aggregated: visibleText });
+  });
+
+  it("renders a nonzero exit code in the model-visible text", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: { success: false, stdout: "done", stderr: "", error: null, exitCode: 3 },
+    });
+
+    const result = await dispatchNodeSystemRun(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    // Output alone must not read as success when the command failed.
+    expect(visibleText).toContain("done");
+    expect(visibleText).toContain("(Command exited with code 3)");
+    expect(result.details).toMatchObject({ status: "failed", exitCode: 3 });
+  });
+
+  it("renders a timeout marker and records timedOut in details", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: { success: false, stdout: "", stderr: "", error: null, timedOut: true },
+    });
+
+    const result = await dispatchNodeSystemRun(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(visibleText).toContain("Command timed out.");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
   });
 
   it("never dispatches a direct node run after cancellation", async () => {
@@ -188,7 +241,7 @@ describe("direct node run", () => {
     const reason = new Error("cancelled before direct node dispatch");
     controller.abort(reason);
 
-    await expect(invokeNodeSystemRunDirect(createDirectNodeRun(controller.signal))).rejects.toBe(
+    await expect(dispatchNodeSystemRun(createDirectNodeRun(controller.signal))).rejects.toBe(
       reason,
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();

@@ -1,4 +1,6 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
@@ -14,6 +16,14 @@ type CombinedSessionMcpRuntime = SessionMcpRuntime & {
   managedParts: readonly SessionMcpRuntime[];
 };
 
+function compareCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
+  return (
+    left.safeServerName.localeCompare(right.safeServerName) ||
+    left.toolName.localeCompare(right.toolName) ||
+    left.serverName.localeCompare(right.serverName)
+  );
+}
+
 export function isCombinedSessionMcpRuntime(
   runtime: SessionMcpRuntime,
 ): runtime is CombinedSessionMcpRuntime {
@@ -27,6 +37,7 @@ export function isCombinedSessionMcpRuntime(
 export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
   const servers: Record<string, McpServerCatalog> = {};
   const tools: McpCatalogTool[] = [];
+  const policyTools: McpCatalogTool[] = [];
   const sessionDeniedTools: McpCatalogTool[] = [];
   const diagnostics: McpToolCatalogDiagnostic[] = [];
 
@@ -37,6 +48,9 @@ export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpTo
       servers[serverName] = server;
     }
     tools.push(...catalog.tools);
+    policyTools.push(
+      ...(catalog.policyTools ?? [...catalog.tools, ...(catalog.sessionDeniedTools ?? [])]),
+    );
     if (catalog.sessionDeniedTools) {
       sessionDeniedTools.push(...catalog.sessionDeniedTools);
     }
@@ -44,30 +58,15 @@ export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpTo
       diagnostics.push(...catalog.diagnostics);
     }
   }
-  tools.sort((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    if (serverOrder !== 0) {
-      return serverOrder;
-    }
-    const toolOrder = a.toolName.localeCompare(b.toolName);
-    if (toolOrder !== 0) {
-      return toolOrder;
-    }
-    return a.serverName.localeCompare(b.serverName);
-  });
-  sessionDeniedTools.sort((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    return (
-      serverOrder ||
-      a.toolName.localeCompare(b.toolName) ||
-      a.serverName.localeCompare(b.serverName)
-    );
-  });
+  tools.sort(compareCatalogTools);
+  policyTools.sort(compareCatalogTools);
+  sessionDeniedTools.sort(compareCatalogTools);
   return {
     version: 1,
     generatedAt: Math.max(0, ...catalogs.map((catalog) => catalog.generatedAt)),
     servers,
     tools,
+    ...(policyTools.length > 0 ? { policyTools } : {}),
     ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
     ...(diagnostics.length > 0 ? { diagnostics } : {}),
   };
@@ -141,8 +140,10 @@ export function createCombinedSessionMcpRuntime(params: {
   // Fresh combined facades have an empty owner map until the catalog is loaded.
   // Share one in-flight getCatalog so concurrent tool/resource calls do not fan out.
   const ownerForServer = async (serverName: string): Promise<SessionMcpRuntime> => {
+    const signal = getSessionMcpRequestSignal();
+    signal?.throwIfAborted();
     if (serverOwner.size === 0) {
-      await loadCatalog();
+      await racePromiseWithAbortSignal(loadCatalog(), signal);
     }
     const owner = serverOwner.get(serverName);
     if (owner) {

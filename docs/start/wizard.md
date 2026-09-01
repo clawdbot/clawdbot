@@ -23,8 +23,8 @@ requires a real completion, and only then starts [OpenClaw](/cli/openclaw)
 to configure the rest of OpenClaw. Choosing **Skip for now** exits onboarding
 without starting OpenClaw.
 
-The classic wizard remains available for custom providers, remote Gateway
-setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
+The classic wizard remains available for remote Gateway setup, channel pairing,
+daemon controls, skills, and imports. Run it explicitly
 with `openclaw onboard --classic`; the guided inference picker does not delegate
 into it. After inference passes, OpenClaw can use `open channel wizard for
 <channel>` to hand channel setup that needs secrets to a masked terminal wizard.
@@ -101,6 +101,10 @@ Plain `openclaw onboard` follows this path:
    OpenRouter, or choose **More…** for the remaining providers. Each provider's
    regions, plans, and supported browser, device, API-key, or token methods
    appear in a second menu and are tested with the same real completion.
+   For an unlisted endpoint, choose **Custom Provider** (under **More…** when shown) and enter
+   its base URL, optional API key, compatibility, and model ID. Custom setup
+   runs in the local CLI on the Gateway host and verifies a real reply before
+   saving the provider or replacing the active model.
    Choose **Skip for now** to exit without starting OpenClaw.
 5. Persist only the verified model route and any credential/plugin state it
    requires. Workspace and Gateway settings remain untouched.
@@ -124,8 +128,12 @@ menu is built from the current installation:
 - With a configured default model, **Keep existing model config** appears first
   and is selected by default, followed by **QuickStart (recommended)** and
   **Manual setup**.
-- Each detected migration source adds an **Import from &lt;source&gt;** choice
-  after the setup choices.
+- When a migration provider is available, **Import from another agent** appears
+  after the setup choices. Selecting it opens provider-specific entries such as
+  **Import from Claude**, **Import from Codex**, and **Import from Hermes**.
+  Detected sources appear first with their paths; other available providers ask
+  for a source path. Use Back from the provider list to return to **Setup mode**
+  before an import begins.
 
 Pass `--flow quickstart` or `--flow manual` (alias `advanced`) to select a
 classic setup flow and skip that prompt. Import flags select the import flow
@@ -188,7 +196,9 @@ Local mode (default) walks through these steps:
 4. **Channels** - built-in and official plugin chat channels, including
    Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
    QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-5. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
+5. **Web search** - configures an optional search provider.
+6. **Skills** - installs recommended skills and their optional dependencies.
+7. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
    (Linux/WSL2), or a native Windows Scheduled Task with a per-user
    Startup-folder fallback.
    If token auth is required and `gateway.auth.token` is SecretRef-managed,
@@ -197,8 +207,7 @@ Local mode (default) walks through these steps:
    install with guidance. If both `gateway.auth.token` and
    `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
    is blocked until you set the mode explicitly.
-6. **Health check** - starts the Gateway and verifies it is reachable.
-7. **Skills** - installs recommended skills and their optional dependencies.
+8. **Health check** - starts the Gateway and verifies it is reachable.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you pass `--reset`.

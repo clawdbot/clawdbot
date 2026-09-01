@@ -87,6 +87,17 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       formatted += ` | ${message}`;
       seenMessages.add(message);
     };
+    // Wrappers routinely embed the cause verbatim ("failed to parse X: <cause.message>"),
+    // which exact-match dedupe misses, so the whole sentence prints twice. Codes stay on
+    // their own: a trailing bare code is this formatter's convention even when the detail
+    // already names it.
+    const appendCauseErrorMessage = (message: string | undefined): void => {
+      if (message && formatted.includes(message)) {
+        seenMessages.add(message);
+        return;
+      }
+      appendCauseMessage(message);
+    };
     if (options.includeCode) {
       const code = readProperty(value, "code");
       if (typeof code === "string" || typeof code === "number") {
@@ -96,7 +107,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        appendCauseMessage(cause.message);
+        appendCauseErrorMessage(cause.message);
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));
@@ -106,7 +117,10 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(cause);
         break;
       } else {
-        appendCauseMessage(formatStatusAndCode(cause));
+        // Mirror the top-level branch: an object cause with keys beyond
+        // status/code makes formatStatusAndCode return undefined, so fall
+        // back to stringifyUnknown rather than dropping the cause entirely.
+        appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
         break;
       }
     }

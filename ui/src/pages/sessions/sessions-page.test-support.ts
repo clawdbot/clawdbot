@@ -12,6 +12,7 @@ import type {
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { SessionsRouteData } from "./route.ts";
 import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
@@ -52,7 +53,7 @@ export type TestSessionsPage = HTMLElement & {
   ) => void;
   patchSession: (
     key: string,
-    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null; unread?: boolean },
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
@@ -75,7 +76,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -194,6 +195,7 @@ export function createContext(
     basePath: "",
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
     agentSelection: {

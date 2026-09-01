@@ -180,10 +180,9 @@ func TestCodexTranslatorUsesExactGlossaryMatchWithoutPrompt(t *testing.T) {
 }
 
 func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
-	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
+	prompt := buildCodexTranslationPrompt("Hello\nworld")
 
 	for _, want := range []string{
-		"System prompt.",
 		"Return only the translated text",
 		"Do not wrap the response in an additional code fence",
 		"preserve every code fence already present in the input exactly",
@@ -202,12 +201,22 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 
 func TestRunCodexExecPromptUsesOutputLastMessage(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("LocalAppData", filepath.Join(dir, "cache"))
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EXPECTED_CODEX_HOME_BASE", filepath.Join(cacheDir, "openclaw-docs-i18n"))
 	fakeCodex := filepath.Join(dir, "codex")
 	if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
 set -eu
 out=""
 saw_effort=0
 saw_service=0
+saw_contract=0
+saw_project_docs_disabled=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output-last-message)
@@ -223,18 +232,34 @@ while [ "$#" -gt 0 ]; do
         service_tier=\"fast\")
           saw_service=1
           ;;
+        developer_instructions=\"Translate.\")
+          saw_contract=1
+          ;;
+        project_doc_max_bytes=0)
+          saw_project_docs_disabled=1
+          ;;
       esac
       ;;
   esac
   shift || true
 done
-cat >/dev/null
+input="$(cat)"
+case "$input" in
+  *"Translate."*)
+    echo "translation contract must not be repeated in user input" >&2
+    exit 1
+    ;;
+esac
 if [ "$saw_effort" != "1" ]; then
   echo "missing high reasoning effort config" >&2
   exit 1
 fi
 if [ "$saw_service" != "1" ]; then
   echo "missing fast service tier config" >&2
+  exit 1
+fi
+if [ "$saw_contract" != "1" ] || [ "$saw_project_docs_disabled" != "1" ]; then
+  echo "missing isolated developer translation contract" >&2
   exit 1
 fi
 if [ -z "${CODEX_HOME:-}" ]; then
@@ -254,11 +279,22 @@ if ! grep -q '"OPENAI_API_KEY":"test-openai-key"' "$CODEX_HOME/auth.json"; then
   exit 1
 fi
 case "$CODEX_HOME" in
-  /tmp/*)
-    echo "CODEX_HOME must not be under /tmp" >&2
+  "$EXPECTED_CODEX_HOME_BASE"/codex-home-*) ;;
+  *)
+    echo "CODEX_HOME must belong to the user cache" >&2
     exit 1
     ;;
 esac
+for private_dir in "$EXPECTED_CODEX_HOME_BASE" "$CODEX_HOME"; do
+  if [ -z "$(find "$private_dir" -prune -type d -perm 0700)" ]; then
+    echo "Codex cache and home must have mode 0700" >&2
+    exit 1
+  fi
+done
+if [ -z "$(find "$CODEX_HOME/auth.json" -prune -type f -perm 0600)" ]; then
+  echo "auth.json must have mode 0600" >&2
+  exit 1
+fi
 printf 'translated from codex\n' > "$out"
 `), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
@@ -277,6 +313,13 @@ printf 'translated from codex\n' > "$out"
 	}
 	if got != "translated from codex" {
 		t.Fatalf("unexpected output %q", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(cacheDir, "openclaw-docs-i18n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("Codex home was not removed: %v", entries)
 	}
 }
 

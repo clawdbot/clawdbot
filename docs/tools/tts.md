@@ -97,6 +97,11 @@ preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
 fields shown below are canonical; each provider's own `voice`/`voiceId`/
 `voiceName` field names still work as legacy aliases.
 
+OpenRouter and DeepInfra use the first nonblank value from `speakerVoice`,
+`speakerVoiceId`, `voice`, and `voiceId`, in that order, before the provider default.
+Talk applies the same order to its provider block; when all four fields are absent
+or blank, it keeps the base TTS voice.
+
 <Tabs>
   <Tab title="Azure Speech">
 ```json5
@@ -859,6 +864,10 @@ channel that supports conversion.
 
 When `tts.auto` is enabled, OpenClaw:
 
+- Keeps terminal slash and plugin command replies text-only, including with
+  `auto: "always"`. Explicit speech requests such as `/tts audio` and `/tts latest`
+  still send audio. Commands that continue into an assistant run keep the normal
+  auto-TTS behavior for the assistant's answer.
 - Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
 - Summarizes long replies when summaries are enabled, using
@@ -910,7 +919,7 @@ Reply -> TTS enabled?
       Active persona id from `personas`. Normalized to lowercase.
     </ParamField>
     <ParamField path="personas.<id>" type="object">
-      Stable spoken identity. Fields: `label`, `description`, `provider`, `fallbackPolicy`, `prompt`, `providers.<provider>`. See [Personas](#personas).
+      Stable spoken identity. Fields: `label`, `description`, `provider`, `fallbackPolicy`, `providers.<provider>`. See [Personas](#personas).
     </ParamField>
     <ParamField path="summaryModel" type="string">
       Cheap model for auto-summary; defaults to `agents.defaults.model.primary`. Accepts `provider/model` or a configured model alias.
@@ -929,8 +938,9 @@ Reply -> TTS enabled?
     </ParamField>
   </Accordion>
 
-Provider `apiKey` fields can be raw strings or SecretRefs. During cold Gateway
-startup, an unavailable TTS SecretRef marks the built-in TTS capability
+Provider `apiKey` fields, including `personas.<id>.providers.<provider>.apiKey`,
+can be raw strings or SecretRefs in global, per-agent, and Discord voice TTS config.
+During cold Gateway startup, an unavailable TTS SecretRef marks the built-in TTS capability
 configured-unavailable instead of stopping the Gateway. `tts.speak` then returns
 `UNAVAILABLE` with reason `SECRET_SURFACE_UNAVAILABLE`, and no provider request is
 sent. Status and doctor list the degraded TTS owner and its config paths. The

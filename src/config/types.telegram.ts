@@ -13,6 +13,7 @@ import type {
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -80,20 +81,22 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
   TelegramPreviewStreamingConfig
 > &
   ChannelReactionConfig<"off" | "own" | "all", "off" | "ack" | "minimal" | "extensive", string> & {
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
     /** Telegram-native exec approval delivery + approver authorization. */
     execApprovals?: TelegramExecApprovalConfig;
     /** Override native command registration for Telegram (bool or "auto"). */
     commands?: ProviderCommandsConfig;
     /** Custom commands to register in Telegram's command menu (merged with native). */
     customCommands?: TelegramCustomCommand[];
-    botToken?: string;
+    botToken?: SecretInput;
     /** Path to a regular file containing the bot token; symlinks are rejected. */
     tokenFile?: string;
     groups?: Record<string, TelegramGroupConfig>;
     /** Per-DM configuration for Telegram DM topics (key is chat ID). */
     direct?: Record<string, TelegramDirectConfig>;
     /**
-     * Use Telegram Bot API 10.2 rich messages for text sends and edits.
+     * Use Telegram Bot API 10.3 rich messages for text sends and edits.
      * When false (default), falls back to HTML/plain text formatting via sendMessage.
      * Set to true to enable native tables, details, and rich media via sendRichMessage.
      * Note: Some Telegram clients (Web, Desktop, older mobile) do NOT support

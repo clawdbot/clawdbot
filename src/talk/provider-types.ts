@@ -22,6 +22,24 @@ export type RealtimeVoiceAudioFormat =
       channels: 1;
     };
 
+export function realtimeVoiceAudioDurationMs(
+  format: RealtimeVoiceAudioFormat,
+  byteLength: number,
+): number {
+  const bytesPerSample = format.encoding === "pcm16" ? 2 : 1;
+  return (byteLength * 1000) / (format.sampleRateHz * format.channels * bytesPerSample);
+}
+
+export type OpenAICompatibleRealtimeAudioFormat =
+  | { type: "audio/pcm"; rate: 24000 }
+  | { type: "audio/pcmu" };
+
+export function toOpenAICompatibleRealtimeAudioFormat(
+  format: RealtimeVoiceAudioFormat,
+): OpenAICompatibleRealtimeAudioFormat {
+  return format.encoding === "pcm16" ? { type: "audio/pcm", rate: 24000 } : { type: "audio/pcmu" };
+}
+
 export const REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ: RealtimeVoiceAudioFormat = {
   encoding: "g711_ulaw",
   sampleRateHz: 8000,
@@ -59,6 +77,13 @@ export type RealtimeVoiceToolResultOptions = {
    */
   suppressResponse?: boolean;
   willContinue?: boolean;
+};
+
+export type RealtimeVoiceCloseDisposition = "abort" | "detach";
+
+export type RealtimeVoiceCloseOptions = {
+  /** Whether closing the transport also cancels work already accepted by the host. */
+  disposition?: RealtimeVoiceCloseDisposition;
 };
 
 export type RealtimeVoiceBridgeEvent = {
@@ -246,6 +271,7 @@ type RealtimeVoiceBrowserWebRtcSdpSession = {
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;
@@ -315,7 +341,7 @@ export type RealtimeVoiceBridge = {
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
   acknowledgeMark(markName?: string): void;
-  close(): void;
+  close(options?: RealtimeVoiceCloseOptions): void;
   isConnected(): boolean;
 };
 

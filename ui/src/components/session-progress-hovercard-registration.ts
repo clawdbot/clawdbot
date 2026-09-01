@@ -1,82 +1,109 @@
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
+import {
+  hovercardBootstrapIntentActive,
+  LazyHovercardBootstrap,
+  type HovercardBootstrapTrigger,
+} from "./lazy-hovercard-registration.ts";
+import {
+  SESSION_PROGRESS_HOVER_LINK_SELECTOR,
+  sessionProgressHoverTargetFromEvent,
+} from "./session-progress-hovercard-target.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
-type HovercardProviderElement = HTMLElement & { gateway?: ApplicationGateway | null };
+let bootstrapObserver: MutationObserver | null = null;
 
-function sessionRowFromEvent(event: Event): HTMLElement | null {
-  for (const target of event.composedPath()) {
-    if (target instanceof HTMLElement && target.dataset.sessionKey) {
-      return target;
+type HovercardProviderElement = HTMLElement & {
+  client?: GatewayBrowserClient | null;
+  context?: ApplicationContext | null;
+  gateway?: ApplicationGateway | null;
+};
+
+const bootstrap = new LazyHovercardBootstrap<
+  HovercardProviderElement,
+  {
+    client: GatewayBrowserClient | null;
+    context: ApplicationContext | null;
+    gateway: ApplicationGateway | null;
+  }
+>({
+  tag: HOVERCARD_TAG,
+  load: async () =>
+    (await import("./session-progress-hovercard.runtime.ts")).SessionProgressHovercardProvider,
+  snapshot: (provider) => ({
+    client: provider.client ?? null,
+    context: provider.context ?? null,
+    gateway: provider.gateway ?? null,
+  }),
+  restore: (provider, properties) => {
+    // Lit assigns .gateway before upgrade. Remove the expando so the runtime
+    // accessors can own the restored dependencies after definition.
+    delete provider.client;
+    delete provider.context;
+    delete provider.gateway;
+    provider.client = properties.client;
+    provider.context = properties.context;
+    provider.gateway = properties.gateway;
+  },
+  onDefined: () => {
+    bootstrapObserver?.disconnect();
+    bootstrapObserver = null;
+  },
+});
+
+function handleBootstrapMutations(records: MutationRecord[]): void {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) {
+        continue;
+      }
+      if (
+        node.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR) ||
+        node.querySelector(SESSION_PROGRESS_HOVER_LINK_SELECTOR)
+      ) {
+        void bootstrap.define();
+        return;
+      }
     }
   }
-  return null;
 }
 
-function providerForRow(row: HTMLElement): HovercardProviderElement | null {
-  return row.closest<HovercardProviderElement>(HOVERCARD_TAG);
-}
-
-function removeBootstrapListeners(): void {
-  document.removeEventListener("pointerover", handleBootstrapIntent, true);
-  document.removeEventListener("focusin", handleBootstrapIntent, true);
-}
-
-async function activateHovercard(event: Event): Promise<void> {
+async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
-    event.type === "pointerover" &&
+    trigger === "pointer" &&
     ((event instanceof PointerEvent && event.pointerType === "touch") ||
       !globalThis.matchMedia?.("(hover: hover)").matches)
   ) {
     return;
   }
-  const row = sessionRowFromEvent(event);
-  if (!row || !providerForRow(row)) {
+  const target = sessionProgressHoverTargetFromEvent(event);
+  if (!target || !bootstrap.providerFor(target)) {
     return;
   }
-  const pendingGateways = new Map(
-    [...document.querySelectorAll<HovercardProviderElement>(HOVERCARD_TAG)].map((provider) => [
-      provider,
-      provider.gateway ?? null,
-    ]),
-  );
-  await ensureCustomElementDefined(HOVERCARD_TAG, async () => {
-    const runtime = await import("./session-progress-hovercard.runtime.ts");
-    if (!customElements.get(HOVERCARD_TAG)) {
-      customElements.define(HOVERCARD_TAG, runtime.SessionProgressHovercardProvider);
-    }
-    for (const [provider, gateway] of pendingGateways) {
-      // Lit assigns .gateway before the lazy element is defined. Remove that
-      // expando after upgrade so the runtime accessor can own subscriptions.
-      delete provider.gateway;
-      provider.gateway = gateway;
-    }
-  });
-  removeBootstrapListeners();
-  const target = event.target;
-  const stillActive =
-    event.type === "pointerover"
-      ? row.matches(":hover")
-      : document.activeElement instanceof Node && row.contains(document.activeElement);
-  if (!(target instanceof EventTarget) || !row.isConnected || !stillActive) {
+  await bootstrap.define();
+  const eventTarget = event.target;
+  if (
+    !(eventTarget instanceof EventTarget) ||
+    !target.isConnected ||
+    !hovercardBootstrapIntentActive(target, trigger, true)
+  ) {
     return;
   }
-  target.dispatchEvent(
-    new Event(event.type === "pointerover" ? "pointerover" : "focusin", {
+  eventTarget.dispatchEvent(
+    new Event(trigger === "pointer" ? "pointerover" : "focusin", {
       bubbles: true,
       composed: true,
     }),
   );
 }
 
-function handleBootstrapIntent(event: Event): void {
-  void activateHovercard(event);
-}
-
-if (customElements.get(HOVERCARD_TAG)) {
-  removeBootstrapListeners();
-} else {
-  document.addEventListener("pointerover", handleBootstrapIntent, true);
-  document.addEventListener("focusin", handleBootstrapIntent, true);
+bootstrap.install(activateHovercard);
+if (!customElements.get(HOVERCARD_TAG)) {
+  bootstrapObserver = new MutationObserver(handleBootstrapMutations);
+  bootstrapObserver.observe(document, { childList: true, subtree: true });
+  if (document.querySelector(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+    void bootstrap.define();
+  }
 }

@@ -633,10 +633,7 @@ export function isDefinitiveRunLifecycle(input: AgentRunLifecycleInput) {
     phase: "error",
     data: input.data,
   });
-  return (
-    input.data?.fallbackExhaustedFailure === true ||
-    classifyAgentRunTerminalOutcome(outcome) !== "failure"
-  );
+  return input.data?.fallbackExhaustedFailure === true || outcome.reason !== "failed";
 }
 
 function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => boolean): boolean {

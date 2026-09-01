@@ -13,6 +13,7 @@ import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sq
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
+  AuthProfileCooldownClassification,
   AuthProfileFailureReason,
   AuthProfileState,
   AuthProfileStateStore,
@@ -33,6 +34,10 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
   "no_error_details",
   "unclassified",
   "unknown",
+]);
+const AUTH_COOLDOWN_CLASSIFICATIONS = new Set<AuthProfileCooldownClassification>([
+  "wham_token_expired",
+  "wham_account_dead",
 ]);
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
@@ -105,6 +110,11 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
   if (!isRecord(raw)) {
     return undefined;
   }
+  const cooldownReason = normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS);
+  const cooldownClassification = normalizeEnumValue(
+    raw.cooldownClassification,
+    AUTH_COOLDOWN_CLASSIFICATIONS,
+  );
   const stats: ProfileUsageStats = {
     lastUsed: asFiniteNumber(raw.lastUsed),
     blockedUntil: asFiniteNumber(raw.blockedUntil),
@@ -113,7 +123,12 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedModel: normalizeOptionalString(raw.blockedModel),
     blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: asFiniteNumber(raw.cooldownUntil),
-    cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
+    cooldownReason,
+    cooldownClassification:
+      (cooldownClassification === "wham_token_expired" && cooldownReason === "auth") ||
+      (cooldownClassification === "wham_account_dead" && cooldownReason === "auth_permanent")
+        ? cooldownClassification
+        : undefined,
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
     disabledUntil: asFiniteNumber(raw.disabledUntil),
     disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),

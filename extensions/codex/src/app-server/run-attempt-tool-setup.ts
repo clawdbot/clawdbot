@@ -24,7 +24,9 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
+import type { CodexDynamicToolSpec } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -32,6 +34,7 @@ import {
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
   return signal?.aborted === true && error === signal.reason;
@@ -61,9 +64,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
+    contextSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     agentDir,
@@ -139,6 +145,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
@@ -189,6 +196,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>)
     | undefined;
+  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -196,10 +204,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
@@ -212,6 +222,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState.yieldDetected = true;
       toolState.yieldAcknowledgment = acknowledgment;
     },
+    claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
     onCodexAppServerEvent: (event: Parameters<typeof emitCodexAppServerEvent>[1]) => {
       void emitCodexAppServerEvent(params, event);
     },
@@ -243,8 +254,35 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
       : {}),
   };
+  let nativeSpecs: CodexDynamicToolSpec[] | undefined;
+  if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
+    runAbortController.signal.throwIfAborted();
+    params.hostCapabilities.assertActive();
+    const client = await connection.attemptClientFactory({
+      startOptions: connection.appServer.start,
+      authProfileId: connection.startupClientAuthProfileId,
+      agentDir,
+      config: params.config,
+      timeoutMs: connection.appServer.requestTimeoutMs,
+    });
+    try {
+      nativeSpecs = await loadCodexNativeToolCatalog({
+        client,
+        binding: mutable.startupBinding,
+        appServer: connection.appServer,
+        agentDir,
+        assertCurrent: () => {
+          runAbortController.signal.throwIfAborted();
+          params.hostCapabilities.assertActive();
+        },
+      });
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  }
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -254,12 +292,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState.webSearchAllowed = allowed;
     },
   });
-  const registeredTools = await buildDynamicTools({
-    ...commonToolParams,
-    forceHeartbeatTool: true,
-    ignoreDisableMessageTool: true,
-    ignoreRuntimePlan: true,
-  });
+  const registeredTools = nativeSpecs
+    ? []
+    : await buildDynamicTools({
+        ...commonToolParams,
+        forceHeartbeatTool: true,
+        ignoreDisableMessageTool: true,
+        ignoreRuntimePlan: true,
+      });
   const policyContext = {
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -267,7 +307,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     agentAccountId: params.agentAccountId,
     messageProvider: params.messageProvider ?? params.messageChannel,
@@ -380,7 +420,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
@@ -406,6 +446,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
       loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
@@ -551,12 +592,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
       onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
+      runtimeYieldCompletionClaim,
     };
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.
