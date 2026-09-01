@@ -168,6 +168,7 @@ openclaw [--dev] [--profile <name>] <command>
     capabilities
     resolve
     logs
+    dead-letters list|resubmit
     add
     remove
     login
