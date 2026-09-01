@@ -533,9 +533,11 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     await client.stop();
   });
 
-  // send.ts detects a send timeout with /imsg rpc timeout \(send\)/i, so the
-  // original wording has to survive as a prefix of the decorated message.
-  it("keeps the client-side timeout wording send.ts matches on", async () => {
+  // A client-side timeout means our wrapper gave up, not that the bridge is
+  // dead, so it is left completely alone: no eviction, no `imsg launch`
+  // guidance, and the exact wording send.ts matches with
+  // /imsg rpc timeout \(send\)/i preserved.
+  it("leaves a client-side timeout undecorated", async () => {
     vi.useFakeTimers();
     const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
     await client.start();
@@ -546,7 +548,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     const error = (await pending.catch((cause: unknown) => cause)) as Error;
     vi.useRealTimers();
     expect(/imsg rpc timeout \(send\)/i.test(error.message)).toBe(true);
-    expect(error.message).toContain("imsg launch");
+    expect(error.message).not.toContain("imsg launch");
 
     child.emit("close", 0, null);
     await client.stop();

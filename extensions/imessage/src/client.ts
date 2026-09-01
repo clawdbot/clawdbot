@@ -48,15 +48,18 @@ export class IMessageRpcRequestError extends Error {
   }
 }
 
-// A stalled bridge, as opposed to a rejected request.
+// A stalled bridge, as opposed to a rejected or merely slow request.
 //
-// Two shapes mean the same thing — the injected helper never answered:
-//   - imsg replies with a JSON-RPC error carrying its own wait timeout, e.g.
-//     "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
-//   - the request outlives our own client-side timer ("imsg rpc timeout (...)")
+// Matches only imsg's own structured wait error, e.g.
+//   "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
+// which imsg raises after publishing a request to the injected helper and
+// getting nothing back. That is first-hand evidence about the bridge.
 //
-// Deliberately narrow. An ordinary rejection (bad target, unknown chat) says
-// nothing about bridge health and must not discard the capability cache.
+// Deliberately excludes our own client-side timer ("imsg rpc timeout (...)"):
+// it fires when the local wrapper is slow or blocked while imsg itself is
+// healthy, so treating it as a dead bridge would evict a good capability cache
+// and point operators at `imsg launch`, the wrong repair. An ordinary rejection
+// (bad target, unknown chat) says nothing about bridge health either.
 // Module-private: request() is the only production caller, and the behavior is
 // covered through that boundary rather than by calling this directly.
 function isIMessageBridgeStall(error: unknown): boolean {
@@ -65,10 +68,7 @@ function isIMessageBridgeStall(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  return (
-    error.message.includes("Timed out waiting for response") ||
-    error.message.includes("imsg rpc timeout")
-  );
+  return error.message.includes("Timed out waiting for response");
 }
 
 const BRIDGE_STALL_GUIDANCE =
