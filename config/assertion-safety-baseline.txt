@@ -716,7 +716,7 @@ extensions/matrix/src/setup-core.ts	8
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	10
 extensions/matrix/src/tool-actions.ts	2
-extensions/mattermost/src/channel.ts	11
+extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	9
 extensions/mattermost/src/mattermost/directory.ts	2
