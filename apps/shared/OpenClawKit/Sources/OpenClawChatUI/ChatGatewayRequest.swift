@@ -149,13 +149,17 @@ public enum OpenClawChatGatewayRequests {
 
     public static func chatMetadata(
         sessionKey: String,
-        fallbackAgentID: String?) -> OpenClawChatGatewayRequest
+        fallbackAgentID: String?,
+        includeSessionKey: Bool = false) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [:]
         self.add(
             OpenClawChatSessionKey.agentID(from: sessionKey) ?? fallbackAgentID,
             to: &params,
             key: "agentId")
+        if includeSessionKey {
+            self.add(sessionKey, to: &params, key: "sessionKey")
+        }
         return OpenClawChatGatewayRequest(
             method: "chat.metadata",
             params: params,

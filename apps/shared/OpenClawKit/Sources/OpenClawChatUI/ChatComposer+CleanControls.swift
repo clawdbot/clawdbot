@@ -201,9 +201,12 @@ extension OpenClawChatComposer {
 
     private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
-            Text(model.displayLabel)
+            let unavailable = self.viewModel.modelUnavailableDescription(model)
+            Text(verbatim: [model.displayLabel, unavailable].compactMap(\.self).joined(separator: " — "))
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag(model.selectionID)
+                .disabled(unavailable != nil)
+                .accessibilityHint(unavailable ?? "")
         }
     }
 

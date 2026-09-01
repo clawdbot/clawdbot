@@ -336,6 +336,33 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
     }
 
+    func loadModelCatalog(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        guard let route = await self.currentSessionMutationRoute() else {
+            throw CancellationError()
+        }
+        let sessionScoped = await self.gateway.supportsServerCapability(
+            .sessionScopedChatMetadata,
+            ifCurrentRoute: route) == true
+        let request = if sessionScoped {
+            OpenClawChatGatewayRequests.chatMetadata(
+                sessionKey: sessionKey,
+                fallbackAgentID: agentID ?? self.globalAgentId,
+                includeSessionKey: true)
+        } else {
+            OpenClawChatGatewayRequests.modelsList(agentID: agentID)
+        }
+        let response = try await self.gateway.request(request, ifCurrentRoute: route)
+        let choices = try sessionScoped
+            ? OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(response)
+            : OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
+        return OpenClawChatModelCatalogSnapshot(
+            choices: choices,
+            availabilityIsSessionScoped: sessionScoped)
+    }
+
     func isSwarmEnabled(sessionKey: String) async throws -> Bool {
         try await self.isSwarmEnabled(sessionKey: sessionKey, ifCurrentRoute: nil)
     }
