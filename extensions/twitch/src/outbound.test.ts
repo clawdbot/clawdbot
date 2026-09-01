@@ -431,7 +431,7 @@ describe("outbound", () => {
           accountId: "default",
         }),
       ).rejects.toThrow(
-        "Account default is not properly configured. Required: username, clientId, and token (config or env for default account).",
+        "Account default is not properly configured. Required: username, clientId, and accessToken (config or env for default account).",
       );
       expect(sendMessageTwitchInternal).not.toHaveBeenCalled();
     });
