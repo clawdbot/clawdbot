@@ -1397,8 +1397,7 @@ extension OnboardingAISetupModel {
         // Reconciliation also returns false when a replacement retires this flow.
         guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
         if cancellation != .unresolved {
-            self.authSessionID = nil
-            self.providerAuthCancellation = nil
+            self.retireProviderAuthSession()
         }
         self.authBusy = false
         self.authError = Self.transportFailure(error.localizedDescription)
@@ -1426,11 +1425,7 @@ extension OnboardingAISetupModel {
         let validationError = !done && status == "running" && error?.isEmpty == false
         let preserveEnteredValue = validationError && self.authStep?.id == step?.id
         if status == "error" || (done && error != nil) {
-            // Terminal sessions are removed by the Gateway. Drop the local id
-            // so Cancel dismisses the preserved, copyable error immediately.
-            self.authSessionID = nil
-            self.providerAuthCancellation = nil
-            self.authStep = nil
+            self.retireProviderAuthSession()
             self.authError = Self.failure(
                 label: option.label,
                 status: "unavailable",
@@ -1536,15 +1531,20 @@ extension OnboardingAISetupModel {
         return true
     }
 
-    private func clearProviderAuth() {
-        // Closing a wizard retires every reply captured by its generation.
+    private func retireProviderAuthSession() {
+        // Settled sessions revoke outstanding replies even while their terminal
+        // error remains visible for inspection and dismissal.
         self.authAttemptID = UUID()
         self.authRequestID = nil
+        self.authSessionID = nil
         self.providerAuthCancellation = nil
+        self.authStep = nil
+    }
+
+    private func clearProviderAuth() {
+        self.retireProviderAuthSession()
         self.activeAuthOption = nil
         self.providerWizardKind = nil
-        self.authSessionID = nil
-        self.authStep = nil
         self.authError = nil
         self.authBusy = false
         self.authText = ""

@@ -822,7 +822,7 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
     var labels: [String] = []
     var buttons: [String: Bool] = [:]
     var visited = Set<ObjectIdentifier>()
-    func visit(_ element: AnyObject) throws {
+    func visit(_ element: AnyObject, buttonEnabled: Bool? = nil) throws {
         guard visited.insert(ObjectIdentifier(element)).inserted else { return }
         // SwiftUI virtual nodes implement public ObjC getters without the full
         // NSAccessibilityProtocol; text getters such as accessibilityTitle can be absent.
@@ -834,14 +834,20 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
             value as? String,
         ].compactMap(\.self)
         labels.append(contentsOf: text)
-        if role == .button, !text.isEmpty {
-            let enabled = try required(element.isAccessibilityEnabled, "isAccessibilityEnabled")()
+        let enabled: Bool? = if role == .button {
+            try required(element.isAccessibilityEnabled, "isAccessibilityEnabled")()
+        } else {
+            buttonEnabled
+        }
+        // Composed Label buttons can expose their text on descendant nodes.
+        // Keep that text bound to the nearest button's enabled state.
+        if let enabled {
             for label in text {
                 buttons[label] = enabled
             }
         }
         for child in try required(element.accessibilityChildren, "accessibilityChildren")() ?? [] {
-            try visit(child as AnyObject)
+            try visit(child as AnyObject, buttonEnabled: enabled)
         }
     }
     try visit(root)
@@ -2091,7 +2097,9 @@ struct OnboardingAISetupTests {
                 let sheet = await inspectAISetupSheet(model)
                 if let terminalError {
                     #expect(sheet.labels.contains(terminalError.summary))
-                    #expect(sheet.buttons[terminalError.detail == nil ? "Copy error" : "Show details"] == true)
+                    #expect(
+                        sheet.buttons[terminalError.detail == nil ? "Copy error" : "Show details"] == true,
+                        "Named buttons: \(sheet.buttons)")
                 }
                 #expect(sheet.buttons["Submit"] == nil)
                 #expect(sheet.buttons["Cancel"] == true)
