@@ -173,6 +173,11 @@
             },
             "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000,
             "thinkingLevelMap": {
               "minimal": "low",

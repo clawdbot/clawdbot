@@ -104,6 +104,28 @@ describe("Anthropic plugin manifest", () => {
     });
   });
 
+  it("publishes the exact Claude Mythos 5 API contract with selectable context windows", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.find((model) => model.id === "claude-mythos-5")).toEqual({
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      contextWindow: 1_000_000,
+      ...selectableContextWindowMetadata,
+      maxTokens: 128_000,
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
+    });
+    // Mythos is direct-API only; the CLI row must not publish a selectable window.
+    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    expect(cliModels.find((model) => model.id === "claude-mythos-5")).toBeUndefined();
+  });
+
   it("declares selectable context windows on both canonical Fable catalog rows", () => {
     const providers = manifest.modelCatalog?.providers;
 
