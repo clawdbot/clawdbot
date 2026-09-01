@@ -776,9 +776,8 @@ private func setupAdmissionBusyResponse(id: String, confirmed: Bool = true) -> D
 }
 
 private enum AISetupAccessibilityError: Error {
-    case requestFailed(attribute: String, code: Int32)
-    case invalidValue(attribute: String)
-    case missingWindow(windowsAttributePresent: Bool, windowCount: Int, windowsWithTitle: Int)
+    case requestFailed(code: Int32)
+    case missingGetter(String)
 }
 
 /// SwiftPM starts background-only, which AppKit does not permit to own windows.
@@ -789,64 +788,49 @@ private let aiSetupAccessibilityApplication: Void = {
     NSApplication.shared.finishLaunching()
 }()
 
-private nonisolated func inspectAISetupWindow(title: String) throws
+@MainActor
+private func inspectAISetupAccessibility(_ root: NSView) async throws
 -> (labels: [String], buttons: [String: Bool]) {
-    func attributeValue(_ element: AXUIElement, _ attribute: String) throws -> CFTypeRef? {
-        var raw: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &raw)
-        switch result {
-        case .attributeUnsupported, .noValue:
-            return nil
-        case .success:
-            return raw
-        default:
-            throw AISetupAccessibilityError.requestFailed(attribute: attribute, code: result.rawValue)
-        }
+    // A real client request materializes SwiftUI's lazy AX tree. Keep MainActor free
+    // for AppKit's reply; window metadata is not used to select the retained root.
+    let result = await Task.detached {
+        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        var windows: CFTypeRef?
+        return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+    }.value
+    guard result == .success else {
+        throw AISetupAccessibilityError.requestFailed(code: result.rawValue)
     }
-    func value<T>(_ element: AXUIElement, _ attribute: String, as _: T.Type) throws -> T? {
-        guard let raw = try attributeValue(element, attribute) else { return nil }
-        guard let typed = raw as? T else {
-            throw AISetupAccessibilityError.invalidValue(attribute: attribute)
-        }
-        return typed
-    }
-
-    let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-    let windows = try value(application, kAXWindowsAttribute, as: [AXUIElement].self)
-    var windowsWithTitle = 0
-    guard let window = try (windows ?? []).first(where: {
-        let candidateTitle = try value($0, kAXTitleAttribute, as: String.self)
-        if candidateTitle != nil { windowsWithTitle += 1 }
-        return candidateTitle == title
-    }) else {
-        throw AISetupAccessibilityError.missingWindow(
-            windowsAttributePresent: windows != nil,
-            windowCount: windows?.count ?? 0,
-            windowsWithTitle: windowsWithTitle)
+    func required<T>(_ getter: T?, _ name: String) throws -> T {
+        guard let getter else { throw AISetupAccessibilityError.missingGetter(name) }
+        return getter
     }
     var labels: [String] = []
     var buttons: [String: Bool] = [:]
-    var visited = Set<AXUIElement>()
-    func visit(_ element: AXUIElement) throws {
-        guard visited.insert(element).inserted else { return }
-        // AXValue is a string for text, but a boolean/number for controls.
-        let text = try [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute].compactMap {
-            try attributeValue(element, $0) as? String
-        }
+    var visited = Set<ObjectIdentifier>()
+    func visit(_ element: AnyObject) throws {
+        guard visited.insert(ObjectIdentifier(element)).inserted else { return }
+        // SwiftUI virtual nodes implement public ObjC getters without the full
+        // NSAccessibilityProtocol; text getters such as accessibilityTitle can be absent.
+        let role = try required(element.accessibilityRole, "accessibilityRole")()
+        let value: Any? = element.accessibilityValue?()
+        let text = [
+            element.accessibilityLabel?(),
+            element.accessibilityTitle?(),
+            value as? String,
+        ].compactMap(\.self)
         labels.append(contentsOf: text)
-        if try value(element, kAXRoleAttribute, as: String.self) == kAXButtonRole, !text.isEmpty {
-            guard let enabled = try value(element, kAXEnabledAttribute, as: Bool.self) else {
-                throw AISetupAccessibilityError.invalidValue(attribute: kAXEnabledAttribute)
-            }
+        if role == .button, !text.isEmpty {
+            let enabled = try required(element.isAccessibilityEnabled, "isAccessibilityEnabled")()
             for label in text {
                 buttons[label] = enabled
             }
         }
-        for child in try value(element, kAXChildrenAttribute, as: [AXUIElement].self) ?? [] {
-            try visit(child)
+        for child in try required(element.accessibilityChildren, "accessibilityChildren")() ?? [] {
+            try visit(child as AnyObject)
         }
     }
-    try visit(window)
+    try visit(root)
     return (labels, buttons)
 }
 
@@ -861,12 +845,9 @@ private func inspectAISetupSheet(
         .environment(\.colorScheme, colorScheme)
         .onAppear { appeared = true })
     hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
-    // Older AppKit exports AXTitle for titled windows but can omit AXIdentifier.
-    // Keep exact ownership through a unique title, not the active or first window.
+    // Keep the sheet mounted through the AX request and detach it before closing.
     let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    let title = "AI setup test \(UUID().uuidString)"
-    window.title = title
     window.contentView = hosting
     defer {
         window.orderOut(nil)
@@ -878,24 +859,12 @@ private func inspectAISetupSheet(
     window.displayIfNeeded()
     hosting.layoutSubtreeIfNeeded()
     #expect(appeared)
-    // AX client requests materialize SwiftUI's virtual nodes without relying on ObjC
-    // protocol conformance. Keep MainActor free so AppKit can answer those requests.
     let snapshot: (labels: [String], buttons: [String: Bool])
     do {
-        snapshot = try await Task.detached { try inspectAISetupWindow(title: title) }.value
+        snapshot = try await inspectAISetupAccessibility(hosting)
     } catch {
         // Record the failure without skipping callers' gated wizard-task cleanup.
-        // Query AppKit only after failure so diagnostics cannot prime AX discovery.
-        let appKitAXWindows = NSApp.accessibilityWindows()
-        Issue.record(error, """
-        Owned AI setup window: mounted=\(hosting.window === window), visible=\(window.isVisible), \
-        accessible=\(window.isAccessibilityElement()), titleMatches=\(window.accessibilityTitle() == title), \
-        appKitListed=\(NSApp.windows.contains { $0 === window }), \
-        appKitAXWindowCount=\(appKitAXWindows?.count ?? 0), \
-        appKitAXListed=\(appKitAXWindows?.contains { ($0 as? NSWindow) === window } ?? false), \
-        canBecomeKey=\(window.canBecomeKey), canBecomeMain=\(window.canBecomeMain), \
-        onActiveSpace=\(window.isOnActiveSpace)
-        """)
+        Issue.record(error)
         snapshot = ([], [:])
     }
     #expect(snapshot.buttons["Cancel"] != nil)
