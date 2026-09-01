@@ -1,9 +1,19 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createTestRegistry,
+  withPluginRuntimeRegistryScope,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  hasControlCommand,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
 import { resolveClickClackInboundAccess } from "./access.js";
+import { clickClackPlugin } from "./channel.js";
 import {
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
@@ -71,6 +81,11 @@ function createRuntime(): PluginRuntime {
       },
     },
     channel: {
+      commands: {
+        shouldComputeCommandAuthorized: vi.fn(shouldComputeCommandAuthorized),
+        shouldHandleTextCommands: vi.fn(shouldHandleTextCommands),
+      },
+      text: { hasControlCommand: vi.fn(hasControlCommand) },
       routing: {
         resolveAgentRoute: vi.fn(
           (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
@@ -483,47 +498,153 @@ describe("ClickClack inbound mention gating", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects an unmentioned group message when mention gating is enabled", async () => {
+  it.each([
+    { body: "hello everyone", requested: false },
+    { body: "hello! poll", requested: false },
+    { body: "hello ! poll", requested: true },
+    { body: "hello ! (exit 0)", requested: true },
+    { body: "hello ! 'printf' ok", requested: true },
+    { body: "hello ! 2>/dev/null", requested: true },
+    { body: "hello !poll", requested: true },
+    { body: "hello /status", requested: true },
+    { body: "! poll", requested: true },
+    { body: "!poll", requested: true },
+  ])(
+    "keeps unmentioned $body gated while command metadata requested=$requested",
+    async ({ body, requested }) => {
+      const runtime = createRuntime();
+      setClickClackRuntime(runtime);
+      const params = {
+        account: createAgentAccount({
+          allowFrom: ["usr_owner"],
+          requireMention: true,
+          botHandle: "blackbird",
+        }),
+        config: { commands: { text: true } } satisfies CoreConfig,
+        message: createMessage({ body }),
+      };
+      const access = await resolveClickClackInboundAccess(params);
+      await handleClickClackInbound({ ...params, access });
+
+      expect(access.channelIngress?.commandAccess).toMatchObject({
+        requested,
+        authorized: requested,
+      });
+      expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runtime.llm.complete).not.toHaveBeenCalled();
+      expect(access.channelIngress?.activationAccess).toMatchObject({
+        shouldSkip: true,
+        shouldBypassMention: false,
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "preserves control bypass on a non-native surface with commands.text=%s",
+    async (text) => {
+      const registry = createTestRegistry([
+        { pluginId: "clickclack", plugin: clickClackPlugin, source: "test" },
+      ]);
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        const runtime = createRuntime();
+        setClickClackRuntime(runtime);
+        const params = {
+          account: createAgentAccount({ allowFrom: ["usr_owner"], requireMention: true }),
+          config: { commands: { text } } satisfies CoreConfig,
+          message: createMessage({ body: "/status" }),
+        };
+        const access = await resolveClickClackInboundAccess(params);
+        await handleClickClackInbound({ ...params, access });
+
+        expect(access.channelIngress?.commandAccess).toMatchObject({
+          requested: true,
+          authorized: true,
+        });
+        expect(access.channelIngress?.activationAccess).toMatchObject({
+          shouldSkip: false,
+          shouldBypassMention: true,
+        });
+        expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+        expect(
+          vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].ctxPayload
+            .CommandAuthorized,
+        ).toBe(true);
+        expect(runtime.llm.complete).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each(["hello ! poll", "/status"])(
+    "does not let model mode bypass mentions for %s",
+    async (body) => {
+      const runtime = createRuntime();
+      setClickClackRuntime(runtime);
+      const params = {
+        account: createAgentAccount({
+          replyMode: "model",
+          allowFrom: ["usr_owner"],
+          requireMention: true,
+        }),
+        config: { commands: { text: true } } satisfies CoreConfig,
+        message: createMessage({ body }),
+      };
+      const access = await resolveClickClackInboundAccess(params);
+      await handleClickClackInbound({ ...params, access });
+
+      expect(access.channelIngress?.commandAccess).toMatchObject({
+        requested: true,
+        authorized: true,
+      });
+      expect(access.channelIngress?.activationAccess).toMatchObject({
+        shouldSkip: true,
+        shouldBypassMention: false,
+      });
+      expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(runtime.llm.complete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["hello ! poll", "/status"])("does not admit a denied sender for %s", async (body) => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const params = {
+      account: createAgentAccount({ allowFrom: ["usr_other"], requireMention: true }),
+      config: { commands: { text: true } } satisfies CoreConfig,
+      message: createMessage({ body }),
+    };
+    const access = await resolveClickClackInboundAccess(params);
+    await handleClickClackInbound({ ...params, access });
 
-    await handleClickClackInbound({
-      account: createAgentAccount({
-        requireMention: true,
-        botHandle: "blackbird",
-      }),
-      config: {} satisfies CoreConfig,
-      message: createMessage({ body: "hello everyone" }),
-    });
-
+    expect(access.channelIngress?.senderAccess.allowed).toBe(false);
+    expect(access.commandAuthorized).toBe(false);
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
-    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
     expect(runtime.llm.complete).not.toHaveBeenCalled();
   });
 
-  it("dispatches a group message when its ClickClack bot handle is mentioned", async () => {
-    const runtime = createRuntime();
-    setClickClackRuntime(runtime);
+  it.each(["@blackbird please help", "@blackbird hello ! poll"])(
+    "dispatches mentioned group text: %s",
+    async (body) => {
+      const runtime = createRuntime();
+      setClickClackRuntime(runtime);
 
-    await handleClickClackInbound({
-      account: createAgentAccount({
-        requireMention: true,
-        botHandle: "blackbird",
-      }),
-      config: {} satisfies CoreConfig,
-      message: createMessage({ body: "@blackbird please help" }),
-    });
+      await handleClickClackInbound({
+        account: createAgentAccount({
+          requireMention: true,
+          botHandle: "blackbird",
+        }),
+        config: {} satisfies CoreConfig,
+        message: createMessage({ body }),
+      });
 
-    const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
-    expect(dispatchTurn).toHaveBeenCalledTimes(1);
-    expect(dispatchTurn.mock.calls[0]?.[0].ctxPayload.WasMentioned).toBe(true);
-  });
+      const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
+      expect(dispatchTurn).toHaveBeenCalledTimes(1);
+      expect(dispatchTurn.mock.calls[0]?.[0].ctxPayload.WasMentioned).toBe(true);
+    },
+  );
 
   it("does not bypass mention gating for a command mentioning another user", async () => {
     const runtime = createRuntime();
-    vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
-    vi.mocked(runtime.channel.commands.shouldHandleTextCommands).mockReturnValue(true);
-    vi.mocked(runtime.channel.text.hasControlCommand).mockReturnValue(true);
     setClickClackRuntime(runtime);
 
     await handleClickClackInbound({

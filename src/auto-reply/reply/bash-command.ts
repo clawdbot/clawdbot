@@ -7,6 +7,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelBackgroundExecSession } from "../../agents/bash-process-control.js";
 import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
+import {
+  appendExecTimeoutRetryGuidance,
+  renderExecExitLabel,
+} from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
@@ -249,16 +253,16 @@ export async function handleBashChatCommand(params: {
       if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
         activeJob = null;
       }
-      const exitLabel = finished.exitSignal
-        ? `signal ${String(finished.exitSignal)}`
-        : `code ${String(finished.exitCode ?? 0)}`;
       const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
       return {
-        text: [
-          `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-          `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
-        ].join("\n"),
+        text: appendExecTimeoutRetryGuidance(
+          [
+            `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+            `Exit: ${renderExecExitLabel(finished)}`,
+            formatOutputBlock(finished.aggregated || finished.tail),
+          ].join("\n"),
+          finished.exitReason,
+        ),
       };
     }
     if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
@@ -309,11 +313,7 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const commandText = request.command.trim();
-  if (!commandText) {
-    return buildUsageReply();
-  }
-
+  const commandText = request.command;
   activeJob = {
     state: "starting",
     startedAt: Date.now(),
@@ -342,7 +342,7 @@ export async function handleBashChatCommand(params: {
         defaultLevel: "on",
       },
     });
-    const result = await execTool.execute("chat-bash", {
+    const { content, details } = await execTool.execute("chat-bash", {
       command: commandText,
       background: shouldBackgroundImmediately,
       yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
@@ -350,12 +350,12 @@ export async function handleBashChatCommand(params: {
       elevated: true,
     });
 
-    if (result.details?.status === "running") {
-      const sessionId = result.details.sessionId;
+    if (details.status === "running") {
+      const sessionId = details.sessionId;
       activeJob = {
         state: "running",
         sessionId,
-        startedAt: result.details.startedAt,
+        startedAt: details.startedAt,
         command: commandText,
       };
       const snippet = formatSessionSnippet(sessionId);
@@ -365,18 +365,17 @@ export async function handleBashChatCommand(params: {
       };
     }
 
-    // Completed in foreground.
     activeJob = null;
-    const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
-    const output =
-      result.details?.status === "completed"
-        ? result.details.aggregated
-        : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
+    // Exec owns warnings and failure guidance; approval replies have no terminal exit.
+    const output = content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
+    if (details.status !== "completed" && details.status !== "failed") {
+      return { text: output };
+    }
     return {
       text: [
-        `⚙️ bash: ${commandText}`,
-        `Exit: ${exitCode}`,
-        formatOutputBlock(output || "(no output)"),
+        `${details.status === "failed" ? "⚠️" : "⚙️"} bash: ${commandText}`,
+        `Exit: ${renderExecExitLabel(details)}`,
+        formatOutputBlock(output),
       ].join("\n"),
     };
   } catch (err) {

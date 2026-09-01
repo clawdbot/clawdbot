@@ -312,6 +312,9 @@ export async function resolveClickClackInboundAccess(params: {
       ? {
           cfg,
           modeWhenAccessGroupsOff: "configured",
+          // Coarse authorization detection also matches ordinary text; only
+          // actual control commands may bypass the group mention requirement.
+          hasControlCommand: runtime.channel.text.hasControlCommand(params.message.body, cfg),
         }
       : false,
   });

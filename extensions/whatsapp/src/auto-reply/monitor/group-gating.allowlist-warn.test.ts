@@ -93,6 +93,29 @@ function makeParams(
 }
 
 describe("applyGroupGating allowlist drop warning", () => {
+  it.each(["! exit 0", "!poll", "! poll", "!stop", "! stop", "/bash exit 0"])(
+    "preserves owner command mention gating for %s",
+    async (body) => {
+      const msg = makeUnregisteredGroupMsg("registered@g.us");
+      msg.payload.body = body;
+      msg.platform.selfE164 = "+15550000001";
+      const params = makeParams(msg, vi.fn(), {
+        commands: { bash: true },
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15550000002"],
+            groupAllowFrom: ["+15550000002"],
+            groupPolicy: "allowlist",
+            groups: { "registered@g.us": {} },
+          },
+        },
+      });
+      expect(await applyGroupGating(params)).toMatchObject({
+        shouldProcess: body.startsWith("/bash"),
+      });
+    },
+  );
+
   it.each([
     {
       name: "emits a warn log naming the root groups path for the default account",

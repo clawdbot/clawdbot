@@ -38,6 +38,18 @@ Behavior:
 - If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
 
+### Chat shell shortcuts
+
+With [chat bash enabled](/tools/slash-commands), `/bash <command>` and `! <command>`
+report the recorded exit code or signal. Unknown exit codes stay unknown; failed
+results use a warning indicator even when the recorded code is zero. Foreground
+replies preserve exec warnings and failure guidance. Use `/bash poll <sessionId>`
+or `!poll <sessionId>` to inspect a background job; timeout results include
+retry-safety guidance. `/bash stop` and `!stop` request cancellation of background
+jobs; poll to confirm their final outcome.
+
+Both shortcuts use the same sender authorization and elevated-access gates.
+
 ### Env overrides
 
 | Variable                                 | Effect                                                                                                           |

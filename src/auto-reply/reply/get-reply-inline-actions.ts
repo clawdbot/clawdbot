@@ -45,6 +45,7 @@ import {
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
+import { hasExplicitCommandContextText } from "./context-text.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -674,7 +675,7 @@ export async function handleInlineActions(params: {
     (inlineCommand !== null ||
       directiveAck !== undefined ||
       inlineStatusRequested ||
-      command.commandBodyNormalized.trim().startsWith("/"));
+      hasExplicitCommandContextText({ commandText: command.commandBodyNormalized }));
   if (!shouldRunCommandHandlers) {
     return {
       kind: "continue",

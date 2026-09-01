@@ -89,18 +89,14 @@ export function isSessionBoundaryCommandText(
 }
 
 /**
- * Coarse detection for inline directives/shortcuts (e.g. "hey /status") so channel monitors
- * can decide whether to compute CommandAuthorized for a message.
+ * Coarse detection for inline directives/shortcuts and bash input, including after mentions.
+ * Bang arguments may start with whitespace or shell punctuation, not only letters.
  *
  * This intentionally errs on the side of false positives; CommandAuthorized only gates
  * command/directive execution, not normal chat replies.
  */
 export function hasInlineCommandTokens(text?: string): boolean {
-  const body = text ?? "";
-  if (!body.trim()) {
-    return false;
-  }
-  return /(?:^|\s)[/!][a-z]/i.test(body);
+  return /(?:^|\s)(?:\/[a-z]|!)/i.test(text ?? "");
 }
 
 function hasSpacedPluginCommand(text?: string): boolean {

@@ -195,27 +195,7 @@ describe("resolveCommandAuthorization", () => {
   });
 
   it("rejects wildcard channel senders when the plugin enforces owner-only commands", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "discord",
-              outbound: { deliveryMode: "direct" },
-            }),
-            commands: { enforceOwnerForCommands: true },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-              resolveAllowFrom: () => ["*"],
-              formatAllowFrom,
-            },
-          },
-          source: "test",
-        },
-      ]),
-    );
+    registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("discord", () => ["*"]));
     const cfg = {
       channels: { discord: { allowFrom: ["*"] } },
     } as OpenClawConfig;
@@ -237,27 +217,7 @@ describe("resolveCommandAuthorization", () => {
   });
 
   it("rejects channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          plugin: {
-            ...createOutboundTestPlugin({
-              id: "discord",
-              outbound: { deliveryMode: "direct" },
-            }),
-            commands: { enforceOwnerForCommands: true },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-              resolveAllowFrom: () => ["*"],
-              formatAllowFrom,
-            },
-          },
-          source: "test",
-        },
-      ]),
-    );
+    registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("discord", () => ["*"]));
     const cfg = {
       channels: { discord: { allowFrom: ["*"] } },
     } as OpenClawConfig;
@@ -1026,6 +986,38 @@ describe("control command parsing", () => {
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
   });
+
+  it.each([
+    "! exit 0",
+    "!poll",
+    "! poll",
+    "!stop",
+    "! stop",
+    "!",
+    "!: exit 0",
+    "! (exit 0)",
+    "! 'printf' ok",
+    "! ./fixture",
+    "! /bin/true",
+    "! # comment",
+    "! 2>/dev/null",
+    "\n  ! poll",
+    "@bot ! exit 0",
+    "@bot ! poll",
+    "@bot ! stop",
+    "@bot !",
+    "@bot ! (exit 0)",
+    "@bot\t! 'printf' ok",
+    "hello ! poll",
+  ])("requests authorization without granting control-command mention bypass for %s", (body) => {
+    expect(shouldComputeCommandAuthorized(body)).toBe(true);
+    expect(hasControlCommand(body)).toBe(false);
+  });
+
+  it.each([undefined, "", "plain text", "hello! poll", "option A / B", "http://example.com/path"])(
+    "leaves non-command text outside authorization computation: %s",
+    (body) => expect(shouldComputeCommandAuthorized(body)).toBe(false),
+  );
 
   it("detects spaced syntax only for active registered plugin commands", () => {
     expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(false);

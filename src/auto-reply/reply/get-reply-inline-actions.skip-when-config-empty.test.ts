@@ -3,10 +3,19 @@ import os from "node:os";
 import path from "node:path";
 // Tests inline action skipping when channel config does not define actions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
@@ -19,12 +28,14 @@ import type { TypingController } from "./typing.js";
 const {
   buildStatusReplyMock,
   createOpenClawToolsMock,
+  execExecuteMock,
   getChannelPluginMock,
   handleCommandsMock,
   listSkillCommandsForWorkspaceMock,
 } = vi.hoisted(() => ({
   buildStatusReplyMock: vi.fn(),
   createOpenClawToolsMock: vi.fn(),
+  execExecuteMock: vi.fn(),
   getChannelPluginMock: vi.fn(),
   handleCommandsMock: vi.fn(),
   listSkillCommandsForWorkspaceMock: vi.fn(),
@@ -45,14 +56,23 @@ vi.mock("./commands.runtime.js", () => ({
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
 }));
 
+vi.mock("./commands-handlers.runtime.js", async () => {
+  const { handleBashCommand } = await import("./commands-bash.js");
+  return { loadCommandHandlers: () => [handleBashCommand] };
+});
+
+vi.mock("../../agents/bash-tools.js", () => ({
+  createExecTool: () => ({ execute: execExecuteMock }),
+}));
+
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: (...args: unknown[]) => listSkillCommandsForWorkspaceMock(...args),
 }));
 
-vi.mock("../../channels/plugins/index.js", () => ({
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
   getLoadedChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  listChannelPlugins: () => [],
   normalizeChannelId: (value?: string) => value?.trim().toLowerCase() || null,
 }));
 
@@ -269,6 +289,147 @@ describe("handleInlineActions", () => {
         : channelId === "discord"
           ? { mentions: { stripPatterns: () => ["<@!?\\d+>"] } }
           : undefined,
+    );
+  });
+
+  describe("chat bash admission", () => {
+    let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+
+    beforeEach(async () => {
+      registrySnapshot = captureActivePluginRegistrySnapshot();
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createChannelTestPluginBase({
+              id: "discord",
+              capabilities: { chatTypes: ["direct"], nativeCommands: true },
+            }),
+          },
+        ]),
+      );
+      const { handleCommands } = await import("./commands-core.js");
+      handleCommandsMock.mockImplementation(handleCommands);
+      execExecuteMock.mockReset();
+      execExecuteMock.mockResolvedValue({
+        content: [{ type: "text", text: "producer failure guidance" }],
+        details: { status: "failed", exitCode: 127 },
+      });
+    });
+
+    afterEach(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
+
+    function bashInput(body: string) {
+      return createHandleInlineActionsInput({
+        ctx: buildTestCtx({ Body: body, CommandBody: body, CommandAuthorized: true }),
+        typing: createTypingController(),
+        cleanedBody: body,
+        command: { isAuthorizedSender: true },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { bash: true } },
+          elevatedEnabled: true,
+          elevatedAllowed: true,
+        },
+      });
+    }
+
+    it.each(["! exit 127", "/bash exit 127"])(
+      "returns the command outcome before a model turn for %s",
+      async (body) => {
+        const result = await handleInlineActions(bashInput(body));
+        expect(result).toMatchObject({
+          kind: "reply",
+          reply: {
+            text: "⚠️ bash: exit 127\nExit: code 127\n```txt\nproducer failure guidance\n```",
+          },
+        });
+        expect(execExecuteMock).toHaveBeenCalledExactlyOnceWith(
+          "chat-bash",
+          expect.objectContaining({ command: "exit 127" }),
+        );
+        if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
+          throw new Error("expected one command reply");
+        }
+        expect(getReplyPayloadMetadata(result.reply)).toMatchObject({ commandReply: true });
+      },
+    );
+
+    it.each(["!poll", "! poll", "!stop", "! stop", "/bash poll", "/bash stop"])(
+      "dispatches %s without starting a shell",
+      async (body) => {
+        expect(await handleInlineActions(bashInput(body))).toMatchObject({
+          kind: "reply",
+          reply: { text: "⚙️ No active bash job." },
+        });
+        expect(execExecuteMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["! exit 127", "/bash exit 127"])("preserves gates for %s", async (body) => {
+      const disabled = bashInput(body);
+      disabled.cfg.commands = { bash: false };
+      expect(await handleInlineActions(disabled)).toMatchObject({
+        kind: "reply",
+        reply: { text: expect.stringContaining("bash is disabled") },
+      });
+      for (const gate of ["elevatedEnabled", "elevatedAllowed"] as const) {
+        const denied = bashInput(body);
+        denied[gate] = false;
+        expect(await handleInlineActions(denied)).toMatchObject({
+          kind: "reply",
+          reply: { text: expect.stringContaining("elevated is not available") },
+        });
+      }
+      const unauthorized = bashInput(body);
+      unauthorized.command.isAuthorizedSender = false;
+      unauthorized.ctx.CommandAuthorized = false;
+      expect(await handleInlineActions(unauthorized)).toMatchObject(
+        body.startsWith("!") ? { kind: "continue" } : { kind: "reply", reply: undefined },
+      );
+      const textDisabled = bashInput(body);
+      textDisabled.cfg.commands = { bash: true, text: false };
+      textDisabled.command.surface = "discord";
+      expect(await handleInlineActions(textDisabled)).toMatchObject({ kind: "continue" });
+      const literal = bashInput(body);
+      literal.ctx.CommandInterpretationSuppressed = true;
+      expect(await handleInlineActions(literal)).toMatchObject({ kind: "continue" });
+      expect(execExecuteMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["!poll", "/bash poll"])(
+      "keeps text commands enabled on non-native surfaces with commands.text=false: %s",
+      async (body) => {
+        const input = bashInput(body);
+        input.cfg.commands = { bash: true, text: false };
+        expect(await handleInlineActions(input)).toMatchObject({
+          kind: "reply",
+          reply: { text: "⚙️ No active bash job." },
+        });
+      },
+    );
+
+    it("keeps explicit skill tokens literal in slash command arguments", async () => {
+      const input = bashInput("/bash echo $office_hours");
+      input.skillCommands = officeHoursInlineSkillCommands();
+      expect(await handleInlineActions(input)).toMatchObject({ kind: "reply" });
+      expect(execExecuteMock).toHaveBeenCalledExactlyOnceWith(
+        "chat-bash",
+        expect.objectContaining({ command: "echo $office_hours" }),
+      );
+    });
+
+    it.each(["hello", "explain !poll", "please run /bash exit 127"])(
+      "keeps ordinary text on the fast path: %s",
+      async (body) => {
+        expect(await handleInlineActions(bashInput(body))).toMatchObject({
+          kind: "continue",
+          cleanedBody: body,
+        });
+        expect(handleCommandsMock).not.toHaveBeenCalled();
+        expect(execExecuteMock).not.toHaveBeenCalled();
+      },
     );
   });
 
@@ -912,42 +1073,44 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("preserves slash commands inside an explicitly referenced skill payload", async () => {
-    const typing = createTypingController();
-    const body = "$office_hours compare /help and /commands with /status";
-    const cleanedBody = stripInlineStatus(body).cleaned;
-    const ctx = buildTestCtx({
-      Body: body,
-      CommandBody: body,
-      Provider: "webchat",
-      Surface: "webchat",
-    });
+  it.each(["$office_hours compare /help and /commands with /status", "! echo $office_hours"])(
+    "preserves commands inside an explicitly referenced skill payload: %s",
+    async (body) => {
+      const typing = createTypingController();
+      const cleanedBody = stripInlineStatus(body).cleaned;
+      const ctx = buildTestCtx({
+        Body: body,
+        CommandBody: body,
+        Provider: "webchat",
+        Surface: "webchat",
+      });
 
-    const result = await handleInlineActions(
-      createHandleInlineActionsInput({
-        ctx,
-        typing,
-        cleanedBody,
-        command: {
-          isAuthorizedSender: true,
-          rawBodyNormalized: body,
-          commandBodyNormalized: body,
-        },
-        overrides: {
-          allowTextCommands: true,
-          inlineStatusRequested: true,
-          cfg: { commands: { text: true } },
-          skillCommands: officeHoursInlineSkillCommands(),
-        },
-      }),
-    );
+      const result = await handleInlineActions(
+        createHandleInlineActionsInput({
+          ctx,
+          typing,
+          cleanedBody,
+          command: {
+            isAuthorizedSender: true,
+            rawBodyNormalized: body,
+            commandBodyNormalized: body,
+          },
+          overrides: {
+            allowTextCommands: true,
+            inlineStatusRequested: true,
+            cfg: { commands: { text: true } },
+            skillCommands: officeHoursInlineSkillCommands(),
+          },
+        }),
+      );
 
-    const expected = expandedOfficeHoursRequest(body);
-    expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
-    expect(ctx.Body).toBe(expected);
-    expect(buildStatusReplyMock).not.toHaveBeenCalled();
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-  });
+      const expected = expandedOfficeHoursRequest(body);
+      expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+      expect(ctx.Body).toBe(expected);
+      expect(buildStatusReplyMock).not.toHaveBeenCalled();
+      expect(handleCommandsMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps unauthorized explicit skill references as plain text", async () => {
     const typing = createTypingController();
