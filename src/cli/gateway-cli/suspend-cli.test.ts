@@ -118,6 +118,21 @@ describe("gateway suspend CLI", () => {
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
+  it.each(["", "   "])(
+    "rejects an empty --wait value before calling the Gateway",
+    async (waitSeconds) => {
+      const callGateway = vi.fn(async () => readyResult);
+
+      await expect(
+        runGatewaySuspend(
+          { rpcOpts: {}, requestId: "host-operation", waitSeconds },
+          { callGateway, runtime: createRuntime() },
+        ),
+      ).rejects.toThrow("--wait must be a non-negative number of seconds");
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("polls with one stable request id until the Gateway is ready", async () => {
     const callGateway = vi
       .fn()
