@@ -8310,6 +8310,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       selectedJobs: ["macos-node", "checks-windows"],
     },
     {
+      label: "Windows process census fixture",
+      changedPath: "test/scripts/fixtures/ci-windows-process-census.py",
+      selectedJobs: ["macos-node", "checks-windows"],
+    },
+    {
       label: "Mac app",
       changedPath: "apps/macos/Sources/Foo.swift",
       selectedJobs: ["macos-node", "macos-swift"],
