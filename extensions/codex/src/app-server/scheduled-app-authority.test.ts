@@ -14,7 +14,7 @@ import {
   intersectCodexPluginThreadConfigWithScheduledAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
-import { buildCodexManagedRequirementsFingerprint } from "./thread-requests.js";
+import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 
 function policyContext() {
   return buildPluginAppPolicyContext(
@@ -336,6 +336,9 @@ describe("scheduled Codex app authority", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
+    const managedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
+      request,
+    } as never);
 
     await expect(
       captureScheduledCodexAppAuthority({
@@ -352,8 +355,7 @@ describe("scheduled Codex app authority", () => {
         auth: {
           kind: "configured-app-server",
           connectionFingerprint: "configured-connection",
-          managedRequirementsFingerprint:
-            buildCodexManagedRequirementsFingerprint(managedRequirements),
+          managedRequirementsFingerprint,
         },
         apps: [
           {
