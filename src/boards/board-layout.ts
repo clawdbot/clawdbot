@@ -289,16 +289,19 @@ export function insertBoardWidget(
   placement: { tabId: string; after?: string; move?: boolean },
 ): BoardLayout {
   const next = cloneLayout(layout);
-  const existing = next.widgets.find((candidate) => candidate.name === widget.name);
+  const index = next.widgets.findIndex((candidate) => candidate.name === widget.name);
+  const existing = next.widgets[index];
+  // A put carries the widget's whole record, so replace the stored entry rather
+  // than merging into it: a field this put leaves off (plugin props, declared
+  // capabilities) must not survive from the previous revision.
+  const inserted: BoardWidget = { ...widget, tabId: placement.tabId };
   if (existing) {
-    const position = existing.position;
-    Object.assign(existing, widget, { tabId: placement.tabId, position });
-    if (placement.move) {
-      moveWidget(next, existing, placement.tabId, undefined, placement.after);
-    }
+    inserted.position = existing.position;
+    next.widgets[index] = inserted;
   } else {
-    next.widgets.push({ ...widget, tabId: placement.tabId });
-    const inserted = requireWidget(next, widget.name);
+    next.widgets.push(inserted);
+  }
+  if (!existing || placement.move) {
     moveWidget(next, inserted, placement.tabId, undefined, placement.after);
   }
   return normalizeBoardLayout(next);

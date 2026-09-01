@@ -238,6 +238,28 @@ describe("SqliteBoardStore behavior", () => {
     expect(store.readWidgetMcpApp(boardSession, "work-item")).toBeUndefined();
   });
 
+  it("drops plugin props when a later put omits them", () => {
+    const store = createStore();
+    store.putWidget({
+      ...boardSession,
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123", compact: true },
+      },
+    });
+
+    const put = store.putWidget({
+      ...boardSession,
+      name: "work-item",
+      content: { kind: "plugin", pluginKind: "workboard:card" },
+    });
+
+    expect(put.widgets[0]).not.toHaveProperty("props");
+    expect(store.getSnapshot(boardSession).widgets[0]).toEqual(put.widgets[0]);
+  });
+
   it("rejects oversized plugin props and capability declarations", () => {
     const store = createStore();
     expect(() =>
