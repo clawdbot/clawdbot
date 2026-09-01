@@ -43,9 +43,11 @@ function renderSidebarMenuRadioItem(params: {
   checked: boolean;
   label: string;
   owner?: SessionOwnerOption;
+  submenu?: boolean;
 }) {
   return html`
     <wa-dropdown-item
+      slot=${params.submenu ? "submenu" : nothing}
       class="sidebar-session-sort-menu__item"
       value=${params.value}
       role="menuitemradio"
@@ -85,17 +87,23 @@ function renderSidebarOwnerFilter(
       checked: involvingMe,
       label: t("sessionsView.involvingMe"),
     })}
-    ${owners.map((owner) =>
-      renderSidebarMenuRadioItem({
-        value: `owner:${owner.id}`,
-        checked: ownerFilterId === owner.id,
-        label:
-          owner.id === selfOwnerId
-            ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
-            : (owner.label ?? owner.id),
-        owner,
-      }),
-    )}
+    ${owners.length > 0
+      ? html`<wa-dropdown-item class="session-menu__item sidebar-session-sort-menu__item">
+          <span class="session-menu__text">${t("sessionsView.owners")}</span>
+          ${owners.map((owner) =>
+            renderSidebarMenuRadioItem({
+              value: `owner:${owner.id}`,
+              checked: ownerFilterId === owner.id,
+              label:
+                owner.id === selfOwnerId
+                  ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
+                  : (owner.label ?? owner.id),
+              owner,
+              submenu: true,
+            }),
+          )}
+        </wa-dropdown-item>`
+      : nothing}
   `;
 }
 
