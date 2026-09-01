@@ -394,6 +394,57 @@ describe("managed ChatGPT OAuth response model", () => {
 
     expect(result.responseModel).toBe(responseModel);
   });
+
+  it("fails closed when managed HTTP and SSE model attestations conflict", async () => {
+    const tracked = trackedFetch(() =>
+      completedResponse(
+        { headers: { "openai-model": "gpt-5.6-sol" } },
+        { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
+      ),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
+
+  it("fails closed when one managed SSE event has conflicting model attestations", async () => {
+    const tracked = trackedFetch(() =>
+      completedResponse(undefined, {
+        "openai-model": "gpt-5.6-sol",
+        "x-openai-model": "gpt-5.6-terra-2026-08-01",
+      }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
+
+  it("fails closed when repeated managed HTTP model headers conflict", async () => {
+    const headers = new Headers({ "openai-model": "gpt-5.6-sol" });
+    headers.append("openai-model", "gpt-5.6-terra-2026-08-01");
+    const tracked = trackedFetch(() => completedResponse({ headers }));
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
 });
 
 describe("native ChatGPT SSE non-success response hooks", () => {

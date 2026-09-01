@@ -62,6 +62,13 @@ The interactive wizard writes both the Reef guard selection and the exact host L
 
 ```json5
 {
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+      },
+    },
+  },
   channels: {
     reef: {
       enabled: true,
@@ -93,7 +100,7 @@ The interactive wizard writes both the Reef guard selection and the exact host L
 }
 ```
 
-The selected profile must resolve to OAuth. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime.
+The selected profile must resolve to OAuth, and its id cannot contain `/`. The model must use the bundled `codex` agent runtime as shown above; the interactive wizard writes that exact model binding and preserves other model metadata. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime. ChatGPT OAuth may omit concrete model headers; that absence is accepted only for the three explicitly documented undated ids below.
 
 ### API key
 
@@ -129,7 +136,7 @@ The existing API-key configuration remains supported:
 - Private Ed25519/X25519 keys, the encrypted replay guard, review state, delivery dedupe, audit chain, and approved peer pins live in the shared `state/openclaw.sqlite` plugin state and never leave the machine. `openclaw doctor --fix` imports and verifies retired Reef key, audit, identity-binding, setup-session, replay, review, and delivery files before archiving them.
 - Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins, and the relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
-- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected, and every guard response must echo the exact configured id.
+- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected. Dated pins require an exact provider-attested response model. A documented undated pin accepts an omitted concrete header, the same id, or the same id plus a provider date suffix; any other reported identity fails closed.
 - `authMode: "oauth"` is OpenAI-only. `authProfileId` names the exact OpenAI profile owned by the host; no fallback to another credential or provider is allowed.
 - `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error fails the send immediately, and inbound messages wait un-delivered at the relay and retry until the guard is back — a provider outage never rejects a peer's message.
 

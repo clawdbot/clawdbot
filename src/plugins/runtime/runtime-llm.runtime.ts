@@ -599,6 +599,12 @@ export function createRuntimeLlm(
           "Plugin LLM completion selected a credential with the wrong authentication mode.",
         );
       }
+      if (requestedModelProfile && prepared.auth.profileId !== requestedModelProfile) {
+        throw completionError(
+          "LLM_COMPLETION_NOT_AUTHORIZED",
+          "Plugin LLM completion selected a different authentication profile.",
+        );
+      }
 
       const context = {
         systemPrompt: buildSystemPrompt(params),

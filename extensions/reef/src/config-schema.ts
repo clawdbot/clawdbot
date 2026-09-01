@@ -16,6 +16,7 @@ const RelayUrlSchema = z
     "Reef relay URL must be an HTTP(S) origin without credentials, path, query, or hash",
   )
   .url();
+export const OpenAiOAuthProfileIdSchema = z.string().regex(/^openai:[^\s:/][^\s/]*$/);
 
 const GuardCommonSchema = {
   pinnedModel: z.string().min(1),
@@ -35,7 +36,10 @@ const GuardSchema = z.union([
     .object({
       provider: z.literal("openai"),
       authMode: z.literal("oauth"),
-      authProfileId: z.string().regex(/^openai:[^\s:][^\s]*$/),
+      // Direct plugin completions encode the profile as a trailing model-ref
+      // suffix, whose grammar deliberately excludes '/'. Reject values that
+      // cannot round-trip through that host boundary.
+      authProfileId: OpenAiOAuthProfileIdSchema,
       ...GuardCommonSchema,
     })
     .strict(),

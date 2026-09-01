@@ -34,6 +34,46 @@ afterEach(() => {
 });
 
 describe("resolveApiKeyForProviderCore OAuth refresh failure ordering", () => {
+  it("does not allow a locked OAuth profile to resolve as another profile", async () => {
+    const profileId = "openai:default";
+    authProfileMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
+      apiKey: "alternate-token",
+      provider: "openai",
+      profileId: "openai:alternate",
+    });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "expired-access",
+          refresh: "expired-refresh",
+          expires: Date.now() - 60_000,
+        },
+        "openai:alternate": {
+          type: "oauth",
+          provider: "openai",
+          access: "alternate-token",
+          refresh: "alternate-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "openai",
+        profileId,
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow("Locked auth profile resolution returned a different profile");
+    expect(authProfileMocks.resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId, allowProfileFallback: false }),
+    );
+  });
+
   it("does not fall back to env after a configured OAuth profile refresh fails", async () => {
     const profileId = "openai:oauth-refresh";
     const refreshFailure = new OAuthRefreshFailureError({

@@ -30,6 +30,7 @@ import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
 const oauthGuardModel = "gpt-5.6-terra";
+const oauthGuardResponseModel = `${oauthGuardModel}-2026-08-01`;
 
 beforeEach(() => {
   resetFlowStoresForTests();
@@ -66,74 +67,58 @@ describe("createConfiguredGuard", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer guard-key");
   });
 
-  it("uses the host-owned OpenAI OAuth profile with strict structured output", async () => {
-    const runtime = createPluginRuntimeMock();
-    const verdict = {
-      decision: "allow",
-      category: "safe",
-      reason: "Safe.",
-      policyVersion: "v1",
-    };
-    runtime.llm.complete = vi.fn().mockResolvedValue({
-      text: JSON.stringify(verdict),
-      provider: "openai",
-      model: oauthGuardModel,
-      responseModel: oauthGuardModel,
-      stopReason: "stop",
-      agentId: "main",
-      usage: {},
-      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-      audit: { caller: { kind: "plugin", id: "reef" } },
-    });
-    setReefRuntime(runtime);
-    const classifier = createConfiguredGuard(
-      ReefChannelConfigSchema.parse({
-        guard: {
-          provider: "openai",
-          authMode: "oauth",
-          authProfileId: "openai:work",
-          pinnedModel: oauthGuardModel,
-          policyVersion: "v1",
-          timeoutMs: 1_000,
-        },
-      }),
-    );
-
-    await expect(
-      classifier.classify({
-        direction: "outbound",
-        source: "alice#1",
-        destination: "bob#1",
-        text: "hello",
+  it.each([
+    { label: "without optional concrete model headers", responseModel: undefined },
+    { label: "with a provider-attested dated model", responseModel: oauthGuardResponseModel },
+  ])(
+    "uses the host-owned OpenAI OAuth profile with strict structured output $label",
+    async ({ responseModel }) => {
+      const runtime = createPluginRuntimeMock();
+      const verdict = {
+        decision: "allow",
+        category: "safe",
+        reason: "Safe.",
         policyVersion: "v1",
-      }),
-    ).resolves.toMatchObject({ decision: "allow", model: oauthGuardModel });
-
-    expect(runtime.llm.complete).toHaveBeenCalledWith({
-      model: `openai/${oauthGuardModel}@openai:work`,
-      systemPrompt: `${guardInstructions("outbound")} Set policyVersion to exactly "v1".`,
-      messages: [
-        {
-          role: "user",
-          content: JSON.stringify({
-            direction: "outbound",
-            source: "alice#1",
-            destination: "bob#1",
-            text: "hello",
+      };
+      runtime.llm.complete = vi.fn().mockResolvedValue({
+        text: JSON.stringify(verdict),
+        provider: "openai",
+        model: oauthGuardModel,
+        responseModel,
+        stopReason: "stop",
+        agentId: "main",
+        usage: {},
+        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        audit: { caller: { kind: "plugin", id: "reef" } },
+      });
+      setReefRuntime(runtime);
+      const classifier = createConfiguredGuard(
+        ReefChannelConfigSchema.parse({
+          guard: {
+            provider: "openai",
+            authMode: "oauth",
+            authProfileId: "openai:work",
+            pinnedModel: oauthGuardModel,
             policyVersion: "v1",
-          }),
-        },
-      ],
-      maxTokens: 512,
-      purpose: "reef.guard",
-      reasoning: "low",
-      requiredAuthMode: "oauth",
-      responseFormat: {
-        type: "json_schema",
-        json_schema: {
-          name: "reef_guard_verdict",
-          strict: true,
-          schema: {
+            timeoutMs: 1_000,
+          },
+        }),
+      );
+
+      await expect(
+        classifier.classify({
+          direction: "outbound",
+          source: "alice#1",
+          destination: "bob#1",
+          text: "hello",
+          policyVersion: "v1",
+        }),
+      ).resolves.toMatchObject({ decision: "allow", model: oauthGuardModel });
+
+      expect(runtime.llm.complete).toHaveBeenCalledWith({
+        model: `openai/${oauthGuardModel}@openai:work`,
+        systemPrompt: `${guardInstructions("outbound")} Set policyVersion to exactly "v1". The object must exactly match this schema: ${JSON.stringify(
+          {
             type: "object",
             additionalProperties: false,
             properties: {
@@ -144,27 +129,68 @@ describe("createConfiguredGuard", () => {
             },
             required: ["decision", "category", "reason", "policyVersion"],
           },
+        )}`,
+        messages: [
+          {
+            role: "user",
+            content: JSON.stringify({
+              direction: "outbound",
+              source: "alice#1",
+              destination: "bob#1",
+              text: "hello",
+              policyVersion: "v1",
+            }),
+          },
+        ],
+        maxTokens: 512,
+        purpose: "reef.guard",
+        reasoning: "low",
+        requiredAuthMode: "oauth",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: {
+            name: "reef_guard_verdict",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                decision: { type: "string", enum: ["allow", "deny", "review"] },
+                category: { type: "string" },
+                reason: { type: "string" },
+                policyVersion: { type: "string" },
+              },
+              required: ["decision", "category", "reason", "policyVersion"],
+            },
+          },
         },
-      },
-      signal: expect.any(AbortSignal),
-    });
-  });
+        signal: expect.any(AbortSignal),
+      });
+    },
+  );
 
   it.each([
     [
       "wrong provider",
-      { provider: "anthropic", responseModel: oauthGuardModel, stopReason: "stop" },
+      { provider: "anthropic", responseModel: oauthGuardResponseModel, stopReason: "stop" },
     ],
     [
       "wrong logical model",
-      { model: "gpt-5.6-sol", responseModel: oauthGuardModel, stopReason: "stop" },
+      { model: "gpt-5.6-sol", responseModel: oauthGuardResponseModel, stopReason: "stop" },
     ],
-    ["missing response model", { responseModel: undefined, stopReason: "stop" }],
     ["mismatched response model", { responseModel: "gpt-5.6-sol", stopReason: "stop" }],
-    ["incomplete response", { responseModel: oauthGuardModel, stopReason: "length" }],
-    ["tool response", { responseModel: oauthGuardModel, stopReason: "toolUse" }],
-    ["error response", { responseModel: oauthGuardModel, stopReason: "error" }],
-    ["aborted response", { responseModel: oauthGuardModel, stopReason: "aborted" }],
+    [
+      "non-date response suffix",
+      { responseModel: `${oauthGuardModel}-preview`, stopReason: "stop" },
+    ],
+    [
+      "inserted response segment before date",
+      { responseModel: `${oauthGuardModel}-preview-20260801`, stopReason: "stop" },
+    ],
+    ["incomplete response", { responseModel: oauthGuardResponseModel, stopReason: "length" }],
+    ["tool response", { responseModel: oauthGuardResponseModel, stopReason: "toolUse" }],
+    ["error response", { responseModel: oauthGuardResponseModel, stopReason: "error" }],
+    ["aborted response", { responseModel: oauthGuardResponseModel, stopReason: "aborted" }],
   ])("fails closed for OAuth guard evidence: %s", async (_label, evidence) => {
     const runtime = createPluginRuntimeMock();
     runtime.llm.complete = vi.fn().mockResolvedValue({
@@ -206,6 +232,52 @@ describe("createConfiguredGuard", () => {
       }),
     ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
   });
+
+  it.each([undefined, "gpt-5.6-luna-20260802"])(
+    "keeps dated OAuth guard model pins exact for response model %s",
+    async (responseModel) => {
+      const runtime = createPluginRuntimeMock();
+      runtime.llm.complete = vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          decision: "allow",
+          category: "safe",
+          reason: "Safe.",
+          policyVersion: "v1",
+        }),
+        provider: "openai",
+        model: "gpt-5.6-luna-20260801",
+        responseModel,
+        stopReason: "stop",
+        agentId: "main",
+        usage: {},
+        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        audit: { caller: { kind: "plugin", id: "reef" } },
+      });
+      setReefRuntime(runtime);
+      const classifier = createConfiguredGuard(
+        ReefChannelConfigSchema.parse({
+          guard: {
+            provider: "openai",
+            authMode: "oauth",
+            authProfileId: "openai:work",
+            pinnedModel: "gpt-5.6-luna-20260801",
+            policyVersion: "v1",
+            timeoutMs: 1_000,
+          },
+        }),
+      );
+
+      await expect(
+        classifier.classify({
+          direction: "outbound",
+          source: "alice#1",
+          destination: "bob#1",
+          text: "hello",
+          policyVersion: "v1",
+        }),
+      ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
+    },
+  );
 });
 
 describe("ReefMessageFlow inbound", () => {

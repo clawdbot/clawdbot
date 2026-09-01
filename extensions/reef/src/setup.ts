@@ -2,6 +2,7 @@ import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
 import {
+  OpenAiOAuthProfileIdSchema,
   parseReefRelayUrl,
   ReefChannelConfigSchema,
   type ReefChannelConfig,
@@ -236,6 +237,10 @@ export const reefSetupWizard = {
         ? await prompter.text({
             message: "OpenAI OAuth auth profile id",
             initialValue: "openai:default",
+            validate: (value) =>
+              OpenAiOAuthProfileIdSchema.safeParse(value).success
+                ? undefined
+                : "Enter an OpenAI profile id without spaces or slashes",
           })
         : undefined;
     const apiKeyEnv =
@@ -287,12 +292,29 @@ function authorizeReefOAuthGuardModel(cfg: OpenClawConfig, pinnedModel: string):
   const modelRef = `openai/${pinnedModel}`;
   const entry = cfg.plugins?.entries?.reef ?? {};
   const llm = entry.llm ?? {};
+  const configuredModel = cfg.agents?.defaults?.models?.[modelRef] ?? {};
   const addModel = (values: string[] | undefined): string[] =>
     values?.includes(modelRef) ? values : [...(values ?? []), modelRef];
+  const addPlugin = (values: string[] | undefined, pluginId: string): string[] | undefined =>
+    values ? (values.includes(pluginId) ? values : [...values, pluginId]) : undefined;
   return {
     ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: {
+          ...cfg.agents?.defaults?.models,
+          [modelRef]: {
+            ...configuredModel,
+            agentRuntime: { ...configuredModel.agentRuntime, id: "codex" },
+          },
+        },
+      },
+    },
     plugins: {
       ...cfg.plugins,
+      allow: addPlugin(cfg.plugins?.allow, "codex"),
       entries: {
         ...cfg.plugins?.entries,
         reef: {

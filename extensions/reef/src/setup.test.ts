@@ -144,6 +144,9 @@ describe("Reef setup wizard identity binding", () => {
       allowedModels: ["openai/gpt-5.6-terra"],
       allowedCompletionModels: ["openai/gpt-5.6-terra"],
     });
+    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.6-terra"]).toEqual({
+      agentRuntime: { id: "codex" },
+    });
     expect(JSON.stringify(result.cfg)).not.toContain("apiKeyEnv");
   });
 

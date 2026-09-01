@@ -38,55 +38,80 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
-export function readOpenAIResponseModelHeader(headers: Headers): string | undefined {
-  for (const name of OPENAI_RESPONSE_MODEL_HEADER_NAMES) {
-    const responseModel = headers.get(name)?.trim();
-    if (responseModel) {
-      return responseModel;
-    }
-  }
-  return undefined;
+const OPENAI_RESPONSE_MODEL_CONFLICT = "Conflicting OpenAI response model attestations";
+
+function splitOpenAIResponseModelHeader(value: string | null | undefined): string[] {
+  return value
+    ? value
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+    : [];
 }
 
-function readOpenAIResponseModelHeaderRecord(headers: unknown): string | undefined {
+function readOpenAIResponseModelHeaders(headers: Headers): string[] {
+  return [...OPENAI_RESPONSE_MODEL_HEADER_NAMES].flatMap((name) =>
+    splitOpenAIResponseModelHeader(headers.get(name)),
+  );
+}
+
+function readOpenAIResponseModelHeaderRecord(headers: unknown): string[] {
   if (!isRecord(headers)) {
-    return undefined;
+    return [];
   }
-  for (const [name, value] of Object.entries(headers)) {
-    if (
-      OPENAI_RESPONSE_MODEL_HEADER_NAMES.has(name.toLowerCase()) &&
-      typeof value === "string" &&
-      value.trim()
-    ) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return Object.entries(headers)
+    .filter(([name]) => OPENAI_RESPONSE_MODEL_HEADER_NAMES.has(name.toLowerCase()))
+    .flatMap(([, value]) =>
+      typeof value === "string" ? splitOpenAIResponseModelHeader(value) : [],
+    );
 }
 
-export function readOpenAIResponseModelEvent(event: unknown): string | undefined {
+function readOpenAIResponseModelEvent(event: unknown): string[] {
   if (!isRecord(event)) {
-    return undefined;
+    return [];
   }
   const response = isRecord(event.response) ? event.response : undefined;
-  return (
-    readOpenAIResponseModelHeaderRecord(response?.headers) ??
-    readOpenAIResponseModelHeaderRecord(event.headers)
-  );
+  return [
+    ...readOpenAIResponseModelHeaderRecord(response?.headers),
+    ...readOpenAIResponseModelHeaderRecord(event.headers),
+  ];
 }
 
 export function createResponseModelTracker(enabled = true) {
   let responseModel: string | undefined;
+  const observe = (models: readonly string[]) => {
+    for (const model of models) {
+      if (responseModel && responseModel !== model) {
+        throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
+      }
+      responseModel = model;
+    }
+  };
+  const begin = (headers?: Headers) => {
+    responseModel = undefined;
+    if (enabled && headers) {
+      observe(readOpenAIResponseModelHeaders(headers));
+    }
+  };
+  const observeEvent = (event: unknown) => {
+    if (enabled) {
+      observe(readOpenAIResponseModelEvent(event));
+    }
+    return responseModel;
+  };
   const resolve = () => responseModel;
   return {
+    begin,
+    observeEvent,
+    resolve,
     track(response: Response, stream: AsyncIterable<unknown>): AsyncIterable<unknown> {
       if (!enabled) {
         return stream;
       }
-      responseModel = readOpenAIResponseModelHeader(response.headers);
       return (async function* () {
+        begin(response.headers);
         for await (const event of stream) {
-          responseModel = readOpenAIResponseModelEvent(event) ?? responseModel;
+          observeEvent(event);
           yield event;
         }
       })();

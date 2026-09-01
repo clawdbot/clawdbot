@@ -52,6 +52,29 @@ const verdictSchema = {
   required: ["decision", "category", "reason", "policyVersion"],
 } as const;
 
+const OPENAI_DATED_MODEL_ID = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+const OPENAI_DATED_MODEL_SUFFIX = /^-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+
+function matchesOpenAiPinnedModel(responseModel: string | undefined, pinnedModel: string): boolean {
+  // Reef already admits only three explicitly documented undated OpenAI ids.
+  // ChatGPT OAuth currently returns the logical model in the Responses payload
+  // but may omit concrete model headers entirely. Preserve that owner-approved
+  // residual risk only for those undated pins; dated pins require attestation.
+  if (responseModel === undefined) {
+    return !OPENAI_DATED_MODEL_ID.test(pinnedModel);
+  }
+  if (responseModel === pinnedModel) {
+    return true;
+  }
+  // Dated pins stay exact. The documented undated OpenAI ids may be realized as
+  // the same id plus a provider-attested date suffix on the managed OAuth route.
+  return (
+    !OPENAI_DATED_MODEL_ID.test(pinnedModel) &&
+    responseModel.startsWith(pinnedModel) &&
+    OPENAI_DATED_MODEL_SUFFIX.test(responseModel.slice(pinnedModel.length))
+  );
+}
+
 export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
   assertPinnedModel(options.pinnedModel);
   assertGuardRules(options.rules);
@@ -122,7 +145,7 @@ export function createHostOpenAiGuard(options: HostOpenAiGuardOptions): GuardAda
     pinnedModel: options.pinnedModel,
     async classifyRaw(request, signal) {
       const result = await options.complete({
-        systemPrompt: instructionFor(request, options.rules),
+        systemPrompt: `${instructionFor(request, options.rules)} The object must exactly match this schema: ${JSON.stringify(verdictSchema)}`,
         input: JSON.stringify(request),
         maxTokens: 512,
         responseFormat: {
@@ -138,12 +161,12 @@ export function createHostOpenAiGuard(options: HostOpenAiGuardOptions): GuardAda
       if (
         result.provider !== "openai" ||
         result.model !== options.pinnedModel ||
-        result.responseModel !== options.pinnedModel ||
+        !matchesOpenAiPinnedModel(result.responseModel, options.pinnedModel) ||
         result.stopReason !== "stop"
       ) {
         throw new Error("invalid host OpenAI guard response");
       }
-      return attachProviderModel(parseStrictJson(result.text, true), result.responseModel);
+      return attachProviderModel(parseStrictJson(result.text, true), options.pinnedModel);
     },
   };
   return admitGuardAdapter(raw, options.timeoutMs);

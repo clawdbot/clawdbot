@@ -63,26 +63,19 @@ function stubHangingFetch(timeoutMs: number): void {
   );
 }
 
-function completedSseResponse(
-  responseId = "resp_test",
-  headers?: HeadersInit,
-  payloadModel?: string,
-): Response {
+function completedSseResponse(responseId = "resp_test"): Response {
   const event = {
     type: "response.completed",
     response: {
       id: responseId,
       status: "completed",
-      ...(payloadModel ? { model: payloadModel } : {}),
       output: [],
       usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
     },
   };
-  const responseHeaders = new Headers(headers);
-  responseHeaders.set("content-type", "text/event-stream");
   return new Response(`data: ${JSON.stringify(event)}\n\n`, {
     status: 200,
-    headers: responseHeaders,
+    headers: { "content-type": "text/event-stream" },
   });
 }
 
@@ -271,80 +264,6 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(capturedEncoding).toBeNull();
     expect(capturedBody).toEqual(expect.any(String));
     expect(JSON.parse(capturedBody as string)).toMatchObject({ model: model.id });
-  });
-
-  it("preserves the concrete model reported by the ChatGPT SSE response header", async () => {
-    const responseModel = "gpt-5.5-rerouted";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => completedSseResponse("resp_model", { "openai-model": responseModel })),
-    );
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
-
-    expect(result.responseModel).toBe(responseModel);
-  });
-
-  it("does not treat the ChatGPT terminal payload model as concrete identity", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => completedSseResponse("resp_payload_model", undefined, model.id)),
-    );
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
-
-    expect(result.responseModel).toBeUndefined();
-  });
-
-  it("preserves the concrete model reported by ChatGPT websocket event headers", async () => {
-    const responseModel = "gpt-5.5-rerouted";
-    class ModelHeaderWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), {
-              data: JSON.stringify({
-                type: "response.completed",
-                response: {
-                  id: "resp_ws_model",
-                  status: "completed",
-                  headers: { "x-openai-model": responseModel },
-                  output: [],
-                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-                },
-              }),
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", ModelHeaderWebSocket);
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "websocket",
-    }).result();
-
-    expect(result.responseModel).toBe(responseModel);
   });
 
   it("reconnects once when the websocket connection limit is reached", async () => {

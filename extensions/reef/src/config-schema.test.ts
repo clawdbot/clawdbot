@@ -77,6 +77,7 @@ describe("Reef configuration boundary", () => {
       { ...base, provider: "anthropic" },
       { ...base, provider: "openai", authProfileId: "" },
       { ...base, provider: "openai", authProfileId: "openai:   " },
+      { ...base, provider: "openai", authProfileId: "openai:team/work" },
       { ...base, provider: "openai", authProfileId: "anthropic:work" },
       { ...base, provider: "openai", apiKeyEnv: "OPENAI_API_KEY" },
     ]) {
