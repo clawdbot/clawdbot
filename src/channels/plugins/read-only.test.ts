@@ -521,7 +521,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       resolveEnabled({
         "external-chat": {
           enabled: true,
-          accounts: { ops: { enabled: false, token: "disabled" } },
+          accounts: { ops: { enabled: false } },
         },
       }),
     ).toBe(false);
@@ -529,7 +529,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       resolveEnabled({
         "external-chat": {
           enabled: false,
-          accounts: { ops: { enabled: true, token: "enabled" } },
+          accounts: { ops: { enabled: true } },
         },
       }),
     ).toBe(true);
@@ -537,7 +537,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       resolveEnabled({
         "external-chat": {
           enabled: false,
-          accounts: { ops: { token: "inherits-disabled" } },
+          accounts: { ops: {} },
         },
       }),
     ).toBe(false);
