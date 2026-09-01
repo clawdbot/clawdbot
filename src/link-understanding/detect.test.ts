@@ -40,6 +40,25 @@ describe("extractLinksFromMessage", () => {
     ).toStrictEqual(["https://bare.example"]);
   });
 
+  it("ignores markdown links whose title escapes its own delimiter", () => {
+    // A title may backslash-escape its own delimiter. Stopping at the escaped
+    // delimiter aborts the match and leaks the destination to BARE_LINK_RE.
+    expect(
+      extractLinksFromMessage(
+        '[doc](https://docs.example "A \\"quoted\\" title") https://bare.example',
+      ),
+    ).toStrictEqual(["https://bare.example"]);
+    expect(
+      extractLinksFromMessage("[doc](https://docs.example 'A \\'quoted\\' title')"),
+    ).toStrictEqual([]);
+    expect(
+      extractLinksFromMessage("[doc](https://docs.example (a \\(paren\\) title))"),
+    ).toStrictEqual([]);
+    // An unpaired backslash right before the closing delimiter still ends the title,
+    // so an input the old pattern stripped does not start leaking instead.
+    expect(extractLinksFromMessage('[doc](https://docs.example "t\\")')).toStrictEqual([]);
+  });
+
   it("blocks 127.0.0.1", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);

@@ -7,9 +7,13 @@ import { DEFAULT_MAX_LINKS } from "./defaults.js";
 // markdown links whose label contains brackets (e.g. "[my notes [v2]](...)")
 // are still stripped instead of leaking their URL to BARE_LINK_RE.
 // The destination may be followed by a CommonMark title ("[doc](url \"Docs\")"),
-// which must be consumed too or the URL leaks out as a bare link.
+// which must be consumed too or the URL leaks out as a bare link. A title may
+// contain backslash-escaped delimiters, so each alternative pairs a backslash with
+// the character after it ("s" lets that be a newline) and tolerates one unpaired
+// backslash before the closing delimiter. The escape and non-escape branches never
+// start on the same character, so the alternation stays linear on hostile input.
 const MARKDOWN_LINK_RE =
-  /\[(?:[^\]]|](?!\())*]\((https?:\/\/\S+?)(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/gi;
+  /\[(?:[^\]]|](?!\())*]\((https?:\/\/\S+?)(?:\s+(?:"(?:[^"\\]|\\.)*\\?"|'(?:[^'\\]|\\.)*\\?'|\((?:[^()\\]|\\.)*\\?\)))?\s*\)/gis;
 const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
 function stripMarkdownLinks(message: string): string {
