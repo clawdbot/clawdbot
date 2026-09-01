@@ -230,34 +230,8 @@ The scalar handler canonicalizes calls to these advertised fields, so a
 provider compatibility pass that removes object-closure keywords cannot route
 undeclared legacy batch fields into the model-facing parser. A batch-only
 payload is rejected at the model-visible handler even after that normalization.
-
-Authenticated non-model callers retain batch search through Gateway
-`tools.invoke` (or `POST /tools/invoke`) with `name`/`tool` set to `tool_search`.
-This path is available only while Tool Search is enabled and builds its catalog
-from the caller's session-scoped, policy-filtered Gateway tool inventory. The
-control itself also follows that inventory policy: restrictive tool allowlists
-must include `tool_search`, and `gateway.tools.deny` can always block it. For
-example:
-
-```json
-{
-  "name": "tool_search",
-  "sessionKey": "main",
-  "args": {
-    "queries": [
-      { "query": "today's calendar events", "limit": 3 },
-      { "query": "messages needing attention", "limit": 3 }
-    ]
-  }
-}
-```
-
-Non-model batches return
-`{ results: [{ query, candidates }] }` in request order and accept at most 16
-queries, 50 requested candidates, 512 characters per query, and 512 UTF-8 bytes
-across the serialized query list. If the complete batch would exceed the
-4,000-character response budget, lower-ranked candidates are removed and the
-response includes `truncated: true`.
+The legacy `queries` batch shape is retired; callers issue independent scalar
+searches instead of relying on an alternate contract hidden from the model.
 
 Directory mode exposes:
 

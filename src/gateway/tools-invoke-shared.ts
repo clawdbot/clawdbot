@@ -8,7 +8,6 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { TOOL_SEARCH_RAW_TOOL_NAME } from "../agents/tool-search-types.js";
 import {
   AUTOMATIONS_TOOL_NAME,
   isAutomationsToolName,
@@ -42,7 +41,6 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
-import { createGatewayToolSearchInvokeTool } from "./tools-invoke-tool-search.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -345,7 +343,7 @@ async function invokeGatewayToolWithSignal(
       },
     };
   }
-  const resolveTools = (disablePluginTools: boolean, additionalTools?: readonly AnyAgentTool[]) =>
+  const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
@@ -362,7 +360,6 @@ async function invokeGatewayToolWithSignal(
       allowMediaInvokeCommands: true,
       surface: "http",
       disablePluginTools,
-      additionalTools,
       gatewayRequestedTools,
     });
 
@@ -381,19 +378,6 @@ async function invokeGatewayToolWithSignal(
         message: `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
       },
     };
-  }
-  if (toolName === TOOL_SEARCH_RAW_TOOL_NAME) {
-    const gatewayToolSearch = createGatewayToolSearchInvokeTool({
-      cfg: params.cfg,
-      tools,
-      agentId,
-      sessionKey,
-      sessionId: sessionEntry?.sessionId,
-      signal: params.signal,
-    });
-    if (gatewayToolSearch) {
-      ({ agentId, tools, workspaceDir } = resolveTools(knownCoreTool, [gatewayToolSearch]));
-    }
   }
   const tool = tools.find((candidate) => candidate.name === toolName);
   if (!tool) {

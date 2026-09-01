@@ -83,7 +83,6 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./live-transports/whatsapp/scenario-runtime.js": () =>
     import("./live-transports/whatsapp/scenario-runtime.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
-  "./tool-search-gateway-batch.fixture.js": () => import("./tool-search-gateway-batch.fixture.js"),
 };
 
 function formatFlowDetails(details: unknown) {

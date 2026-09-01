@@ -23,7 +23,7 @@ import {
   applyToolSchemaDirectoryCatalog,
   MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
 } from "./tool-search-directory.js";
-import { executeInternalToolSearchRequest } from "./tool-search-execute.js";
+import { readToolSearchLimit } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
@@ -201,20 +201,13 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       ),
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const params = asToolParamsRecord(args);
-        if (params.query === undefined) {
+        if (typeof params.query !== "string") {
           throw new ToolInputError("query must be a string.");
         }
         // Provider compatibility passes may strip additionalProperties. Once the
-        // required scalar query is present, discard undeclared fields before parsing.
-        // Non-model callers retain batch support through executeInternalToolSearchRequest.
-        return await executeInternalToolSearchRequest(
-          ctx,
-          {
-            query: params.query,
-            limit: params.limit,
-          },
-          { runtime },
-        );
+        // required scalar query is present, ignore undeclared legacy fields.
+        const limit = readToolSearchLimit(params.limit, config);
+        return jsonResult(await runtime.search(params.query, { limit }));
       },
     },
     {
