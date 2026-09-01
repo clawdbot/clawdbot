@@ -568,8 +568,21 @@ private actor LocalFixtureChatStore {
                 thinkingOptions: Self.thinkingOptions,
                 thinkingDefault: "auto",
                 mainSessionKey: self.fixture.sessionKey,
-                modelSelectionTarget: self.fixture.modelSelectionTarget),
+                modelSelectionTarget: self.fixtureModelSelectionTarget),
             sessions: [entry])
+    }
+
+    private var fixtureModelSelectionTarget: String {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-selection-target"),
+              arguments.indices.contains(index + 1)
+        else {
+            return self.fixture.modelSelectionTarget
+        }
+        switch arguments[index + 1] {
+        case "session", "agent", "global": return arguments[index + 1]
+        default: return self.fixture.modelSelectionTarget
+        }
     }
 
     func reset() {
