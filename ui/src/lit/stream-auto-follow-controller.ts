@@ -52,12 +52,16 @@ export class StreamAutoFollowController implements ReactiveController {
         ) {
           return;
         }
-        this.scrollToBottomUntilSettled(container);
+        this.scrollToBottomUntilSettled(container, isCurrent);
       });
     });
   }
 
-  private scrollToBottomUntilSettled(container: HTMLElement, framesLeft = SETTLE_FRAMES): void {
+  private scrollToBottomUntilSettled(
+    container: HTMLElement,
+    isCurrent: () => boolean,
+    framesLeft = SETTLE_FRAMES,
+  ): void {
     const heightAtScroll = container.scrollHeight;
     container.scrollTop = container.scrollHeight;
     this.atBottom = true;
@@ -66,12 +70,19 @@ export class StreamAutoFollowController implements ReactiveController {
     }
     this.frame = requestAnimationFrame(() => {
       this.frame = null;
+      // The first frame validated enablement and the captured stream epoch,
+      // but both can change while the settle loop is armed: auto-follow can
+      // be toggled off, or the stream can reconnect. Re-check the boundaries
+      // before every settle write so a stale loop never resets scrollTop.
+      if (!isCurrent() || !this.options.isEnabled()) {
+        return;
+      }
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       // Chase the bottom only while content growth pushed us away from it. Stop
       // when the user scrolled up (atBottom flips false in handleScroll) or when
       // content shrank underneath us.
       if (distance > 2 && this.atBottom && container.scrollHeight >= heightAtScroll) {
-        this.scrollToBottomUntilSettled(container, framesLeft - 1);
+        this.scrollToBottomUntilSettled(container, isCurrent, framesLeft - 1);
       }
     });
   }

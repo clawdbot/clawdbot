@@ -50,12 +50,20 @@ function createHost(container: HTMLElement) {
   return host as unknown as ReactiveControllerHost & HTMLElement;
 }
 
-function createController(options: { isEnabled?: boolean } = {}) {
+function createController(
+  options: {
+    isEnabled?: boolean | (() => boolean);
+    captureCurrent?: () => () => boolean;
+  } = {},
+) {
   const { container, state } = createScrollContainer();
   const host = createHost(container);
+  const isEnabled =
+    typeof options.isEnabled === "function" ? options.isEnabled : () => options.isEnabled ?? true;
   const controller = new StreamAutoFollowController(host, {
     selector: ".scroll",
-    isEnabled: () => options.isEnabled ?? true,
+    isEnabled,
+    captureCurrent: options.captureCurrent,
   });
   return { controller, container, state };
 }
@@ -125,6 +133,63 @@ describe("StreamAutoFollowController", () => {
     runFrame();
     expect(state.scrollTop).toBe(500);
     expect(rafQueue).toHaveLength(0);
+  });
+
+  it("stops settling when auto-follow is turned off mid-settle", async () => {
+    let enabled = true;
+    const { controller, state } = createController({ isEnabled: () => enabled });
+    controller.schedule();
+    await flushUpdate();
+    runFrame();
+    expect(state.scrollTop).toBe(800);
+
+    // Content grows, then the user disables auto-follow before the next
+    // settle frame lands. The loop must not reset scrollTop again.
+    state.scrollHeight = 1500;
+    enabled = false;
+
+    runFrame();
+    expect(state.scrollTop).toBe(800);
+    expect(rafQueue).toHaveLength(0);
+  });
+
+  it("stops settling when the captured stream epoch goes stale mid-settle", async () => {
+    let current = true;
+    const { controller, state } = createController({
+      captureCurrent: () => () => current,
+    });
+    controller.schedule();
+    await flushUpdate();
+    runFrame();
+    expect(state.scrollTop).toBe(800);
+
+    // The stream reconnects after the first settle write; the predicate
+    // captured at schedule time is now stale and must disarm the loop.
+    state.scrollHeight = 1500;
+    current = false;
+
+    runFrame();
+    expect(state.scrollTop).toBe(800);
+    expect(rafQueue).toHaveLength(0);
+  });
+
+  it("keeps settling while the captured epoch and enablement stay valid", async () => {
+    let current = true;
+    let enabled = true;
+    const { controller, state } = createController({
+      isEnabled: () => enabled,
+      captureCurrent: () => () => current,
+    });
+    controller.schedule();
+    await flushUpdate();
+    runFrame();
+    expect(state.scrollTop).toBe(800);
+
+    state.scrollHeight = 1500;
+    runFrame();
+    expect(state.scrollTop).toBe(1300);
+    expect(current).toBe(true);
+    expect(enabled).toBe(true);
   });
 
   it("does not scroll without force while far from the bottom", async () => {
