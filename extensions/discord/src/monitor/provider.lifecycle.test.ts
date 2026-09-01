@@ -984,4 +984,53 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("caps the grace timeout at the cumulative disconnect deadline when CONNECTING", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      // Socket stays CONNECTING so grace is granted, but the grace timeout
+      // must be capped to the remaining cumulative budget. A 120s reconnect
+      // delay pushes the initial watchdog to 150s (the cap). Without the fix,
+      // two grace windows extend force-stop to ~210s. With the fix, the grace
+      // threshold at 150s is 0, so force-stop fires at ~150s.
+      const mockWs = new EventEmitter() as EventEmitter & { readyState: number };
+      mockWs.readyState = 0; // CONNECTING — never reaches OPEN
+      gateway.ws = mockWs;
+
+      let forceStopElapsed: number | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          const match = /stayed disconnected for (\d+)ms/.exec(
+            err instanceof Error ? err.message : String(err),
+          );
+          forceStopElapsed = match ? Number(match[1]) : undefined;
+          throw err;
+        });
+
+        // Reconnect scheduled with 120s delay — initial watchdog threshold
+        // is capped at min(30s + 120s, 150s) = 150s.
+        emitter.emit("reconnect-scheduled", 120_000);
+        // Advance past 150s. Watchdog fires at 150s, grants grace 1 but
+        // remaining budget is 0 so threshold is 0, fires again immediately,
+        // grants grace 2, same thing, then force-stops (grace exhausted).
+        await vi.advanceTimersByTimeAsync(151_000);
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+      // Force-stop at ~150s (the cumulative cap), not ~210s.
+      expect(forceStopElapsed).toBeGreaterThanOrEqual(150_000);
+      expect(forceStopElapsed).toBeLessThan(160_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

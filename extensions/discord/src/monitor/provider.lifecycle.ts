@@ -269,7 +269,15 @@ function createGatewayStatusObserver(params: {
         // Preserve the original disconnect epoch through grace re-arms so the
         // cumulative cap is measured from the initial disconnect, not reset.
         disconnectedAt = preservedDisconnectedAt;
-        armWatchdog(params.runtimeReadyTimeoutMs);
+        // Cap the grace timeout to the remaining cumulative disconnect budget
+        // so a CONNECTING/OPEN socket near the cap boundary cannot receive a
+        // full new grace window that exceeds the stated recovery deadline.
+        const cumulativeCap = params.runtimeReadyTimeoutMs * CUMULATIVE_DISCONNECT_CAP_MULTIPLIER;
+        const elapsedSinceGraceDisconnect =
+          disconnectedAt !== undefined ? Date.now() - disconnectedAt : 0;
+        const remainingToGraceCap = Math.max(0, cumulativeCap - elapsedSinceGraceDisconnect);
+        const graceThreshold = Math.min(params.runtimeReadyTimeoutMs, remainingToGraceCap);
+        armWatchdog(graceThreshold);
         return;
       }
       params.runtime.error?.(
