@@ -429,6 +429,7 @@ select it to open the owning Approvals page.
   </Accordion>
   <Accordion title="Usage">
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
+    - Select **Local** or **UTC** for hourly charts and peak error hours. Historical hour labels stay tied to the selected time zone, including when you view them across a daylight-saving transition.
     - Provider cards call `usage.status` and show live plan names, quota windows, balances, spend, and budgets reported by configured provider plugins.
     - A provider usage failure does not block the session/cost dashboard; unavailable provider cards show their own error state.
     - Incomplete session/cost totals stay readable while the visible, focused page checks for updates. Automatic checks are bounded; if they pause, select **Refresh** to check again.
