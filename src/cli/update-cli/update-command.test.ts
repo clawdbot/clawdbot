@@ -585,18 +585,6 @@ describe("collectMissingPluginInstallPayloads", () => {
   });
 });
 
-describe("resolvePostSyncPluginUpdateSkipIds", () => {
-  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
-    expect(
-      updateCommandPluginsTesting.resolvePostSyncPluginUpdateSkipIds({
-        switchedToClawHub: ["whatsapp"],
-        switchedToNpm: ["voice-call"],
-        repairedMissingPayloadIds: new Set(["telegram"]),
-      }),
-    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
-  });
-});
-
 describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
   it("never restarts package updates through the pre-update process", () => {
     expect(
@@ -933,7 +921,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
       } as unknown as Awaited<
         ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
       >,
-      opts: { json: true } as never,
+      json: true,
       timeoutMs: 1000,
     });
     expect(result.status).toBe("error");

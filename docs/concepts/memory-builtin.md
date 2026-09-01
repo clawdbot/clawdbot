@@ -225,6 +225,30 @@ unavailable` points at sqlite-vec loading while `Embeddings: unavailable`
 points at provider/auth or model readiness. Check logs for the specific load
 error.
 
+### Safe index recovery
+
+To rebuild after stale results or an embedding-provider change, select the
+affected agent explicitly:
+
+```bash
+openclaw memory status --agent <agent-id> --deep
+openclaw memory index --agent <agent-id> --force --verbose
+openclaw memory status --agent <agent-id> --deep
+```
+
+The index shares `openclaw-agent.sqlite` with session history and other durable
+agent state. A full reindex replaces only the memory tables; it does not
+replace the agent database file. Deleting that database, its WAL, or its
+journal can remove conversation history and other state that memory indexing
+cannot reconstruct. Do not treat the agent database as a disposable cache.
+
+If indexing fails or the database grows unexpectedly, keep the database and
+its sidecars, retain the verbose error, and [create and verify a backup](/cli/backup)
+before manual recovery. A large database alone does not show which tables are
+responsible. Reindexing is not a session-history restore: if history is missing
+after moving or deleting the database, recover from a verified backup using
+the [restore workflow](/install/backups#restore-a-full-archive).
+
 ## Configuration
 
 For embedding provider setup, search result limits and thresholds, batch

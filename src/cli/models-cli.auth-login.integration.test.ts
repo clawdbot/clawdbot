@@ -53,7 +53,8 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 }));
 
 function makeStdinInteractive(): () => void {
-  const stdin = process.stdin as Omit<NodeJS.ReadStream, "isTTY"> & { isTTY?: boolean };
+  // Piped stdin has no own isTTY property; the fixture owns only its temporary override.
+  const stdin: { isTTY?: boolean } = process.stdin;
   const descriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
   Object.defineProperty(stdin, "isTTY", { configurable: true, get: () => true });
   return () => {

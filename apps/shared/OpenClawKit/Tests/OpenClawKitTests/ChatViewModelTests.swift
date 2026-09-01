@@ -283,12 +283,18 @@ private func modelChoice(
     id: String,
     name: String,
     provider: String = "anthropic",
+    available: Bool? = nil,
+    unavailableReason: String? = nil,
+    unavailableUntil: Int? = nil,
     reasoning: Bool? = nil) -> OpenClawChatModelChoice
 {
     OpenClawChatModelChoice(
         modelID: id,
         name: name,
         provider: provider,
+        available: available,
+        unavailableReason: unavailableReason,
+        unavailableUntil: unavailableUntil,
         contextWindow: nil,
         reasoning: reasoning)
 }
@@ -370,6 +376,8 @@ private func makeViewModel(
     sessionRoutingContract: String? = nil,
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    modelAvailabilityIsSessionScoped: Bool = false,
+    modelCatalogHook: (@Sendable (Int) async throws -> OpenClawChatModelCatalogSnapshot?)? = nil,
     modelPatchResults: [OpenClawChatModelPatchResult?] = [],
     thinkingPatchResults: [OpenClawChatModelPatchResult?] = [],
     commandResponses: [[OpenClawChatCommandChoice]] = [],
@@ -427,6 +435,8 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        modelAvailabilityIsSessionScoped: modelAvailabilityIsSessionScoped,
+        modelCatalogHook: modelCatalogHook,
         modelPatchResults: modelPatchResults,
         thinkingPatchResults: thinkingPatchResults,
         commandResponses: commandResponses,
@@ -768,6 +778,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let modelAvailabilityIsSessionScoped: Bool
+    private let modelCatalogHook: (@Sendable (Int) async throws -> OpenClawChatModelCatalogSnapshot?)?
     private let modelPatchResults: [OpenClawChatModelPatchResult?]
     private let thinkingPatchResults: [OpenClawChatModelPatchResult?]
     private let commandResponses: [[OpenClawChatCommandChoice]]
@@ -814,6 +826,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        modelAvailabilityIsSessionScoped: Bool = false,
+        modelCatalogHook: (@Sendable (Int) async throws -> OpenClawChatModelCatalogSnapshot?)? = nil,
         modelPatchResults: [OpenClawChatModelPatchResult?] = [],
         thinkingPatchResults: [OpenClawChatModelPatchResult?] = [],
         commandResponses: [[OpenClawChatCommandChoice]] = [],
@@ -853,6 +867,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.modelAvailabilityIsSessionScoped = modelAvailabilityIsSessionScoped
+        self.modelCatalogHook = modelCatalogHook
         self.modelPatchResults = modelPatchResults
         self.thinkingPatchResults = thinkingPatchResults
         self.commandResponses = commandResponses
@@ -1091,6 +1107,24 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             return self.modelResponses[idx]
         }
         return self.modelResponses.last ?? []
+    }
+
+    func loadModelCatalog(
+        sessionKey _: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        let idx = await state.recordModelsCall(agentID: agentID)
+        if let catalog = try await self.modelCatalogHook?(idx) {
+            return catalog
+        }
+        let choices = if idx < self.modelResponses.count {
+            self.modelResponses[idx]
+        } else {
+            self.modelResponses.last ?? []
+        }
+        return OpenClawChatModelCatalogSnapshot(
+            choices: choices,
+            availabilityIsSessionScoped: self.modelAvailabilityIsSessionScoped)
     }
 
     var supportsSlashCommandCatalog: Bool {
@@ -8516,6 +8550,52 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.defaultModelLabel } == "Default: openai/gpt-4.1-mini")
     }
 
+    @Test @MainActor func `model selection target follows refresh without changing pinned models`() async throws {
+        let suiteName = "ChatViewModelTests.modelSelectionTarget.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let modelPickerStore = ChatModelPickerStore(defaults: defaults)
+        let pinnedID = "anthropic/claude-opus-4-6"
+        modelPickerStore.toggleFavorite(pinnedID)
+        let initialSessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: 1, model: nil),
+            defaults: OpenClawChatSessionsDefaults(
+                model: "openai/gpt-4.1-mini",
+                contextTokens: nil,
+                modelSelectionTarget: "global"))
+        let refreshedSessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: 2, model: "gpt-5.4", modelProvider: "openai"),
+            defaults: OpenClawChatSessionsDefaults(
+                model: "openai/gpt-4.1-mini",
+                contextTokens: nil,
+                modelSelectionTarget: "agent"))
+        let models = [
+            modelChoice(id: "gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+            modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [initialSessions, refreshedSessions],
+            modelResponses: [models],
+            modelPickerStore: modelPickerStore)
+
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(vm.modelSelectionTargetDescription == "Changes the global default")
+
+        vm.selectModel("openai/gpt-5.4")
+        try await waitUntil("model selection completed") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
+        }
+        #expect(vm.modelSelectionTargetDescription == "Changes the global default")
+        #expect(modelPickerStore.favorites == [pinnedID])
+
+        await vm.fetchSessions(limit: nil)
+
+        #expect(vm.modelSelectionTargetDescription == "Changes this agent's default")
+        #expect(modelPickerStore.favorites == [pinnedID])
+    }
+
     @Test func `model catalog requests follow the selected session agent`() async throws {
         let (workerTransport, workerViewModel) = await makeViewModel(
             sessionKey: "agent:worker:main",
@@ -8533,6 +8613,385 @@ struct ChatViewModelTests {
 
         #expect(await workerTransport.modelAgentIDs() == ["worker"])
         #expect(await defaultTransport.modelAgentIDs() == [nil])
+    }
+
+    @Test @MainActor func `unavailable picker rows cannot change the selected model`() async throws {
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "missing-auth")
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(
+                sessionEntry(key: "main", updatedAt: 1, model: current.modelID, modelProvider: current.provider))],
+            modelResponses: [[current, unavailable]],
+            modelAvailabilityIsSessionScoped: true)
+        try await loadAndWaitBootstrap(vm: vm)
+
+        #expect(!vm.canSelectModel(unavailable.selectionID))
+        #expect(vm.modelUnavailableDescription(unavailable) == "Sign-in needed")
+        vm.selectModel(unavailable.selectionID)
+
+        #expect(vm.modelSelectionID == current.selectionID)
+        #expect(await transport.patchedModels().isEmpty)
+    }
+
+    @Test @MainActor func `selected model blocks online send only for permanent auth failures`() async throws {
+        for (reason, message) in [
+            ("missing-auth", "No provider credential is configured for this model. Set it up in Model Setup."),
+            ("auth-failed", "Authentication failed. Review the provider credential or sign-in, then retry."),
+        ] {
+            let selected = modelChoice(
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
+                available: false,
+                unavailableReason: reason)
+            let (_, vm) = await makeViewModel(
+                historyResponses: [historyPayload()],
+                sessionsResponses: [sessionsResponse(sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    model: selected.modelID,
+                    modelProvider: selected.provider))],
+                modelResponses: [[selected]],
+                modelAvailabilityIsSessionScoped: true)
+            try await loadAndWaitBootstrap(vm: vm)
+            vm.input = "hello"
+
+            #expect(vm.composerModelAvailabilityMessage == message)
+            #expect(!vm.canSend)
+        }
+    }
+
+    @Test @MainActor func `cooldown unknown and unscoped availability do not block send`() async throws {
+        for (reason, sessionScoped) in [
+            ("cooldown", true),
+            ("provider-maintenance", true),
+            ("missing-auth", false),
+        ] {
+            let selected = modelChoice(
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
+                available: false,
+                unavailableReason: reason)
+            let (_, vm) = await makeViewModel(
+                historyResponses: [historyPayload()],
+                sessionsResponses: [sessionsResponse(sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    model: selected.modelID,
+                    modelProvider: selected.provider))],
+                modelResponses: [[selected]],
+                modelAvailabilityIsSessionScoped: sessionScoped)
+            try await loadAndWaitBootstrap(vm: vm)
+            vm.input = "hello"
+
+            #expect(vm.composerModelAvailabilityMessage == nil)
+            #expect(vm.canSend)
+        }
+    }
+
+    @Test @MainActor func `usable provider alias prevents a permanent auth gate`() async throws {
+        let unavailable = modelChoice(
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            provider: "openai-codex",
+            available: false,
+            unavailableReason: "missing-auth")
+        let available = modelChoice(
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            provider: "openai",
+            available: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "gpt-5.4",
+                modelProvider: "codex"))],
+            modelResponses: [[unavailable, available]],
+            modelAvailabilityIsSessionScoped: true)
+        try await loadAndWaitBootstrap(vm: vm)
+        vm.input = "hello"
+
+        #expect(vm.composerModelAvailabilityMessage == nil)
+        #expect(vm.canSend)
+    }
+
+    @Test @MainActor func `metadata refresh and sequence recovery replace the selected model gate`() async throws {
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let cooldown = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "cooldown")
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: unavailable.modelID,
+                modelProvider: unavailable.provider))],
+            modelResponses: [[unavailable], [available], [cooldown]],
+            modelAvailabilityIsSessionScoped: true)
+        try await loadAndWaitBootstrap(vm: vm)
+        vm.input = "hello"
+        #expect(!vm.canSend)
+
+        transport.emit(.chatMetadataChanged)
+        try await waitUntil("credential recovery refreshes model catalog") {
+            await MainActor.run { vm.modelChoices.first?.available == true }
+        }
+        #expect(vm.canSend)
+
+        transport.emit(.seqGap)
+        try await waitUntil("sequence recovery refreshes model catalog") {
+            await MainActor.run { vm.modelChoices.first?.unavailableReason == "cooldown" }
+        }
+        #expect(vm.canSend)
+    }
+
+    @Test @MainActor func `metadata refresh supersedes an in flight sequence recovery catalog`() async throws {
+        let sequenceRecoveryGate = AsyncGate()
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            modelAvailabilityIsSessionScoped: true,
+            modelCatalogHook: { call in
+                if call == 1 {
+                    await sequenceRecoveryGate.wait()
+                }
+                return OpenClawChatModelCatalogSnapshot(
+                    choices: call == 2 ? [available] : [unavailable],
+                    availabilityIsSessionScoped: true)
+            })
+        await vm.fetchModels()
+        #expect(vm.modelChoices.first?.available == false)
+
+        vm.handleTransportEvent(.seqGap)
+        try await waitUntil("sequence recovery catalog refresh starts") {
+            await transport.modelAgentIDs().count >= 2
+        }
+        vm.handleTransportEvent(.chatMetadataChanged)
+        await sequenceRecoveryGate.open()
+        try await waitUntil("metadata refresh clears the stale auth gate") {
+            await MainActor.run { vm.modelChoices.first?.available == true }
+        }
+    }
+
+    @Test @MainActor func `current session mutations refresh selected model availability`() async throws {
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let cooldown = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "cooldown")
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: unavailable.modelID,
+                modelProvider: unavailable.provider))],
+            modelResponses: [[unavailable], [available], [cooldown]],
+            modelAvailabilityIsSessionScoped: true)
+        try await loadAndWaitBootstrap(vm: vm)
+        vm.input = "hello"
+        #expect(!vm.canSend)
+
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "patch")))
+        try await waitUntil("patch refresh clears auth gate") {
+            await MainActor.run { vm.modelChoices.first?.available == true }
+        }
+        #expect(vm.canSend)
+
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
+        try await waitUntil("command metadata refresh replaces availability") {
+            await MainActor.run { vm.modelChoices.first?.unavailableReason == "cooldown" }
+        }
+        #expect(vm.canSend)
+    }
+
+    @Test @MainActor func `late catalog response cannot restore an obsolete auth gate`() async throws {
+        let staleRefreshGate = AsyncGate()
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: unavailable.modelID,
+                modelProvider: unavailable.provider))],
+            modelAvailabilityIsSessionScoped: true,
+            modelCatalogHook: { call in
+                if call == 1 {
+                    await staleRefreshGate.wait()
+                }
+                return OpenClawChatModelCatalogSnapshot(
+                    choices: call == 2 ? [available] : [unavailable],
+                    availabilityIsSessionScoped: true)
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        vm.input = "hello"
+        #expect(!vm.canSend)
+
+        let staleRefresh = Task { await vm.fetchModels() }
+        try await waitUntil("stale catalog refresh starts") {
+            await transport.modelAgentIDs().count >= 2
+        }
+        await vm.fetchModels()
+        #expect(vm.canSend)
+        await staleRefreshGate.open()
+        await staleRefresh.value
+
+        #expect(vm.modelChoices.first?.available == true)
+        #expect(vm.canSend)
+    }
+
+    @Test @MainActor func `catalog refresh cannot roll back a concurrent model selection`() async throws {
+        let refreshGate = AsyncGate()
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai", available: true)
+        let next = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: current.modelID,
+                modelProvider: current.provider))],
+            modelAvailabilityIsSessionScoped: true,
+            modelCatalogHook: { call in
+                if call == 1 {
+                    await refreshGate.wait()
+                }
+                return OpenClawChatModelCatalogSnapshot(
+                    choices: [current, next],
+                    availabilityIsSessionScoped: true)
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+
+        let refresh = Task { await vm.fetchModels() }
+        try await waitUntil("catalog refresh starts") {
+            await transport.modelAgentIDs().count >= 2
+        }
+        vm.selectModel(next.selectionID)
+        try await waitUntil("model selection completes") {
+            await transport.patchedModels() == [next.selectionID]
+        }
+        await refreshGate.open()
+        await refresh.value
+
+        #expect(vm.modelSelectionID == next.selectionID)
+    }
+
+    @Test @MainActor func `failed newest catalog refresh retains the last accepted auth gate`() async throws {
+        let staleRefreshGate = AsyncGate()
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: unavailable.modelID,
+                modelProvider: unavailable.provider))],
+            modelAvailabilityIsSessionScoped: true,
+            modelCatalogHook: { call in
+                if call == 1 {
+                    await staleRefreshGate.wait()
+                    return OpenClawChatModelCatalogSnapshot(
+                        choices: [available],
+                        availabilityIsSessionScoped: true)
+                }
+                if call == 2 {
+                    throw NSError(domain: "test", code: 1)
+                }
+                return OpenClawChatModelCatalogSnapshot(
+                    choices: [unavailable],
+                    availabilityIsSessionScoped: true)
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        vm.input = "hello"
+
+        let staleRefresh = Task { await vm.fetchModels() }
+        try await waitUntil("older catalog refresh starts") {
+            await transport.modelAgentIDs().count >= 2
+        }
+        await vm.fetchModels()
+        await staleRefreshGate.open()
+        await staleRefresh.value
+
+        #expect(vm.modelChoices.first?.available == false)
+        #expect(!vm.canSend)
+    }
+
+    @Test @MainActor func `offline draft remains eligible for durable queue despite auth failure`() async throws {
+        let selected = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "missing-auth")
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: selected.modelID,
+                modelProvider: selected.provider))],
+            modelResponses: [[selected]],
+            modelAvailabilityIsSessionScoped: true)
+        try await loadAndWaitBootstrap(vm: vm)
+        transport.emit(.health(ok: false))
+        try await waitUntil("chat becomes offline") { await MainActor.run { !vm.healthOK } }
+        vm.input = "queue me"
+
+        #expect(vm.composerModelAvailabilityMessage == nil)
+        #expect(vm.canSend)
     }
 
     @Test func `selecting default model patches nil and updates selection`() async throws {

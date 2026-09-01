@@ -54,7 +54,7 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
-    `export const updatePluginsAfterCoreUpdate = async ({opts}) => { if (opts.restart !== false) throw new Error('Unexpected restart'); return {status: ${JSON.stringify(scenario === "plugin-error" ? "error" : "ok")}, changed: false}; };`,
+    `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario === "plugin-error" ? "error" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),

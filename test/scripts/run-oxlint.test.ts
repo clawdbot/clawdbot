@@ -735,6 +735,15 @@ describe("run-oxlint", () => {
       platform: "linux",
       readDir: () => entries,
     });
+    const explicitStripeShards = createOxlintShards({
+      cwd: "/repo",
+      env: { CI: "true" },
+      hostResources: { logicalCpuCount: 8, totalMemoryBytes: 31 * 1024 ** 3 },
+      platform: "linux",
+      readDir: () => entries,
+      splitExtensions: true,
+    }).filter((shard) => shard.name.startsWith("extensions"));
+    expect(explicitStripeShards).toEqual(shards);
     const stripes = Array.from({ length: 6 }, (_, index) =>
       selectExtensionOxlintStripe(shards, { index: index + 1, total: 6 }),
     );
@@ -745,12 +754,13 @@ describe("run-oxlint", () => {
     );
     expect(new Set(selected.map((shard) => shard.name))).toHaveProperty("size", shards.length);
     expect(selectExtensionOxlintStripe(shards, { index: 9, total: 9 })).toEqual([]);
+    expect(selectExtensionOxlintStripe([], { index: 1, total: 6 })).toEqual([]);
     expect(() =>
       selectExtensionOxlintStripe(createOxlintShards({ cwd: "/repo" }), {
         index: 1,
         total: 2,
       }),
-    ).toThrow("--extension-stripe requires a non-empty extension-only shard selection");
+    ).toThrow("--extension-stripe requires an extension-only shard selection");
   });
 
   it.each([

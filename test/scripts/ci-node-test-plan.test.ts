@@ -753,19 +753,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             includePatterns: ["src/cli/gateway-backed-exit.process.test.ts"],
           }),
         ]);
-        expect(cliProcessJobs.filter((shard) => shard.pretestBuildMode)).toEqual([
-          expect.objectContaining({
-            pretestBuildMode: "runtime",
-            groups: expect.arrayContaining([
+        const runtimeCliJobs = cliProcessJobs.filter((shard) => shard.pretestBuildMode);
+        expect(runtimeCliJobs).toHaveLength(2);
+        expect(runtimeCliJobs).toEqual(
+          expect.arrayContaining(
+            [
+              "src/cli/acp-cli-exit.process.test.ts",
+              "src/cli/update-dry-run-state.process.test.ts",
+            ].map((file) =>
               expect.objectContaining({
                 pretestBuildMode: "runtime",
-                includePatterns: expect.arrayContaining([
-                  "src/cli/update-dry-run-state.process.test.ts",
+                groups: expect.arrayContaining([
+                  expect.objectContaining({
+                    pretestBuildMode: "runtime",
+                    includePatterns: expect.arrayContaining([file]),
+                  }),
                 ]),
               }),
-            ]),
-          }),
-        ]);
+            ),
+          ),
+        );
         for (const shard of cliProcessJobs) {
           // The indivisible gateway file takes 200s. Hosted runtime preparation
           // alone costs 160s; other groups retain the 150s admission budget.
@@ -833,6 +840,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shard.groups.some((group) => isExclusiveCompactShardName(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
+    const hybridJobFor = (name: string) =>
+      hybridPullRequestCompact.find((shard) =>
+        shard.groups.some((group) => group.shard_name === name),
+      );
+    const hybridCliJob = hybridJobFor("agentic-cli");
+    const hybridToolingIsolatedJob = hybridJobFor("core-tooling-isolated");
+    expect(hybridCliJob).toBeDefined();
+    expect(hybridToolingIsolatedJob).toBeDefined();
+    expect(hybridToolingIsolatedJob?.checkName).not.toBe(hybridCliJob?.checkName);
     const expectedEmbeddedAgentGroupNames = [
       "agentic-agents-embedded-base-1",
       "agentic-agents-embedded-base-2",

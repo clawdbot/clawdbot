@@ -1140,6 +1140,8 @@ Shipped baseline exclusions: v2026.8.1 (10 PRs: #111111, #119051, #122346, #1244
 - **PR #134870** [fix(release): restore evidence reuse and reconcile advisory ranges](https://github.com/openclaw/openclaw/pull/134870)
 ## 2026.8.1
 
+[Full release notes](https://docs.openclaw.ai/releases/2026.8.1)
+
 > **Release correction:** The package published as `2026.9.1-beta.1` was incorrectly versioned and is actually `2026.8.1-beta.4`. It should not be interpreted as newer than stable `2026.8.1`.
 
 ### Highlights

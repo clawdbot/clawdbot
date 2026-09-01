@@ -360,7 +360,7 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
   };
 });
 
-vi.mock("./update-cli/post-core-plugin-convergence.js", () => ({
+vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
   convergenceWarningsToOutcomes: (convergence: {
     warnings: Array<{ pluginId?: string; message: string }>;
     errored: boolean;
@@ -548,7 +548,8 @@ const { runCommandWithTimeout, runExec } = await import("../process/exec.js");
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
-const postCorePluginConvergence = await import("./update-cli/post-core-plugin-convergence.js");
+const postCorePluginConvergence =
+  await import("../commands/doctor/shared/post-core-plugin-convergence.js");
 const { completePostCorePluginUpdate } =
   await import("./update-cli/update-command-fresh-doctor.js");
 const { continuePostCoreUpdateInFreshProcess } =

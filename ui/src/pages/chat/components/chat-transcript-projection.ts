@@ -16,13 +16,13 @@ import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
-  assistantMessageExpansionSignature,
   buildCachedChatItems,
   collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  deleteExpansionState,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -171,7 +171,7 @@ export function projectChatTranscript(
     );
     for (const key of expandedAssistantMessages.keys()) {
       if (!retainedKeys.has(key)) {
-        expandedAssistantMessages.delete(key);
+        deleteExpansionState(expandedAssistantMessages, key);
       }
     }
   }
@@ -195,7 +195,7 @@ export function projectChatTranscript(
     }
     const revision = (current?.revision ?? 0) + 1;
     const pending = { status: "loading", revision } as const;
-    expandedAssistantMessages.set(key, pending);
+    setExpansionState(expandedAssistantMessages, key, pending);
     requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
       // A reset or source replacement can reuse both message id and revision.
@@ -207,7 +207,8 @@ export function projectChatTranscript(
         result?.ok && result.message && typeof result.message === "object"
           ? extractTextCached(result.message)
           : null;
-      expandedAssistantMessages.set(
+      setExpansionState(
+        expandedAssistantMessages,
         key,
         markdown === null
           ? { status: "error", revision: revision + 1 }
@@ -265,6 +266,9 @@ export function projectChatTranscript(
   const messageRowKeysById = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    onReply: props.onSetReply
+      ? (target) => state.transcriptRenderContext.onSetReply?.(target)
+      : undefined,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
@@ -337,9 +341,6 @@ export function projectChatTranscript(
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
-      onReply: props.onSetReply
-        ? (target) => state.transcriptRenderContext.onSetReply?.(target)
-        : undefined,
       resolveReplyPreview,
       onResolveReply: props.replyMessageAccess?.request,
       onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
@@ -537,7 +538,8 @@ export function projectChatTranscript(
     for (const group of groups) {
       for (const source of group.messages) {
         const sourceMessageId = persistedMessageEntryId(source.message);
-        if (sourceMessageId && extractTextCached(source.message)?.trim()) {
+        // The preview resolves content lazily; indexing only needs persisted identities.
+        if (sourceMessageId) {
           messageRowKeysById.set(sourceMessageId, item.key);
           loadedReplySources.set(sourceMessageId, {
             message: source.message,
@@ -602,7 +604,8 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
-    assistantMessageExpansionSignature(expandedAssistantMessages),
+    expandedAssistantMessages,
+    getExpansionStateVersion(expandedAssistantMessages),
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),

@@ -300,6 +300,22 @@ openclaw gateway call node.list --params "{}"
 
 ### 6. Chat + history
 
+The draft has its own full-width row above the attachment and voice/send controls,
+so larger text and narrow screens do not squeeze it between buttons. The empty
+hint stays on one line; drafts show up to four lines and scroll when space is limited.
+The composer has narrower side gutters than the transcript, with readable draft
+text and 48dp action targets. Typography still follows system text scaling.
+Model and thinking controls sit together, opposite the microphone and primary
+action. The model name stays on one line and follows system text scaling;
+long names use a middle ellipsis to keep both ends visible. The full name remains
+in the model sheet and accessibility text. The thinking dial opens a menu without
+expanding the composer.
+Context usage is available in the model sheet and the model control's
+accessibility value, leaving more room for the model name in the toolbar.
+During Talk, the live waveform replaces the microphone and remains tappable to
+end Talk. If a run is also active, a separate, softly tinted Stop button stays at
+the trailing edge to abort that run.
+
 The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
@@ -331,8 +347,10 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
-- Android does not advertise the `voiceWake` capability. Use Chat dictation,
-  a voice note, or Talk for voice input.
+- Enable **Settings → Voice → Listen for wake words** for foreground on-device
+  Voice Wake. Android advertises `voiceWake` only when enabled, on-device
+  recognition and microphone permission are available, and wake words are
+  synchronized with the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).

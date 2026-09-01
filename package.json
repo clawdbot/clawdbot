@@ -805,6 +805,10 @@
     "./plugin-sdk/cli-runtime": {
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
+    "./plugin-sdk/node-cli-runtime": {
+      "types": "./dist/plugin-sdk/node-cli-runtime.d.ts",
+      "default": "./dist/plugin-sdk/node-cli-runtime.js"
+    },
     "./plugin-sdk/cli-backend": {
       "default": "./dist/plugin-sdk/cli-backend.js"
     },
@@ -1825,6 +1829,7 @@
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts && node scripts/run-vitest.mjs run packages/gateway-protocol/src/connect-error-details.test.ts",
     "test:build:singleton": "node --import ./scripts/tsx.mjs scripts/test-built-plugin-singleton.mts",
+    "test:skills:downgrade": "node --import ./scripts/tsx.mjs src/skills/library/persistence-downgrade.test-support.ts",
     "test:build:status-message-runtime": "node --import ./scripts/tsx.mjs scripts/test-built-status-message-runtime.mts",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
     "test:changed": "node --import ./scripts/tsx.mjs scripts/test-projects.mts --changed origin/main",
@@ -2078,7 +2083,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.5.6",
+    "@openclaw/fs-safe": "0.7.0",
     "@openclaw/proxyline": "0.3.7",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.21.0",

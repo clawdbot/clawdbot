@@ -716,7 +716,7 @@ extensions/matrix/src/setup-core.ts	8
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	10
 extensions/matrix/src/tool-actions.ts	2
-extensions/mattermost/src/channel.ts	11
+extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	9
 extensions/mattermost/src/mattermost/directory.ts	2
@@ -2409,7 +2409,6 @@ src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1
 src/cli/test-runtime-capture.ts	1
 src/cli/update-cli.ts	2
-src/cli/update-cli/plugin-payload-validation.ts	2
 src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
@@ -2651,7 +2650,7 @@ src/config/sessions/metadata.ts	1
 src/config/sessions/restart-recovery-state.ts	6
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
-src/config/sessions/session-accessor.sqlite-active-events.ts	3
+src/config/sessions/session-accessor.sqlite-active-events.ts	2
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-archive.ts	3
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
@@ -2666,7 +2665,7 @@ src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
-src/config/sessions/session-accessor.sqlite-reset-window.ts	3
+src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-title-probes.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
@@ -2989,7 +2988,6 @@ src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-message.ts	4
-src/gateway/session-transcript-readers.ts	3
 src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
@@ -3995,7 +3993,7 @@ ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	4
-ui/src/pages/chat/chat-pane-render.ts	4
+ui/src/pages/chat/chat-pane-render.ts	3
 ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-realtime.ts	1
@@ -4034,7 +4032,7 @@ ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
-ui/src/pages/chat/components/chat-thread-interactions.ts	6
+ui/src/pages/chat/components/chat-thread-interactions.ts	3
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/session-diff-menus.ts	1
 ui/src/pages/chat/components/session-diff-panel.ts	2

@@ -250,10 +250,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "desktop-inbox-upgrade-pending.png");
 
     await closeInbox(page);
-    await page
-      .locator(".shell-chrome-controls")
-      .getByRole("button", { name: "Collapse sidebar" })
-      .click();
+    await page.locator(".sidebar-brand__collapse").click();
     const collapsedItem = await openLimitedAccessItem(await openInbox(page));
     await waitForPendingUpgradeItem(collapsedItem);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);

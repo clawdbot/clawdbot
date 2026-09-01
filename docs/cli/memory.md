@@ -82,10 +82,10 @@ Both repair commands replace the derived memory index while preserving other age
 state. Use `--agent` to limit the repair to the affected agent.
 
 <Warning>
-`agents/<agentId>/agent/openclaw-agent.sqlite` is the primary agent database. It
-also stores sessions, transcripts, and other agent state. Do not delete or rename
-this database or its SQLite sidecars to reset memory; use
-`openclaw memory index --force --agent <id>`.
+The default `openclaw-agent.sqlite` database also contains session history and
+other durable agent state. Do not delete it or its `-wal`, `-shm`, or `-journal`
+sidecars to reset memory. Use `memory index --force` to rebuild the index; see
+[Safe index recovery](/concepts/memory-builtin#safe-index-recovery).
 </Warning>
 
 ## `memory search`

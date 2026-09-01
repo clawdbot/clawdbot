@@ -750,6 +750,109 @@ class ChatControllerBranchCoordinationTest {
   fun inputAdmittedWhileRemoteBranchHistoryWaitsSurvivesForExplicitRetry() = runTest { verifyInputAcrossHistoryReplacement(gate = ReplacementGate.History, remoteMutation = true) }
 
   @Test
+  fun blankHistoryEntryIdDoesNotStrandBootstrap() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("main", listOf(ReplayHistoryMessage("assistant", "History", 1, entryId = " \t"))),
+      )
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load("main")
+      awaitBranchProgress { ownerJob.children.none() }
+
+      assertTrue(controller.healthOk.value)
+      assertFalse(controller.historyLoading.value)
+      assertNull(
+        controller.messages.value
+          .single()
+          .entryId,
+      )
+      assertEquals(1, gateway.callCount("chat.history"))
+    }
+
+  @Test
+  fun reconnectCompletesWhenEarlierBranchListingFencesHistory() =
+    runTest {
+      val key = "agent:main:branch-proof"
+      val gateway = ScriptedGateway(json)
+      val transcript = AtomicReference(listOf("A"))
+      val holdBranches = AtomicBoolean(false)
+      val holdReconnectHistory = AtomicBoolean(false)
+      val branchesEntered = CompletableDeferred<Job>()
+      val releaseBranches = CompletableDeferred<Unit>()
+      val reconnectHistoryEntered = CompletableDeferred<Job>()
+      val releaseReconnectHistory = CompletableDeferred<Unit>()
+      gateway.respond("chat.history") {
+        val entries = transcript.get()
+        val response =
+          historyResponse(
+            sessionId = "session-${entries.first()}",
+            messages =
+              entries.mapIndexed { index, entry ->
+                ReplayHistoryMessage("assistant", "history $entry", index.toLong() + 1, entryId = "entry-$entry")
+              },
+          )
+        if (holdReconnectHistory.compareAndSet(true, false)) {
+          reconnectHistoryEntered.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseReconnectHistory.await()
+        }
+        response
+      }
+      gateway.respond("sessions.branches.list") {
+        val entries = transcript.get()
+        val response = """{"branches":[{"leafEntryId":"entry-${entries.last()}","headline":"Current","messageCount":${entries.size},"active":true}]}"""
+        if (holdBranches.compareAndSet(true, false)) {
+          branchesEntered.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseBranches.await()
+        }
+        response
+      }
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load(key)
+      awaitBranchProgress { controller.healthOk.value && !controller.historyLoading.value && ownerJob.children.none() }
+      assertEquals("session-A", controller.sessionId.value)
+
+      transcript.set(listOf("B"))
+      holdBranches.set(true)
+      controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      awaitBranchProgress { branchesEntered.isCompleted }
+      val branchesJob = branchesEntered.await()
+      assertEquals("session-B", controller.sessionId.value)
+
+      holdReconnectHistory.set(true)
+      controller.onDisconnected("Reconnecting")
+      controller.onGatewayConnected()
+      awaitBranchProgress { reconnectHistoryEntered.isCompleted }
+      val reconnectHistoryJob = reconnectHistoryEntered.await()
+      assertFalse(controller.healthOk.value)
+      assertTrue(controller.historyLoading.value)
+
+      // The listing settles after reconnect captured its branch evidence, before history returns.
+      releaseBranches.complete(Unit)
+      awaitBranchProgress { branchesJob.isCompleted }
+      // The held response stays at B; recovery must read again to observe this continuation.
+      transcript.set(listOf("B", "B2"))
+      releaseReconnectHistory.complete(Unit)
+      awaitBranchProgress { reconnectHistoryJob.isCompleted && ownerJob.children.none() }
+
+      assertEquals(
+        "Branch listing completed=${branchesJob.isCompleted}; reconnect completed=${reconnectHistoryJob.isCompleted}; " +
+          "remaining controller jobs=${ownerJob.children.count()}",
+        Triple(true, false, "session-B"),
+        Triple(controller.healthOk.value, controller.historyLoading.value, controller.sessionId.value),
+      )
+      assertEquals(listOf("history B", "history B2"), controller.messages.value.map { it.content.single().text })
+    }
+
+  @Test
   fun inputAdmittedAfterHistoryWhileBranchesWaitSendsOnceOnReconnect() = runTest { verifyInputAcrossHistoryReplacement(bootstrap = true, gate = ReplacementGate.Branches) }
 
   @Test
