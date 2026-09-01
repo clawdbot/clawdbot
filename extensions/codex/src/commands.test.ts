@@ -496,11 +496,7 @@ describe("codex command", () => {
     const result = await runCommand("plugins menu", { codexPluginsManagementIo });
 
     expectResultTextContains(result, "/codex plugins enable");
-    expectResultTextContains(result, "Browse ChatGPT plugins: https://chatgpt.com/plugins");
-    expectResultTextContains(
-      result,
-      "Manage ChatGPT plugins: https://chatgpt.com/#settings/Plugins",
-    );
+    expectResultTextContains(result, "Check ChatGPT app access");
     expect(buttonCommands(result)).toContain("/codex plugins list");
   });
 

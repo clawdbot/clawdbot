@@ -49,25 +49,29 @@ for the OpenAI account and admin model.
 
 ## Quickstart
 
-Run `/codex plugins` or `/codex plugins menu` for **Browse ChatGPT plugins**
-and **Manage ChatGPT plugins** links. They open the existing
-[ChatGPT plugin directory](https://chatgpt.com/plugins) and
-[ChatGPT Plugins settings](https://chatgpt.com/#settings/Plugins), including
-when no Codex plugins are configured. `/codex plugins help` also includes
-these links; channels without buttons receive the URLs as text.
+Owners and gateway clients with `operator.admin` can use **Check ChatGPT app
+access** in `/codex plugins`, `/codex plugins menu`, or `/codex plugins help`.
+Choose a configured Codex plugin to inspect its hosted app pages, local app
+access, and runtime readiness. Channels without buttons receive the same
+commands as text.
 
-These pages do not replace the controls for every Codex plugin: native Codex
-bundles can also contain skills, hooks, and MCP servers from local or other
-marketplaces. The OpenClaw `codex` plugin hosts that separate Codex runtime;
-it is not the same thing as the bundles loaded inside it.
+A ChatGPT app page is offered only when the scoped status check supports that
+handoff. Missing or restricted metadata does not become a connection prompt.
+Codex does not report account-wide ChatGPT directory or management eligibility,
+so OpenClaw does not infer general Browse/Manage access from sign-in or an empty
+app inventory. For a plugin not yet configured, use `/codex plugins available`
+and explicitly install the desired Codex plugin.
 
-Sign in to the same ChatGPT account and workspace used by Codex. Opening a
-page does not change OpenClaw policy or verify readiness. For Codex marketplace
-installation, an owner or `operator.admin` can use `/codex plugins available`
-and `/codex plugins install <plugin>@<marketplace>`. After hosted setup, return
-to OpenClaw and use `/new` or `/reset` before trying the plugin. An
-already-configured plugin does not need to be reinstalled; connected account
-apps can also be admitted through the existing `allow_all_plugins` policy.
+Native Codex bundles can also contain skills, hooks, and MCP servers from local
+or other marketplaces. Their controls remain available; a ChatGPT connection
+page does not manage every bundle component or native OpenClaw plugin.
+
+Use the same ChatGPT account and workspace as the active Codex harness when
+opening an app page. Browser setup does not change OpenClaw app access or prove
+readiness. Return to `/codex plugins recheck <configured-plugin>`, then use
+`/new` or `/reset` before trying newly connected apps. An already-configured
+plugin does not need to be reinstalled; the existing `allow_all_plugins` policy
+is unchanged.
 
 Preview migration from the source Codex home:
 
@@ -185,7 +189,7 @@ Responses show up to five app links and explicitly report additional apps to
 review in Codex CLI. These links are for hosted ChatGPT apps; native MCP server
 setup remains separate.
 
-After completing sign-in, choose **Finished connecting / recheck** or run:
+After completing sign-in, choose **Recheck app tools** or run:
 
 ```text
 /codex plugins recheck security-review@company-tools

@@ -3,10 +3,6 @@ import {
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 // Codex plugin module implements command plugins management behavior.
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
@@ -72,14 +68,16 @@ export async function handleCodexPluginsSubcommand(
     if (args.length > 0) {
       return { text: "Usage: /codex plugins menu" };
     }
-    return buildPluginsMenuReply();
+    return buildPluginsMenuReply(ctx);
   }
 
   if (normalized === "help") {
     if (args.length > 0) {
       return { text: "Usage: /codex plugins help" };
     }
-    return withChatGptPluginNavigation({ blocks: [{ type: "text", text: buildPluginsHelp() }] });
+    return withChatGptPluginNavigation(ctx, {
+      blocks: [{ type: "text", text: buildPluginsHelp() }],
+    });
   }
 
   if (normalized === "list") {
@@ -87,7 +85,7 @@ export async function handleCodexPluginsSubcommand(
       return { text: "Usage: /codex plugins list" };
     }
     const current = await io.readConfig();
-    return withChatGptPluginNavigation({
+    return withChatGptPluginNavigation(ctx, {
       blocks: [
         {
           type: "text",
@@ -125,6 +123,33 @@ export async function handleCodexPluginsSubcommand(
   }
 
   if (normalized === "status" || normalized === "recheck") {
+    if (normalized === "status" && args.length === 0) {
+      if (!canMutateCodexHost(ctx)) {
+        return {
+          text: "Only an owner or operator.admin gateway client can inspect Codex plugin status.",
+        };
+      }
+      const current = await io.readConfig();
+      const names = Object.keys(current.plugins ?? {}).toSorted();
+      const presentation = buildCodexCommandPickerPresentation(
+        "Configured Codex plugins",
+        names.length === 0
+          ? "No Codex plugins are explicitly configured. Discover a plugin before checking its app access."
+          : "Choose a configured plugin to inspect its app pages and readiness. For additional plugins, use /codex plugins list and /codex plugins status <configured-plugin>.",
+        [
+          ...names.slice(0, 5).map((name) => ({
+            label: formatCodexDisplayText(name.slice(0, 80)),
+            command: `/codex plugins status '${name.replaceAll("'", "'\\''")}'`,
+          })),
+          { label: "Available Codex plugins", command: "/codex plugins available" },
+        ],
+      );
+      return {
+        text: renderMessagePresentationFallbackText({ presentation }),
+        presentation,
+        presentationTextMode: "fallback",
+      };
+    }
     const requestedPlugin = args[0];
     const page = args[1] === undefined ? 1 : Number(args[1]);
     if (
@@ -238,7 +263,7 @@ export async function handleCodexPluginsSubcommand(
   };
 }
 
-function buildPluginsMenuReply(): PluginCommandResult {
+function buildPluginsMenuReply(ctx: PluginCommandContext): PluginCommandResult {
   const buttons: CodexCommandPickerButton[] = [
     { label: "list", command: "/codex plugins list" },
     { label: "available", command: "/codex plugins available" },
@@ -250,6 +275,7 @@ function buildPluginsMenuReply(): PluginCommandResult {
     { label: "back", command: "/codex" },
   ];
   return withChatGptPluginNavigation(
+    ctx,
     buildCodexCommandPickerPresentation(
       "Codex sub-plugins",
       "Pick a Codex sub-plugin action:",
@@ -258,29 +284,31 @@ function buildPluginsMenuReply(): PluginCommandResult {
   );
 }
 
-function withChatGptPluginNavigation(presentation: MessagePresentation): PluginCommandResult {
-  // These public pages use the browser's own session; never put Codex credentials in a URL.
+function withChatGptPluginNavigation(
+  ctx: PluginCommandContext,
+  presentation: MessagePresentation,
+): PluginCommandResult {
   const linked: MessagePresentation = {
     ...presentation,
     blocks: [
       ...presentation.blocks,
-      {
-        type: "buttons",
-        buttons: [
-          {
-            label: "Browse ChatGPT plugins",
-            action: { type: "url", url: "https://chatgpt.com/plugins" },
-          },
-          {
-            label: "Manage ChatGPT plugins",
-            action: { type: "url", url: "https://chatgpt.com/#settings/Plugins" },
-          },
-        ],
-      },
-      {
-        type: "context",
-        text: "These pages manage ChatGPT plugins, not every local or marketplace Codex plugin. Use the same ChatGPT account and workspace as Codex. Opening a page does not change OpenClaw policy or confirm readiness. For Codex marketplace installation, an owner or operator.admin can use /codex plugins available and /codex plugins install <plugin>@<marketplace>. After browser setup, return here and use /new or /reset before trying the plugin; an already-configured plugin does not need to be reinstalled.",
-      },
+      ...(canMutateCodexHost(ctx)
+        ? [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Check ChatGPT app access",
+                  action: { type: "command" as const, command: "/codex plugins status" },
+                },
+              ],
+            },
+            {
+              type: "context" as const,
+              text: "Check a configured Codex plugin for its available ChatGPT app pages. This does not change connections or OpenClaw app access. For new plugins, use /codex plugins available. Local and marketplace Codex plugins keep their own management controls.",
+            },
+          ]
+        : []),
     ],
   };
   return {
