@@ -540,9 +540,18 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
+      let pluginNodeCapabilityFallback:
+        | import("./server/plugin-node-capability-auth.js").PluginNodeCapabilityFallback
+        | undefined;
+      let revalidatePluginNodeCapabilityFallback:
+        | typeof import("./server/plugin-node-capability-auth.js").revalidatePluginNodeCapabilityFallback
+        | undefined;
       addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
       addRequestStage(Boolean(nodeCapability), async () => {
-        const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
+        const {
+          authorizePluginNodeCapabilityRequest,
+          revalidatePluginNodeCapabilityFallback: revalidate,
+        } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
           req,
           auth: resolvedAuthValue,
@@ -558,13 +567,25 @@ export function createGatewayHttpServer(opts: {
           sendGatewayAuthFailure(res, ok);
           return true;
         }
+        pluginNodeCapabilityFallback = ok.pluginNodeCapabilityFallback;
+        revalidatePluginNodeCapabilityFallback = revalidate;
         return false;
       });
       addRequestStage(
         Boolean(nodeCapability) &&
           isCoreCanvasHostEnabled(configSnapshot) &&
           isCanvasDocumentHttpPath(scopedRequestPath),
-        async () => (await getCanvasServeModule()).handleCanvasDocumentHttpRequest(req, res),
+        async () => {
+          const canvasServe = await getCanvasServeModule();
+          if (
+            pluginNodeCapabilityFallback &&
+            !revalidatePluginNodeCapabilityFallback?.(pluginNodeCapabilityFallback)
+          ) {
+            sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+            return true;
+          }
+          return await canvasServe.handleCanvasDocumentHttpRequest(req, res);
+        },
       );
       // This page must remain reachable when a plugin route is broken so the
       // operator can disable it. Other explicit plugin routes retain precedence.
@@ -630,13 +651,21 @@ export function createGatewayHttpServer(opts: {
             pluginRequestOperatorScopes = authResult.operatorScopes;
             return false;
           },
-          () =>
-            handlePluginRequest(req, res, pluginPathContext, {
+          async () => {
+            if (
+              pluginNodeCapabilityFallback &&
+              !revalidatePluginNodeCapabilityFallback?.(pluginNodeCapabilityFallback)
+            ) {
+              sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+              return true;
+            }
+            return await handlePluginRequest(req, res, pluginPathContext, {
               gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
               gatewayRequestAuth: pluginGatewayRequestAuth,
               gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
               gatewayRequestClientIp: requestClientIp,
-            }),
+            });
+          },
         );
       }
 

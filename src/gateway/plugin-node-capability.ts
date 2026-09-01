@@ -375,6 +375,7 @@ export function hasAuthorizedPluginNodeCapability(params: {
   surface: PluginNodeCapabilitySurface;
   capability: string;
   nowMs?: number;
+  renew?: boolean;
 }) {
   const surface = normalizeSurface(params.surface.surface);
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
@@ -401,7 +402,9 @@ export function hasAuthorizedPluginNodeCapability(params: {
       continue;
     }
     if (safeEqualSecret(entry.capability, params.capability)) {
-      entry.expiresAtMs = nextExpiresAtMs;
+      if (params.renew !== false) {
+        entry.expiresAtMs = nextExpiresAtMs;
+      }
       return true;
     }
   }

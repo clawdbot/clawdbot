@@ -30,6 +30,38 @@ const resolvedAuth: ResolvedGatewayAuth = {
 type DispatchCounts = { http: number; ws: number };
 type BoundaryResult = { http: number; ws: number; dispatches: DispatchCounts };
 
+function scheduleCapabilityRevocationAfterAuthorization(params: {
+  client: GatewayWsClient;
+  nodeRegistry: NodeRegistry;
+  nodeId: string;
+}): Promise<void> {
+  let liveCaps = ["canvas"];
+  let scheduled = false;
+  let resolveRevocation!: () => void;
+  const revocation = new Promise<void>((resolve) => {
+    resolveRevocation = resolve;
+  });
+  Object.defineProperty(params.client.connect, "caps", {
+    configurable: true,
+    get: () => {
+      if (!scheduled) {
+        scheduled = true;
+        // Model a pairing revocation that lands after the first live-surface
+        // read but before the request stage reaches its final dispatch check.
+        queueMicrotask(() => {
+          params.nodeRegistry.updateSurface(params.nodeId, { caps: [], commands: [] });
+          resolveRevocation();
+        });
+      }
+      return liveCaps;
+    },
+    set: (nextCaps: string[]) => {
+      liveCaps = nextCaps;
+    },
+  });
+  return revocation;
+}
+
 function makeWsClient(params: {
   connId: string;
   clientIp: string;
@@ -235,7 +267,7 @@ async function runBoundaryProof(
 }
 
 describe("gateway plugin node capability boundary proof", () => {
-  test("rejects pending and revoked nodes before HTTP/WS dispatch while allowing operators", async () => {
+  test("rejects pending, revoked, and concurrently revoked nodes before dispatch", async () => {
     await withTempConfig({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       run: async () => {
@@ -300,6 +332,69 @@ describe("gateway plugin node capability boundary proof", () => {
             expect(revokedWs).toBe(401);
             expect(dispatches()).toEqual({ http: 1, ws: 1 });
             proof.revoked = { http: revokedHttp.status, ws: revokedWs, dispatches: dispatches() };
+
+            const raceHttpCapability = "race-http-node";
+            const raceHttpNode = makeWsClient({
+              connId: "c-race-http-node",
+              clientIp: "192.168.1.20",
+              role: "node",
+              capability: raceHttpCapability,
+            });
+            const raceHttpNodeRegistry = new NodeRegistry();
+            raceHttpNodeRegistry.register(raceHttpNode, { pairingIdentity: "race-http-node" });
+            clients.add(raceHttpNode);
+            try {
+              const revocation = scheduleCapabilityRevocationAfterAuthorization({
+                client: raceHttpNode,
+                nodeRegistry: raceHttpNodeRegistry,
+                nodeId: "race-http-node",
+              });
+              const raceHttp = await probeHttp(raceHttpCapability);
+              await revocation;
+              expect(raceHttp.status).toBe(401);
+              expect(dispatches()).toEqual({ http: 1, ws: 1 });
+              proof.raceHttp = {
+                http: raceHttp.status,
+                ws: 0,
+                dispatches: dispatches(),
+              };
+            } finally {
+              clients.delete(raceHttpNode);
+              raceHttpNodeRegistry.unregister(raceHttpNode.connId);
+            }
+
+            const raceWsCapability = "race-ws-node";
+            const raceWsNode = makeWsClient({
+              connId: "c-race-ws-node",
+              clientIp: "192.168.1.21",
+              role: "node",
+              capability: raceWsCapability,
+            });
+            const raceWsNodeRegistry = new NodeRegistry();
+            raceWsNodeRegistry.register(raceWsNode, { pairingIdentity: "race-ws-node" });
+            clients.add(raceWsNode);
+            try {
+              const revocation = scheduleCapabilityRevocationAfterAuthorization({
+                client: raceWsNode,
+                nodeRegistry: raceWsNodeRegistry,
+                nodeId: "race-ws-node",
+              });
+              const raceWs = await requestWsStatus(
+                port,
+                scopedPath(raceWsCapability, CANVAS_WS_PATH),
+              );
+              await revocation;
+              expect(raceWs).toBe(401);
+              expect(dispatches()).toEqual({ http: 1, ws: 1 });
+              proof.raceWs = {
+                http: 0,
+                ws: raceWs,
+                dispatches: dispatches(),
+              };
+            } finally {
+              clients.delete(raceWsNode);
+              raceWsNodeRegistry.unregister(raceWsNode.connId);
+            }
           } finally {
             clients.delete(pendingNode);
             nodeRegistry.unregister(pendingNode.connId);
