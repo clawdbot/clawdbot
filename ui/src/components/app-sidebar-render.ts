@@ -166,7 +166,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
 
 /** Home: the first page. Opens the rolling main session on its saved face. */
 export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
-  const agentId = host.activeChipAgent().activeId;
+  const agentId = host.expandedAgentId();
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
   const attention = host.resolveHomeSessionAttention(mainKey, mainRow);

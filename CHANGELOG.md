@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI session switching:** reuse prepared sidebar rows for PR badges and prepare menu data only when opened, reducing work when navigating large session lists.
 - **Update readiness:** select declared health-check owners before loading plugin APIs, preventing unrelated optional Doctor checks from interrupting upgrades while retaining mandatory readiness failures.
 
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
