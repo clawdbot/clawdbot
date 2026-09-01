@@ -193,18 +193,35 @@ async function resolveConfiguredProviderApiKey(params: {
   options: EmbeddingProviderCreateOptions;
   configuredApiKey: unknown;
 }): Promise<string | undefined> {
-  if (params.configuredApiKey === undefined) {
+  const apiKey = resolveSecretString({
+    value: params.configuredApiKey,
+    path: `models.providers.${params.providerId}.apiKey`,
+  });
+  if (!apiKey) {
     return undefined;
   }
-  // Provider entries may bind apiKey to an auth-profile id. Keep that binding on
-  // the model-auth path instead of treating the profile id as a bearer token.
-  const { resolveApiKeyForProvider } = await import("../plugin-sdk/provider-auth-runtime.js");
-  const auth = await resolveApiKeyForProvider({
+  const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
+    await import("../agents/agent-scope-config.js");
+  const agentId = tryResolveAmbientOwnerAgentId(params.options.config);
+  const agentDir =
+    params.options.agentDir?.trim() ||
+    (agentId ? resolveAgentDir(params.options.config, agentId) : undefined);
+  // Without an owned auth store, a configured string retains its literal meaning.
+  if (!agentDir) {
+    return apiKey;
+  }
+  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+    await import("../agents/model-auth-provider.js");
+  const authParams = {
     provider: params.providerId,
     cfg: params.options.config,
-    agentDir: params.options.agentDir,
-  });
-  return auth.apiKey;
+    agentDir,
+  };
+  const store = resolveScopedAuthProfileStore(authParams);
+  // Only explicit profile bindings enter model auth. General discovery would
+  // replace literal/runtime-resolved keys with unrelated profile or env credentials.
+  const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
+  return auth ? auth.apiKey : apiKey;
 }
 
 function isOpenAICompatibleProviderConfig(
