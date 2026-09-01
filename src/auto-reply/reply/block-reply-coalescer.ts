@@ -29,6 +29,9 @@ export function createBlockReplyCoalescer(params: {
   let bufferedPayload: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
 
+  const joinBufferedText = (text: string) =>
+    `${bufferText}${bufferText && text && !/^\n[\t ]*\n+/.test(text) ? joiner : ""}${text}`;
+
   const clearIdleTimer = () => {
     if (!idleTimer) {
       return;
@@ -89,7 +92,7 @@ export function createBlockReplyCoalescer(params: {
 
   /** Merges buffered text into a media payload without changing media metadata. */
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
-    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedText = joinBufferedText(text);
     const mergedPayload: ReplyPayload = {
       ...bufferedPayload,
       ...payload,
@@ -166,7 +169,7 @@ export function createBlockReplyCoalescer(params: {
       bufferedPayload = payload;
     }
 
-    const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
+    const nextText = joinBufferedText(text);
     if (nextText.length > maxChars) {
       if (bufferText) {
         void flush({ force: true });

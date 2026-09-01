@@ -97,6 +97,44 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves paragraph separators across separately delivered chunks", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const delivered: string[] = [];
+    const input = "abcdefghij\n\nRest";
+
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-paragraph-boundary",
+      onBlockReply: (payload) => {
+        if (payload.text) {
+          delivered.push(payload.text);
+        }
+      },
+      blockReplyBreak: "text_end",
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 10,
+        breakPreference: "paragraph",
+        flushOnParagraph: true,
+      },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "abcdefghij" });
+    emitAssistantTextDelta({ emit, delta: "\n" });
+    emitAssistantTextDelta({ emit, delta: "\nRest" });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: input }] },
+    });
+
+    await vi.waitFor(() => {
+      expect(delivered.join("")).toBe(input);
+    });
+    expect(delivered.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(delivered.every((chunk) => chunk.trim())).toBe(true);
+  });
+
   it("waits for async block replies before tool_execution_start flush", async () => {
     // The flush callback should observe delivered block replies, not merely
     // scheduled async promises.

@@ -18,6 +18,7 @@ export function normalizeReplyPayloadDirectives(params: {
   currentMessageId?: string;
   silentToken?: string;
   trimLeadingWhitespace?: boolean;
+  preserveLeadingParagraphBoundary?: boolean;
   parseMode?: ReplyDirectiveParseMode;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
@@ -44,7 +45,11 @@ export function normalizeReplyPayloadDirectives(params: {
     : undefined;
 
   let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
-  if (params.trimLeadingWhitespace && text) {
+  if (
+    params.trimLeadingWhitespace &&
+    text &&
+    !(params.preserveLeadingParagraphBoundary && /^\n[\t ]*\n+/.test(text))
+  ) {
     text = text.trimStart() || undefined;
   }
 
@@ -98,7 +103,10 @@ export function createBlockReplyDeliveryHandler(params: {
   directlySentBlockKeys: Set<string>;
   directlySentBlockPayloads: Array<ReplyPayload | undefined>;
 }): (payload: ReplyPayload) => Promise<void> {
-  return async (payload) => {
+  let hasAcceptedTextBlock = false;
+  let admissionTail: Promise<void> = Promise.resolve();
+
+  const deliver = async (payload: ReplyPayload) => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
     if (
@@ -142,6 +150,7 @@ export function createBlockReplyDeliveryHandler(params: {
       currentMessageId: params.currentMessageId,
       silentToken: SILENT_REPLY_TOKEN,
       trimLeadingWhitespace: true,
+      preserveLeadingParagraphBoundary: hasAcceptedTextBlock,
       parseMode: "auto",
       extractMediaDirectives: false,
     });
@@ -167,6 +176,7 @@ export function createBlockReplyDeliveryHandler(params: {
     }
 
     if (blockPayload.text) {
+      hasAcceptedTextBlock = true;
       void params.typingSignals.signalTextDelta(blockPayload.text).catch((err: unknown) => {
         logVerbose(`block reply typing signal failed: ${String(err)}`);
       });
@@ -201,5 +211,13 @@ export function createBlockReplyDeliveryHandler(params: {
       });
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
+  };
+
+  return (payload) => {
+    // Subscriber callbacks can overlap. Queue the full normalization-to-admission
+    // boundary per handler; recover the tail so one rejection cannot poison later blocks.
+    const admission = admissionTail.then(() => deliver(payload));
+    admissionTail = admission.catch(() => undefined);
+    return admission;
   };
 }
