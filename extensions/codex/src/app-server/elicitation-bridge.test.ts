@@ -907,21 +907,29 @@ describe("Codex app-server elicitation bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("accepts safely mapped plugin app elicitations when destructive actions are enabled", async () => {
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildPluginApprovalElicitation(),
-      paramsForRun: createParams(),
-      ...codexTestTurnIds(),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-    });
+  it.each([false, true])(
+    "accepts safely mapped plugin app elicitations only while the turn remains active (aborted: %s)",
+    async (aborted) => {
+      const controller = new AbortController();
+      if (aborted) {
+        controller.abort("permission-change");
+      }
+      const result = await handleCodexAppServerElicitationRequest({
+        requestParams: buildPluginApprovalElicitation(),
+        paramsForRun: createParams(),
+        ...codexTestTurnIds(),
+        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+        signal: controller.signal,
+      });
 
-    expect(result).toEqual({
-      action: "accept",
-      content: { approve: true },
-      _meta: null,
-    });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        action: aborted ? "cancel" : "accept",
+        content: aborted ? null : { approve: true },
+        _meta: null,
+      });
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("accepts connector-id plugin app elicitations when destructive actions are enabled", async () => {
     const result = await handleCodexAppServerElicitationRequest({

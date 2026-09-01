@@ -1,5 +1,5 @@
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 
 type McpApiParamDoc = {
   name: string;

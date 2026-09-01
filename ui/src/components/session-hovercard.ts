@@ -514,7 +514,6 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
   if (!branch) {
     return nothing;
   }
-  const noPullRequest = t("sessionHovercard.noPrYet");
   const createPullRequest = t("chat.pullRequests.createPr");
   return html`
     <div class="session-hovercard__branch-row">
@@ -524,13 +523,13 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
       >
       ${renderDiffStats(branch)}
     </div>
-    <div class="session-hovercard__no-pr">
-      ${branch.createUrl
-        ? html`<a href=${branch.createUrl} target="_blank" rel="noopener noreferrer"
+    ${branch.createUrl
+      ? html`<div class="session-hovercard__no-pr">
+          <a href=${branch.createUrl} target="_blank" rel="noopener noreferrer"
             >${createPullRequest}</a
-          >`
-        : noPullRequest}
-    </div>
+          >
+        </div>`
+      : nothing}
   `;
 }
 

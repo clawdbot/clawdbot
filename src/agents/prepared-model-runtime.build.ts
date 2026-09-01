@@ -155,6 +155,7 @@ function createFullModelCatalogAccess(params: {
     input: createPreparedModelCatalogWorkerInput({
       agentFacts: params.agentFacts,
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
     }),
     isCurrent: params.isCurrent,
   });
@@ -301,17 +302,20 @@ async function buildSnapshotBatch(
   const freshGroups = new Map<string, PreparedModelRuntimeBuildCandidate[]>();
   const reusableGroups = new Map<
     PreparedModelRuntimePluginGeneration,
-    PreparedModelRuntimeBuildCandidate[]
+    Map<string, PreparedModelRuntimeBuildCandidate[]>
   >();
   for (const candidate of candidates) {
     const { input, pluginGeneration: reusablePluginGeneration } = candidate;
     if (reusablePluginGeneration) {
-      const group = reusableGroups.get(reusablePluginGeneration);
+      const workspaceGroups = reusableGroups.get(reusablePluginGeneration) ?? new Map();
+      const key = preparedModelRuntimeWorkspaceFactsKey(input);
+      const group = workspaceGroups.get(key);
       if (group) {
         group.push(candidate);
       } else {
-        reusableGroups.set(reusablePluginGeneration, [candidate]);
+        workspaceGroups.set(key, [candidate]);
       }
+      reusableGroups.set(reusablePluginGeneration, workspaceGroups);
       continue;
     }
     const ownerKind = candidate.prepareInboundPluginRegistry ? "configured" : "dynamic";
@@ -327,10 +331,12 @@ async function buildSnapshotBatch(
     groupCandidates: PreparedModelRuntimeBuildCandidate[];
     pluginGeneration?: PreparedModelRuntimePluginGeneration;
   }> = [
-    ...[...reusableGroups].map(([pluginGeneration, groupCandidates]) => ({
-      groupCandidates,
-      pluginGeneration,
-    })),
+    ...[...reusableGroups].flatMap(([pluginGeneration, workspaceGroups]) =>
+      [...workspaceGroups.values()].map((groupCandidates) => ({
+        groupCandidates,
+        pluginGeneration,
+      })),
+    ),
     ...[...freshGroups.values()].map((groupCandidates) => ({ groupCandidates })),
   ];
   const preparedInputs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeAgentFacts>();

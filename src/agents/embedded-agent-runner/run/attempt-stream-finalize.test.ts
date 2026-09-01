@@ -123,7 +123,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
           activeSession,
           clientToolCallSlots: [],
           coreReadAuthorized: true,
-          getCodeModeReconciliationCandidate: vi.fn(() => false),
+          getCodeModeRecoveryCandidate: vi.fn(() => undefined),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
           setCodeModeReconciliationReadAuthorized: vi.fn(),

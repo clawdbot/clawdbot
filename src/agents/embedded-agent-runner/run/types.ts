@@ -104,6 +104,11 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Host-private bounded recovery state for this exact attempt. */
+  codeModeRecovery?: Exclude<
+    import("./terminal-retry-state.js").CodeModeRecoveryState,
+    { kind: "idle" }
+  >;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -178,6 +183,18 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptAbort?: () => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
+  permissionChange?: {
+    readonly owner: object;
+    readonly baseExecOverrides: Readonly<NonNullable<RunEmbeddedAgentParams["execOverrides"]>>;
+    readonly notice?: string;
+    request: (
+      mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null,
+    ) => Promise<boolean>;
+    /** False means a newer permission request superseded this prepared attempt. */
+    applied: () => boolean;
+    recordApplied: (mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null) => void;
+  };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
@@ -279,14 +296,11 @@ export type EmbeddedRunAttemptResult = {
   /** Exact provider-response count when the harness can observe model iterations directly. */
   modelIterations?: number;
   messagesSnapshot: AgentMessage[];
-  /**
-   * Complete application transcript frozen through a settled tool boundary.
-   * Projection-backed finalizers must fail closed when their harness does not provide it.
-   */
-  settledTurnFinalizationContext?: {
-    readonly source: "openclaw-transcript";
-    readonly messages: readonly AgentMessage[];
-  };
+  /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
+  settledTurnFinalizationContext?:
+    | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
+    | { readonly source: "harness"; readonly data: unknown }
+    | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
@@ -363,8 +377,8 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
-  /** Host-authenticated request for one bounded post-mutation inspection attempt. */
-  codeModeReconciliationCandidate?: boolean;
+  /** Host-authenticated facts for bounded post-mutation inspection and recovery. */
+  codeModeRecoveryCandidate?: import("./terminal-retry-state.js").CodeModeRecoveryCandidate;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

@@ -54,6 +54,44 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it.each(["entries", "list"])(
+    "persists explicit ownership for a markerless multi-agent %s roster",
+    async (shape) => {
+      await withTempHome(async (home) => {
+        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const entries = {
+            ops: { workspace: path.join(home, "ops") },
+            research: { workspace: path.join(home, "research") },
+          };
+          const configPath = await writeOpenClawConfig(home, {
+            agents:
+              shape === "entries"
+                ? { entries }
+                : {
+                    list: Object.entries(entries).map(([id, entry]) => ({
+                      id,
+                      workspace: entry.workspace,
+                    })),
+                  },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          expect((await readConfigFileSnapshot()).valid).toBe(false);
+
+          const ctx = await prepareDoctorContext(configPath);
+          await runInitialConfigWriteHealth(ctx);
+
+          const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
+          expect(saved.agents).toEqual({ ownership: "explicit", entries });
+          expect((await readConfigFileSnapshot()).valid).toBe(true);
+          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
+            false,
+          );
+        });
+      });
+    },
+  );
+
   it.each(["entries", "list", "noncanonical list"])(
     "repairs workspace and heartbeat values from %s through snapshot, doctor, and write",
     async (shape) => {

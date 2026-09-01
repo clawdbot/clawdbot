@@ -6,17 +6,15 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
+import type { FallbackStatus } from "./tool-stream-contract.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
   TOOL_STREAM_TEST_NOW,
   useToolStreamFakeTimers,
 } from "./tool-stream.test-helpers.ts";
-import {
-  handleAgentEvent,
-  handleSessionOperationEvent,
-  type FallbackStatus,
-} from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function expectCompactionCompleteAndAutoClears(host: ReturnType<typeof createHost>) {
   expect(host.compactionStatus).toEqual({
@@ -227,7 +225,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       const host = createHost({
         sessionKey: key,
         assistantAgentId: agentId,
-        agentsList: { defaultId: "main" },
+        agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
         sessions,
       });
       const event = {
@@ -261,7 +259,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         createHost({
           sessionKey: key,
           assistantAgentId: agentId,
-          agentsList: { defaultId: "main" },
+          agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
           sessions,
         }),
         event,
@@ -826,7 +824,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({
       sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main" },
+      agentsList: { defaultId: "main", scope: "global" },
     });
 
     handleAgentEvent(host, {

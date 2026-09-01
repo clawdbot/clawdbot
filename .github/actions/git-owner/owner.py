@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import re
 import runpy
@@ -14,6 +16,7 @@ cleanup_seconds = 10
 cancelled = 0
 closed = False
 git = shutil.which("git")
+checkout_environment = {}
 
 
 def cancel(signum, _frame):
@@ -199,6 +202,23 @@ def git_lock_files(directory):
     return locks
 
 
+def git_auth_environment(remote, token):
+    # Git's promisor fetch inherits this process-only config from checkout.
+    # Reject redirects: http.<url> matching does not re-scope redirected requests.
+    count = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
+    if count < 0:
+        raise ValueError("Invalid Git environment configuration count")
+    header = f"http.{remote}.extraheader"
+    authorization = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    settings = [(header, ""), (header, f"AUTHORIZATION: basic {authorization}"),
+                (f"http.{remote}.followRedirects", "false")]
+    environment = {"GIT_CONFIG_COUNT": str(count + len(settings)), "GIT_TERMINAL_PROMPT": "0"}
+    for index, (key, value) in enumerate(settings, count):
+        environment[f"GIT_CONFIG_KEY_{index}"] = key
+        environment[f"GIT_CONFIG_VALUE_{index}"] = value
+    return environment
+
+
 def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=None,
             reclaim_locks=False):
     global closed
@@ -216,8 +236,10 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
     timed_out = False
     deadline = time.monotonic() + timeout if timeout is not None else None
     try:
+        environment = ({**os.environ, **checkout_environment, **(env or {})}
+                       if checkout_environment or env is not None else None)
         options = {"stdin": subprocess.DEVNULL, "stdout": stdout, "stderr": stderr,
-                   "env": {**os.environ, **env} if env is not None else None}
+                   "env": environment}
         if os.name == "nt":
             job = create_job(None, None)
             limits = ExtendedLimits()
@@ -339,8 +361,46 @@ def checkout_selected_ref():
     run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
+def checkout_harness(sha):
+    action = ".github/actions/setup-node-env/action.yml"
+    if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
+        raise GitFailure(1)
+    harness = os.path.join(workspace, ".ci-harness")
+    os.makedirs(harness, exist_ok=True)
+    if sha == os.environ["WORKFLOW_SHA"]:
+        # Export the workflow revision from the freshly populated index, replacing
+        # retained platform files without updating the index or trusting later edits.
+        paths = git_output(workspace, "ls-files", "-z", "--", ".github/actions").split("\0")[:-1]
+        run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
+    else:
+        run_git(harness, "init", harness)
+        run_git(harness, "remote", "add", "origin", remote)
+        # The harness only supplies .github/actions, so narrow the fetch before it runs:
+        # sparse first, then blob-less. A full snapshot here downloads a second copy of
+        # the repository that the checkout below immediately discards, and every extra
+        # byte is amplified by the shared runner egress.
+        run_git(harness, "sparse-checkout", "set", ".github/actions")
+        fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
+              max_attempts=1, blobless=True)
+        # Checkout now materializes the sparse blobs over the network, so it carries the
+        # fetch deadline instead of running unbounded like a local checkout.
+        run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
+                timeout=fetch_timeout_seconds)
+    if not os.path.isfile(os.path.join(harness, action)):
+        raise GitFailure(1)
+    check_cancelled()
+
+
 def checkout():
     check_cancelled()
+    prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
+    if prerequisites is None:
+        prerequisites = []
+    if not isinstance(prerequisites, list) or any(
+        not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit)
+        for commit in prerequisites
+    ):
+        raise ValueError("Invalid immutable test prerequisite commits")
     if reset:
         os.makedirs(workspace, exist_ok=True)
         # Every earlier Git group has been drained before deleting its workspace.
@@ -353,6 +413,8 @@ def checkout():
     run_git(workspace, "remote", "add", "origin", remote)
     if kind in ("preflight", "manual"):
         checkout_selected_ref()
+        if kind == "preflight" and resolve_ref("HEAD") == os.environ["WORKFLOW_SHA"]:
+            checkout_harness(os.environ["WORKFLOW_SHA"])
         return
     target = "refs/remotes/origin/ci-target" if kind in ("linux-node", "android") else "refs/remotes/origin/checkout"
     sha = "refs/heads/main" if kind == "clawhub" else os.environ["CHECKOUT_SHA"]
@@ -360,6 +422,9 @@ def checkout():
     base = os.environ.get("CHECKOUT_BASE_SHA") if kind == "linux-node" else None
     if base:
         refs.append(f"+{base}:refs/remotes/origin/ci-ratchet-base")
+    # Fetch full reader objects with the authenticated checkout, before its
+    # credential scope ends and test workers create historical worktrees.
+    refs.extend(prerequisites)
     fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
           retry_codes=(124, 137) if kind == "skills" else ())
     run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
@@ -370,27 +435,7 @@ def checkout():
         return
     if kind in ("clawhub", "skills"):
         return
-    action = ".github/actions/setup-node-env/action.yml"
-    if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
-        raise GitFailure(1)
-    harness = os.path.join(workspace, ".ci-harness")
-    os.makedirs(harness, exist_ok=True)
-    run_git(harness, "init", harness)
-    run_git(harness, "remote", "add", "origin", remote)
-    # The harness only supplies .github/actions, so narrow the fetch before it runs:
-    # sparse first, then blob-less. A full snapshot here downloads a second copy of
-    # the repository that the checkout below immediately discards, and every extra
-    # byte is amplified by the shared runner egress.
-    run_git(harness, "sparse-checkout", "set", ".github/actions")
-    fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
-          max_attempts=1, blobless=True)
-    # Checkout now materializes the sparse blobs over the network, so it carries the
-    # fetch deadline instead of running unbounded like a local checkout.
-    run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"],
-            timeout=fetch_timeout_seconds)
-    if not os.path.isfile(os.path.join(harness, action)):
-        raise GitFailure(1)
-    check_cancelled()
+    checkout_harness(sha)
 
 
 def main():
@@ -422,29 +467,37 @@ def main():
         raise SystemExit(0)
     workspace = os.environ["GITHUB_WORKSPACE"]
     remote = f"https://github.com/{os.environ['CHECKOUT_REPO']}.git"
+    # The workflow's token is repository-bound; never lend it to a sibling checkout.
+    token = os.environ.pop("CHECKOUT_TOKEN", "")
+    if token and os.environ["CHECKOUT_REPO"] == os.environ.get("GITHUB_REPOSITORY"):
+        checkout_environment.update(git_auth_environment(remote, token))
+    del token
     if kind == "clawhub":
         workspace = os.path.join(workspace, "clawhub-source")
     reset = kind in ("linux-node", "android", "clawhub")
     label = "ClawHub checkout" if kind == "clawhub" else "checkout"
     started_at = time.monotonic()
-    for attempt in range(1, 6 if reset else 2):
-        try:
-            checkout()
-            if reset:
-                print(f"{label} attempt {attempt}/5 succeeded", flush=True)
-            if kind == "clawhub":
-                print(f"{label} completed in {int(time.monotonic() - started_at)}s", flush=True)
-            raise SystemExit(0)
-        except (FetchTimeout, GitFailure) as error:
-            # Only command failures are retryable. Ownership/inspection errors
-            # escape to the fail-closed boundary below, never workspace deletion.
-            check_cancelled()
-            if not reset:
-                raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-            print(f"{label} attempt {attempt}/5 failed", flush=True)
-            backoff(attempt * 5)
-    print(f"{label} failed after 5 attempts", file=sys.stderr)
-    raise SystemExit(1)
+    try:
+        for attempt in range(1, 6 if reset else 2):
+            try:
+                checkout()
+                if reset:
+                    print(f"{label} attempt {attempt}/5 succeeded", flush=True)
+                if kind == "clawhub":
+                    print(f"{label} completed in {int(time.monotonic() - started_at)}s", flush=True)
+                raise SystemExit(0)
+            except (FetchTimeout, GitFailure) as error:
+                # Only command failures are retryable. Ownership/inspection errors
+                # escape to the fail-closed boundary below, never workspace deletion.
+                check_cancelled()
+                if not reset:
+                    raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
+                print(f"{label} attempt {attempt}/5 failed", flush=True)
+                backoff(attempt * 5)
+        print(f"{label} failed after 5 attempts", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        checkout_environment.clear()
 
 
 if __name__ == "__main__":

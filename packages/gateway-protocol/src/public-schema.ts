@@ -1,5 +1,6 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./public-schema-push.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,
@@ -123,8 +124,6 @@ export {
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   WakeParamsSchema,
-  PushTestParamsSchema,
-  PushTestResultSchema,
   SecretStoreSecretEntrySchema,
   SecretStoreEnvEntrySchema,
   SecretStoreEntrySchema,
@@ -133,10 +132,6 @@ export {
   SecretsStoreSetParamsSchema,
   SecretsStoreDeleteParamsSchema,
   SecretsStoreMutationResultSchema,
-  WebPushVapidPublicKeyParamsSchema,
-  WebPushSubscribeParamsSchema,
-  WebPushUnsubscribeParamsSchema,
-  WebPushTestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
@@ -404,6 +399,8 @@ export {
   SystemAgentSetupVerifyResultSchema,
   SystemAgentSetupActivateParamsSchema,
   SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupActivateStartParamsSchema,
+  SystemAgentSetupActivateStartResultSchema,
   SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResultSchema,
   WizardStartParamsSchema,

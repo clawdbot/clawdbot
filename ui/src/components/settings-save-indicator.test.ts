@@ -121,14 +121,13 @@ describe("settings save indicator", () => {
 
   it("cleans the saved timer when disconnected", async () => {
     vi.useFakeTimers();
-    const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
     await update(props({ status: "saving" }));
+    expect(vi.getTimerCount()).toBe(0);
     await update(props({ status: "saved" }));
+    expect(vi.getTimerCount()).toBe(1);
 
-    const callsBeforeDisconnect = clearTimeout.mock.calls.length;
     indicator.remove();
 
-    expect(clearTimeout).toHaveBeenCalledTimes(callsBeforeDisconnect + 1);
-    await vi.runAllTimersAsync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

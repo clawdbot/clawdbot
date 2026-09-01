@@ -1,11 +1,12 @@
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 // Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
   resolveEmbeddedReplyActivity,
-  resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
@@ -259,6 +260,17 @@ export async function recoverStuckDiagnosticSession(
       }
       // Active embedded runs own their cleanup; registry terminal settle bounds
       // lane release if the owner never drains after this abort.
+      const recoveryBlocker = resolveActiveEmbeddedRunRecoveryBlocker(activeSessionId);
+      if (recoveryBlocker) {
+        return {
+          status: "skipped",
+          action: "keep_lane",
+          reason: recoveryBlocker,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId,
+        };
+      }
       const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,

@@ -175,17 +175,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
     return html`<span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
       <span class="session-owner-stack__back" aria-hidden="true">
         ${this.participantCount === 1 && participant
-          ? html`<openclaw-viewer-avatar
-              .user=${{
-                id: participant.identity.id,
-                name: participant.label,
-                avatarUrl: participant.avatarUrl,
-                watchedSessions: [],
-              }}
-              .markAsViewer=${false}
-              .identity=${participant.identity}
-              variant="session"
-            ></openclaw-viewer-avatar>`
+          ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
           : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
       </span>
       ${chip}

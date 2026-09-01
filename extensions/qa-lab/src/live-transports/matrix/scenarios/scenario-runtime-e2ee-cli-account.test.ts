@@ -8,10 +8,7 @@ import { startMatrixQaFaultProxy } from "../substrate/fault-proxy.js";
 import type { MatrixQaCliSession } from "./scenario-runtime-cli.js";
 import { runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario } from "./scenario-runtime-e2ee-cli-account.js";
 import { MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT } from "./scenario-runtime-e2ee-shared.js";
-import {
-  assertMatrixQaTestPortClosed,
-  createMatrixQaE2eeTestContext,
-} from "./scenario-runtime-e2ee.test-helpers.js";
+import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({ createRuntime: vi.fn() }));
 vi.mock("./scenario-runtime-e2ee-cli-runtime.js", () => ({
@@ -65,6 +62,8 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
         stop: async () => {
           await beforeProxyStop?.();
           stopping = proxy.stop().then(() => {
+            // The real stop joins this server's close event. Its released port may
+            // already belong to another worker when the scenario settles.
             closed = true;
           });
           await stopping;
@@ -128,7 +127,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     async ({ methods }) => {
       configureCli(methods);
       await expect(run()).rejects.toThrow("did not attempt faulted room-key backup creation");
-      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+      expect(closed).toBe(true);
       expect(dispose).toHaveBeenCalledOnce();
     },
   );
@@ -138,11 +137,11 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     await expect(run()).resolves.toMatchObject({
       artifacts: { bootstrapSuccess: false, faultHitCount: 2 },
     });
-    await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    expect(closed).toBe(true);
     closed = false;
     configureCli(["POST"], "unrelated failure");
     await expect(run()).rejects.toThrow("unexpected reason");
-    await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    expect(closed).toBe(true);
   });
 
   it.each([new Error("runtime construction failed"), undefined, "construction rejected"])(
@@ -150,7 +149,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     async (failure) => {
       mocks.createRuntime.mockRejectedValueOnce(failure);
       await expect(run()).rejects.toBe(failure);
-      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+      expect(closed).toBe(true);
     },
   );
 
@@ -163,7 +162,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
         cause: failure,
         errors: [failure, proxyCleanupFailure],
       });
-      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+      expect(closed).toBe(true);
     },
   );
 
@@ -173,7 +172,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
       configureCli(["POST"]);
       dispose.mockRejectedValueOnce(failure);
       await expect(run()).rejects.toBe(failure);
-      await assertMatrixQaTestPortClosed(proxy.baseUrl);
+      expect(closed).toBe(true);
     },
   );
 
@@ -186,7 +185,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
       cause: disposalFailure,
       errors: [disposalFailure, proxyCleanupFailure],
     });
-    await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    expect(closed).toBe(true);
   });
 
   it("joins proxy cleanup before returning a CLI disposal failure", async () => {
@@ -212,6 +211,6 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
       release.resolve();
       expect(await operation).toBe(disposalFailure);
     }
-    await assertMatrixQaTestPortClosed(proxy.baseUrl);
+    expect(closed).toBe(true);
   });
 });

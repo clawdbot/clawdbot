@@ -3,7 +3,10 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createQaGatewayChild } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
-import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
+import {
+  formatQaScenarioFailureSuffix,
+  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
+} from "./progress-format.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   measureRuntimeParityCellTiming,
@@ -281,12 +284,15 @@ export async function runQaFlowSuiteStandard(
       let scenarioResult: QaSuiteScenarioResult =
         params?.captureRuntimeParityCell || scenarioRetryCount === 0
           ? await runSelectedScenario()
-          : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
+          : await runQaScenarioWithFlakeRetry(runSelectedScenario, () => {
+              // Both attempts share append-only Gateway logs. Retain the failed
+              // attempt through final cleanup even when its retry passes.
+              preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
               writeQaSuiteProgress(
                 progressEnabled,
                 `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
-              ),
-            );
+              );
+            });
       if (scenarioResult.status === "pass" && params?.roundTripProbe?.scenarioId === scenario.id) {
         const probeResult = await runQaSuiteRoundTripProbe({
           probe: params.roundTripProbe,
@@ -320,7 +326,7 @@ export async function runQaFlowSuiteStandard(
       scenarios.push(scenarioResult);
       writeQaSuiteProgress(
         progressEnabled,
-        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
       );
       liveScenarioOutcomes[index] = {
         id: scenario.id,

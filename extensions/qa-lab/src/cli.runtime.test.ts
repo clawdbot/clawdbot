@@ -1132,30 +1132,51 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("runs canonical scenarios through a discovered live adapter factory", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa/telegram-live",
-      channelDriver: "live",
-      channel: "telegram",
-      providerMode: "mock-openai",
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(runQaSuite).toHaveBeenCalledWith(
-      expect.objectContaining({
-        adapterFactories: listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+  it.each([
+    { isolatesInstances: undefined, requested: undefined, expected: 1 },
+    { isolatesInstances: undefined, requested: 8, expected: 1 },
+    { isolatesInstances: true, requested: undefined, expected: 4 },
+    { isolatesInstances: true, requested: 1, expected: 1 },
+    { isolatesInstances: true, requested: 2, expected: 2 },
+    { isolatesInstances: true, requested: 8, expected: 4 },
+  ])(
+    "runs discovered live adapters with isolation=$isolatesInstances, concurrency=$requested at $expected workers",
+    async ({ isolatesInstances, requested, expected }) => {
+      vi.stubEnv("OPENCLAW_QA_SUITE_CONCURRENCY", "64");
+      listLiveTransportQaAdapterFactories.mockReturnValue([
+        {
+          id: "telegram",
+          isolatesInstances,
+          matches: ({ channelId, driver }: { channelId: string; driver: string }) =>
+            channelId === "telegram" && driver === "live",
+          create: vi.fn(),
+        },
+      ]);
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        outputDir: ".artifacts/qa/telegram-live",
         channelDriver: "live",
-        channelId: "telegram",
-        concurrency: 1,
-        adapterOptions: expect.objectContaining({
-          explicitScenarioSelection: true,
-          repoRoot: path.resolve("/tmp/openclaw-repo"),
-        }),
+        channel: "telegram",
+        concurrency: requested,
+        providerMode: "mock-openai",
         scenarioIds: ["channel-chat-baseline"],
-      }),
-    );
-  });
+      });
+
+      expect(runQaSuite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          adapterFactories: listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+          channelDriver: "live",
+          channelId: "telegram",
+          concurrency: expected,
+          adapterOptions: expect.objectContaining({
+            explicitScenarioSelection: true,
+            repoRoot: path.resolve("/tmp/openclaw-repo"),
+          }),
+          scenarioIds: ["channel-chat-baseline"],
+        }),
+      );
+    },
+  );
 
   it("dispatches one declared-channel scenario through either driver", async () => {
     for (const channelDriver of ["crabline", "live"] as const) {
@@ -2263,6 +2284,7 @@ describe("qa cli runtime", () => {
         "runtime-tool-tavily-extract",
         "runtime-tool-tavily-search",
         "runtime-tool-tts",
+        "internal-event-subagent-spawn-live",
       ],
     });
     expectWriteContains(

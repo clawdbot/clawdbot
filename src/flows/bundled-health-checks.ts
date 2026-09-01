@@ -57,6 +57,7 @@ type BundledHealthCheckSelection = {
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly includeAllChecks?: boolean;
+  readonly updateReadiness?: "post-plugin";
 };
 
 type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
@@ -71,6 +72,11 @@ function loadMemoryCoreHealthApi(): BundledHealthApi {
 export function resolveBundledHealthCheckPluginStateMode(
   selection: BundledHealthCheckSelection,
 ): BundledHealthCheckPluginStateMode {
+  if (selection.updateReadiness !== undefined) {
+    // Update gates may inspect plugin-owned persistent state. Keep every phase on a private
+    // snapshot so a future tagged check cannot accidentally mutate the live pre-restart owner.
+    return "isolated";
+  }
   if (
     selection.includeAllChecks !== true &&
     (selection.onlyIds === undefined || selection.onlyIds.length === 0)
@@ -142,13 +148,17 @@ export function registerBundledHealthChecks(params: {
         "Unable to resolve Codex doctor health API: install the official Codex plugin with openclaw plugins install @openclaw/codex",
       );
     }
-    loadPluginPublicArtifactModuleSync<
-      Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
-    >({
-      pluginRoot: owner.rootDir,
-      artifactBasename: "api.js",
-      origin: owner.origin === "bundled" ? "bundled" : "global",
-    }).registerCodexManagedAppServerDoctorChecks({ getHealthCheck, registerHealthCheck });
+    // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
+    // Only load an advertised surface; a broken declaration must still fail visibly.
+    if (owner.doctorHealthChecks === true) {
+      loadPluginPublicArtifactModuleSync<
+        Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
+      >({
+        pluginRoot: owner.rootDir,
+        artifactBasename: "api.js",
+        origin: owner.origin === "bundled" ? "bundled" : "global",
+      }).registerCodexManagedAppServerDoctorChecks({ getHealthCheck, registerHealthCheck });
+    }
   }
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({

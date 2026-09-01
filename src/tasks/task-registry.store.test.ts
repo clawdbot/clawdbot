@@ -476,7 +476,7 @@ describe("task-registry store runtime", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-task-invalid-notify-" },
         async () => {
-          resetTaskRegistryForTests();
+          resetTaskRegistryForTests({ persist: false });
           const created = createTaskRecord({
             runtime: "acp",
             ownerKey: "agent:main:main",
@@ -553,7 +553,7 @@ describe("task-registry store runtime", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-task-valid-notify-" },
         async () => {
-          resetTaskRegistryForTests();
+          resetTaskRegistryForTests({ persist: false });
           const created = createTaskRecord({
             runtime: "acp",
             ownerKey: "agent:main:main",
@@ -580,7 +580,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-corrupt-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const created = createTaskRecord({
           runtime: "cron",
           ownerKey: "agent:main:main",
@@ -609,7 +609,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-invalid-origin-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const created = createTaskRecord({
           runtime: "acp",
           ownerKey: "agent:main:main",
@@ -690,7 +690,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-read-snapshot-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const created = createTaskRecord({
           runtime: "acp",
           ownerKey: "agent:main:main",
@@ -746,7 +746,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-owner-index-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const ownerKey = "agent:main:main";
         const target = createTaskRecord({
           runtime: "cron",

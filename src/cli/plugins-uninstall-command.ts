@@ -65,7 +65,7 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
-  const { resolveInstalledPluginPackageOwnership } =
+  const { resolveInstalledPluginLifecycleOwnership } =
     await import("../plugins/installed-plugin-package-ownership.js");
   const {
     loadInstalledPluginIndexInstallRecords,
@@ -131,23 +131,26 @@ async function runPluginUninstallCommandUnlocked(
   }
   const { plugin } = selection.value;
   const requestedPluginId = selection.value.pluginId;
-  const ownership = resolveInstalledPluginPackageOwnership(installedIndex, requestedPluginId);
+  const ownership = resolveInstalledPluginLifecycleOwnership(installedIndex, requestedPluginId);
   if (!ownership.ok) {
     runtime.error(ownership.error);
     runtime.exit(1);
     return;
   }
   const { installOwner: pluginId, pluginIds: ownedPluginIds } = ownership.value;
-  const channelIds =
-    ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId
-      ? plugin?.channelIds
-      : [
-          ...new Set(
-            ownedPluginIds.flatMap(
-              (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
-            ),
-          ),
-        ];
+  const policyPluginIds = ownedPluginIds.length > 0 ? ownedPluginIds : [pluginId];
+  let channelIds: string[] | undefined;
+  if (ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId) {
+    channelIds = plugin?.channelIds;
+  } else if (ownedPluginIds.length > 1) {
+    channelIds = [
+      ...new Set(
+        ownedPluginIds.flatMap(
+          (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
+        ),
+      ),
+    ];
+  }
   const initialPlan = planPluginUninstall(
     recordPluginPackageUninstallPlan(
       {
@@ -158,7 +161,7 @@ async function runPluginUninstallCommandUnlocked(
         extensionsDir,
       },
       {
-        runtimePluginIds: ownedPluginIds,
+        runtimePluginIds: policyPluginIds,
         runtimeLoadPaths: ownedPluginIds.flatMap(
           (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
         ),
@@ -278,7 +281,7 @@ async function runPluginUninstallCommandUnlocked(
     if (plan.directoryRemoval) {
       const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
         sourceConfig,
-        ownedPluginIds,
+        policyPluginIds,
       );
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
@@ -321,7 +324,7 @@ async function runPluginUninstallCommandUnlocked(
             extensionsDir,
           },
           {
-            runtimePluginIds: ownedPluginIds,
+            runtimePluginIds: policyPluginIds,
             runtimeLoadPaths: ownedPluginIds.flatMap(
               (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
             ),

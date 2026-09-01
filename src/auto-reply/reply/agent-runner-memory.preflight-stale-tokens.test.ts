@@ -60,10 +60,9 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     });
     setAgentRunnerMemoryTestDeps({
       compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
-      incrementCompactionCount: vi.fn() as never,
+      incrementCompactionCount: vi.fn().mockResolvedValue(1) as never,
       refreshQueuedFollowupSession: vi.fn() as never,
       registerAgentRunContext: vi.fn() as never,
-      emitAgentEvent: vi.fn() as never,
     });
   });
 
@@ -272,11 +271,9 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
 
       expect(result).toBe(sessionEntry);
       if (expectsCompaction) {
-        expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionTarget: expect.objectContaining({ agentId: expectedAgentId }),
-          }),
-        );
+        expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+          sessionTarget: { agentId: expectedAgentId },
+        });
       } else {
         expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
       }

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expressionBuilder, type SelectQueryBuilder } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
@@ -15,6 +16,13 @@ import {
 } from "./user-profiles-tailscale-avatar.js";
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
+
+// Selection metadata is immutable and carries no database handle or profile state.
+export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase, "user_profiles">()(
+  "avatar",
+  "is not",
+  null,
+).as("has_avatar");
 type UserProfileAvatar = {
   bytes: Uint8Array;
   mime: UserProfileAvatarMime;
@@ -30,10 +38,19 @@ export function normalizeUserProfileAvatarMime(value: string | null): UserProfil
   return USER_PROFILE_AVATAR_MIME_TYPES.find((candidate) => candidate === value) ?? null;
 }
 
-function selectUserProfileById(db: DatabaseSync, profileId: string): UserProfileRow | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    userProfilesDb(db).selectFrom("user_profiles").selectAll().where("id", "=", profileId),
+export function selectResolvedUserProfile<T extends Pick<UserProfileRow, "merged_into">>(
+  db: DatabaseSync,
+  profileId: string,
+  query: SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>,
+): T | undefined {
+  const profile = executeSqliteQueryTakeFirstSync(db, query.where("id", "=", profileId));
+  if (!profile?.merged_into) {
+    return profile;
+  }
+  // Merge writers repoint aliases and existing tombstones, so durable profile
+  // references need exactly one hop to reach the canonical row.
+  return (
+    executeSqliteQueryTakeFirstSync(db, query.where("id", "=", profile.merged_into)) ?? profile
   );
 }
 
@@ -41,13 +58,11 @@ export function selectResolvedUserProfileById(
   db: DatabaseSync,
   profileId: string,
 ): UserProfileRow | undefined {
-  const profile = selectUserProfileById(db, profileId);
-  if (!profile?.merged_into) {
-    return profile;
-  }
-  // Merge writers repoint aliases and existing tombstones, so durable profile
-  // references need exactly one hop to reach the canonical row.
-  return selectUserProfileById(db, profile.merged_into) ?? profile;
+  return selectResolvedUserProfile(
+    db,
+    profileId,
+    userProfilesDb(db).selectFrom("user_profiles").selectAll(),
+  );
 }
 
 export function requireResolvedUserProfileById(

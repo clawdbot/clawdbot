@@ -24,7 +24,7 @@ function reprojectLegacyCronJson(db: DatabaseSync): void {
     : "NULL AS last_run_status";
   const rows = db
     .prepare(
-      `SELECT store_key, job_id, job_json, state_json, ${lastRunStatus}, ${projectionColumns.join(", ")}
+      `SELECT store_key, job_id, enabled, job_json, state_json, ${lastRunStatus}, ${projectionColumns.join(", ")}
          FROM cron_jobs`,
     )
     .all();
@@ -47,6 +47,12 @@ function reprojectLegacyCronJson(db: DatabaseSync): void {
       continue;
     }
     let changed = false;
+    if (typeof job.enabled !== "boolean") {
+      // Early cron rows kept the effective flag only in this retained projection.
+      // Fold it into canonical JSON before schema v13 removes the other projections.
+      job.enabled = row.enabled !== 0;
+      changed = true;
+    }
     const delivery = asNullableRecord(job.delivery);
     const destination = asNullableRecord(delivery?.failureDestination);
     if (

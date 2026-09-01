@@ -94,27 +94,42 @@ function registryWithCatalog(loadModelCatalog: () => Promise<readonly never[]>) 
 }
 
 describe("agent harness model catalog", () => {
-  it("does not donate host transport or capabilities to native-owned rows", async () => {
-    const native = {
-      provider: "openai",
-      id: "gpt-5.6-sol",
-      name: "Native model",
-      nativeRuntime: "codex",
-      reasoning: true,
-    };
-    const result = await augmentModelCatalogWithAgentHarness({
-      cfg,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.6-sol",
-      snapshot,
-      pluginRegistry: registryWithCatalog(async () => [native] as never),
-    });
-    expect(result.entries[0]).toEqual(native);
-    expect(result.routeVariants[0]).toEqual(native);
-  });
+  it.each([false, true])(
+    "does not donate host transport or capabilities to native-owned rows (host sibling: %s)",
+    async (includeHostRow) => {
+      const native = {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "Native model",
+        nativeRuntime: "codex",
+        reasoning: true,
+      };
+      const host = { provider: "openai", id: "gpt-5.6-terra", name: "Host model" };
+      const result = await augmentModelCatalogWithAgentHarness({
+        cfg,
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/workspace",
+        defaultProvider: "openai",
+        defaultModel: "openai/gpt-5.6-sol",
+        snapshot,
+        pluginRegistry: registryWithCatalog(
+          async () => (includeHostRow ? [native, host] : [native]) as never,
+        ),
+      });
+      expect(result.entries[0]).toEqual(native);
+      expect(result.routeVariants[0]).toEqual(native);
+      if (includeHostRow) {
+        expect(result.entries[1]).toMatchObject({
+          id: "gpt-5.6-terra",
+          name: "Host model",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          reasoning: true,
+        });
+      }
+    },
+  );
   it("merges account-scoped harness models into the prepared generation", async () => {
     const loadModelCatalog = vi.fn(async () => [
       {

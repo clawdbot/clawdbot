@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -268,21 +269,6 @@ export function publishEncodedSessionTranscriptArchive(params: {
   return archivePath;
 }
 
-function resolveSqliteTranscriptArchiveWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(
-      path.join(distRoot, "config", "sessions", "session-accessor.sqlite-archive.worker.js"),
-    );
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./session-accessor.sqlite-archive.worker${extension}`, currentModuleUrl);
-}
-
 function resolveSourceWorkerExecArgv(): string[] {
   // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
   // register tsx's ESM resolver inside a Worker. Explicitly register the
@@ -297,7 +283,7 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
   expectedMessageType: "done" | "published";
   workerData: object;
 }): Promise<Result[]> {
-  const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
   let worker: Worker;
   try {
     const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")

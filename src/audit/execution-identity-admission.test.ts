@@ -81,9 +81,9 @@ describe("execution identity admission envelope", () => {
           displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
         },
         applicableGrants: [
+          { rawGrantRef: "é", state: "present" },
           { rawGrantRef: "z", state: "present" },
-          { rawGrantRef: "a", state: "present" },
-          { rawGrantRef: "a", state: "present" },
+          { rawGrantRef: "é", state: "present" },
         ],
         assurance: [
           {
@@ -116,8 +116,8 @@ describe("execution identity admission envelope", () => {
       ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
     });
     expect(envelope.applicableGrants).toEqual([
-      { rawGrantRef: "a", state: "present" },
       { rawGrantRef: "z", state: "present" },
+      { rawGrantRef: "é", state: "present" },
     ]);
     expect(envelope.invoker?.state).toBe("present");
     if (envelope.invoker?.state !== "present") {

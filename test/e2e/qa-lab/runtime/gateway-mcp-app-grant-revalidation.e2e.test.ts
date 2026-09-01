@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -20,54 +19,14 @@ import {
   createChildEnv,
   startHttpFixture,
   stopChild,
+  waitForMcpFixtureGate,
   type GatewayHandle,
   type HttpFixture,
 } from "./gateway-node-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const GATE_WAIT_TIMEOUT_MS = 30_000;
 const APP_TOOL_NAME = "streamableHttp__parity_app";
 const POST_REVOCATION_MARKER = "post-revocation";
-
-async function waitForFile(filePath: string): Promise<void> {
-  try {
-    await fs.access(filePath);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
-    }, GATE_WAIT_TIMEOUT_MS);
-    timeout.unref();
-    const finish = (error?: unknown) => {
-      clearTimeout(timeout);
-      watcher.close();
-      error ? reject(error) : resolve();
-    };
-    const inspect = () => {
-      void fs.access(filePath).then(
-        () => finish(),
-        (error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") {
-            finish(error);
-          }
-        },
-      );
-    };
-    const watcher = watch(path.dirname(filePath), (_event, filename) => {
-      if (!filename || filename.toString() === path.basename(filePath)) {
-        inspect();
-      }
-    });
-    watcher.once("error", finish);
-    inspect();
-  });
-}
 
 function requireMcpAppViewId(messages: unknown[]): string {
   for (const message of messages) {
@@ -298,7 +257,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         expect(notificationCall.status).toBe(200);
 
         pendingCall = postStandalone({ gateway, ticket, marker: POST_REVOCATION_MARKER });
-        await waitForFile(startedPath);
+        await waitForMcpFixtureGate(startedPath);
         await gateway.call("board.update", {
           sessionKey,
           ops: [{ kind: "widget_remove", name: widget.name }],

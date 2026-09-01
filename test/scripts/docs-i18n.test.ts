@@ -24,7 +24,11 @@ describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
       encoding: "utf8",
       // Go's default read-only module directories prevent recursive teardown.
       // Keep this build's writable module cache inside the suite-owned root.
-      env: { ...process.env, GOMODCACHE: path.join(tempDir, "gomodcache") },
+      env: {
+        ...process.env,
+        GOMODCACHE: path.join(tempDir, "gomodcache"),
+        GOTOOLCHAIN: "local",
+      },
     });
     if (result.error || result.status !== 0) {
       throw result.error ?? new Error(result.stderr || result.stdout || "failed to build Go tests");

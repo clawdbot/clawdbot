@@ -23,6 +23,11 @@ import {
   resolveVitestRuntimeCliSelections,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
+import {
+  hasNonRunVitestSubcommand,
+  isVitestWorkerMetadataRequest,
+  vitestOptionConsumesNextArg,
+} from "./lib/vitest-cli-mode.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import {
@@ -30,6 +35,7 @@ import {
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
+import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   forwardSignalToVitestProcessGroup,
@@ -123,62 +129,6 @@ export const TOOLING_EXCLUDED_TESTS = new Set([
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
 const GLOB_PATTERN_CHARS_RE = /[*?[\]{}]/u;
-const NON_RUN_VITEST_SUBCOMMANDS = new Set(["bench", "list", "related"]);
-const VITEST_OPTIONS_WITH_VALUE = new Set([
-  "--attachmentsDir",
-  "--bail",
-  "--browser",
-  "--config",
-  "--configLoader",
-  "-c",
-  "--changed",
-  "--dir",
-  "--diff",
-  "--environment",
-  "--exclude",
-  "--execArgv",
-  "--hookTimeout",
-  "--inspect",
-  "--inspect-brk",
-  "--listTags",
-  "--maxConcurrency",
-  "--maxWorkers",
-  "--mergeReports",
-  "--mode",
-  "--outputFile",
-  "--pool",
-  "--project",
-  "--reporter",
-  "--reporters",
-  "--retry",
-  "--root",
-  "-r",
-  "--sequence",
-  "--sequence.hooks",
-  "--sequence.seed",
-  "--sequence.setupFiles",
-  "--shard",
-  "--silent",
-  "--slowTestThreshold",
-  "--tagsFilter",
-  "--teardownTimeout",
-  "--testNamePattern",
-  "-t",
-  "--testTimeout",
-  "--update",
-  "-u",
-  "--vmMemoryLimit",
-]);
-const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
-  "--browser.",
-  "--coverage.",
-  "--diff.",
-  "--expect.",
-  "--experimental.",
-  "--outputFile.",
-  "--retry.",
-  "--typecheck.",
-];
 const UNBOUNDED_CONFIG_ONLY_OPTIONS = [
   "--changed",
   "--coverage",
@@ -190,7 +140,6 @@ const UNBOUNDED_CONFIG_ONLY_OPTIONS = [
   "--shard",
 ];
 const require = createRequire(import.meta.url);
-const repoRoot = resolveRepoRoot(import.meta.url);
 
 function parsePositiveInt(value: string | undefined): number | null {
   const text = value?.trim();
@@ -241,7 +190,7 @@ function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoExcep
  * Builds the actionable dependency-install message when Vitest is unavailable.
  */
 export function resolveMissingVitestDependencyMessage(
-  baseDir = repoRoot,
+  baseDir = resolveRepoRoot(import.meta.url),
   fsImpl: Pick<VitestFs, "existsSync"> = fs,
 ): string {
   const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
@@ -355,7 +304,7 @@ function resolveHydratedVitestCliEntry({
  * Resolves the Vitest CLI entry from normal or hydrated node_modules layouts.
  */
 export function resolveVitestCliEntry({
-  baseDir = repoRoot,
+  baseDir = resolveRepoRoot(import.meta.url),
   env = process.env,
   fsImpl = fs,
   platform = process.platform,
@@ -472,7 +421,7 @@ function resolveExplicitVitestMode(argv: string[]): "run" | "watch" | null {
       }
       continue;
     }
-    if (optionConsumesNextArg(arg)) {
+    if (vitestOptionConsumesNextArg(arg)) {
       index += 1;
       continue;
     }
@@ -714,16 +663,6 @@ function hasExplicitVitestConfigArg(argv: string[]): boolean {
   return argv.some((arg) => arg === "--config" || arg === "-c" || arg.startsWith("--config="));
 }
 
-function optionConsumesNextArg(arg: string): boolean {
-  if (arg.includes("=")) {
-    return false;
-  }
-  return (
-    VITEST_OPTIONS_WITH_VALUE.has(arg) ||
-    VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES.some((prefix) => arg.startsWith(prefix))
-  );
-}
-
 function isPathLikeExplicitFileArg(arg: string): boolean {
   return (
     path.isAbsolute(arg) || arg.startsWith("./") || arg.startsWith("../") || /[/\\]/u.test(arg)
@@ -814,7 +753,7 @@ function collectExplicitFileTargetArgs(
     if (arg === "--") {
       break;
     }
-    if (optionConsumesNextArg(arg)) {
+    if (vitestOptionConsumesNextArg(arg)) {
       index += 1;
       continue;
     }
@@ -908,7 +847,7 @@ function hasExplicitDisabledRunFlag(argv: string[]): boolean {
     }
     const runFlag = resolveBooleanModeFlag(argv, index, "run");
     if (!runFlag) {
-      if (optionConsumesNextArg(arg)) {
+      if (vitestOptionConsumesNextArg(arg)) {
         index += 1;
       }
       continue;
@@ -942,7 +881,7 @@ function resolveDelegatedVitestArgs(argv: string[]): string[] {
       optionArgs.push(arg);
       continue;
     }
-    if (optionConsumesNextArg(arg)) {
+    if (vitestOptionConsumesNextArg(arg)) {
       optionArgs.push(arg);
       const optionValue = argv[index + 1];
       if (optionValue !== undefined) {
@@ -963,27 +902,6 @@ function resolveDelegatedVitestArgs(argv: string[]): string[] {
     positionalArgs.push(arg);
   }
   return optionArgs.length > 0 ? [...positionalArgs, "--", ...optionArgs] : positionalArgs;
-}
-
-function hasNonRunVitestSubcommand(argv: string[]): boolean {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === undefined) {
-      break;
-    }
-    if (arg === "--") {
-      return false;
-    }
-    if (optionConsumesNextArg(arg)) {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return NON_RUN_VITEST_SUBCOMMANDS.has(arg);
-  }
-  return false;
 }
 
 /**
@@ -1272,19 +1190,49 @@ export function spawnWatchedVitestProcess({
   spawnParams,
   env,
   onNoOutputTimeout,
+  workerRun,
 }: {
   pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
   onNoOutputTimeout?: () => void;
+  workerRun?: VitestWorkerRun;
 }) {
   let forwardedSignal: NodeSignal | null = null;
   let diagnosticsCompletion: Promise<void> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
+  if (workerRun && directNodeArgs) {
+    // Preserve Node flags while giving the same owned child its private generation.
+    const cliIndex = directNodeArgs.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+    if (cliIndex < 0) {
+      throw new Error("Compiled subprocess owner requires a native Vitest CLI spec");
+    }
+    directNodeArgs.splice(
+      cliIndex,
+      0,
+      path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
+      workerRun.descriptor.directory,
+    );
+  }
+  const childSpawnParams: PnpmRunnerParams = workerRun
+    ? {
+        ...spawnParams,
+        stdio: [
+          ...(Array.isArray(spawnParams.stdio)
+            ? spawnParams.stdio
+            : [
+                spawnParams.stdio ?? "pipe",
+                spawnParams.stdio ?? "pipe",
+                spawnParams.stdio ?? "pipe",
+              ]),
+          "ipc",
+        ],
+      }
+    : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess(
     directNodeArgs
-      ? { command: process.execPath, args: directNodeArgs, options: spawnParams }
-      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...spawnParams }),
+      ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
+      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams }),
   );
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
@@ -1348,7 +1296,7 @@ export function spawnWatchedVitestProcess({
 
   return {
     child,
-    completion,
+    completion: workerRun ? workerRun.borrow(child, completion) : completion,
     getForwardedSignal: () => forwardedSignal,
     teardown,
   };
@@ -1357,12 +1305,21 @@ export function spawnWatchedVitestProcess({
 async function finishVitestProcess({
   completion,
   getForwardedSignal,
-}: Pick<VitestProcessHandle, "completion" | "getForwardedSignal">): Promise<number> {
+  beforeSignal,
+}: Pick<VitestProcessHandle, "completion" | "getForwardedSignal"> & {
+  beforeSignal?: () => void | Promise<void>;
+}): Promise<number> {
   const { code, signal } = await completion;
   const exitSignal = getForwardedSignal() ?? signal;
   if (exitSignal) {
-    writeFailedTrailer("vitest", signalExitCode(exitSignal));
-    process.kill(process.pid, exitSignal);
+    try {
+      await beforeSignal?.();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      writeFailedTrailer("vitest", signalExitCode(exitSignal));
+      process.kill(process.pid, exitSignal);
+    }
     return signalExitCode(exitSignal);
   }
   const exitCode = code ?? 1;
@@ -1401,6 +1358,7 @@ async function main(
   const vitestArgs = resolveImplicitVitestArgs(argv);
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
+  const repoRoot = resolveRepoRoot(import.meta.url);
   const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
   const invocationEnv =
     invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
@@ -1429,7 +1387,7 @@ async function main(
   }
   let vitestCliEntry;
   try {
-    vitestCliEntry = resolveVitestCliEntry();
+    vitestCliEntry = resolveVitestCliEntry({ baseDir: repoRoot });
   } catch (error) {
     if (isErrorWithCode(error, "OPENCLAW_MISSING_VITEST")) {
       console.error(error.message);
@@ -1439,37 +1397,48 @@ async function main(
     throw error;
   }
 
-  let failedExitCode = 0;
-  for (const [index, invocation] of invocations.entries()) {
-    const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(invocation);
-    const spawnEnv = resolveRunVitestSpawnEnv(invocationEnv, guardedVitestArgs);
-    if (invocations.length > 1) {
-      console.error("[vitest] bounded process " + (index + 1) + "/" + invocations.length);
+  const sourceMode =
+    resolveExplicitVitestMode(vitestArgs) === "watch" || isVitestWorkerMetadataRequest(vitestArgs);
+  const workers = sourceMode ? undefined : createVitestWorkerRun();
+  try {
+    let failedExitCode = 0;
+    for (const [index, invocation] of invocations.entries()) {
+      const guardedVitestArgs = resolveExplicitTestFileNoPassArgs(invocation);
+      const spawnEnv = resolveRunVitestSpawnEnv(invocationEnv, guardedVitestArgs);
+      if (invocations.length > 1) {
+        console.error("[vitest] bounded process " + (index + 1) + "/" + invocations.length);
+      }
+      const handle = spawnWatchedVitestProcess({
+        workerRun: workers,
+        pnpmArgs: [
+          "exec",
+          "node",
+          ...resolveVitestNodeArgs(invocationEnv),
+          vitestCliEntry,
+          ...guardedVitestArgs,
+        ],
+        spawnParams: resolveVitestSpawnParams(spawnEnv),
+        env: spawnEnv,
+      });
+      const exitCode = await finishVitestProcess({
+        ...handle,
+        beforeSignal: () => workers?.dispose(),
+      });
+      // Ordinary test failures must not hide later files. Signals are forwarded by
+      // finishVitestProcess and stop this owner before another child is admitted.
+      if (
+        handle.getForwardedSignal() ||
+        handle.child.signalCode ||
+        (exitCode !== 0 && exitCode !== 1)
+      ) {
+        return;
+      }
+      failedExitCode ||= exitCode;
     }
-    const handle = spawnWatchedVitestProcess({
-      pnpmArgs: [
-        "exec",
-        "node",
-        ...resolveVitestNodeArgs(invocationEnv),
-        vitestCliEntry,
-        ...guardedVitestArgs,
-      ],
-      spawnParams: resolveVitestSpawnParams(spawnEnv),
-      env: spawnEnv,
-    });
-    const exitCode = await finishVitestProcess(handle);
-    // Ordinary test failures must not hide later files. Signals are forwarded by
-    // finishVitestProcess and stop this owner before another child is admitted.
-    if (
-      handle.getForwardedSignal() ||
-      handle.child.signalCode ||
-      (exitCode !== 0 && exitCode !== 1)
-    ) {
-      return;
-    }
-    failedExitCode ||= exitCode;
+    process.exitCode = failedExitCode;
+  } finally {
+    await workers?.dispose();
   }
-  process.exitCode = failedExitCode;
 }
 
 if (import.meta.main) {

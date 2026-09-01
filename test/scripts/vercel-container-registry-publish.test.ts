@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
@@ -617,8 +618,10 @@ describe("Vercel Container Registry publishing", () => {
     expect(copyIndex).toBeGreaterThan(-1);
     expect(smokeIndex).toBeGreaterThan(copyIndex ?? -1);
     expect(promoteIndex).toBeGreaterThan(smokeIndex ?? -1);
-    const smokeRun = reusablePublish.steps?.[smokeIndex ?? -1]?.run ?? "";
-    expect(smokeRun).toContain("sandbox run \\\n");
+    const smokeStep = reusablePublish.steps?.[smokeIndex ?? -1];
+    expect(smokeStep?.env?.SANDBOX_CLI).toBe("${{ steps.vercel_cli.outputs.sandbox_cli }}");
+    const smokeRun = smokeStep?.run ?? "";
+    expect(smokeRun).toContain('"${SANDBOX_CLI}" run \\\n');
     expect(smokeRun).toContain("image_not_ready");
     expect(smokeRun).toContain("retry_deadline");
   });
@@ -627,25 +630,31 @@ describe("Vercel Container Registry publishing", () => {
     const packageJson = JSON.parse(
       readFileSync(".github/release/vercel-cli/package.json", "utf8"),
     ) as { dependencies?: Record<string, string> };
-    const packageLock = JSON.parse(
-      readFileSync(".github/release/vercel-cli/package-lock.json", "utf8"),
-    ) as {
+    const packageLockBytes = readFileSync(".github/release/vercel-cli/package-lock.json");
+    const packageLock = JSON.parse(packageLockBytes.toString("utf8")) as {
       lockfileVersion?: number;
       packages?: Record<string, { integrity?: string; version?: string }>;
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ vercel: "59.3.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.1.0", vercel: "59.5.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-Bj/SN1qln/9guMcIz4gEGn+Ij+amGtkT2kqxwUAFgrLU2Hr0zYk4kX4QfxmZEs6WhheAaMlblVw2VUF2JFP5fA==",
-      version: "59.3.0",
+        "sha512-tQgKXmppJ/uoQZfX+HYAVIxWSUS6V6FMounEEpsHTUqlHyBI/aOATH9sKtkXXD1lQt/JsN4ocWymIGUPLRTxwA==",
+      version: "59.5.0",
     });
-    expect(materialize).toContain(
-      'expected_lock_sha256="4cea63abc4e89d659902aae28dd3e88973fdff9cdd2d2f5e234315d3a3bb680e"',
-    );
+    expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
+      bin: { sandbox: "bin/sandbox.mjs" },
+      integrity:
+        "sha512-kzDiAyvrGHGdrQ/7mT6Md18K9OUVgZW/KUKO/wBJ/gHouDh6oJPWcGWfOV5i7CSep2map3Pl7vV9gszm3Cvu7Q==",
+      version: "4.1.0",
+    });
+    const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
+    expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materialize).toContain("npm ci \\\n");
     expect(materialize).toContain("--ignore-scripts");
+    expect(materialize).toContain('sandbox_cli="${destination}/node_modules/.bin/sandbox"');
+    expect(materialize).toContain('echo "sandbox_cli=${sandbox_cli}"');
   });
 });

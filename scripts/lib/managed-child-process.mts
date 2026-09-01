@@ -55,6 +55,8 @@ type ManagedCommandOptions = {
 
 type RunManagedCommandOptions = ManagedCommandOptions & {
   timeoutMs?: number;
+  timeoutKillGraceMs?: number;
+  timeoutForceKillOnLeaderExit?: boolean;
   requireProcessTreeExit?: boolean;
   runTaskkill?: TaskkillRunner;
   onReady?: (child: ChildProcess) => void;
@@ -185,12 +187,13 @@ export function inspectManagedProcessGroup(
   }
   try {
     process.kill(-pid, 0);
-    if (
-      platform === "linux" &&
-      (child.exitCode != null || child.signalCode != null) &&
-      isLinuxZombieProcessGroup(pid)
-    ) {
-      return "dead";
+    if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
+      if (isLinuxZombieProcessGroup(pid)) {
+        return "dead";
+      }
+      // The group may be reaped while ps runs. Recheck kernel existence without
+      // treating an empty or failed snapshot as proof of completion.
+      process.kill(-pid, 0);
     }
     return "live";
   } catch (error) {
@@ -278,6 +281,8 @@ export async function runManagedCommand({
   windowsVerbatimArguments,
   comSpec,
   timeoutMs,
+  timeoutKillGraceMs,
+  timeoutForceKillOnLeaderExit = false,
   requireProcessTreeExit = false,
   runTaskkill = spawnSync,
   onReady,
@@ -340,6 +345,7 @@ export async function runManagedCommand({
     outcome: ManagedCommandOutcome,
     stopSignal: NodeJS.Signals,
     forceKillDelayMs?: number,
+    forceKillOnLeaderExit = false,
   ) => {
     if (cancellation) {
       return cancellation;
@@ -349,6 +355,7 @@ export async function runManagedCommand({
       platform,
       runTaskkill,
       forceKillDelayMs,
+      forceKillOnLeaderExit,
     });
     cancellation = finalization.then(
       () => outcome,
@@ -384,7 +391,7 @@ export async function runManagedCommand({
     });
     if (timeoutMs !== undefined) {
       timeoutTimer = setTimeout(() => {
-        void stop({ type: "timeout" }, "SIGTERM");
+        void stop({ type: "timeout" }, "SIGTERM", timeoutKillGraceMs, timeoutForceKillOnLeaderExit);
       }, timeoutMs);
     }
     signal?.addEventListener("abort", abort, { once: true });
@@ -454,10 +461,12 @@ async function finalizeManagedChild(
     platform,
     runTaskkill,
     forceKillDelayMs = FORCE_KILL_DELAY_MS,
+    forceKillOnLeaderExit = false,
   }: {
     platform: NodeJS.Platform;
     runTaskkill: TaskkillRunner;
     forceKillDelayMs?: number;
+    forceKillOnLeaderExit?: boolean;
   },
 ) {
   // Nested wrappers own detached groups. Let them forward the signal before
@@ -500,7 +509,9 @@ async function finalizeManagedChild(
       return;
     }
     const now = Date.now();
-    if (!forced && now >= forceAt) {
+    // Bounded timeout callers can retire remaining descendants as soon as the
+    // leader exits. Other owners retain their configured graceful-drain window.
+    if (!forced && (now >= forceAt || (forceKillOnLeaderExit && exited))) {
       forced = true;
       if (groupState !== "dead") {
         terminateManagedChild(child, "SIGKILL", { platform, runTaskkill });

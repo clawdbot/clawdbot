@@ -19,8 +19,7 @@ describe("status cold imports", () => {
       getNodeDaemonStatusSummary: async () => ({ label: "node" }),
     }));
 
-    const { loadStatusProviderUsageModule, resolveStatusRuntimeSnapshot } =
-      await import("./status-runtime-shared.js");
+    const { resolveStatusRuntimeSnapshot } = await import("./status-runtime-shared.js");
     const params = { config: {}, sourceConfig: {}, gatewayReachable: false };
     const snapshot = await resolveStatusRuntimeSnapshot(params);
 
@@ -33,13 +32,14 @@ describe("status cold imports", () => {
       nodeService: { label: "node" },
     });
 
-    // Vitest wraps a failed module factory; both callers must preserve its cause.
+    // Usage collection must preserve its failure without breaking pure text formatting.
     await expect(resolveStatusRuntimeSnapshot({ ...params, usage: true })).rejects.toMatchObject({
       cause: usageImportFailure,
     });
-    await expect(loadStatusProviderUsageModule()).rejects.toMatchObject({
-      cause: usageImportFailure,
-    });
+    const { formatUsageReportLines } = await import("./status.command.text-runtime.js");
+    expect(formatUsageReportLines({ updatedAt: 0, providers: [] })).toEqual([
+      "Usage: no provider usage available.",
+    ]);
     await expect(resolveStatusRuntimeSnapshot(params)).resolves.toEqual(snapshot);
   });
 

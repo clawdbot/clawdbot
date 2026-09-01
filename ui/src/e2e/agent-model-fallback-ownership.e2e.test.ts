@@ -1,7 +1,7 @@
 // Real browser proof that agent model fallbacks follow the Gateway's ownership contract.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,7 +15,12 @@ const primaryModel = "openai/gpt-5.4";
 const inheritedFallback = "anthropic/claude-sonnet-4-6";
 const writerWorkspace = "/tmp/agents/writer";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/agent-context-ownership");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-context-ownership");
+  }
+});
 
 suite.define(() => {
   it.each([
@@ -120,7 +125,6 @@ suite.define(() => {
           .toBe("/settings/agents/writer/overview");
 
         if (captureUiProof && model && !("primary" in Object(model))) {
-          await mkdir(proofDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

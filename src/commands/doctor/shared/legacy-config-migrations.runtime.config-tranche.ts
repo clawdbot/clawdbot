@@ -1,31 +1,7 @@
 // Config-tranche migrations move legacy aliases before canonical validation.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/account-id.js";
-import { deleteRetiredPath } from "./legacy-config-record-shared.js";
-
-function visitAgentEntries(
-  raw: Record<string, unknown>,
-  visitor: (entry: Record<string, unknown>, path: string) => void,
-): void {
-  const agents = getRecord(raw.agents);
-  const entries = getRecord(agents?.entries);
-  if (entries) {
-    for (const [agentId, value] of Object.entries(entries)) {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.entries.${agentId}`);
-      }
-    }
-  }
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((value, index) => {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.list[${index}]`);
-      }
-    });
-  }
-}
+import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
 function stripRetiredPresentationPrefs(raw: Record<string, unknown>, changes: string[]): void {
   const prefs = getRecord(getRecord(raw.ui)?.prefs);
@@ -72,13 +48,17 @@ function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]
     stripContextLimits(defaults);
   }
   let removedTypingOverride = false;
-  visitAgentEntries(raw, (entry) => {
-    if (Object.hasOwn(entry, "typingIntervalSeconds")) {
-      delete entry.typingIntervalSeconds;
-      removedTypingOverride = true;
-    }
-    stripContextLimits(entry);
-  });
+  visitAgentConfigScopes(
+    raw,
+    (entry) => {
+      if (Object.hasOwn(entry, "typingIntervalSeconds")) {
+        delete entry.typingIntervalSeconds;
+        removedTypingOverride = true;
+      }
+      stripContextLimits(entry);
+    },
+    { includeDefaults: false },
+  );
   if (removedTypingOverride) {
     changes.push(
       "Removed per-agent typingIntervalSeconds overrides; agents.defaults.typingIntervalSeconds now applies to every agent.",

@@ -33,12 +33,26 @@ async function markClientReload(client) {
   guardUrl.searchParams.set("client", client.id);
   const guardRequest = new Request(guardUrl);
   if (await cache.match(guardRequest)) {
-    return false;
+    return null;
   }
   // Persist before navigation so repeated activation of the same build cannot
   // loop a document that keeps receiving stale HTML.
   await cache.put(guardRequest, new Response(CACHE_VERSION));
-  return true;
+  return { cache, guardRequest };
+}
+
+async function navigateSuspendedClient(client) {
+  const reloadClaim = await markClientReload(client);
+  if (!reloadClaim) {
+    return;
+  }
+  // Navigation can stay pending for the lifetime of a suspended document, so
+  // it must not keep the replacement service worker's activation alive.
+  void client.navigate(client.url).catch(() => {
+    // A suspended WebKit document can reject navigation. Release ownership so
+    // the next activation can retry instead of stranding this build forever.
+    void reloadClaim.cache.delete(reloadClaim.guardRequest).catch(() => undefined);
+  });
 }
 
 function readClientVersion(client) {
@@ -91,14 +105,15 @@ self.addEventListener("activate", (event) => {
         windowClients
           .filter((client) => isControlUiChatClient(client.url))
           .map(async (client) => {
-            if (
-              (await readClientVersion(client)) !== CACHE_VERSION &&
-              (await markClientReload(client))
-            ) {
-              // Navigation starts synchronously; activation must not stay alive
-              // indefinitely waiting for a document that never finishes loading.
-              void client.navigate(client.url).catch(() => undefined);
+            const clientVersion = await readClientVersion(client);
+            if (clientVersion === CACHE_VERSION) {
+              return;
             }
+            if (clientVersion !== null) {
+              client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
+              return;
+            }
+            await navigateSuspendedClient(client);
           }),
       );
     })(),
@@ -180,6 +195,7 @@ self.addEventListener("push", (event) => {
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
+    renotify: data.renotify === true,
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),

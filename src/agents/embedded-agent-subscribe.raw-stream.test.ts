@@ -42,17 +42,19 @@ describe("appendRawStream", () => {
     fs.mkdirSync(directoryTarget);
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", directoryTarget);
 
-    expect(() => appendRawStream({ event: "test", ts: 1 })).not.toThrow();
+    expect(() => appendRawStream(() => ({ event: "test", ts: 1 }))).not.toThrow();
     await drainAsyncWrites();
 
     expect(unhandledRejections).toHaveLength(0);
   });
 
-  it("appends exact JSONL through the real dependency", async () => {
+  it("snapshots the factory result before appending exact JSONL", async () => {
     const rawStreamPath = path.join(tmpDir, "raw.jsonl");
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
 
-    appendRawStream({ event: "test", ts: 1 });
+    const payload = { event: "test", ts: 1 };
+    appendRawStream(() => payload);
+    payload.ts = 2;
     // The async writer creates the file before its append completes.
     await vi.waitFor(() => {
       expect(fs.readFileSync(rawStreamPath, "utf8")).toBe('{"event":"test","ts":1}\n');
@@ -65,20 +67,31 @@ describe("appendRawStream", () => {
     vi.stubEnv("OPENCLAW_RAW_STREAM", "");
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
 
-    appendRawStream({ event: "test", ts: 1 });
+    let evaluated = false;
+    appendRawStream(() => {
+      evaluated = true;
+      return { event: "test", ts: 1 };
+    });
     await drainAsyncWrites();
+
+    expect(evaluated).toBe(false);
 
     expect(fs.existsSync(rawStreamPath)).toBe(false);
     expect(unhandledRejections).toHaveLength(0);
   });
 
-  it("contains synchronous JSON serialization failures", () => {
+  it("contains synchronous factory and JSON serialization failures", () => {
     const rawStreamPath = path.join(tmpDir, "cyclic.jsonl");
     const payload: Record<string, unknown> = {};
     payload.self = payload;
     vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
 
-    expect(() => appendRawStream(payload)).not.toThrow();
+    expect(() => appendRawStream(() => payload)).not.toThrow();
+    expect(() =>
+      appendRawStream(() => {
+        throw new Error("payload unavailable");
+      }),
+    ).not.toThrow();
     expect(fs.existsSync(rawStreamPath)).toBe(false);
     expect(unhandledRejections).toHaveLength(0);
   });

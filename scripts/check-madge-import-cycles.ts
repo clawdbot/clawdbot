@@ -65,7 +65,7 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
       file,
       readFileSync(absoluteFile, "utf8"),
       ts.ScriptTarget.Latest,
-      true,
+      false,
     );
     const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
       const resolved = ts.resolveModuleName(

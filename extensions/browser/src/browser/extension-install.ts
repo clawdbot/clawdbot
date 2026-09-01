@@ -469,7 +469,7 @@ export async function installChromeExtensionBootstrap(params: {
     );
   } else {
     preRegistrationIssues.push(
-      "No existing Chrome-family user-data directory was available for native host pre-registration. Launch Chrome, then run install again before loading the extension.",
+      "No native host was pre-registered. Resolve any pre-registration refusals above; if Chrome has not been launched yet, launch it first. Then run install again before loading the extension.",
     );
   }
   const waitMs = normalizeExtensionInstallWaitMs(params.waitMs);

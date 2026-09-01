@@ -40,7 +40,9 @@ async function captureUpdateProof(
 
 suite.define(() => {
   it("explains a disabled update to a read-only mobile operator", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-read-only-mobile");
+    const artifactDir = captureUiProofEnabled
+      ? path.join(suite.artifactDir, "update-read-only-mobile")
+      : "";
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -99,7 +101,9 @@ suite.define(() => {
   });
 
   it("shows package update failure status after the Update click", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-package-status");
+    const artifactDir = captureUiProofEnabled
+      ? path.join(suite.artifactDir, "update-package-status")
+      : "";
     await suite.withPage(
       {
         locale: "en-US",
@@ -160,7 +164,9 @@ suite.define(() => {
   });
 
   it("shows coalesced restart feedback after the Update click", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-coalesced");
+    const artifactDir = captureUiProofEnabled
+      ? path.join(suite.artifactDir, "update-coalesced")
+      : "";
     await suite.withPage(
       {
         locale: "en-US",
@@ -237,9 +243,9 @@ suite.define(() => {
   ])(
     "settles the managed update $name",
     async ({ artifactName, expectedStatusRequests, expectedText, responseFirst }) => {
-      const artifactDir = path.resolve(
-        `.artifacts/control-ui-e2e/update-managed-handoff-${artifactName}`,
-      );
+      const artifactDir = captureUiProofEnabled
+        ? path.join(suite.artifactDir, `update-managed-handoff-${artifactName}`)
+        : "";
       await suite.withPage(
         {
           locale: "en-US",
@@ -313,7 +319,9 @@ suite.define(() => {
   );
 
   it("shows and routes the update target from live Mac app ownership", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-ownership");
+    const artifactDir = captureUiProofEnabled
+      ? path.join(suite.artifactDir, "update-ownership")
+      : "";
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",

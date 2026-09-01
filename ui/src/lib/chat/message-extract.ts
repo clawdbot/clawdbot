@@ -122,6 +122,7 @@ function extractRawText(message: unknown): string | null {
 }
 
 export function readTranscriptMediaEntries(message: unknown): Array<{
+  factIndex: number;
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
@@ -133,11 +134,12 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   if (!message || typeof message !== "object") {
     return [];
   }
-  return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
+  return (readPersistedMediaFacts(message) ?? []).flatMap((fact, factIndex) => {
     const path = fact.path ?? fact.url;
     return path
       ? [
           {
+            factIndex,
             path,
             mediaType: fact.contentType ?? fact.kind,
             fileName: fact.fileName,

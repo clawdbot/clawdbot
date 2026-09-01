@@ -1,20 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
 
 type RunCommand = typeof runCommandWithTimeout;
 
-const tmpRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let root: string;
 
-async function makeRoot(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dev-branch-"));
-  tmpRoots.push(dir);
-  // macOS tmpdir is a symlink (/var -> /private/var); production compares
-  // canonical package and git roots.
-  return await fs.realpath(dir);
-}
+beforeAll(() => {
+  root = tempDirs.make("openclaw-dev-branch-");
+});
 
 function makeRunCommand(byArg: {
   toplevel?: { code: number; stdout: string };
@@ -55,13 +52,8 @@ afterEach(() => {
   vi.doUnmock("./openclaw-root.js");
 });
 
-afterAll(async () => {
-  await Promise.all(tmpRoots.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
 describe("resolveDevInstallGitBranch", () => {
   it("returns the branch for a source checkout on a feature branch", async () => {
-    const root = await makeRoot();
     const branch = await resolveBranch({
       root,
       runCommand: makeRunCommand({
@@ -78,7 +70,6 @@ describe("resolveDevInstallGitBranch", () => {
   });
 
   it("returns null when the root is not inside a git repo", async () => {
-    const root = await makeRoot();
     const branch = await resolveBranch({
       root,
       runCommand: makeRunCommand({ toplevel: { code: 128, stdout: "" } }),
@@ -87,7 +78,6 @@ describe("resolveDevInstallGitBranch", () => {
   });
 
   it("returns null when the package root is nested inside an unrelated repo", async () => {
-    const root = await makeRoot();
     const nested = path.join(root, "node_modules", "openclaw");
     await fs.mkdir(nested, { recursive: true });
     const branch = await resolveBranch({
@@ -101,7 +91,6 @@ describe("resolveDevInstallGitBranch", () => {
   });
 
   it.each(["main", "master", "HEAD", ""])("hides mainline/detached state %j", async (name) => {
-    const root = await makeRoot();
     const branch = await resolveBranch({
       root,
       runCommand: makeRunCommand({
@@ -113,7 +102,6 @@ describe("resolveDevInstallGitBranch", () => {
   });
 
   it("returns null when git branch resolution fails", async () => {
-    const root = await makeRoot();
     const branch = await resolveBranch({
       root,
       runCommand: makeRunCommand({

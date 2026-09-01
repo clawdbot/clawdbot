@@ -33,8 +33,8 @@ export function prepareChannelParticipantObservation(ctx: SessionParticipantInpu
   if (
     ctx[sessionParticipantInput] ||
     !ctx.SenderId ||
-    (channel !== undefined &&
-      ["webchat", "heartbeat", "cron-event", "exec-event"].includes(channel)) ||
+    channel === "webchat" ||
+    ctx.InternalTurnSource !== undefined ||
     (ctx.InputProvenance && ctx.InputProvenance.kind !== "external_user")
   ) {
     return;

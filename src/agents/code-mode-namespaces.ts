@@ -6,7 +6,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import { sanitizeNodeIdFragment } from "./agent-bundle-mcp-names.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {

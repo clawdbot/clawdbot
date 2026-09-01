@@ -5,6 +5,8 @@ import {
   readTranscriptDisplayDelta,
   type SessionTranscriptDisplayDeltaResult,
 } from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   projectSessionMessagePayload,
   type SessionMessageProjectionState,
@@ -69,6 +71,9 @@ export function readChatHistoryDelta(params: {
     streamErrorFallbackPending: false,
     turnBoundaryPending: false,
   };
+  const projectCurrentUserProfile = createCurrentUserProfileMessageProjector(
+    resolveCurrentUserProfileDisplay,
+  );
   const messages: Record<string, unknown>[] = [];
   for (const row of result.events) {
     const event = readMessageEvent(row.event);
@@ -82,6 +87,7 @@ export function readChatHistoryDelta(params: {
       messageSeq: row.messageSeq,
       transcriptPosition: row.displayPosition,
       projectionState,
+      projectCurrentUserProfile,
       sessionKey: params.sessionKey,
       sessionSnapshot: params.sessionSnapshot,
     });

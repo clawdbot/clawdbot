@@ -7,11 +7,16 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
 import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "./lib/package-lifecycle-marker.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -181,14 +186,6 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   return resolvePackageBuildTimeoutMs(valueMs, 1);
 }
 
-function readOptionValue(argv: string[], index: number, optionName: string) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 function readEqualsOptionValue(value: string, optionName: string) {
   if (value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
@@ -253,14 +250,14 @@ export function parseArgs(argv: string[]) {
     if (arg === "--allow-unreleased-changelog") {
       setOnce(arg, "allowUnreleasedChangelog", true);
     } else if (arg === "--bundle-plugin") {
-      options.bundlePlugins.push(readOptionValue(args, index, arg));
+      options.bundlePlugins.push(requireOptionArgument(args, index, arg));
       index += 1;
     } else if (arg?.startsWith("--bundle-plugin=")) {
       options.bundlePlugins.push(
         readEqualsOptionValue(arg.slice("--bundle-plugin=".length), "--bundle-plugin"),
       );
     } else if (arg === "--output-dir") {
-      setOnce("--output-dir", "outputDir", readOptionValue(args, index, arg));
+      setOnce("--output-dir", "outputDir", requireOptionArgument(args, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
       setOnce(
@@ -269,7 +266,7 @@ export function parseArgs(argv: string[]) {
         readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir"),
       );
     } else if (arg === "--output-name") {
-      setOnce("--output-name", "outputName", readOptionValue(args, index, arg));
+      setOnce("--output-name", "outputName", requireOptionArgument(args, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-name=")) {
       setOnce(
@@ -278,7 +275,7 @@ export function parseArgs(argv: string[]) {
         readEqualsOptionValue(arg.slice("--output-name=".length), "--output-name"),
       );
     } else if (arg === "--pack-json") {
-      setOnce("--pack-json", "packJson", readOptionValue(args, index, arg));
+      setOnce("--pack-json", "packJson", requireOptionArgument(args, index, arg));
       index += 1;
     } else if (arg?.startsWith("--pack-json=")) {
       setOnce(
@@ -291,7 +288,7 @@ export function parseArgs(argv: string[]) {
     } else if (arg === "--skip-build") {
       setOnce(arg, "skipBuild", true);
     } else if (arg === "--source-dir") {
-      setOnce("--source-dir", "sourceDir", readOptionValue(args, index, arg));
+      setOnce("--source-dir", "sourceDir", requireOptionArgument(args, index, arg));
       index += 1;
     } else if (arg?.startsWith("--source-dir=")) {
       setOnce(
@@ -889,6 +886,11 @@ async function restorePackageSourceArtifacts(
   await restoreManifest(sourceDir);
   // Release the lifecycle receipt only after every other source mutation settles.
   await restoreDocsMap(sourceDir);
+  await Promise.all(
+    [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
+      (relativePath) => fs.rm(path.join(sourceDir, relativePath), { force: true }),
+    ),
+  );
 }
 
 async function loadSourcePackageLifecycle(

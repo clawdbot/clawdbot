@@ -237,6 +237,13 @@ if [[ "$run_count" == "0" ]]; then
   no_reuse "no prior successful validation runs"
 fi
 
+reuse_request="$(jq -nc \
+  --arg targetSha "$TARGET_SHA" \
+  --arg releaseProfile "$RELEASE_PROFILE" \
+  --arg runReleaseSoak "$RUN_RELEASE_SOAK" \
+  --argjson validationInputs "$expected_inputs" \
+  '{targetSha: $targetSha, releaseProfile: $releaseProfile, runReleaseSoak: $runReleaseSoak, validationInputs: $validationInputs}')"
+
 for ((index = 0; index < run_count; index += 1)); do
   run_id="$(jq -r ".[${index}].id" <<< "$runs_json")"
   validation_record=""
@@ -244,6 +251,7 @@ for ((index = 0; index < run_count; index += 1)); do
     node "$VALIDATOR" \
       --validate-run "$run_id" \
       --repo "$REPO" \
+      --reuse-request-json "$reuse_request" \
       --trusted-workflow-ref "$TRUSTED_WORKFLOW_REF" \
       --trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF" \
       --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
@@ -337,6 +345,7 @@ for ((index = 0; index < run_count; index += 1)); do
       and ([.children[].role] | sort) ==
         (if (
           .rerunGroup == "all"
+          and ((.validationInputs.telegramWaiver // "") == "")
           and (
             ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
             or ((.validationInputs.releasePackageSpec // "") | length) > 0
@@ -352,7 +361,7 @@ for ((index = 0; index < run_count; index += 1)); do
         | .reportPublication] == ["artifact-only"])
       and all(.children[];
         .status == "completed"
-        and .conclusion == "success"
+        and .policyPassed == true
         and .workflowSha == $record.root.workflowSha
         and (.sourceParentRunId | tostring) == $run_id
       )

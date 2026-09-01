@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import {
   buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
@@ -10,12 +11,12 @@ import {
   expectDefined,
   installMockGateway,
   installPlainHttpClipboardCapture,
-  managedImageCacheProofDir,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 suite.define(() => {
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
@@ -89,13 +90,17 @@ suite.define(() => {
     },
     {
       kind: "audio",
-      source: `FILE:${path.join(managedImageCacheProofDir, "bootstrap-structured-audio.mp3")}`,
+      source: "bootstrap-structured-audio.mp3",
       ticket: "ticket-bootstrap-structured-audio",
       structured: true,
     },
   ] as const)(
     "renders local assistant $kind through server metadata before preview roots load",
-    async ({ kind, source, ticket, ...options }) => {
+    async ({ kind, source: fixtureSource, ticket, ...options }) => {
+      const source =
+        "structured" in options
+          ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`
+          : fixtureSource;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -200,12 +205,10 @@ suite.define(() => {
             .toBe(180);
         }
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
+            path: path.join(suite.artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
@@ -286,12 +289,10 @@ suite.define(() => {
         expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
         expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-blocked-${code}.png`),
+            path: path.join(suite.artifactDir, `bootstrap-blocked-${code}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
@@ -432,7 +433,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? suite.artifactDir
+      : undefined;
     const managedAttachmentSource = (artifactId: string) =>
       `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_media_".length)}/full`;
     const attachments = [
@@ -548,7 +551,6 @@ suite.define(() => {
       expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
       expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
       if (proofDir) {
-        await mkdir(proofDir, { recursive: true });
         await page.screenshot({ path: path.join(proofDir, "media-batch-skeletons.png") });
       }
 
@@ -602,7 +604,9 @@ suite.define(() => {
   ] as const)(
     "renders a $name image through the ticketed media route",
     async ({ source, workspaceDir, screenshotName }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+        ? suite.artifactDir
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -670,7 +674,6 @@ suite.define(() => {
           )
           .toBe(1);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             fullPage: true,
             path: `${artifactDir}/${screenshotName}.png`,
@@ -889,7 +892,7 @@ suite.define(() => {
         revokedBlobUrls: finalProof.revoked.length,
       };
       if (captureUiProofEnabled) {
-        await mkdir(managedImageCacheProofDir, { recursive: true });
+        const managedImageCacheProofDir = path.join(suite.artifactDir, "managed-image-cache");
         await page.evaluate((summary) => {
           const panel = document.createElement("pre");
           panel.setAttribute("data-managed-image-cache-proof", "true");

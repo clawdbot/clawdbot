@@ -322,6 +322,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       created.assertCurrent();
       handoff({ tabId: tab.id, targetId: attached.targetId });
       created.handedOff = true;
+      // Earlier inventory reads must not retract the target just handed to a
+      // client. Self-group events need not change discovery's revision.
+      discoveryRevision += 1;
     } catch (error) {
       // Rollback belongs to the creator, before any id is handed to the relay.
       // Never use ordinary close as a privileged bypass or close a user-revoked tab.
@@ -637,10 +640,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         if (listRevision !== discoveryRevision) {
           break;
         }
-        if (tabIsRevoking(tab.id)) {
-          continue;
-        }
-        if (!eligibilityForTab(tab).eligible) {
+        if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }
         if (mode === ACCESS_MODE_ALL) {
@@ -737,6 +737,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     initialize,
     get mode() {
       return mode;
+    },
+    get discoveryRevision() {
+      return discoveryRevision;
     },
     setMode,
     setEnabled,
