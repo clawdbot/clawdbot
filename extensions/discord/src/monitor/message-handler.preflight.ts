@@ -817,6 +817,7 @@ export async function preflightDiscordMessage(
           conversationId: messageChannelId,
           senderId: author.id,
           receiverId: params.botUserId,
+          eventId: message.id,
           config: params.discordConfig?.botLoopProtection,
           defaultsConfig: params.cfg.channels?.defaults?.botLoopProtection,
           defaultEnabled: true,

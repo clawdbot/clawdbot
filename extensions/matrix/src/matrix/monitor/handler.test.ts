@@ -730,6 +730,7 @@ describe("matrix monitor handler pairing account scope", () => {
       conversationId: "!room:example.org",
       senderId: "@ops:example.org",
       receiverId: "@bot:example.org",
+      eventId: "$bot-on",
       config: { maxEventsPerWindow: 3, windowSeconds: 120, cooldownSeconds: 240 },
       defaultsConfig: undefined,
       defaultEnabled: true,

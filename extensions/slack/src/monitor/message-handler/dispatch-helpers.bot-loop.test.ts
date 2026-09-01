@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
 import type { PreparedSlackMessage } from "./types.js";
 
-function prepared(message: { channel: string; thread_ts?: string }): PreparedSlackMessage {
+function prepared(message: {
+  channel: string;
+  thread_ts?: string;
+  ts?: string;
+}): PreparedSlackMessage {
   return {
     message: { type: "message", bot_id: "B_PEER", ...message },
     ctx: { botId: "B_SELF", botUserId: "U_SELF", cfg: {} },
@@ -24,5 +28,11 @@ describe("resolveSlackBotLoopProtection", () => {
     expect(resolveSlackBotLoopProtection(prepared({ channel: "C123" }))?.conversationId).toBe(
       "C123",
     );
+  });
+
+  it("forwards the stable Slack timestamp as the replay identity", () => {
+    expect(
+      resolveSlackBotLoopProtection(prepared({ channel: "C123", ts: "1700000000.002" }))?.eventId,
+    ).toBe("1700000000.002");
   });
 });

@@ -141,6 +141,7 @@ export async function resolveMatrixIngressAccess(config: {
           conversationId: roomId,
           senderId,
           receiverId: selfUserId,
+          eventId: messageId,
           config: mergePairLoopGuardConfig(
             accountConfig?.botLoopProtection,
             roomConfig?.botLoopProtection,

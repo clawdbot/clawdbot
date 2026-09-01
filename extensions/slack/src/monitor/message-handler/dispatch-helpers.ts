@@ -39,6 +39,7 @@ export function resolveSlackBotLoopProtection(
     conversationId: prepared.message.thread_ts ?? prepared.message.channel,
     senderId: senderBotId,
     receiverId: receiverBotId,
+    eventId: prepared.message.ts,
     config: mergePairLoopGuardConfig(
       prepared.account.config.botLoopProtection,
       prepared.channelConfig?.botLoopProtection,
