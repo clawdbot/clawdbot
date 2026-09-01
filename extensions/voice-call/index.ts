@@ -551,6 +551,7 @@ export default definePluginEntry({
         registerVoiceCallCli({
           program,
           config,
+          coreConfig: api.config,
           ensureRuntime,
           stateRuntime: api.runtime.state,
           logger: api.logger,

@@ -5917,8 +5917,8 @@ td.data-table-key-col {
   }
 }
 
-.session-row-host--pinned .session-action--pin {
-  color: var(--accent);
+.session-row-host--pinned .session-action--pin svg {
+  fill: currentColor;
 }
 
 .session-run-spinner {

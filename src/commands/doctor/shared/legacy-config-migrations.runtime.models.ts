@@ -9,6 +9,7 @@ import * as catalog from "./legacy-config-migrations.runtime.models.catalog.js";
 import * as codex from "./legacy-config-migrations.runtime.models.codex.js";
 import * as refs from "./legacy-config-migrations.runtime.models.refs.js";
 import * as vllm from "./legacy-config-migrations.runtime.models.vllm.js";
+import { visitAgentEntries } from "./legacy-config-record-shared.js";
 
 export { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.codex.js";
 export type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.codex.js";
@@ -217,7 +218,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
           const providerModelIds = [
             ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
             ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
-            ...vllm.collectVllmModelIdsFromAgentList(getRecord(raw.agents)?.list),
+            ...vllm.collectVllmModelIdsFromAgentRoster(raw),
           ];
           const targets = vllm.combineVllmModelTargets(
             vllm.listExistingVllmModelTargets(raw),
@@ -283,18 +284,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         }
       }
 
-      const agentList = getRecord(raw.agents)?.list;
-      if (!Array.isArray(agentList)) {
-        return;
-      }
-      for (const [index, agent] of agentList.entries()) {
-        const agentRecord = getRecord(agent);
-        const agentParams = getRecord(agentRecord?.params);
+      visitAgentEntries(raw, (agentRecord, path) => {
+        const agentParams = getRecord(agentRecord.params);
         const agentLegacyFormat = agentParams
           ? vllm.getLegacyVllmQwenThinkingFormat(agentParams)
           : undefined;
-        if (!agentRecord || !agentParams || !agentLegacyFormat) {
-          continue;
+        if (!agentParams || !agentLegacyFormat) {
+          return;
         }
         const explicitAgentModelIds = [
           ...vllm.collectVllmModelIdsFromSelection(agentRecord.model),
@@ -312,7 +308,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
             : vllm.listExistingVllmModelTargets(raw);
         if (targets.length === 0) {
           vllm.removeUntargetedLegacyVllmQwenThinkingFormat({
-            sourcePath: `agents.list[${index}].params`,
+            sourcePath: `${path}.params`,
             legacyParams: agentParams,
             legacyFormat: agentLegacyFormat,
             changes,
@@ -320,7 +316,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         } else {
           for (const target of targets) {
             vllm.applyLegacyVllmQwenThinkingFormat({
-              sourcePath: `agents.list[${index}].params`,
+              sourcePath: `${path}.params`,
               legacyParams: agentParams,
               target,
               legacyFormat: agentLegacyFormat,
@@ -331,7 +327,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         if (Object.keys(agentParams).length === 0) {
           delete agentRecord.params;
         }
-      }
+      });
     },
   }),
   defineLegacyConfigMigration({

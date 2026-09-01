@@ -1,7 +1,7 @@
 // Config-tranche migrations move legacy aliases before canonical validation.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/account-id.js";
-import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
+import { deleteRetiredPath, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 function stripRetiredPresentationPrefs(raw: Record<string, unknown>, changes: string[]): void {
   const prefs = getRecord(getRecord(raw.ui)?.prefs);
@@ -48,17 +48,13 @@ function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]
     stripContextLimits(defaults);
   }
   let removedTypingOverride = false;
-  visitAgentConfigScopes(
-    raw,
-    (entry) => {
-      if (Object.hasOwn(entry, "typingIntervalSeconds")) {
-        delete entry.typingIntervalSeconds;
-        removedTypingOverride = true;
-      }
-      stripContextLimits(entry);
-    },
-    { includeDefaults: false },
-  );
+  visitAgentEntries(raw, (entry) => {
+    if (Object.hasOwn(entry, "typingIntervalSeconds")) {
+      delete entry.typingIntervalSeconds;
+      removedTypingOverride = true;
+    }
+    stripContextLimits(entry);
+  });
   if (removedTypingOverride) {
     changes.push(
       "Removed per-agent typingIntervalSeconds overrides; agents.defaults.typingIntervalSeconds now applies to every agent.",

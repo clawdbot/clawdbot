@@ -37,7 +37,6 @@ Docs: https://docs.openclaw.ai
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
 
 - **macOS AI setup:** show confirmed capability-review cancellation and retry guidance directly instead of a misleading Gateway failure headline. (#134573)
-- **Gateway startup:** reuse one plugin alias resolver across startup decisions and avoid repeated trimming and array copies while preserving activation policy and alias precedence.
 - **Doctor memory:** keep Matrix migration codecs separate from the live client and avoid loading the ACP runtime when no legacy session records need inspection.
 - **Agent prompts:** keep model-identity guidance conditional so ordinary requests are not mistaken for questions about the current model.
 

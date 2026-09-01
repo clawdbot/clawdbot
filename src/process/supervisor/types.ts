@@ -116,7 +116,7 @@ type SpawnChildInput = SpawnBaseInput & {
 
 type SpawnPtyInput = SpawnBaseInput & {
   mode: "pty";
-  ptyCommand: string;
+  argv: string[];
 };
 
 type SpawnAnchoredShellInput = SpawnBaseInput & {

@@ -351,7 +351,12 @@ export function hydrateReusedPlan(plan, evidence) {
       ...child,
       displayTitle: reused.displayTitle,
       result: "success",
-      runAttempt: reused.runAttempt,
+      // Reuse keeps the dispatch origin, so a human rerun still composes earlier jobs.
+      // Verified manifests predating childEvidence only carry the effective attempt.
+      runAttempt:
+        evidence.manifest.childEvidence === undefined
+          ? reused.runAttempt
+          : evidence.manifest.childEvidence[child.key].plannedRunAttempt,
       runId: reused.runId,
       url: reused.url,
       workflowRef: reused.headBranch,

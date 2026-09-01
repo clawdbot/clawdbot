@@ -214,6 +214,9 @@ export const en: TranslationMap = {
   },
   sessionHovercard: {
     ariaLabel: "Session information",
+    agentNotepad: "Agent Notepad",
+    attributionOther: "& {count} other",
+    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",

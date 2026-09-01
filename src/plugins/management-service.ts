@@ -92,6 +92,7 @@ import {
   withPluginInstallRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import {
   resolveInstalledPluginLifecycleOwnership,
@@ -2069,7 +2070,12 @@ export async function uninstallManagedPlugin(params: {
     const channelIds =
       ownedManifests.length > 0
         ? uniqueStrings(ownedManifests.flatMap((manifest) => manifest.channels))
-        : undefined;
+        : ownership.value.kind === "orphan" &&
+            createInstalledPluginIndexScopeLookup(metadata.index).hasChannelContributionOwners([
+              installOwner,
+            ])
+          ? []
+          : undefined;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
     const initialPlan = planPluginUninstall(
       recordPluginPackageUninstallPlan(
