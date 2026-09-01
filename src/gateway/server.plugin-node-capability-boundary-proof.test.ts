@@ -28,7 +28,7 @@ const resolvedAuth: ResolvedGatewayAuth = {
 };
 
 type DispatchCounts = { http: number; ws: number };
-type BoundaryResult = { http: number; ws: number; dispatches: DispatchCounts };
+type BoundaryResult = { http?: number; ws?: number; dispatches: DispatchCounts };
 
 function scheduleCapabilityRevocationAfterAuthorization(params: {
   client: GatewayWsClient;
@@ -367,7 +367,6 @@ describe("gateway plugin node capability boundary proof", () => {
               expect(dispatches()).toEqual({ http: 1, ws: 1 });
               proof.raceHttp = {
                 http: raceHttp.status,
-                ws: 0,
                 dispatches: dispatches(),
               };
             } finally {
@@ -399,7 +398,6 @@ describe("gateway plugin node capability boundary proof", () => {
               expect(raceWs).toBe(401);
               expect(dispatches()).toEqual({ http: 1, ws: 1 });
               proof.raceWs = {
-                http: 0,
                 ws: raceWs,
                 dispatches: dispatches(),
               };
