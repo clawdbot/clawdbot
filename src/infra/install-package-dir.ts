@@ -220,6 +220,7 @@ export async function installPackageDir<
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  beforePersistentApply?: () => void;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const deferCommit = isPackageDirInstallCommitDeferred(params);
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
@@ -400,6 +401,7 @@ export async function installPackageDir<
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
+    params.beforePersistentApply?.();
     await movePathWithCopyFallback({
       from: stageDir,
       sourceHardlinks,
@@ -483,6 +485,7 @@ export async function installPackageDirWithManifestDeps<
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  beforePersistentApply?: () => void;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir<TAfterInstallFailure>({

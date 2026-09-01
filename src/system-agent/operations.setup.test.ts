@@ -930,7 +930,7 @@ describe("parseSystemAgentOperation", () => {
         latencyMs: 5,
       };
     });
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (bindingOwner !== "verified") {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
@@ -976,7 +976,7 @@ describe("parseSystemAgentOperation", () => {
         latencyMs: 5,
       };
     });
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (bindingOwner !== "verified") {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }

@@ -44,9 +44,13 @@ function resolveTurnSourceTelegramOriginTarget(
   }
   const rawThreadId =
     request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
+  const directMessagesTopicId = parsedTurnSourceTarget?.directMessagesTopicId;
   return {
-    to: turnSourceTo,
-    threadId: parseTelegramThreadId(rawThreadId),
+    to:
+      directMessagesTopicId == null
+        ? turnSourceTo
+        : `${turnSourceTo}:direct-topic:${directMessagesTopicId}`,
+    threadId: directMessagesTopicId == null ? parseTelegramThreadId(rawThreadId) : undefined,
   };
 }
 

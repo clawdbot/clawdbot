@@ -171,7 +171,7 @@ function buildPendingPayload(params: {
 
 export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   TelegramPendingDelivery,
-  { chatId: string; messageThreadId?: number },
+  { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
   PendingMessage,
   never,
   TelegramFinalDelivery
@@ -211,16 +211,20 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     }),
   },
   transport: {
-    prepareTarget: ({ plannedTarget }) => ({
-      dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
-      target: {
-        chatId: plannedTarget.target.to,
-        messageThreadId:
-          typeof plannedTarget.target.threadId === "number"
-            ? plannedTarget.target.threadId
-            : undefined,
-      },
-    }),
+    prepareTarget: ({ plannedTarget }) => {
+      const parsedTarget = parseTelegramTarget(plannedTarget.target.to);
+      return {
+        dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
+        target: {
+          chatId: parsedTarget.chatId,
+          messageThreadId:
+            typeof plannedTarget.target.threadId === "number"
+              ? plannedTarget.target.threadId
+              : parsedTarget.messageThreadId,
+          directMessagesTopicId: parsedTarget.directMessagesTopicId,
+        },
+      };
+    },
     deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
@@ -243,6 +247,9 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         buttons: pendingPayload.buttons,
         ...(preparedTarget.messageThreadId != null
           ? { messageThreadId: preparedTarget.messageThreadId }
+          : {}),
+        ...(preparedTarget.directMessagesTopicId != null
+          ? { directMessagesTopicId: preparedTarget.directMessagesTopicId }
           : {}),
       });
       return {

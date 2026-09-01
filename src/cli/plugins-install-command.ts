@@ -73,6 +73,9 @@ async function runPluginInstallCommandUnlocked(
   assertConfigWriteAllowedInCurrentMode();
 
   const runtime = params.runtime ?? defaultRuntime;
+  const persistentApplyOptions = params.beforePersistentApply
+    ? { beforePersistentApply: params.beforePersistentApply }
+    : {};
   const invalidateRuntimeCache = params.invalidateRuntimeCache ?? true;
   const { raw, opts, installMode, request } = preflight;
   if (opts.dangerouslyForceUnsafeInstall) {
@@ -129,6 +132,7 @@ async function runPluginInstallCommandUnlocked(
       logger: createPluginInstallLogger(runtime),
       invalidateRuntimeCache,
       runtime,
+      ...persistentApplyOptions,
     });
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
@@ -203,6 +207,7 @@ async function runPluginInstallCommandUnlocked(
         logger: createPluginInstallLogger(runtime),
         invalidateRuntimeCache,
         runtime,
+        ...persistentApplyOptions,
       });
       if (result.ok) {
         return;
@@ -237,6 +242,7 @@ async function runPluginInstallCommandUnlocked(
         logger: createPluginInstallLogger(runtime),
         invalidateRuntimeCache,
         runtime,
+        ...persistentApplyOptions,
       });
       if (!result.ok) {
         runtime.error(result.error);
@@ -254,6 +260,7 @@ async function runPluginInstallCommandUnlocked(
             snapshot,
             invalidateRuntimeCache,
             runtime,
+            ...persistentApplyOptions,
           }),
         {
           command: "install",
@@ -308,6 +315,7 @@ async function runPluginInstallCommandUnlocked(
           logger: createPluginInstallLogger(runtime),
           invalidateRuntimeCache,
           runtime,
+          ...persistentApplyOptions,
         });
         if (!result.ok) {
           if (!isClawHubBlockedCliFailure(result)) {

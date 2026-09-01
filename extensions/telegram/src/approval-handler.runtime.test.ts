@@ -732,4 +732,57 @@ describe("telegramApprovalNativeRuntime", () => {
       messageId: "m1",
     });
   });
+
+  it("passes channel Direct Messages topic ids to approval delivery", async () => {
+    const sendTyping = vi.fn().mockResolvedValue({ ok: true });
+    const sendMessage = vi.fn().mockResolvedValue({
+      chatId: "-1003841603622",
+      messageId: "m1",
+    });
+
+    await telegramApprovalNativeRuntime.transport.deliverPending?.({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+        deps: { sendTyping, sendMessage },
+      },
+      plannedTarget: {
+        surface: "origin",
+        reason: "preferred",
+        target: {
+          to: "-1003841603622:direct-topic:77",
+        },
+      },
+      preparedTarget: {
+        chatId: "-1003841603622",
+        directMessagesTopicId: 77,
+      },
+      request: {
+        id: "req-direct-topic",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-direct-topic",
+        commandText: "echo hi",
+        actions: [],
+      } as never,
+      pendingPayload: {
+        text: "pending",
+        buttons: [],
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("-1003841603622", "pending", {
+      cfg: {},
+      token: "tg-token",
+      accountId: "default",
+      buttons: [],
+      directMessagesTopicId: 77,
+    });
+  });
 });
