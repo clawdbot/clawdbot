@@ -513,7 +513,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       );
       expect(plugin).toBeDefined();
       const account = plugin!.config.resolveAccount(cfg, "ops");
-      return plugin!.config.isEnabled(account, cfg);
+      expect(plugin!.config.isEnabled).toBeDefined();
+      return plugin!.config.isEnabled!(account, cfg);
     };
 
     expect(
