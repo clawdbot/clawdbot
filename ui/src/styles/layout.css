@@ -1072,14 +1072,6 @@ openclaw-settings-save-indicator:empty {
   opacity: 1;
 }
 
-.sidebar-brand__collapse svg {
-  transform: translateX(2px);
-}
-
-.sidebar-brand__search svg {
-  transform: translateX(-1px);
-}
-
 .sidebar-brand__new-thread {
   color: var(--text);
 }

@@ -255,6 +255,25 @@ suite.define(() => {
       const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
       await expect.poll(() => sidebarBrand.count()).toBe(1);
       await expect
+        .poll(() =>
+          sidebarBrand
+            .locator(".sidebar-brand__collapse, .sidebar-brand__search")
+            .evaluateAll((buttons) =>
+              buttons.map((button) => {
+                const icon = button.querySelector("svg");
+                if (!icon) {
+                  return null;
+                }
+                const buttonBox = button.getBoundingClientRect();
+                const iconBox = icon.getBoundingClientRect();
+                return Math.round(
+                  buttonBox.left + buttonBox.width / 2 - (iconBox.left + iconBox.width / 2),
+                );
+              }),
+            ),
+        )
+        .toEqual([0, 0]);
+      await expect
         .poll(async () => {
           const [brandBox, actionsBox] = await Promise.all([
             sidebarBrand.boundingBox(),
