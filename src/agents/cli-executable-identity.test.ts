@@ -94,6 +94,38 @@ describe("CLI executable implementation identity", () => {
     },
   );
 
+  it.runIf(process.platform === "win32")(
+    "resolves a bare Windows command through PATHEXT to its .cmd entrypoint",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-win-pathext-"));
+      tempDirs.push(root);
+      const binDir = path.join(root, "bin");
+      const entrypointDir = path.join(binDir, "node_modules", "claude", "bin");
+      fs.mkdirSync(entrypointDir, { recursive: true });
+      // npm installs a non-runnable extensionless POSIX shim beside its .cmd launcher.
+      fs.writeFileSync(path.join(binDir, "claude"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const entrypoint = path.join(entrypointDir, "claude.exe");
+      fs.copyFileSync(process.execPath, entrypoint);
+      fs.writeFileSync(
+        path.join(binDir, "claude.cmd"),
+        '@ECHO off\r\n"%~dp0\\node_modules\\claude\\bin\\claude.exe" %*\r\n',
+      );
+
+      const identity = await resolveCliExecutableIdentity({
+        command: "claude",
+        env: { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" },
+        runtimeArtifact: {
+          ...commandPackagePolicy,
+          nativeExecutableNames: ["claude", "claude.exe"],
+        },
+      });
+
+      expect(identity?.resolvedPath).toBe(fs.realpathSync(path.join(binDir, "claude.cmd")));
+      expect(identity?.invocation.resolution).toBe("exe-entrypoint");
+      expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
+    },
+  );
+
   it("does not depend on host locale collation when ordering package files", async () => {
     const fixture = makePackage();
     fs.writeFileSync(path.join(fixture.root, "dist", "z.js"), "z\n");
