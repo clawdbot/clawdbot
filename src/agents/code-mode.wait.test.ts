@@ -88,6 +88,55 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });
 
+  it("preserves the remaining budget for a pending bridge in a parked snapshot", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const bridgeResult = createDeferred();
+    const pendingBridge = pluginToolWithExecute(
+      "fake_pending_bridge",
+      "Pending bridge",
+      async (_toolCallId, _input, signal) => {
+        await bridgeResult.promise;
+        if (signal?.aborted) {
+          throw signal.reason;
+        }
+        return jsonResult({ ok: true });
+      },
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pendingBridge],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-pending-bridge",
+        { restartSafe: true, code: "return await fake_pending_bridge({});" },
+      ),
+    );
+    expect(suspended.status).toBe("waiting");
+
+    const state = expectDefined(
+      testing.activeRuns.get(suspended.runId as string),
+      "parked Code Mode state",
+    );
+    const pending = expectDefined(state.pending[0], "pending bridge state");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(pending.settled).toBeUndefined();
+
+    bridgeResult.resolve();
+    const resumed = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-pending-bridge",
+        { runId: suspended.runId },
+      ),
+    );
+    expect(resumed).toMatchObject({ status: "completed", value: { ok: true } });
+  });
+
   it("keeps inline nested approval inside the original admitted run beyond the Code Mode budget", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const runId = "run-code-mode-inline-approval";

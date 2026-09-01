@@ -209,16 +209,16 @@ async function waitForPending(
       bridgeReady,
       new Promise<boolean>((resolve) => {
         let remainingMs = timeoutMs;
-        let resumedAtMs = Date.now();
+        let resumedAtMs = performance.now();
         const arm = () => {
-          resumedAtMs = Date.now();
+          resumedAtMs = performance.now();
           timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
         };
         approvalWait.onChange = (approvalPending) => {
           if (approvalPending) {
             // Preserve the unused guest budget while its owning approval remains inline.
             clearTimeout(timer);
-            remainingMs = Math.max(1, remainingMs - (Date.now() - resumedAtMs));
+            remainingMs = Math.max(1, remainingMs - (performance.now() - resumedAtMs));
           } else {
             arm();
           }
@@ -457,7 +457,7 @@ async function settleCodeModeResult(params: {
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - Date.now(),
+          remainingMs: settleDeadline() - performance.now(),
           activeRunId,
           ctx: params.ctx,
           signal: params.signal,
