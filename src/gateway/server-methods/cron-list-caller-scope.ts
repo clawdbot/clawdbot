@@ -13,6 +13,9 @@ type CronListCallerScopeContext = {
 
 const CRON_LIST_SCOPED_SNAPSHOT_MAX_ATTEMPTS = 3;
 
+const CRON_LIST_CALLER_SCOPE_NOTICE =
+  "Totals and jobs are limited to this caller's authority; other automations may exist on the gateway.";
+
 export async function listCronPageWithVisibility({
   matchesJob,
   context,
@@ -71,6 +74,8 @@ export async function listCronPageWithVisibility({
     jobs,
     // Never expose the source revision: it includes jobs hidden by caller scope.
     snapshotRevision: resolveCronListSnapshotRevision(stableScopedJobs),
+    visibility: "caller-scoped",
+    scopeNotice: CRON_LIST_CALLER_SCOPE_NOTICE,
     total,
     offset: pageOffset,
     limit,

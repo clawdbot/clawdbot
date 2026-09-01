@@ -44,4 +44,8 @@ export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
   limit: number;
   hasMore: boolean;
   nextOffset: number | null;
+  /** Present when jobs/totals exclude automations hidden from the caller. */
+  visibility?: "caller-scoped";
+  /** Human-readable note that the list may be incomplete. */
+  scopeNotice?: string;
 };
