@@ -62,6 +62,34 @@ export function isIMessageBridgeStall(error: unknown): boolean {
   return message.includes("Timed out waiting for response") || message.includes("imsg rpc timeout");
 }
 
+const BRIDGE_STALL_GUIDANCE =
+  "The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, " +
+  "then `openclaw channels status --probe` to refresh capability detection.";
+
+// Append the actionable cause without rewriting the error.
+//
+// Normal outbound sends never consult the private-API status cache (send.ts
+// builds a client and dispatches directly), so evicting that cache alone leaves
+// them repeating an opaque timeout. Decorating here reaches every caller.
+//
+// Preserve the class, code, data, and original message text: send.ts keys
+// delayed-send reconciliation off `data.disposition`/`data.retry_safe` and
+// matches `imsg rpc timeout (send)` by regex, so the original wording has to
+// survive as a prefix.
+function describeIMessageBridgeStall(error: unknown): unknown {
+  if (error instanceof IMessageRpcRequestError) {
+    return new IMessageRpcRequestError(
+      `${error.message} ${BRIDGE_STALL_GUIDANCE}`,
+      error.code,
+      error.data,
+    );
+  }
+  if (error instanceof Error) {
+    return new Error(`${error.message} ${BRIDGE_STALL_GUIDANCE}`, { cause: error });
+  }
+  return error;
+}
+
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -255,6 +283,7 @@ export class IMessageRpcClient {
       // re-probe and report the real state.
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        throw describeIMessageBridgeStall(err);
       }
       throw err;
     }

@@ -490,6 +490,65 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     await client.stop();
   });
 
+  // Normal outbound sends never read the private-API cache (send.ts builds a
+  // client and dispatches directly), so eviction alone would leave them
+  // repeating an opaque -32603. The decorated message is what reaches the
+  // operator on the very first failed send.
+  it("appends actionable guidance to a stalled send", async () => {
+    const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-guidance" });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32603,
+            message: "Timed out waiting for response to 'send-message'",
+            data: { disposition: "not_started", retry_safe: true },
+          },
+        })}\n`,
+      ),
+    );
+
+    const error = (await pending.catch((cause: unknown) => cause)) as Error;
+    expect(error.message).toContain("Timed out waiting for response to 'send-message'");
+    expect(error.message).toContain("imsg launch");
+    expect(error.message).toContain("channels status --probe");
+    // send.ts reconciles delayed sends off these, so decorating must not drop
+    // the class, code, or data.
+    expect(error).toBeInstanceOf(IMessageRpcRequestError);
+    expect(error).toMatchObject({
+      code: -32603,
+      data: { disposition: "not_started", retry_safe: true },
+    });
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
+  // send.ts detects a send timeout with /imsg rpc timeout \(send\)/i, so the
+  // original wording has to survive as a prefix of the decorated message.
+  it("keeps the client-side timeout wording send.ts matches on", async () => {
+    vi.useFakeTimers();
+    const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 10 });
+    pending.catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+
+    const error = (await pending.catch((cause: unknown) => cause)) as Error;
+    vi.useRealTimers();
+    expect(/imsg rpc timeout \(send\)/i.test(error.message)).toBe(true);
+    expect(error.message).toContain("imsg launch");
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
   // The cache is what keeps the bridge off the hot path, so an ordinary
   // rejection must not cost every later send a re-probe.
   it("keeps the cached verdict when the request is merely rejected", async () => {
