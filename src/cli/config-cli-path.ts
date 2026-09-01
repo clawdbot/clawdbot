@@ -48,17 +48,101 @@ function isIndexSegment(raw: string): boolean {
   return parseIndexSegment(raw) !== undefined;
 }
 
+/** Re-quote bare array elements PowerShell strips before JSON.parse sees them. */
+function repairPowerShellStrippedJsonArray(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return null;
+  }
+  const inner = trimmed.slice(1, -1).trim();
+  if (!inner) {
+    return "[]";
+  }
+  const elements: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let inString = false;
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < inner.length; index += 1) {
+    const character = inner[index];
+    if (inString) {
+      if (character === quote && inner[index - 1] !== "\\") {
+        inString = false;
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      inString = true;
+      quote = character;
+      continue;
+    }
+    if (character === "[" || character === "{") {
+      depth += 1;
+      continue;
+    }
+    if (character === "]" || character === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (character === "," && depth === 0) {
+      elements.push(inner.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  elements.push(inner.slice(start).trim());
+  const repaired = elements.map((element) => {
+    if (!element) {
+      return element;
+    }
+    if (element.startsWith('"') && element.endsWith('"')) {
+      return element;
+    }
+    if (element.startsWith("'") && element.endsWith("'")) {
+      return JSON.stringify(element.slice(1, -1));
+    }
+    if (/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(element)) {
+      return element;
+    }
+    if (element === "true" || element === "false" || element === "null") {
+      return element;
+    }
+    if (element.startsWith("[") || element.startsWith("{")) {
+      return element;
+    }
+    return JSON.stringify(element);
+  });
+  return `[${repaired.join(",")}]`;
+}
+
+function parseStrictConfigSetValue(raw: string): unknown {
+  const trimmed = raw.trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (firstError) {
+    const repaired = repairPowerShellStrippedJsonArray(trimmed);
+    if (!repaired) {
+      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: firstError }), {
+        cause: firstError,
+      });
+    }
+    try {
+      parsed = JSON.parse(repaired);
+    } catch (secondError) {
+      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: secondError }), {
+        cause: secondError,
+      });
+    }
+  }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
+}
+
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   const trimmed = raw.trim();
   if (strictJson) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch (err) {
-      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
-    }
-    rejectConfigNonFiniteNumbers(parsed);
-    return parsed;
+    return parseStrictConfigSetValue(raw);
   }
   let parsed: unknown;
   try {

@@ -57,6 +57,15 @@ describe("parseConfigSetValue", () => {
     );
   });
 
+  it("repairs PowerShell-stripped JSON array literals in strict JSON mode", () => {
+    expect(parseConfigSetValue('["telegram:123"]', true)).toEqual(["telegram:123"]);
+    expect(parseConfigSetValue("[telegram:123]", true)).toEqual(["telegram:123"]);
+    expect(parseConfigSetValue('[telegram:123,"discord:456"]', true)).toEqual([
+      "telegram:123",
+      "discord:456",
+    ]);
+  });
+
   it("merges deeply nested object values without an engine failure", () => {
     const depth = 20_000;
     const root = { value: nestedRecord(depth, { retained: true }) };
