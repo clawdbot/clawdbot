@@ -146,11 +146,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
     ).rows.length;
   }
 
-  /**
-   * Canonical archive rows. Main persists these inside the lifecycle deletion
-   * transaction; publishing to disk is a separate deferred pass, so the row --
-   * not a file -- is what a completed sweep guarantees.
-   */
+  /** Canonical archive rows committed and published by a completed sweep. */
   function archiveRows(sessionId: string): { archive_name: string; published_at: number | null }[] {
     const database = openDatabase();
     const db = getSessionKysely(database.db);
@@ -209,8 +205,8 @@ describe("sweepTombstonedCronRunRemnants", () => {
     expect(countRows("transcript_events", "session_id", sessionId)).toBe(0);
     const archives = archiveRows(sessionId);
     expect(archives).toHaveLength(1);
-    // Not yet on disk: publishing is the deferred pass's job.
-    expect(archives[0]?.published_at).toBeNull();
+    expect(archives[0]?.published_at).toEqual(expect.any(Number));
+    expect(archiveNames(sessionId)).toEqual([archives[0]?.archive_name]);
 
     await expect(sweep({ dryRun: false })).resolves.toMatchObject({
       candidates: 0,
@@ -218,6 +214,28 @@ describe("sweepTombstonedCronRunRemnants", () => {
       sweptTranscriptStates: 0,
     });
     expect(archiveRows(sessionId)).toHaveLength(1);
+  });
+
+  it("preserves another logical agent's placeholder in a shared SQLite store", async () => {
+    storePath = path.join(tempDir, "shared.sqlite");
+    const opsKey = "agent:ops:cron:job-2:run:run-2";
+    const mainSessionId = await seedCanonicalPlaceholder({});
+    const opsSessionId = await seedCanonicalPlaceholder({
+      key: opsKey,
+      sessionId: "ops-cron-session",
+    });
+
+    await expect(sweep({ dryRun: false })).resolves.toMatchObject({
+      candidates: 1,
+      removedNodes: 1,
+      sweptTranscriptStates: 1,
+    });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(0);
+    expect(countRows("transcript_events", "session_id", mainSessionId)).toBe(0);
+    expect(countRows("session_nodes", "session_key", opsKey)).toBe(1);
+    expect(countRows("session_windows", "session_key", opsKey)).toBe(1);
+    expect(countRows("transcript_events", "session_id", opsSessionId)).toBe(1);
+    expect(archiveRows(opsSessionId)).toHaveLength(0);
   });
 
   it("uses the newest owned window timestamp for the retention gate", async () => {

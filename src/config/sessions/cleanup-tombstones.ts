@@ -6,6 +6,7 @@ import fs from "node:fs";
  * before deletion; archive lifetime remains owned by existing archive policy.
  */
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -14,6 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -59,7 +61,9 @@ type TombstoneCandidate = {
 function listCanonicalCronRunTombstones(
   database: Pick<OpenClawAgentDatabase, "db">,
   cutoffMs: number,
+  agentId: string,
 ): TombstoneCandidate[] {
+  const requestedOwner = normalizeAgentId(agentId);
   const db = getSessionKysely(database.db);
   const nodes = executeSqliteQuerySync(
     database.db,
@@ -93,6 +97,10 @@ function listCanonicalCronRunTombstones(
     const ownedWindows = windowsByKey.get(node.session_key) ?? [];
     const updatedAt = Math.max(node.updated_at, ...ownedWindows.map((window) => window.updatedAt));
     if (!isCronRunSessionKey(node.session_key) || updatedAt >= cutoffMs) {
+      return [];
+    }
+    const scopedOwner = parseAgentSessionKey(node.session_key)?.agentId;
+    if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
       return [];
     }
     if (!isCanonicalSqliteRetainedHistoryPlaceholder(node)) {
@@ -162,7 +170,7 @@ async function sweepTombstonedCronRunRemnants(params: {
     olderThanMs,
   };
   const scanned = withOpenClawAgentDatabaseReadOnly(
-    (database) => listCanonicalCronRunTombstones(database, cutoffMs),
+    (database) => listCanonicalCronRunTombstones(database, cutoffMs, params.agentId),
     scope,
   );
   const candidates = scanned.found ? scanned.value : [];
@@ -182,9 +190,11 @@ async function sweepTombstonedCronRunRemnants(params: {
       run: async () =>
         await runExclusiveSqliteSessionWrite(scope, async () => {
           const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-          const authoritative = listCanonicalCronRunTombstones(database, cutoffMs).find(
-            (current) => current.sessionKey === candidate.sessionKey,
-          );
+          const authoritative = listCanonicalCronRunTombstones(
+            database,
+            cutoffMs,
+            params.agentId,
+          ).find((current) => current.sessionKey === candidate.sessionKey);
           if (!sameCandidate(candidate, authoritative)) {
             return null;
           }
@@ -216,9 +226,11 @@ async function sweepTombstonedCronRunRemnants(params: {
           let removed = false;
           runOpenClawAgentWriteTransaction(
             (transactionDb) => {
-              const current = listCanonicalCronRunTombstones(transactionDb, cutoffMs).find(
-                (entry) => entry.sessionKey === candidate.sessionKey,
-              );
+              const current = listCanonicalCronRunTombstones(
+                transactionDb,
+                cutoffMs,
+                params.agentId,
+              ).find((entry) => entry.sessionKey === candidate.sessionKey);
               if (!sameCandidate(candidate, current)) {
                 return;
               }
@@ -280,9 +292,12 @@ async function sweepTombstonedCronRunRemnants(params: {
     if (!result) {
       continue;
     }
+    // The lifecycle and SQLite writer lanes are released before file I/O;
+    // publication reacquires the writer only for its short status commit.
+    const publishedArchives = await publishSessionStateArchives(scope, result.archivedTranscripts);
     removedNodes += 1;
     sweptTranscriptStates += result.sweptTranscriptStates;
-    emitArchivedTranscriptUpdates(result.archivedTranscripts);
+    emitArchivedTranscriptUpdates(publishedArchives);
   }
   return {
     candidates: candidates.length,
