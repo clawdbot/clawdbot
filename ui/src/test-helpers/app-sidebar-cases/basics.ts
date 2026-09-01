@@ -312,7 +312,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
-  it("shows a working subtitle while the agent has an active run", async () => {
+  it("shows the Home spinner without an agent subtitle during an active run", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
