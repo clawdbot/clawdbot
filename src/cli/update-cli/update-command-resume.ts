@@ -30,6 +30,7 @@ import {
   readPostCorePluginInstallRecordsFile,
   resolvePostCoreUpdateStartedAtMs,
   writePostCorePluginUpdateResultFile,
+  writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 
 type ResumePostCoreUpdateParams = {
@@ -40,6 +41,22 @@ type ResumePostCoreUpdateParams = {
 };
 
 export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): Promise<void> {
+  try {
+    await resumePostCoreUpdateInternal(params);
+  } catch (error) {
+    // Publish only after phase cleanup releases its leases. The parent owns
+    // recovery and triage; inherited TTY output cannot serve as its error record.
+    await writePostCoreUpdateFailureFile(
+      process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
+      error,
+    ).catch((writeError: unknown) =>
+      defaultRuntime.error(`Could not save post-update failure: ${String(writeError)}`),
+    );
+    throw error;
+  }
+}
+
+async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams): Promise<void> {
   if (
     params.channel !== "stable" &&
     params.channel !== "extended-stable" &&

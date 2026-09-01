@@ -552,8 +552,10 @@ describe("renderUpdates", () => {
       expect(
         container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
       ).not.toBeNull();
-      expect(row("CLI fallback").textContent).toContain("on the Gateway host");
-      expect(row("CLI fallback").querySelector("code")?.textContent).toBe("openclaw triage");
+      const cliFallback = row("CLI fallback");
+      expect(cliFallback.textContent).toContain("on the Gateway host");
+      expect(cliFallback.textContent).toContain("local coding agent");
+      expect(cliFallback.querySelector("code")?.textContent?.trim()).toBe("openclaw triage");
     },
   );
 

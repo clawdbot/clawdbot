@@ -177,12 +177,15 @@ ClawHub also provides plugin discovery. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
 [plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
-Fresh beta-channel installs of official plugins require a `beta` artifact from
-one of their declared sources; pass an explicit version to choose another
-release. Doctor, onboarding, and plugin-update recovery paths can fall back to
-the recorded or default selector with a visible warning. On the extended-stable
-channel, eligible official plugins with bare/default or `@latest` intent resolve
-to the installed core version (the base release cohort for version-bound plugins).
+Fresh beta-channel installs with bare/default or `@latest` intent target the
+installed core's exact beta version for eligible official npm and trusted
+official ClawHub plugins. If the core is not a beta release, they target `@beta`.
+The selected release must exist in a declared source; pass an explicit version
+to choose another release. Doctor, onboarding, and plugin-update recovery paths
+can fall back to the recorded or default selector with a visible warning.
+On the extended-stable channel, eligible official plugins with bare/default or
+`@latest` intent resolve to the installed core version (the base release cohort
+for version-bound plugins).
 The install record retains the requested selector. Exact pins and explicit
 non-`latest` tags keep their targets. Unrelated third-party packages are not pinned
 to the core version. Doctor separately refreshes stale official runtime plugins
@@ -476,9 +479,9 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. On an installed beta core, eligible official npm plugins target that exact core version when the effective plugin update channel is beta. This prevents a moving plugin `@beta` tag from selecting a different beta release. Targeted updates with an explicitly configured stable channel retain that selection. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. On an installed beta core, eligible official npm and trusted official ClawHub plugins with default/latest intent target that exact core version when the effective plugin update channel is beta. This prevents a moving plugin `@beta` tag from selecting a different beta release. Targeted updates with an explicitly configured stable channel retain that selection. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
-    `openclaw update` resolves plugin targets from the newly installed core, so a one-off beta `--tag` also aligns eligible official npm plugins even when the configured channel is stable. Other default-line npm and ClawHub plugin records on the beta channel try `@beta` first. They fall back to the recorded default/latest spec only if no plugin beta release exists. Integrity, compatibility, trust, install-policy, and capability-consent failures do not trigger fallback. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit non-`latest` tags stay pinned to that selector for targeted and bulk updates except while completing the trusted plugin id replacement above.
+    `openclaw update` resolves plugin targets from the newly installed core, so a one-off beta `--tag` also aligns eligible official npm and trusted official ClawHub plugins even when the configured channel is stable. Other default-line npm and ClawHub plugin records on the beta channel try `@beta` first. OpenClaw falls back to the recorded default/latest spec only if the selected beta release is unavailable. Integrity, compatibility, trust, install-policy, and capability-consent failures do not trigger fallback. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit non-`latest` tags stay pinned to that selector for targeted and bulk updates except while completing the trusted plugin id replacement above.
 
   </Accordion>
   <Accordion title="Existing plugin source choices">

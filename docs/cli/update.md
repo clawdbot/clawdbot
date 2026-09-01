@@ -39,6 +39,9 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
+Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
+after service recovery and cleanup finish.
+
 ## Options
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
@@ -91,26 +94,50 @@ transcript artifacts before starting an older file-backed version. See
 
 ## Recover a failed update
 
-After a failed interactive update, OpenClaw finishes cleanup and
-opens [Triage](/cli/triage). Triage starts the first installed coding agent it
-can launch: Claude Code, Codex, OpenCode, then Pi. It gives the agent the failed
-update outcome, local diagnostics, and the same installation paths so it can
-repair the cause and verify the result. The agent keeps its normal permissions
-and approval settings.
+After a failed interactive update or repair, OpenClaw finishes cleanup and
+opens [Triage](/cli/triage). Triage immediately starts the first directly
+launchable coding agent on `PATH`, in this order: Claude Code, Codex, OpenCode,
+then Pi. It passes the captured update failure directly and leaves fresh Doctor
+checks and diagnostics collection to the agent, so a broken installation does
+not delay the handoff. The agent keeps its existing authentication, sandbox, and
+approval settings.
 
-`--yes`, `--json`, and piped input or output never open a coding agent. For those
-updates, or a disconnected Control UI, run this in a terminal on the Gateway host
-with the same profile and state/config overrides:
+The agent starts in the operator's original working directory, or their OS home
+if that directory is no longer accessible. The failed installation's resolved
+state, config, and default workspace paths remain pinned for the repair.
+
+Updates using `--yes`, `--json`, or a non-interactive session (including piped
+input or output) collect diagnostics and print handoff commands without starting
+a coding agent. With `--json`, triage output goes to stderr so stdout retains
+the original update result. Diagnostic collection failures never hide the update
+failure.
+
+For a background or Control UI failure, use the installation-specific command
+printed on the Gateway host. Printed commands use PowerShell on Windows and
+POSIX shells on macOS, Linux, and WSL. When running triage manually, keep the same
+profile and state/config overrides:
 
 ```bash
 openclaw triage
 openclaw triage --agent codex
 ```
 
+Use `openclaw triage --non-interactive` to collect diagnostics without starting
+an agent. Add `--update-result <path>` to include a saved update-failure artifact.
+
 An unverified installation stays stopped until repaired. Preserve migrated state
 and history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
+
+Dry runs and commands rejected by the initial argument, external-supervisor,
+state-store ownership, handoff identity, or immutable-config checks do not
+collect diagnostics or start an agent. Once those checks pass, failed metadata,
+schema, runtime, and managed-service checks enter triage even when installation
+is blocked. This includes an update that cannot safely stop its parent Gateway
+process. Diagnosis preserves that refusal: it does not stop the Gateway, retry
+the update, or bypass safety checks. See
+[Update troubleshooting](/install/update-troubleshooting).
 
 ## `update status`
 
@@ -447,17 +474,18 @@ returns the latest sentinel.
     `openclaw doctor` runs as the final safe-update check.
   </Step>
   <Step title="Sync plugins">
-    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates tracked plugin installs.
+    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. Updates tracked plugin installs.
   </Step>
 </Steps>
 
 ### Plugin sync details
 
-After a beta core update, eligible official npm plugins with a default/latest
-catalog target try the exact installed core version. This also applies to a
-one-off `--tag <beta-version>` while the configured channel is stable, including
-when plugin synchronization resumes in a fresh process. Other default-line npm
-and ClawHub plugins on the beta channel try their plugin `@beta` tag.
+After a beta core update, eligible official npm and trusted official ClawHub
+plugins with a default/latest catalog target try the exact installed core
+version. This also applies to a one-off `--tag <beta-version>` while the
+configured channel is stable, including when plugin synchronization resumes
+in a fresh process. Other default-line npm and ClawHub plugins on the beta
+channel try their plugin `@beta` tag.
 
 If the selected beta plugin release is unavailable, OpenClaw falls back to the
 default/latest spec and reports a warning naming the requested and used targets.

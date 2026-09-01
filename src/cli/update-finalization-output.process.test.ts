@@ -102,7 +102,13 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       for (const diagnostic of doctorDiagnostics) {
         expect(diagnostics, failure).toContain(diagnostic);
       }
+      expect(diagnostics.match(/Doctor console diagnostic/gu), failure).toHaveLength(1);
       expect(result.stderr, failure).toContain("Doctor stderr diagnostic");
+      const triageNotice = "Update failed. Entering triage...";
+      if (!scenario.endsWith("error")) {
+        expect(result.stdout + result.stderr, failure).not.toContain(triageNotice);
+        expect(result.stdout + result.stderr, failure).not.toContain("triage-fixture-prompt.md");
+      }
       if (!json) {
         const terminal =
           scenario === "human-plugin-error"
@@ -110,11 +116,29 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             : scenario === "human-plugin-warning"
               ? "Update finalization completed with warnings."
               : "Update finalization completed.";
-        expect(result.stdout.trimEnd().endsWith(terminal), failure).toBe(true);
+        if (scenario === "human-plugin-error") {
+          expect(result.stdout, failure).toContain(terminal);
+          const triageIndex = result.stdout.indexOf(triageNotice);
+          const promptIndex = result.stdout.indexOf("Debugging prompt:");
+          const guidanceIndex = result.stdout.indexOf("Ready-to-run agent handoffs:");
+          expect(triageIndex, failure).toBeGreaterThan(result.stdout.indexOf(terminal));
+          expect(promptIndex, failure).toBeGreaterThan(triageIndex);
+          expect(guidanceIndex, failure).toBeGreaterThan(promptIndex);
+          expect(result.stdout.trimEnd().endsWith("openclaw triage --run"), failure).toBe(true);
+        } else {
+          expect(result.stdout.trimEnd().endsWith(terminal), failure).toBe(true);
+        }
         return;
       }
       // Parse the whole pipe: accepting a suffix would hide Clack's direct stdout writes.
       const output = JSON.parse(result.stdout);
+      if (scenario.endsWith("error")) {
+        expect(result.stderr, failure).toContain(triageNotice);
+        expect(result.stderr, failure).toContain('"promptPath":');
+        expect(result.stderr, failure).toContain("triage-fixture-prompt.md");
+        expect(result.stderr, failure).not.toContain("Triage could not complete:");
+        expect(result.stdout, failure).not.toContain("triage-fixture-prompt.md");
+      }
       if (scenario === "doctor-error") {
         expect(output).toMatchObject({
           ok: false,

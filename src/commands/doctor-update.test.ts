@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
-import type { UpdateRecovery } from "../infra/update-recovery.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
@@ -250,13 +250,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     );
   }
 
-  function mockUpdateResult(result: {
-    status: "ok" | "error" | "skipped";
-    mode: "git";
-    root: string;
-    after?: { version: string; buildId?: string };
-    recovery?: UpdateRecovery;
-  }) {
+  function mockUpdateResult(result: Omit<UpdateRunResult, "steps" | "durationMs">) {
     mocks.runGatewayUpdate.mockImplementation(
       async ({
         beforeGitMutation,
@@ -264,7 +258,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         beforeGitMutation?: (target: object) => Promise<unknown>;
       }) => {
         mocks.gitMutationPolicy(await beforeGitMutation?.({}));
-        return result;
+        return { ...result, steps: [], durationMs: 0 } satisfies UpdateRunResult;
       },
     );
   }
@@ -354,7 +348,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         recovery: unsafe
           ? { serviceRestartSafe: false, reason: "state-migration-started" }
           : { serviceRestartSafe: true, version: "2026.4.24" },
-      };
+        steps: [],
+        durationMs: 0,
+      } satisfies UpdateRunResult;
     });
     mocks.maybeRestartServiceAfterFailedMutableUpdate.mockImplementation(async () => {
       expect(taskEnabled).toBe(true);
@@ -419,14 +415,17 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       expect(
         mocks.maybeRestartServiceAfterFailedMutableUpdate.mock.invocationCallOrder[0],
       ).toBeLessThan(mocks.triageCommand.mock.invocationCallOrder[0]!);
-      expect(mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.update).toMatchObject({
-        status: "error",
-        recovery: { serviceRestartSafe: true },
+      expect(mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure).toMatchObject({
+        result: {
+          status: "error",
+          recovery: { serviceRestartSafe: true },
+        },
       });
     }
     if (safeRecoveryFails) {
-      const triageRecovery = mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.update.recovery;
-      expect(triageRecovery).toMatchObject({ serviceRestartSafe: true, service: "failed" });
+      expect(mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure).toMatchObject({
+        result: { recovery: { serviceRestartSafe: true, service: "failed" } },
+      });
     }
   });
 
@@ -456,9 +455,14 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     );
   });
 
-  it.each([false, true])(
-    "disables update progress for a skipped update without a TTY (verified recovery: %s)",
-    async (safe) => {
+  it.each([
+    { reason: "no-upstream", failed: true, safe: false },
+    { reason: "no-upstream", failed: true, safe: true },
+    { reason: "already-current", failed: false, safe: false },
+    { reason: "already-current", failed: false, safe: true },
+  ])(
+    "handles $reason without a TTY (verified recovery: $safe)",
+    async ({ reason, failed, safe }) => {
       Object.defineProperty(process.stdout, "isTTY", {
         configurable: true,
         value: false,
@@ -468,19 +472,38 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         status: "skipped",
         mode: "git",
         root: "/repo/link",
+        reason,
         recovery: safe ? { serviceRestartSafe: true, version: "2026.4.24" } : undefined,
         steps: [],
         durationMs: 0,
-      });
+      } satisfies UpdateRunResult);
 
       const confirm = vi.fn().mockResolvedValue(true);
-      await expect(runOffer({ root: "/repo/link", confirm })).resolves.toEqual({
-        updated: true,
-        handled: false,
-      });
+      const offer = runOffer({ root: "/repo/link", confirm });
+      if (failed) {
+        await expect(offer).rejects.toEqual(new ExitError(1));
+      } else {
+        await expect(offer).resolves.toEqual({ updated: true, handled: false });
+      }
 
       expect(mocks.createUpdateProgress).toHaveBeenCalledWith(false);
       expect(mocks.triageCommand).not.toHaveBeenCalled();
+      const diagnosticCall = mocks.runCommandWithTimeout.mock.calls.find(
+        ([argv]) => argv[2] === "triage",
+      );
+      if (failed) {
+        expect(diagnosticCall?.[0]).toEqual([
+          process.execPath,
+          "/repo/link/dist/index.js",
+          "triage",
+          "--update-result",
+          expect.any(String),
+          "--non-interactive",
+        ]);
+        expect(diagnosticCall?.[1]).toMatchObject({ input: "" });
+      } else {
+        expect(diagnosticCall).toBeUndefined();
+      }
     },
   );
 
@@ -882,9 +905,11 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       });
       mocks.maybeRestartServiceAfterFailedMutableUpdate.mockResolvedValue("healthy");
 
+      const invocationCwd = process.cwd();
       const offer = runOffer({ confirm: vi.fn().mockResolvedValue(true) });
       await expect(offer).rejects.toEqual(new ExitError(1));
       expect(mocks.triageCommand).toHaveBeenCalledOnce();
+      expect(mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.cwd).toBe(invocationCwd);
 
       if (safe) {
         expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).toHaveBeenCalledWith({
@@ -892,16 +917,24 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
           preManagedServiceStop: expect.objectContaining({ stopped: true }),
           jsonMode: false,
           timeoutMs: 1_200_000,
-          invocationCwd: "/repo/link",
+          invocationCwd,
         });
-        expect(mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.update).toMatchObject({
-          status: "error",
-          recovery: { serviceRestartSafe: true, version: "2026.4.24", buildId: "synthetic-build" },
+        expect(mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure).toMatchObject({
+          result: {
+            status: "error",
+            recovery: {
+              serviceRestartSafe: true,
+              version: "2026.4.24",
+              buildId: "synthetic-build",
+            },
+          },
         });
       } else {
         expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).not.toHaveBeenCalled();
-        const triageRecovery = mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.update.recovery;
-        expect(triageRecovery).toEqual({
+        const updateFailure = mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure;
+        expect(
+          updateFailure && "result" in updateFailure ? updateFailure.result.recovery : undefined,
+        ).toEqual({
           serviceRestartSafe: false,
           reason: "runtime-verification-failed",
         });
@@ -1007,7 +1040,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       status: "ok",
       mode: "git",
       root: "/repo/link",
-    });
+      steps: [],
+      durationMs: 0,
+    } satisfies UpdateRunResult);
 
     await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
       updated: true,

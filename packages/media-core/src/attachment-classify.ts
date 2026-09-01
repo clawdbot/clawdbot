@@ -81,31 +81,31 @@ function resolveUtf16Charset(buffer: Buffer): AttachmentCharset | undefined {
 
 function textRatios(text: string, includeWordish: boolean): [printable: number, wordish: number] {
   let printable = 0;
-  let control = 0;
   let wordish = 0;
+  let total = 0;
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13 || code === 32) {
-      printable += 1;
-      wordish += 1;
-    } else if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
-      control += 1;
-    } else {
-      printable += 1;
-      wordish += includeWordish ? Number(WORDISH_CHAR.test(char)) : 0;
-    }
+    const whitespace = code === 9 || code === 10 || code === 13 || code === 32;
+    const isControl = !whitespace && (code < 32 || (code >= 0x7f && code <= 0x9f));
+    total += 1;
+    printable += Number(!isControl);
+    wordish += Number(whitespace || (!isControl && includeWordish && WORDISH_CHAR.test(char)));
   }
-  const total = printable + control;
   return total === 0 ? [0, 0] : [printable / total, wordish / total];
 }
 
 function looksLikeText(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return false;
-  }
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  const sample = buffer.subarray(0, 4096);
+  // Finish the last sampled UTF-8 sequence without starting a new one outside the window.
+  // Its lead is within the final four bytes; completion needs at most three more.
+  const tail = sample.subarray(-4);
+  const leadIndex = tail.findLastIndex((byte) => (byte & 0xc0) !== 0x80);
+  const lead = tail[leadIndex] ?? 0;
+  const width = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc2 ? 2 : 1;
+  const end = sample.length + Math.max(0, leadIndex + width - tail.length);
   try {
-    return textRatios(new TextDecoder("utf-8", { fatal: true }).decode(sample), false)[0] > 0.85;
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, end));
+    return textRatios(text, false)[0] > 0.85;
   } catch {
     const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample), true);
     return printable > 0.95 && wordish > 0.3;

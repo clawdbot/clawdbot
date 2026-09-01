@@ -200,13 +200,15 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
 
 describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
   it.each([
-    { updateChannel: "stable", versionBoundToCore: false, selector: undefined },
-    { updateChannel: "stable", versionBoundToCore: true, selector: "2026.7.33" },
-    { updateChannel: "beta", versionBoundToCore: false, selector: "beta" },
-    { updateChannel: "extended-stable", versionBoundToCore: false, selector: "2026.7.33" },
+    ["stable", false, "2026.7.33", undefined],
+    ["stable", true, "2026.7.33", "2026.7.33"],
+    ["beta", false, "2026.7.33", "beta"],
+    ["beta", false, "2026.8.1-beta.3", "2026.8.1-beta.3"],
+    ["beta", true, "2026.8.1-beta.3", "2026.8.1-beta.3"],
+    ["extended-stable", false, "2026.7.33", "2026.7.33"],
   ] as const)(
-    "resolves declared ClawHub defaults on $updateChannel (bound: $versionBoundToCore)",
-    ({ updateChannel, versionBoundToCore, selector }) => {
+    "resolves declared ClawHub defaults on %s (bound: %s, core: %s)",
+    (updateChannel, versionBoundToCore, coreVersion, selector) => {
       for (const spec of ["clawhub:@openclaw/discord", "clawhub:@openclaw/discord@latest"]) {
         const installSpec = selector ? `clawhub:@openclaw/discord@${selector}` : spec;
         expect(
@@ -214,7 +216,7 @@ describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
             spec,
             updateChannel,
             officialPackageName: "@openclaw/discord",
-            coreVersion: "2026.7.33",
+            coreVersion,
             versionBoundToCore,
           }),
         ).toEqual({
@@ -236,7 +238,7 @@ describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
             spec,
             updateChannel,
             officialPackageName: "@openclaw/discord",
-            coreVersion: "2026.7.33",
+            coreVersion: updateChannel === "beta" ? "2026.8.1-beta.3" : "2026.7.33",
             versionBoundToCore: true,
           }),
         ).toEqual({ installSpec: spec, recordSpec: spec });

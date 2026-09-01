@@ -97,17 +97,6 @@ export function resolveDefaultNpmSpec(spec: string): ParsedRegistryNpmSpec | nul
   return null;
 }
 
-function isDefaultClawHubSpecForBetaChannel(spec: string): { name: string } | null {
-  const parsed = parseClawHubPluginSpec(spec);
-  if (!parsed) {
-    return null;
-  }
-  if (!parsed.version || parsed.version.toLowerCase() === "latest") {
-    return { name: parsed.name };
-  }
-  return null;
-}
-
 export function resolveNpmInstallSpecsForUpdateChannel(params: {
   spec: string;
   updateChannel?: UpdateChannel;
@@ -188,20 +177,23 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
     });
     return { installSpec: `clawhub:${npm.installSpec}`, recordSpec: params.spec };
   }
-  if (params.updateChannel !== "beta") {
+  if (
+    params.updateChannel !== "beta" ||
+    !parsed ||
+    (parsed.version && parsed.version.toLowerCase() !== "latest")
+  ) {
     return {
       installSpec: params.spec,
       recordSpec: params.spec,
     };
   }
-  const betaTarget = isDefaultClawHubSpecForBetaChannel(params.spec);
-  if (!betaTarget) {
-    return {
-      installSpec: params.spec,
-      recordSpec: params.spec,
-    };
-  }
-  const betaSpec = `clawhub:${betaTarget.name}@beta`;
+  // Declared official sources share the installed core's beta cohort even when
+  // availability moves an install from npm to ClawHub.
+  const betaTarget =
+    params.officialPackageName === parsed.name
+      ? resolveNpmInstallSpecsForUpdateChannel({ ...params, spec: parsed.name }).installSpec
+      : `${parsed.name}@beta`;
+  const betaSpec = `clawhub:${betaTarget}`;
   return {
     installSpec: betaSpec,
     recordSpec: params.spec,

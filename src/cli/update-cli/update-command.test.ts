@@ -916,13 +916,8 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   });
 });
 
-describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
-  it("returns status:error (not skipped) when configSnapshot is invalid, so the pre-restart gate fires", async () => {
-    // The pre-restart gate in `updateCommand` is literally
-    //   if (postCorePluginUpdate?.status === "error") { exit(1) }
-    // so asserting that this function returns status:"error" on invalid
-    // config is sufficient to prove the gate fires end-to-end. We pass
-    // `json: true` to suppress logging side-effects without mocking.
+describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
+  it("reports invalid config as an error with repair guidance", async () => {
     const result = await updatePluginsAfterCoreUpdate({
       root: "/tmp/openclaw-test",
       channel: "stable",
@@ -954,7 +949,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
 });
 
 describe("buildInvalidConfigPostCoreUpdateResult", () => {
-  it("returns status:error so the existing pre-restart gate exits 1 instead of restarting on invalid config", () => {
+  it("builds an error result for invalid post-core config", () => {
     const built = updateCommandPluginsTesting.buildInvalidConfigPostCoreUpdateResult();
     expect(built.result.status).toBe("error");
     expect(built.result.reason).toBe("invalid-config");

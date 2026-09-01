@@ -102,13 +102,20 @@ function sync(
   controller: GitHubIdentityController,
   client: GatewayBrowserClient,
   config: Record<string, unknown> = {},
-  overrides: Partial<Parameters<GitHubIdentityController["sync"]>[0]> = {},
+  overrides: Partial<Parameters<GitHubIdentityController["sync"]>[0]> & {
+    agentId?: string;
+    scope?: "system" | "agent";
+  } = {},
 ) {
   controller.sync({
     client,
     connected: true,
-    agentId: "main",
-    config,
+    target: {
+      kind: "shared",
+      agentId: overrides.agentId ?? "main",
+      scope: overrides.scope ?? "system",
+      config,
+    },
     statusReadable: true,
     configurable: true,
     authorizable: true,
@@ -118,9 +125,9 @@ function sync(
 }
 
 describe("GitHubIdentityController", () => {
-  it("keeps scope drafts isolated and clears only the inherited scope", async () => {
+  it("keeps independent controller drafts isolated and clears only the inherited target", async () => {
     const { controller, client, requests } = createController();
-    sync(controller, client, {
+    const config = {
       tools: {
         github: {
           profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -139,11 +146,13 @@ describe("GitHubIdentityController", () => {
           },
         },
       },
-    });
+    };
+    const system = createController();
+    sync(controller, client, config, { scope: "agent" });
     controller.setDraft("token", "agent-token");
-    controller.selectScope("system");
-    controller.setDraft("token", "system-token");
-    controller.selectScope("agent");
+    sync(system.controller, system.client, config);
+    system.controller.setDraft("token", "system-token");
+    sync(controller, client, config, { scope: "agent" });
 
     expect(controller.draft.token).toBe("agent-token");
     await controller.inherit();
@@ -154,14 +163,14 @@ describe("GitHubIdentityController", () => {
     });
     expect(controller.scope).toBe("agent");
     expect(controller.draft).toEqual({ token: "", name: "", email: "" });
-    controller.selectScope("system");
-    expect(controller.draft).toMatchObject({ name: "System Author", token: "system-token" });
+    sync(system.controller, system.client, config);
+    expect(system.controller.draft).toMatchObject({ name: "System Author", token: "system-token" });
+    expect(system.requests).toEqual([]);
   });
 
   it("hands off the token directly and adopts configure status without verifying again", async () => {
     const { controller, client, requests } = createController();
-    sync(controller, client);
-    controller.selectScope("agent");
+    sync(controller, client, {}, { scope: "agent" });
     controller.setDraft("token", "one-use-token");
     controller.setDraft("name", "Agent Author");
 
@@ -432,11 +441,11 @@ describe("GitHubIdentityController", () => {
         },
       },
     });
-    sync(controller, client, config("System One", "Agent One"));
+    sync(controller, client, config("System One", "Agent One"), { scope: "agent" });
     controller.setDraft("name", "Active Agent Edit");
-    sync(controller, client, config("System Two", "Agent Two"));
+    sync(controller, client, config("System Two", "Agent Two"), { scope: "agent" });
     expect(controller.draft.name).toBe("Active Agent Edit");
-    controller.selectScope("system");
+    sync(controller, client, config("System Two", "Agent Two"));
     expect(controller.draft.name).toBe("System Two");
   });
 
@@ -451,7 +460,6 @@ describe("GitHubIdentityController", () => {
       },
     });
     sync(controller, client, config("ghp_11111111111111111111111111111111"));
-    controller.selectScope("system");
     await controller.verify();
     expect(controller.status).not.toBeNull();
 
@@ -543,6 +551,16 @@ describe("GitHubIdentityController", () => {
       { status: "success" as const, githubStatus: availableStatus("system") },
     ];
     const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          sourceConfig: {},
+          raw: "{}",
+          hash: "poll-hash",
+          valid: true,
+          issues: [],
+        };
+      }
       if (method === "tools.github.authorize.start") {
         return {
           requestId: "github-device-11111111111111111111111111111111",
@@ -559,14 +577,20 @@ describe("GitHubIdentityController", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runExternalMutation: RuntimeConfigCapability["runExternalMutation"] = async (task) => ({
-      ok: true,
-      value: await task(client),
-      refresh: { ok: true },
+    const runtimeConfig = createRuntimeConfigCapability({
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
+      subscribe: () => () => undefined,
     });
+    await runtimeConfig.ensureLoaded();
+    request.mockClear();
     const controller = new GitHubIdentityController({
       requestUpdate: vi.fn(),
-      runExternalMutation,
+      runExternalMutation: runtimeConfig.runExternalMutation,
     });
     sync(controller, client);
 
@@ -577,6 +601,7 @@ describe("GitHubIdentityController", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(pollTimes).toEqual([1_800_000_005_000]);
     expect(controller.authorization).toMatchObject({ phase: "pending", slowedDown: true });
+    expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(9_999);
     expect(pollTimes).toHaveLength(1);
@@ -584,12 +609,16 @@ describe("GitHubIdentityController", () => {
     expect(pollTimes).toEqual([1_800_000_005_000, 1_800_000_015_000]);
     expect(controller.status).toEqual(availableStatus("system"));
     expect(controller.authorization).toEqual({ phase: "idle" });
+    expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+    controller.dispose();
+    runtimeConfig.dispose();
   });
 
   it.each([
     { label: "selected agent changes", overrides: { agentId: "reviewer" } },
     { label: "connection generation changes", overrides: { clientRevision: 2 } },
     { label: "administrator access is lost", overrides: { authorizable: false } },
+    { label: "selected scope changes", overrides: { scope: "agent" as const } },
   ])("cancels the exact authorization when $label", async ({ overrides }) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
@@ -623,7 +652,7 @@ describe("GitHubIdentityController", () => {
     );
   });
 
-  it("locks scope during authorization and cancels the exact request on demand", async () => {
+  it("cancels the exact request once when cancellation is repeated", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
     const request = vi.fn(async (method: string) =>
@@ -642,8 +671,6 @@ describe("GitHubIdentityController", () => {
     sync(controller, client);
     await controller.startAuthorization();
 
-    controller.selectScope("agent");
-    expect(controller.scope).toBe("system");
     const firstCancel = controller.cancelAuthorization();
     const duplicateCancel = controller.cancelAuthorization();
     await Promise.all([firstCancel, duplicateCancel]);

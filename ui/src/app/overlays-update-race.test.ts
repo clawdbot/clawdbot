@@ -11,6 +11,7 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import type { UpdateRestartStatusResponse } from "./update-overlay-helpers.ts";
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
@@ -52,6 +53,7 @@ describe("application update reconciliation races", () => {
               sentinel: {
                 kind: "update",
                 status: "ok",
+                ts: 1_000,
                 stats: { after: { version: "2.0.0" } },
               },
             }
@@ -65,6 +67,9 @@ describe("application update reconciliation races", () => {
       autoEnabled: true,
       target: { kind: "package", version: "2.0.0" },
     };
+    harness.emitEvent("update.available", {
+      updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+    });
     const running = overlays.runUpdate();
     try {
       await flushMicrotasks();
@@ -98,7 +103,20 @@ describe("application update reconciliation races", () => {
   });
 
   it("checks the authoritative sentinel when disconnect wins the update.run response race", async () => {
+    vi.useFakeTimers();
     installUpdateTranslations();
+    let status: UpdateRestartStatusResponse = {
+      sentinel: {
+        kind: "update",
+        status: "skipped",
+        ts: 1_000,
+        stats: {
+          handoffId: "handoff-current",
+          reason: UPDATE_HANDOFF_STARTED_REASON,
+          after: { version: "1.0.0" },
+        },
+      },
+    };
     const updateRun = deferred<{
       ok: boolean;
       handoff: { status: string };
@@ -112,13 +130,7 @@ describe("application update reconciliation races", () => {
         return updateRun.promise;
       }
       if (method === "update.status") {
-        return Promise.resolve({
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "1.0.0" } },
-          },
-        });
+        return Promise.resolve(status);
       }
       return Promise.resolve({});
     });
@@ -150,6 +162,17 @@ describe("application update reconciliation races", () => {
       await flushMicrotasks();
 
       expectUpdateStatusRequested(request);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      // The status owner learned this real pending handoff while the RPC was unavailable.
+      status = {
+        sentinel: {
+          ...status.sentinel,
+          status: "ok",
+          ts: 2_000,
+          stats: { handoffId: "handoff-current", reason: null, after: { version: "1.0.0" } },
+        },
+      };
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",
@@ -170,6 +193,7 @@ describe("application update reconciliation races", () => {
         result: { reason: UPDATE_HANDOFF_STARTED_REASON, status: "skipped" },
       });
       overlays.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -275,7 +299,7 @@ describe("application update reconciliation races", () => {
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",
-        text: expect.stringContaining("Expected v2.0.0"),
+        text: UNKNOWN_OUTCOME_TEXT,
       });
     } finally {
       overlays.dispose();

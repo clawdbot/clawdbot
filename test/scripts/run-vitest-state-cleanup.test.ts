@@ -121,7 +121,13 @@ posixIt.each([
     failFirstFile: true,
     homePolicy: "isolated",
   })),
-  ...["hermetic-ambient", "staged-live", "real-home", "profile-only"].flatMap((homePolicy) =>
+  ...[
+    "hermetic-ambient",
+    "staged-live",
+    "real-home",
+    "profile-only",
+    "profile-only-parent-shell",
+  ].flatMap((homePolicy) =>
     ["threads", "forks"].map((pool) => ({
       route: homePolicy === "staged-live" ? "live" : "owned",
       pool,
@@ -136,12 +142,13 @@ posixIt.each([
   async ({ route, pool, failRun, pauseAfterAck, failFirstFile, homePolicy }) => {
     const root = tempDirs.make("oc-vt-state-");
     const tmp = path.join(root, "tmp");
-    const home = path.join(root, homePolicy === "profile-only" ? "home-$source" : "home");
+    const profileOnly = homePolicy === "profile-only" || homePolicy === "profile-only-parent-shell";
+    const home = path.join(root, profileOnly ? "home-$source" : "home");
     fs.mkdirSync(tmp);
     fs.mkdirSync(home);
     const realHome = homePolicy === "real-home";
     const hermetic = homePolicy === "hermetic-ambient";
-    const profileLoaded = ["staged-live", "real-home", "profile-only"].includes(homePolicy);
+    const profileLoaded = profileOnly || ["staged-live", "real-home"].includes(homePolicy);
     const staged = homePolicy === "staged-live";
     const syntheticCredential = "synthetic-home-source-only";
     const credentialRelativePath = ".claude/.credentials.json";
@@ -220,6 +227,7 @@ export function restoreHomeMocks() {
 export async function allocateResources() {
   const home = process.env.HOME;
   expect(process.env.VITEST_HOME_SOURCE_MARKER).toBe(${profileLoaded ? '"synthetic-profile"' : "undefined"});
+  expect(process.env.VITEST_UNREQUESTED_PROFILE).toBeUndefined();
   const credential = path.join(home, ${JSON.stringify(credentialRelativePath)});
   expect(fs.existsSync(credential)).toBe(${staged || realHome});
   if (${staged || realHome}) expect(fs.readFileSync(credential, "utf8")).toBe(${JSON.stringify(syntheticCredential)});
@@ -351,8 +359,16 @@ export default {
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
       pnpm_config_verify_deps_before_run: "false",
     };
+    if (profileOnly) {
+      // Node's piped stdin selects .bashrc in level-zero macOS Bash; a parent shell
+      // reaches BASH_ENV instead. Neither may run before the selected profile.
+      env.SHLVL = homePolicy === "profile-only-parent-shell" ? "1" : "0";
+      env.BASH_ENV = path.join(root, "ambient-profile.sh");
+      fs.writeFileSync(env.BASH_ENV, "export VITEST_UNREQUESTED_PROFILE=bash-env\n");
+      fs.writeFileSync(path.join(home, ".bashrc"), "export VITEST_UNREQUESTED_PROFILE=bashrc\n");
+    }
     if (homePolicy !== "isolated") {
-      env.OPENCLAW_LIVE_TEST = homePolicy === "profile-only" ? "0" : "1";
+      env.OPENCLAW_LIVE_TEST = profileOnly ? "0" : "1";
       env.OPENCLAW_LIVE_USE_REAL_HOME = staged ? "0" : "1";
       env.OPENCLAW_LIVE_TEST_QUIET = "1";
     }

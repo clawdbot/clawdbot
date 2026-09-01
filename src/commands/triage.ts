@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
@@ -17,15 +18,20 @@ import {
   type InstallationTarget,
 } from "../infra/installation-target-context.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import {
+  redactSupportString,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
 import { resolveWindowsSpawnProgramCandidate } from "../plugin-sdk/windows-spawn.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { renderTriagePrompt, type TriageBundle } from "./triage-prompt.js";
 import {
-  renderTriagePrompt,
-  type TriageBundle,
-  type TriageUpdateEvidence,
-} from "./triage-prompt.js";
+  readTriageUpdateFailure,
+  sanitizeTriageUpdateFailure,
+  writeTriageUpdateFailure,
+  type TriageUpdateFailure,
+} from "./triage-update.js";
 
 const TRIAGE_EXTERNAL_AGENTS = ["claude", "codex", "opencode", "pi"] as const;
 type TriageExternalAgent = (typeof TRIAGE_EXTERNAL_AGENTS)[number];
@@ -33,21 +39,29 @@ type TriageExternalAgent = (typeof TRIAGE_EXTERNAL_AGENTS)[number];
 export type TriageRecoveryContext = {
   target: InstallationTarget;
   cwd?: string;
-  update: Pick<
-    UpdateRunResult,
-    "status" | "mode" | "root" | "reason" | "before" | "after" | "recovery" | "steps"
-  >;
+  updateFailure: TriageUpdateFailure;
+  isCurrent?: () => boolean;
 };
 
 type TriageOptions = {
   json?: boolean;
   noExport?: boolean;
   run?: boolean;
+  nonInteractive?: boolean;
+  updateResult?: string;
   agent?: TriageExternalAgent;
   recovery?: TriageRecoveryContext;
 };
 
-async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
+function triageCollectionError(error: unknown, redaction: SupportRedactionContext): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return scrubDoctorErrorMessage(redactSupportString(message, redaction));
+}
+
+async function collectTriageBundle(
+  skipExport: boolean,
+  redaction: SupportRedactionContext,
+): Promise<TriageBundle> {
   if (skipExport) {
     return { kind: "skipped" };
   }
@@ -69,46 +83,48 @@ async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
     });
     return { kind: "available", path: result.path };
   } catch (error) {
-    return {
-      kind: "unavailable",
-      reason: scrubDoctorErrorMessage(error),
-    };
+    return { kind: "unavailable", reason: triageCollectionError(error, redaction) };
   }
 }
 
-async function collectTriageUpdateEvidence(
-  recovery: TriageRecoveryContext | undefined,
+async function readPendingTriageUpdateFailure(
   env: NodeJS.ProcessEnv,
-): Promise<TriageUpdateEvidence | undefined> {
-  if (recovery) {
-    return recovery.update;
-  }
-  // A pending update notification is evidence only; triage must not consume it or
-  // create state while the Gateway is offline. Delivery instructions are excluded.
+  redaction: SupportRedactionContext,
+): Promise<TriageUpdateFailure | undefined> {
+  // A pending update notification is evidence only. Do not consume it or create
+  // state while the Gateway is offline; delivery instructions are never projected.
   const sentinel = await readRestartSentinelReadOnly(env);
-  if (sentinel?.payload.kind !== "update" || sentinel.payload.status !== "error") {
+  if (sentinel?.payload.kind !== "update") {
     return undefined;
   }
-  const stats = sentinel.payload.stats;
-  return {
-    status: sentinel.payload.status,
-    mode: stats?.mode,
-    root: stats?.root,
-    reason: stats?.reason,
-    before: stats?.before,
-    after: stats?.after,
-    recovery: stats?.recovery,
-    steps: (stats?.steps ?? []).map((step) => ({
-      name: step.name,
-      exitCode: step.log?.exitCode,
-      stderrTail: step.log?.stderrTail,
-      stdoutTail: step.log?.stdoutTail,
-    })),
-  };
-}
-
-function quoteShellArgument(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  const { payload } = sentinel;
+  const stats = payload.stats;
+  if (
+    classifyUpdateOutcome({ status: payload.status, reason: stats?.reason ?? undefined }) !==
+    "failed"
+  ) {
+    return undefined;
+  }
+  return sanitizeTriageUpdateFailure(
+    {
+      result: {
+        status: payload.status,
+        mode: stats?.mode ?? "unknown",
+        root: stats?.root,
+        reason: stats?.reason ?? undefined,
+        before: stats?.before ?? undefined,
+        after: stats?.after ?? undefined,
+        recovery: stats?.recovery,
+        steps: (stats?.steps ?? []).map((step) => ({
+          name: step.name,
+          exitCode: step.log?.exitCode ?? null,
+          stderrTail: step.log?.stderrTail,
+          stdoutTail: step.log?.stdoutTail,
+        })),
+      },
+    },
+    redaction,
+  );
 }
 
 /** Collect read-only diagnostics and hand the local repair to an available coding agent. */
@@ -116,37 +132,47 @@ export async function triageCommand(
   runtime: RuntimeEnv,
   options: TriageOptions = {},
 ): Promise<void> {
+  const isCurrent = () => options.recovery?.isCurrent?.() !== false;
+  if (!isCurrent()) {
+    return;
+  }
+  const interactive = process.stdin.isTTY && process.stdout.isTTY;
+  const allowAgent = options.json !== true && options.nonInteractive !== true && interactive;
+  const deferDiagnostics = allowAgent && Boolean(options.recovery || options.updateResult);
   let findings: readonly HealthFinding[] = [];
-  if (!options.recovery) {
+  if (!deferDiagnostics) {
     try {
       const { collectDoctorFindings } = await import("./doctor-lint.js");
       findings = await collectDoctorFindings(runtime);
     } catch (error) {
       findings = [
         {
-          checkId: "core/triage/doctor-unavailable",
+          checkId: "core/triage/doctor-collection",
           severity: "error",
-          message: `Doctor checks unavailable: ${scrubDoctorErrorMessage(error)}`,
-          fixHint: "Inspect the local installation and captured update outcome, then rerun Doctor.",
+          message: `Doctor checks unavailable: ${triageCollectionError(error, {
+            env: process.env,
+            stateDir: options.recovery?.target.stateDir ?? resolveInstallationTarget().stateDir,
+          })}`,
         },
       ];
     }
   }
   // Standalone Doctor loads dotenv; recovery carries selectors captured before mutation.
   const target = options.recovery?.target ?? resolveInstallationTarget();
-  const targetEnv = installationTargetEnv(target);
+  const targetEnv = { ...process.env, ...installationTargetEnv(target) };
   const agentOptions = options.recovery?.cwd ? { cwd: options.recovery.cwd } : {};
-  const redaction = { env: process.env, stateDir: target.stateDir };
-  // Recovery already has an authoritative update result. Fresh checks and exports
-  // can block on the broken installation, so the fixing agent owns that enrichment.
-  const bundle: TriageBundle = options.recovery
+  const redaction = { env: targetEnv, stateDir: target.stateDir };
+  const updateFailure = options.recovery
+    ? sanitizeTriageUpdateFailure(options.recovery.updateFailure, redaction)
+    : options.updateResult
+      ? await readTriageUpdateFailure(options.updateResult, redaction)
+      : await readPendingTriageUpdateFailure(targetEnv, redaction);
+  // Captured interactive recovery must reach the repair agent before fresh checks
+  // or exports can block on the broken installation. Unattended runs still collect.
+  const bundle: TriageBundle = deferDiagnostics
     ? { kind: "deferred" }
-    : await collectTriageBundle(options.noExport === true);
-  const update = await collectTriageUpdateEvidence(options.recovery, {
-    ...process.env,
-    ...targetEnv,
-  });
-  const prompt = renderTriagePrompt({ findings, bundle, redaction, update });
+    : await collectTriageBundle(options.noExport === true, redaction);
+  const prompt = renderTriagePrompt({ findings, bundle, redaction, updateFailure });
   // Packaged OpenClaw/Bun hosts cannot interpret npm shim entrypoints. Reuse the
   // active Node runtime or require an installed node.exe before choosing a shim.
   const nodeExecutable = isNodeRuntime(process.execPath)
@@ -168,65 +194,85 @@ export async function triageCommand(
         ]
       : [];
   });
-  const interactive = process.stdin.isTTY && process.stdout.isTTY;
   const handoff = externalAgents.find(({ agent, program }) => {
     const launchable =
       program.resolution !== "unresolved-wrapper" &&
       (program.resolution !== "node-entrypoint" || nodeExecutable !== undefined);
     return launchable && (options.agent === undefined || agent === options.agent);
   });
-  const canStartAgent =
-    options.json !== true && interactive && (options.run === true || handoff !== undefined);
+  const canStartAgent = allowAgent && (options.run === true || handoff !== undefined);
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
-  const outputDir = path.join(redaction.stateDir, "logs", "support");
+  const outputDir = path.join(target.stateDir, "logs", "support");
+  let updateResultPath: string | undefined;
   let promptArtifact: Result<string, string>;
   try {
+    // Private handoff inputs can be deleted by their caller. Saved commands use a
+    // sanitized support export that remains readable after the updater completes.
+    updateResultPath = updateFailure
+      ? await writeTriageUpdateFailure(updateFailure, { env: targetEnv })
+      : undefined;
+    if (!isCurrent()) {
+      return;
+    }
     const file = path.join(outputDir, `openclaw-triage-prompt-${now}-${process.pid}.md`);
     await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(file, prompt, { encoding: "utf8", mode: 0o600 });
     promptArtifact = { ok: true, value: file };
   } catch (error) {
-    // Native and embedded agents consume the in-memory prompt. A support artifact
-    // must not prevent an interactive agent from repairing a storage failure.
+    // Both agent routes consume the in-memory prompt. Support artifact failures
+    // must not block an interactive repair of the installation's storage access.
     if (!canStartAgent) {
       throw error;
     }
-    promptArtifact = {
-      ok: false,
-      error: redactSupportString(scrubDoctorErrorMessage(error), redaction),
-    };
+    promptArtifact = { ok: false, error: triageCollectionError(error, redaction) };
+  }
+  if (!isCurrent()) {
+    return;
   }
   const promptPath = promptArtifact.ok ? promptArtifact.value : null;
-
-  // Operator-facing paths and shell commands stay real; only agent prompt content is path-redacted.
-  const quotedPath = promptPath ? quoteShellArgument(promptPath) : undefined;
-  const promptArgument = quotedPath ? `"$(cat ${quotedPath})"` : quoteShellArgument(prompt);
-  const codexPromptArgument = quotedPath ? `- < ${quotedPath}` : promptArgument;
-  const targetPrefix = `env OPENCLAW_STATE_DIR=${quoteShellArgument(target.stateDir)} OPENCLAW_CONFIG_PATH=${quoteShellArgument(target.configPath)} OPENCLAW_WORKSPACE_DIR=${quoteShellArgument(target.defaultWorkspaceDir)}`;
+  const stdin = promptPath ? { stdinPath: promptPath, env: targetEnv } : { env: targetEnv };
   const suggestedCommands = [
-    ...TRIAGE_EXTERNAL_AGENTS.map((agent) =>
-      agent === "codex"
-        ? `${targetPrefix} codex exec --skip-git-repo-check ${codexPromptArgument}`
-        : `${targetPrefix} ${agent}${agent === "opencode" ? " --prompt" : ""} ${promptArgument}`,
+    formatInstallationTargetCommand(
+      ["claude", "-p", ...(promptPath ? [] : [prompt])],
+      target,
+      stdin,
     ),
-    `${targetPrefix} openclaw triage --run`,
+    formatInstallationTargetCommand(
+      ["codex", "exec", "--skip-git-repo-check", promptPath ? "-" : prompt],
+      target,
+      stdin,
+    ),
+    formatInstallationTargetCommand(
+      ["opencode", "run", ...(promptPath ? [] : [prompt])],
+      target,
+      stdin,
+    ),
+    formatInstallationTargetCommand(
+      ["pi", "--print", ...(promptPath ? [] : [prompt])],
+      target,
+      stdin,
+    ),
+    formatInstallationTargetCommand(
+      [
+        "openclaw",
+        "triage",
+        "--run",
+        ...(updateResultPath ? ["--update-result", updateResultPath] : []),
+      ],
+      target,
+      { env: targetEnv },
+    ),
   ];
-  const findingCounts: Record<HealthFindingSeverity, number> = {
-    error: 0,
-    warning: 0,
-    info: 0,
-  };
+  const findingCounts: Record<HealthFindingSeverity, number> = { error: 0, warning: 0, info: 0 };
   for (const finding of findings) {
     findingCounts[finding.severity] += 1;
   }
-  const detectedAgents = externalAgents.map(({ agent }) => agent);
   const report = {
     promptPath,
     bundlePath: bundle.kind === "available" ? bundle.path : null,
-    bundleError:
-      bundle.kind === "unavailable" ? redactSupportString(bundle.reason, redaction) : null,
+    bundleError: bundle.kind === "unavailable" ? bundle.reason : null,
     findings: findingCounts,
-    detectedAgents,
+    detectedAgents: externalAgents.map(({ agent }) => agent),
     suggestedCommands,
   };
   if (options.json === true) {
@@ -242,19 +288,14 @@ export async function triageCommand(
   if (bundle.kind === "available") {
     runtime.log(`Sanitized diagnostics: ${bundle.path}`);
   } else if (bundle.kind === "unavailable") {
-    runtime.log(`Diagnostics export unavailable: ${report.bundleError}`);
+    runtime.log(`Diagnostics export unavailable: ${bundle.reason}`);
   }
-
-  if (!interactive || options.run === true || !handoff) {
-    runtime.log(
-      process.platform === "win32"
-        ? "Agent handoffs (POSIX/Git Bash syntax; not PowerShell or Command Prompt):"
-        : "Ready-to-run agent handoffs:",
-    );
+  if (!allowAgent || options.run === true || !handoff) {
+    runtime.log("Ready-to-run agent handoffs:");
     for (const command of suggestedCommands) {
       runtime.log(`  ${command}`);
     }
-    if (!interactive && options.run !== true) {
+    if (!allowAgent && options.run !== true) {
       return;
     }
   }
@@ -269,23 +310,26 @@ export async function triageCommand(
     }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
     const args = handoff.agent === "opencode" ? ["--prompt", prompt] : [prompt];
+    // Artifact I/O can outlive the admitted update attempt. Recheck its exact
+    // owner immediately before handing control to a local coding agent.
+    if (!isCurrent()) {
+      return;
+    }
     let exitCode: number;
     try {
       exitCode = await new Promise<number>((resolve, reject) => {
         const child = spawn(handoff.program.command, [...handoff.program.leadingArgv, ...args], {
           stdio: "inherit",
-          env: { ...process.env, ...targetEnv },
+          env: targetEnv,
           ...agentOptions,
         });
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
       });
     } catch (error) {
-      const reason = redactSupportString(scrubDoctorErrorMessage(error), redaction);
-      runtime.error(`Failed to launch ${handoff.agent}: ${reason}`);
-      if (process.platform === "win32") {
-        runtime.log("Manual handoff commands use POSIX/Git Bash syntax.");
-      }
+      runtime.error(
+        `Failed to launch ${handoff.agent}: ${triageCollectionError(error, redaction)}`,
+      );
       runtime.log(
         `Run manually: ${suggestedCommands[TRIAGE_EXTERNAL_AGENTS.indexOf(handoff.agent)]}`,
       );
@@ -296,21 +340,30 @@ export async function triageCommand(
     }
     return;
   }
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+  if (!allowAgent) {
     throw new Error(
       "Embedded triage requires an interactive terminal; use a suggested handoff command.",
     );
   }
 
   const { verifySetupInference } = await import("../system-agent/setup-inference.js");
+  if (!isCurrent()) {
+    return;
+  }
   const inference = await verifySetupInference({ runtime, timeoutMs: 15_000 });
+  if (!isCurrent()) {
+    return;
+  }
   if (!inference.ok) {
-    const reason = redactSupportString(scrubDoctorErrorMessage(inference.error), redaction);
+    const reason = triageCollectionError(inference.error, redaction);
     throw new Error(
       `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
     );
   }
   const { agentExecCommand } = await import("./agent-exec.js");
+  if (!isCurrent()) {
+    return;
+  }
   const result = await withInstallationTarget(target, () =>
     agentExecCommand(prompt, agentOptions, runtime),
   );

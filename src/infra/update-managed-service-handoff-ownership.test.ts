@@ -303,6 +303,7 @@ childProcess.spawn = function(command, args, options) {
           "-e",
           `require("node:fs").writeFileSync(${JSON.stringify(updaterPath)},"ran");setTimeout(() => process.exit(${params.commandExitCode ?? 1}), ${params.commandDelayMs ?? 0})`,
         ],
+        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
         logPath,
         sensitivePaths: [],
       },
@@ -392,7 +393,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
 
     expect(result).toEqual({ code: 7, signal: null });
     await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
-      "managed update command exited code=7",
+      "managed update update command exited code=7",
     );
     const databasePath = resolveOpenClawStateSqlitePath(env);
     const stat = await fs.stat(databasePath);
@@ -458,7 +459,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
           await vi.waitFor(
             async () => {
               await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
-                "managed update command exited code=7",
+                "managed update update command exited code=7",
               );
             },
             { interval: 5, timeout: 2_000 },

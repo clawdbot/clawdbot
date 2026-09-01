@@ -678,17 +678,24 @@ openclaw doctor --lint --json
 
 ## If you are stuck
 
-Run `openclaw triage` in a terminal on the Gateway host, keeping the same profile
-and state/config overrides. It opens an installed coding agent with local
-diagnostics and any recorded failed-update outcome, so the agent can repair the
-installation and verify Gateway health. Use `openclaw triage --agent codex` to
-select a particular agent; see [Triage](/cli/triage) for supported agents and
-authentication requirements.
+Run `openclaw triage` in a terminal on the Gateway host, using the printed
+installation-specific command or keeping the same profile and state/config
+overrides. It opens the first directly launchable coding agent in this order:
+Claude Code, Codex, OpenCode, then Pi. The agent receives local diagnostics and
+any recorded failed-update outcome so it can repair the installation and verify
+Gateway health, using its normal authentication, sandbox, and approval settings.
+Use `openclaw triage --agent codex` to select a particular agent.
 
-Failed interactive updates open triage automatically after updater cleanup.
-JSON, `--yes`, and piped invocations print their result without starting an agent.
+Failed interactive updates open triage automatically after updater cleanup and
+pass the captured failure to the agent before fresh diagnostics can delay the
+handoff. JSON, `--yes`, and non-interactive update invocations collect diagnostics
+and print handoff commands without starting an agent. For diagnostic collection
+alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
+include a saved update-failure artifact. See [Triage](/cli/triage) for command
+formatting and installation targeting.
+
 Keep an unverified Gateway stopped and preserve migrated state during repair.
-The failed update retains its nonzero exit code after the agent finishes.
+The failed update retains its nonzero exit code even if the agent repairs it.
 
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)

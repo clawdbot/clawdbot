@@ -138,12 +138,21 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     return applied;
   };
   try {
-    // Only the opted-in profile reader gets its source home. The test process
-    // stays isolated while $HOME references inside the profile retain their meaning.
+    // Skip ambient startup files, which can reset HOME or load an unselected profile.
+    // Only this reader gets the source HOME; the test process stays isolated.
     const output = execFileSync(
       "/bin/bash",
-      ["-lc", 'set -a; source "$1" >/dev/null 2>&1; env -0', "openclaw-test-profile", profilePath],
-      { encoding: "utf8", env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir } },
+      [
+        "--norc",
+        "-c",
+        'set -a; source "$1" >/dev/null 2>&1; env -0',
+        "openclaw-test-profile",
+        profilePath,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir, BASH_ENV: undefined },
+      },
     );
     const applied = countAppliedEntries(output.split("\0").filter(Boolean));
     if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {

@@ -11,13 +11,13 @@ import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
-  MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
@@ -43,6 +43,7 @@ import {
 } from "./update-command-post-core.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
+  UpdateCommandFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import {
@@ -70,10 +71,9 @@ import { resolveUnsafeUpdateRecoveryGuidance } from "./update-recovery-guidance.
 
 const CLI_NAME = resolveCliName();
 
-export type UpdateCommandOutcome = { result: UpdateRunResult; exitCode: number };
-
 export async function finishUpdate(params: {
   result: UpdateRunResult;
+  failure?: { cause: unknown; detail: string };
   root: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
@@ -93,7 +93,7 @@ export async function finishUpdate(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
-}): Promise<UpdateCommandOutcome> {
+}): Promise<void> {
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
   const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
     ...result,
@@ -108,7 +108,11 @@ export async function finishUpdate(params: {
     }
     return result;
   };
-  const reportResult = async (result: UpdateRunResult, recoverService = false) => {
+  const reportResult = async (
+    result: UpdateRunResult,
+    recoverService = false,
+    restoreFailure?: { cause: unknown },
+  ) => {
     const finalResult = completedResult({
       ...result,
       ...(result.status === "error" && !recoverService
@@ -120,14 +124,24 @@ export async function finishUpdate(params: {
           }
         : {}),
     });
-    try {
-      if (finalResult.status !== "ok" && finalResult.recovery?.serviceRestartSafe !== true) {
-        params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
-      } else {
-        await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop, true);
+    if (!restoreFailure) {
+      try {
+        if (finalResult.status !== "ok" && finalResult.recovery?.serviceRestartSafe !== true) {
+          params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
+        } else {
+          await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
+            params.preManagedServiceStop,
+            true,
+          );
+        }
+      } catch (cause) {
+        restoreFailure = { cause };
       }
-    } catch (error) {
-      defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(error)}`);
+    }
+    if (restoreFailure) {
+      defaultRuntime.error(
+        `Failed to restore Windows Scheduled Task autostart: ${String(restoreFailure.cause)}`,
+      );
       finalResult.status = "error";
       finalResult.reason = "windows-task-autostart-restore-failed";
       finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
@@ -159,22 +173,33 @@ export async function finishUpdate(params: {
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
     const reportedResult = recoverService ? completedResult(finalResult) : finalResult;
     printFinalResult(reportedResult);
+    if (restoreFailure) {
+      // Persist the unsafe outcome before unwinding. Keep both failures for
+      // recovery diagnostics, with the failed compensation as the primary cause.
+      const priorDetail = [result.reason, params.failure?.detail].filter(Boolean).join(": ");
+      const detail =
+        `${priorDetail ? `${priorDetail}; ` : ""}Windows Scheduled Task autostart recovery failed: ` +
+        formatErrorMessage(restoreFailure.cause);
+      const cause = params.failure
+        ? new AggregateError([params.failure.cause, restoreFailure.cause], detail, {
+            cause: restoreFailure.cause,
+          })
+        : restoreFailure.cause;
+      throw new UpdateCommandFailure(
+        reportedResult,
+        resolveManagedServiceUpdateFailureExitCode(reportedResult),
+        detail,
+        { cause },
+      );
+    }
     return reportedResult;
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop, true);
-      return undefined;
-    } catch (err) {
-      defaultRuntime.error(
-        `Failed to restore Windows Scheduled Task autostart after package update: ${String(err)}`,
-      );
-      const reported = await reportResult({
-        ...result,
-        status: "error",
-        reason: "windows-task-autostart-restore-failed",
-      });
-      return { result: reported, exitCode: resolveManagedServiceUpdateFailureExitCode(reported) };
+    } catch (cause) {
+      // The attempted restore already failed; reporting must not attempt it again.
+      await reportResult(result, false, { cause });
     }
   };
 
@@ -200,7 +225,12 @@ export async function finishUpdate(params: {
           }
         }
       }
-      return { result: reported, exitCode: resolveManagedServiceUpdateFailureExitCode(reported) };
+      throw new UpdateCommandFailure(
+        reported,
+        resolveManagedServiceUpdateFailureExitCode(reported),
+        params.failure?.detail,
+        params.failure,
+      );
     }
 
     if (params.result.status === "skipped") {
@@ -233,13 +263,12 @@ export async function finishUpdate(params: {
           ),
         );
       }
-      return {
-        result: reported,
-        exitCode:
-          reported.status === "error" || params.result.reason === "dirty"
-            ? resolveManagedServiceUpdateFailureExitCode(reported)
-            : 0,
-      };
+      throw new UpdateCommandFailure(
+        reported,
+        classifyUpdateOutcome(reported) === "failed"
+          ? resolveManagedServiceUpdateFailureExitCode(reported)
+          : 0,
+      );
     }
 
     const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
@@ -300,16 +329,13 @@ export async function finishUpdate(params: {
           status: "error",
           reason: "post-core-update-failed",
         });
-        // Foreground callers retain the child status; only the final handoff
-        // verdict may emit the unsafe recovery code.
-        return {
-          result: reported,
-          exitCode:
-            resolveManagedServiceUpdateFailureExitCode(reported) ===
-            MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE
-              ? MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE
-              : freshProcessResult.exitCode,
-        };
+        // A nested child status cannot authorize recovery. Only the final
+        // owner may emit the unsafe recovery code.
+        throw new UpdateCommandFailure(
+          reported,
+          resolveManagedServiceUpdateFailureExitCode(reported),
+          freshProcessResult.error,
+        );
       }
       pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
       postCorePluginUpdate = freshProcessResult.pluginUpdate;
@@ -412,7 +438,10 @@ export async function finishUpdate(params: {
       // Post-core validation can mutate config and state. Only its complete success
       // permits activation; a healthy-looking config cannot override Doctor failure.
       const reported = await reportResult(resultWithPostUpdate);
-      return { result: reported, exitCode: resolveManagedServiceUpdateFailureExitCode(reported) };
+      throw new UpdateCommandFailure(
+        reported,
+        resolveManagedServiceUpdateFailureExitCode(reported),
+      );
     }
 
     const restartConfigSnapshot =
@@ -530,10 +559,12 @@ export async function finishUpdate(params: {
             status: "error",
             reason: "service-revalidation-failed",
           });
-          return {
-            result: reported,
-            exitCode: resolveManagedServiceUpdateFailureExitCode(reported),
-          };
+          throw new UpdateCommandFailure(
+            reported,
+            resolveManagedServiceUpdateFailureExitCode(reported),
+            message,
+            { cause: err },
+          );
         }
         serviceMutationAllowed = false;
         serviceMutationSkipMessage =
@@ -548,10 +579,7 @@ export async function finishUpdate(params: {
       jsonMode: Boolean(params.opts.json),
     });
 
-    const restoreFailure = await restoreWindowsAutoStart(resultWithPostUpdate);
-    if (restoreFailure) {
-      return restoreFailure;
-    }
+    await restoreWindowsAutoStart(resultWithPostUpdate);
     const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
       maybeRestartService({
         shouldRestart: params.shouldRestart && serviceMutationAllowed,
@@ -588,7 +616,10 @@ export async function finishUpdate(params: {
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         }),
       );
-      return { result: reported, exitCode: resolveManagedServiceUpdateFailureExitCode(reported) };
+      throw new UpdateCommandFailure(
+        reported,
+        resolveManagedServiceUpdateFailureExitCode(reported),
+      );
     }
 
     // Restart and health verification own recovery of the service stopped for this update.
@@ -631,11 +662,11 @@ export async function finishUpdate(params: {
             reason: "wrapper-retirement-failed",
           }),
         );
-        return { result: reported, exitCode: 1 };
+        throw new UpdateCommandFailure(reported, 1, retirement.error);
       }
     }
 
-    const reported = await reportResult(resultWithPostUpdate);
+    await reportResult(resultWithPostUpdate);
     if (!params.opts.json) {
       const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
       defaultRuntime.log(
@@ -644,12 +675,10 @@ export async function finishUpdate(params: {
         ),
       );
     }
-    return {
-      result: reported,
-      exitCode:
-        reported.status === "error" ? resolveManagedServiceUpdateFailureExitCode(reported) : 0,
-    };
   } catch (error) {
+    if (error instanceof UpdateCommandFailure) {
+      throw error;
+    }
     const message = formatErrorMessage(error);
     defaultRuntime.error(`Post-update verification failed: ${message}`);
     const reported = await reportResult({
@@ -668,6 +697,11 @@ export async function finishUpdate(params: {
         },
       ],
     });
-    return { result: reported, exitCode: resolveManagedServiceUpdateFailureExitCode(reported) };
+    throw new UpdateCommandFailure(
+      reported,
+      resolveManagedServiceUpdateFailureExitCode(reported),
+      message,
+      { cause: error },
+    );
   }
 }

@@ -11,6 +11,7 @@ import {
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import { visitSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
@@ -349,10 +350,13 @@ export async function visitSessionMessagesAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   let count = 0;
-  for (const record of readSqliteMessageRecords(target)) {
-    visit(record.message, record.seq);
-    count += 1;
-  }
+  visitSessionTranscriptMessageEvents(toTranscriptReadScope(target), (entry) => {
+    const record = extractMessageRecord(entry.event);
+    if (record) {
+      visit(record.message, entry.seq);
+      count += 1;
+    }
+  });
   return count;
 }
 

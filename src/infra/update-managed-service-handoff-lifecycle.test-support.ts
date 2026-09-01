@@ -1,3 +1,4 @@
+import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
@@ -32,12 +33,17 @@ export type ManagedServiceManagerBoundaryOptions = {
   recoveryHang?: boolean;
   recoveryClockAdvanceMs?: number;
   recoverySentinel?: "retained" | "consumed" | "replaced";
+  triageExitCode?: number;
+  triageHang?: boolean;
+  triageMissing?: boolean;
+  recordedFailure?: TriageUpdateFailure;
   helperExitCode?: number;
   updaterResult?: unknown;
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
   updaterNotification?: "published" | "consumed";
   gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited";
+  diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
 
 export type ManagedServiceCommandTiming = {
@@ -53,6 +59,8 @@ export type ManagedServiceManagerBoundaryResult = {
   sentinel: unknown;
   log: string;
   commandTimings: ManagedServiceCommandTiming[];
+  savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
+  sensitiveFilesRemoved: boolean;
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -353,6 +361,11 @@ export function createManagedServiceUpdaterFixtureScript(params: {
             : []),
         ]
       : []),
+    ...(options?.diagnosticReadFailure === "before-recovery"
+      ? [
+          `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }`,
+        ]
+      : []),
     `const result = JSON.stringify(${JSON.stringify(updaterResult)});`,
     `const mode = ${JSON.stringify(options?.updaterOutput)};`,
     `const output = mode === "missing" ? "" : mode === "malformed" ? "diagnostic before JSON\\n" + result : mode === "overflow" ? " ".repeat(4 * 1024 * 1024) + result : result;`,
@@ -433,6 +446,17 @@ export function registerManagedRecoveryOutcomeTests(
     async ({ kind, contradictory }) => {
       const { commands, sentinel, state } = await runManagedServiceManagerBoundary(kind, {
         updaterExitCode: 79,
+        recordedFailure: contradictory
+          ? {
+              error: "Diagnostic restart safety must not override the direct updater outcome",
+              result: {
+                status: "error",
+                mode: "npm",
+                recovery: { serviceRestartSafe: true },
+                steps: [],
+              },
+            }
+          : undefined,
         updaterResult: contradictory
           ? {
               status: "error",
@@ -444,6 +468,11 @@ export function registerManagedRecoveryOutcomeTests(
 
       expect(state.parked).toBe(true);
       expect(state.restored).toBeUndefined();
+      expect(state).toMatchObject({
+        triageCalls: 1,
+        triageObservedRestored: false,
+        triageObservedRecovery: false,
+      });
       expect(
         commands.some((command) => /(?:^| )(?:start|enable|bootstrap|kickstart) /.test(command)),
       ).toBe(false);
@@ -489,9 +518,9 @@ export function registerManagedRecoveryOutcomeTests(
     },
   );
 
-  itUnix.each(
-    (["systemd", "launchd"] as const).flatMap((kind) => [
-      ...(["error", "skipped"] as const).flatMap((status) =>
+  itUnix.each([
+    ...(["systemd", "launchd"] as const).flatMap((kind) =>
+      (["error", "skipped"] as const).flatMap((status) =>
         ([undefined, "published", "consumed"] as const).map((updaterNotification) => ({
           kind,
           status,
@@ -499,19 +528,20 @@ export function registerManagedRecoveryOutcomeTests(
           updaterOutput: undefined,
         })),
       ),
-      {
-        kind,
-        status: "error" as const,
-        updaterNotification: "published" as const,
-        updaterOutput: "split-utf8" as const,
-      },
-    ]),
-  )(
+    ),
+    ...(["systemd", "launchd"] as const).map((kind) => ({
+      kind,
+      status: "error" as const,
+      updaterNotification: "published" as const,
+      updaterOutput: "split-utf8" as const,
+    })),
+  ])(
     "$kind restores a verified Git $status before the child owns a service stop (notification=$updaterNotification, output=$updaterOutput)",
     async ({ kind, status, updaterNotification, updaterOutput }) => {
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
       const { commands, state, sentinel, log } = await runManagedServiceManagerBoundary(kind, {
         updaterExitCode: status === "skipped" ? 0 : 7,
+        helperExitCode: status === "skipped" ? 1 : 7,
         updaterNotification,
         updaterOutput,
         updaterResult: {
@@ -529,6 +559,9 @@ export function registerManagedRecoveryOutcomeTests(
         healthProbeCount: 1,
         expectedVersion: "1.0.0",
         expectedBuildId: "original-git-build",
+        triageCalls: 1,
+        triageObservedRestored: true,
+        triageObservedRecovery: true,
       });
       expect(log).toContain(JSON.stringify(reason));
       if (updaterNotification === "published") {
@@ -571,11 +604,10 @@ export function registerManagedRecoveryOutcomeTests(
   )(
     "$kind preserves terminal foreground $status outcomes and rejects unverified recovery ($recoveryLabel)",
     async ({ kind, status, recovery }) => {
-      const healthy = recovery && "service" in recovery && recovery.service === "healthy";
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
       const { commands, state, sentinel, log } = await runManagedServiceManagerBoundary(kind, {
         updaterExitCode: status === "skipped" ? 0 : 7,
-        helperExitCode: status === "skipped" ? (healthy ? 0 : 1) : 7,
+        helperExitCode: status === "skipped" ? 1 : 7,
         updaterNotification: "consumed",
         updaterResult: { status, reason, mode: "git", recovery },
       });
@@ -668,6 +700,7 @@ export function registerManagedRecoveryOutcomeTests(
         });
         expect(state.restored).toBeUndefined();
         expect(state.healthProbed).toBeUndefined();
+        expect(state.triageCalls).toBe(1);
         expect(sentinel).toMatchObject({
           payload: { status: "error", stats: { reason: "managed-service-handoff-failed" } },
         });

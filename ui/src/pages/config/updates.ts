@@ -11,7 +11,7 @@ import type {
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
-} from "../../app/update-overlay-helpers.ts";
+} from "../../app/update-schedule-projection.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -139,7 +139,7 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
     }),
     renderSettingsRow({
       title: t("updates.page.cliFallback"),
-      description: t("updates.recoveryTriage"),
+      description: t("updates.triage.hostHint"),
       stacked: true,
       control: html`<details class="updates-attempt-details">
         <summary>${t("updates.page.showCliFallback")}</summary>

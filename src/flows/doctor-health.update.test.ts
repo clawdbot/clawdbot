@@ -122,7 +122,8 @@ describe("runDoctorHealthFlow update outcomes", () => {
     "rollback-checkout-dirty",
     "state-migration-started",
     "recovered-update-error",
-    "safe-skipped",
+    "dirty",
+    "already-current",
   ] as const)(
     "preserves the accepted update outcome when Doctor completes: %s",
     async (outcome) => {
@@ -151,7 +152,8 @@ describe("runDoctorHealthFlow update outcomes", () => {
       }
       try {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-          const skipped = outcome === "safe-skipped";
+          const skipped = outcome === "dirty" || outcome === "already-current";
+          const noop = outcome === "already-current";
           const recovered = outcome === "recovered-update-error";
           const cfg: OpenClawConfig = { gateway: { mode: "local" } };
           await state.writeConfig(cfg);
@@ -190,7 +192,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
             status: skipped ? "skipped" : "error",
             mode: "git",
             root: packageRoot,
-            reason: skipped ? "dirty" : recovered ? "deps-install-failed" : "doctor-failed",
+            reason: skipped ? outcome : recovered ? "deps-install-failed" : "doctor-failed",
             steps: recovered
               ? [
                   {
@@ -243,7 +245,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
             // the bug by already taking Doctor's terminal error branch.
             await expect(recoverService.mock.results[0]?.value).resolves.toBe("healthy");
           }
-          if (skipped) {
+          if (noop) {
             expect(mocks.runContributions).toHaveBeenCalledOnce();
             expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
             expect(mocks.triageCommand).not.toHaveBeenCalled();
@@ -253,15 +255,21 @@ describe("runDoctorHealthFlow update outcomes", () => {
             expect(mocks.runContributions).not.toHaveBeenCalled();
             expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
             expect(mocks.triageCommand).toHaveBeenCalledExactlyOnceWith(
-              runtime,
+              expect.objectContaining({
+                log: runtime.log,
+                error: runtime.error,
+                exit: expect.any(Function),
+              }),
               expect.objectContaining({
                 recovery: expect.objectContaining({
-                  update: expect.objectContaining({
-                    status: "error",
-                    reason: expectedUpdate.reason,
-                    steps: expectedUpdate.steps,
-                    recovery: expect.objectContaining(expectedUpdate.recovery),
-                  }),
+                  updateFailure: {
+                    result: expect.objectContaining({
+                      status: expectedUpdate.status,
+                      reason: expectedUpdate.reason,
+                      steps: expectedUpdate.steps,
+                      recovery: expect.objectContaining(expectedUpdate.recovery),
+                    }),
+                  },
                 }),
               }),
             );

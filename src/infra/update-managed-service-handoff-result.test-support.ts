@@ -63,6 +63,7 @@ export function registerManagedTerminalResultTests(
         updaterExitCode: 0,
         updaterResult,
         updaterNotification,
+        recordedFailure: { error: "A diagnostic export cannot override direct success." },
       });
       expect(
         commands.some((command) =>
@@ -71,6 +72,7 @@ export function registerManagedTerminalResultTests(
       ).toBe(false);
       expect(state.restored).toBeUndefined();
       expect(state.healthProbed).toBeUndefined();
+      expect(state.triageCalls).toBeUndefined();
       expect(state.publishedSentinel).toMatchObject({ payload: { status: "ok", stats: { mode } } });
       if (updaterNotification === "consumed") {
         expect(state.consumedNotifications).toBe(1);
@@ -104,6 +106,14 @@ export function registerManagedTerminalResultTests(
           durationMs: 100,
           recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "original-git-build" },
         } satisfies UpdateRunResult,
+        recordedFailure: {
+          result: {
+            status: "error",
+            mode: "git",
+            steps: [],
+            recovery: { serviceRestartSafe: true },
+          },
+        },
       });
       expect(
         commands.some((command) =>
@@ -112,6 +122,7 @@ export function registerManagedTerminalResultTests(
       ).toBe(false);
       expect(state.restored).toBeUndefined();
       expect(state.healthProbed).toBeUndefined();
+      expect(state.triageCalls).toBe(1);
       expect(sentinel).toMatchObject({
         payload: { status: "error", stats: { reason: "managed-service-handoff-failed" } },
       });

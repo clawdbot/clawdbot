@@ -4,8 +4,11 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
-import { prepareUpdateCommandCompletion } from "../cli/update-cli/update-command-completion.js";
+import { tryResolveInvocationCwd } from "../cli/update-cli/shared.js";
+import { resolveServiceRefreshEnv } from "../cli/update-cli/update-command-service-env.js";
 import { resolveUnsafeUpdateRecoveryGuidance } from "../cli/update-cli/update-recovery-guidance.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../daemon/schtasks-update-recovery.js";
@@ -16,8 +19,10 @@ import type { UpdateRecovery } from "../infra/update-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-runner-command.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
+import { prepareUpdateFailureTriage } from "../infra/update-triage.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
@@ -78,10 +83,23 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return { updated: false };
     }
     const updateRoot = params.root;
-    const completeUpdate = await prepareUpdateCommandCompletion({
+    const invocationCwd = tryResolveInvocationCwd();
+    const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
+    const runTriage = await prepareUpdateFailureTriage({
       runtime: params.runtime,
-      invocationCwd: process.cwd(),
+      mode: isTerminalInteractive() ? "interactive" : "non-interactive",
+      invocationCwd,
     });
+    const completeFailedUpdate = async (
+      result: UpdateRunResult,
+      serviceEnv?: NodeJS.ProcessEnv,
+    ) => {
+      await runTriage({
+        failure: { result },
+        target: { root: updateRoot, env: serviceEnv ?? operatorEnv },
+      });
+      exitCliAfterOutput(params.runtime, 1);
+    };
     const externallyManaged = isServiceRepairExternallyManaged();
     const serviceLifecycle =
       isDefaultInstallIdentity(process.env) && !externallyManaged
@@ -241,7 +259,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           preManagedServiceStop: inspection,
           jsonMode: false,
           timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
-          invocationCwd: updateRoot,
+          invocationCwd,
         });
         if (recovered) {
           result = {
@@ -251,8 +269,8 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           };
         }
       }
-      if (result.status === "error") {
-        await completeUpdate({ result, exitCode: 1 }, ownedServiceEnv);
+      if (classifyUpdateOutcome(result) === "failed") {
+        await completeFailedUpdate(result, ownedServiceEnv);
         return { updated: true, handled: true };
       }
       return { updated: true, handled: false };
@@ -301,7 +319,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           "gateway-restart-failed",
         );
         params.outro(`${message}.`);
-        await completeUpdate({ result, exitCode: 1 }, ownedServiceEnv);
+        await completeFailedUpdate(result, ownedServiceEnv);
         return { updated: true, handled: true };
       }
     }

@@ -100,7 +100,7 @@ function renderSidebarOwnerFilter(
 }
 
 export function renderSidebarSessionGroupMenu(params: {
-  menu: SidebarSessionGroupMenuState | null;
+  menu: SidebarSessionGroupMenuState;
   trigger: HTMLElement | null;
   connected: boolean;
   groupDefaultsUnavailable?: boolean;
@@ -109,9 +109,6 @@ export function renderSidebarSessionGroupMenu(params: {
   onClose: (restoreFocus: boolean) => void;
 }) {
   const menu = params.menu;
-  if (!menu) {
-    return nothing;
-  }
   return keyed(
     menu,
     html`
@@ -188,7 +185,7 @@ export function renderSidebarSessionGroupMenu(params: {
 }
 
 export function renderSidebarCatalogViewMenu(params: {
-  position: { x: number; y: number } | null;
+  position: { x: number; y: number };
   trigger: HTMLElement | null;
   grouping: CatalogProjectGrouping;
   owners: readonly SessionOwnerOption[];
@@ -201,9 +198,6 @@ export function renderSidebarCatalogViewMenu(params: {
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const groupingOptions = [
     { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
     { grouping: "person", label: t("chat.sidebar.catalogGroupByPerson") },
@@ -260,7 +254,7 @@ export function renderSidebarCatalogViewMenu(params: {
 }
 
 export function renderSidebarSessionSortMenu(params: {
-  position: { x: number; y: number } | null;
+  position: { x: number; y: number };
   trigger: HTMLElement | null;
   grouping: SidebarSessionsGrouping;
   sortMode: SidebarSessionSortMode;
@@ -285,9 +279,6 @@ export function renderSidebarSessionSortMenu(params: {
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const groupingOptions = [
     { grouping: "category", label: t("sessionsView.groupByCategory") },
     { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },

@@ -5219,6 +5219,7 @@ describe("syncPluginsForUpdateChannel", () => {
       const npmSpec = "@openclaw/diagnostics-otel";
       const clawhubSpec = `clawhub:${npmSpec}`;
       const coreVersion = "2026.8.1-beta.3";
+      const clawhubBetaSpec = `${clawhubSpec}@${source === "source-fallback" ? coreVersion : "beta"}`;
       const attempts: Array<{ spec: string; expectedIntegrity?: string }> = [];
       installPluginFromNpmSpecMock.mockImplementation(
         async ({ spec, expectedIntegrity }: { spec: string; expectedIntegrity?: string }) => {
@@ -5265,7 +5266,7 @@ describe("syncPluginsForUpdateChannel", () => {
               { spec: `${npmSpec}@${coreVersion}`, expectedIntegrity: undefined },
               { spec: npmSpec, expectedIntegrity: "sha512-catalog-default" },
             ]),
-        ...(source === "npm" ? [] : [{ spec: `${clawhubSpec}@beta` }, { spec: clawhubSpec }]),
+        ...(source === "npm" ? [] : [{ spec: clawhubBetaSpec }, { spec: clawhubSpec }]),
       ]);
       expect(result.config.plugins?.installs?.[pluginId]).toMatchObject({
         source: source === "npm" ? "npm" : "clawhub",
@@ -5274,7 +5275,7 @@ describe("syncPluginsForUpdateChannel", () => {
       });
       expect(result.config.plugins?.load?.paths).toEqual([]);
       expect(result.summary.warnings.join("\n")).toContain(
-        source === "npm" ? `${npmSpec}@${coreVersion}` : `${clawhubSpec}@beta`,
+        source === "npm" ? `${npmSpec}@${coreVersion}` : clawhubBetaSpec,
       );
     },
   );

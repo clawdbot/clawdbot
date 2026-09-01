@@ -2,11 +2,9 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareUpdateCommandCompletion } from "../cli/update-cli/update-command-completion.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import { readRestartSentinelReadOnly, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { triageCommand } from "./triage.js";
 
@@ -33,6 +31,11 @@ vi.mock("../infra/executable-path.js", async (importOriginal) => ({
 vi.mock("./configure.shared.js", () => ({ select: mocks.select }));
 
 const agents = ["claude", "codex", "opencode", "pi"] as const;
+const printOnlyModes = [
+  { mode: "JSON", json: true, nonInteractive: false, terminal: true },
+  { mode: "--non-interactive", json: false, nonInteractive: true, terminal: true },
+  { mode: "non-TTY", json: false, nonInteractive: false, terminal: false },
+] as const;
 const secret = "sk-test-triage-recovery-secret-1234567890";
 
 function createRuntime() {
@@ -75,8 +78,8 @@ function failedUpdate(root: string): UpdateRunResult {
         cwd: root,
         exitCode: 1,
         durationMs: 12,
-        stderrTail: `Migration failed at ${root}/runtime-entry.js; Authorization: Bearer ${secret}; ${"🦞".repeat(600)}`,
-        stdoutTail: "lower-priority-step-output",
+        stderrTail: `${"🦞".repeat(600)} Migration failed at ${root}/runtime-entry.js; Authorization: Bearer ${secret}`,
+        stdoutTail: "compiler-output-cause",
       },
     ],
     durationMs: 15,
@@ -132,21 +135,21 @@ describe("triage external recovery handoff", () => {
     },
   );
 
-  it.each([true, false])(
-    "never launches from JSON or noninteractive output (json=%s)",
-    async (json) => {
+  it.each(printOnlyModes)(
+    "never launches an explicitly selected agent in $mode mode",
+    async ({ json, nonInteractive, terminal }) => {
       await withOpenClawTestState({ layout: "split" }, async () => {
         const runtime = createRuntime();
-        await withTerminal(json, () =>
-          triageCommand(runtime, { json, noExport: true, agent: "opencode" }),
+        await withTerminal(terminal, () =>
+          triageCommand(runtime, { json, nonInteractive, noExport: true, agent: "opencode" }),
         );
         if (json) {
           expect(runtime.writeJson).toHaveBeenCalledWith(
             expect.objectContaining({
               detectedAgents: agents,
               suggestedCommands: expect.arrayContaining([
-                expect.stringContaining("opencode --prompt"),
-                expect.stringContaining(" pi "),
+                expect.stringContaining("opencode run"),
+                expect.stringContaining("pi --print"),
               ]),
             }),
             2,
@@ -209,11 +212,24 @@ describe("triage external recovery handoff", () => {
         ),
         doctorStep,
         { ...doctorStep, name: "successful-step", exitCode: 0 },
-        { ...doctorStep, name: "unknown-step", exitCode: null },
+        {
+          ...doctorStep,
+          name: "interrupted-step",
+          exitCode: null,
+          termination: "signal",
+          stderrTail: "Update child terminated before reporting an exit code",
+        },
+        {
+          ...doctorStep,
+          name: "advisory-step",
+          advisory: { kind: "package-post-install-doctor", message: "Recoverable Doctor advice" },
+        },
       ];
       const runtime = createRuntime();
       await withTerminal(true, () =>
-        triageCommand(runtime, { recovery: { target, cwd: state.workspaceDir, update } }),
+        triageCommand(runtime, {
+          recovery: { target, cwd: state.workspaceDir, updateFailure: { result: update } },
+        }),
       );
       expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
         "/usr/local/bin/claude",
@@ -232,124 +248,44 @@ describe("triage external recovery handoff", () => {
       expect(prompt).toContain("injected-doctor-failure");
       expect(prompt).toContain("2026.8.25");
       expect(prompt).toContain("2026.8.26");
-      expect(prompt).toContain('"serviceRestartSafe": false');
       expect(mocks.collectDoctorFindings).not.toHaveBeenCalled();
       expect(mocks.writeDiagnosticSupportExport).not.toHaveBeenCalled();
       expect(prompt).toMatch(/Doctor checks deferred/iu);
       expect(prompt).toMatch(/Diagnostics export deferred/iu);
       expect(prompt).not.toContain("with `--no-export`");
-      expect(prompt).toContain("Migration failed at $OPENCLAW_STATE_DIR/install/runtime-entry.js");
-      expect(prompt).not.toContain("lower-priority-step-output");
-      const evidence = JSON.parse(/```json\n([\s\S]+?)\n```/u.exec(prompt)?.[1] ?? "") as {
-        steps: { name: string; diagnosticExcerpt: string }[];
-      };
-      expect(evidence.steps.map((step) => step.name)).toEqual([
-        "recent-failure",
-        "latest-failure",
-        "doctor",
-      ]);
-      for (const step of evidence.steps) {
-        expect(Buffer.byteLength(step.diagnosticExcerpt, "utf8")).toBeLessThanOrEqual(384);
-      }
+      const details = /```json\n([\s\S]+?)\n```/u.exec(prompt)?.[1] ?? "";
+      expect(JSON.parse(details)).toMatchObject({
+        result: {
+          recovery: { serviceRestartSafe: false },
+          steps: [
+            { name: "latest-failure", exitCode: 1 },
+            {
+              name: "doctor",
+              exitCode: 1,
+              stderrTail: expect.stringContaining(
+                "Migration failed at $OPENCLAW_STATE_DIR/install/runtime-entry.js",
+              ),
+              stdoutTail: "compiler-output-cause",
+            },
+            {
+              name: "interrupted-step",
+              exitCode: null,
+              termination: "signal",
+              stderrTail: "Update child terminated before reporting an exit code",
+            },
+          ],
+        },
+      });
+      expect(Buffer.byteLength(details)).toBeLessThanOrEqual(4 * 1024);
       expect(prompt).toMatch(/autonomously/iu);
       expect(prompt).toMatch(/preserve.*(?:state|history|database)/iu);
       expect(prompt).not.toContain(secret);
       expect(prompt).not.toContain(state.stateDir);
+      expect(prompt).not.toContain("\uFFFD");
       expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(8 * 1024);
       expect(runtime.exit).not.toHaveBeenCalled();
     });
   });
-
-  it
-    .skipIf(process.platform === "win32")
-    .each([
-      { stateFailure: "missing", removeCwd: false },
-      { stateFailure: "missing", removeCwd: true },
-      ...(process.getuid?.() === 0 ? [] : [{ stateFailure: "unsearchable", removeCwd: false }]),
-    ])(
-    "starts native recovery outside an unusable state directory ($stateFailure, removed cwd=$removeCwd)",
-    async ({ stateFailure, removeCwd }) => {
-      await withOpenClawTestState({ layout: "split" }, async (state) => {
-        const invocationCwd = state.path("operator-shell");
-        const brokenStateDir = state.path("unusable-state");
-        const receiptPath = state.path("agent-receipt.json");
-        const agentPath = state.path("claude");
-        await fs.mkdir(invocationCwd);
-        if (stateFailure === "missing") {
-          await fs.symlink(state.path("unavailable-state-volume"), brokenStateDir, "dir");
-        } else {
-          await fs.mkdir(brokenStateDir, { mode: 0o600 });
-        }
-        try {
-          await expect(fs.access(brokenStateDir, fs.constants.X_OK)).rejects.toMatchObject({
-            code: stateFailure === "missing" ? "ENOENT" : "EACCES",
-          });
-          await fs.writeFile(
-            agentPath,
-            `#!${process.execPath}\n` +
-              `const fs = require("node:fs");\n` +
-              `fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
-              `  cwd: fs.realpathSync(process.cwd()),\n` +
-              `  stateDir: process.env.OPENCLAW_STATE_DIR,\n` +
-              `  configPath: process.env.OPENCLAW_CONFIG_PATH,\n` +
-              `  workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,\n` +
-              `  prompt: process.argv[2],\n` +
-              `}));\n`,
-            { mode: 0o700 },
-          );
-          const children =
-            await vi.importActual<typeof import("node:child_process")>("node:child_process");
-          mocks.spawn.mockImplementation(children.spawn);
-          mocks.resolveExecutablePath.mockImplementation((agent: string) =>
-            agent === "claude" ? agentPath : undefined,
-          );
-          const runtime = createRuntime();
-          await withEnvAsync(
-            {
-              OPENCLAW_STATE_DIR: brokenStateDir,
-              OPENCLAW_WORKSPACE_DIR: state.workspaceDir,
-            },
-            async () => {
-              await expect(
-                withTerminal(true, async () => {
-                  const complete = await prepareUpdateCommandCompletion({ runtime, invocationCwd });
-                  if (removeCwd) {
-                    await fs.rmdir(invocationCwd);
-                  }
-                  await complete({
-                    result: failedUpdate(path.join(brokenStateDir, "install")),
-                    exitCode: 7,
-                  });
-                }),
-              ).rejects.toMatchObject({ code: 7 });
-            },
-          );
-
-          const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
-          expect(receipt).toMatchObject({
-            cwd: removeCwd ? state.home : invocationCwd,
-            stateDir: brokenStateDir,
-            configPath: state.configPath,
-            workspaceDir: state.workspaceDir,
-          });
-          expect(receipt.prompt).toContain("injected-doctor-failure");
-          expect(receipt.prompt).not.toContain(secret);
-          expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringContaining("Debugging prompt could not be saved:"),
-          );
-          expect(runtime.log).not.toHaveBeenCalledWith(
-            expect.stringMatching(/^Debugging prompt: /u),
-          );
-          expect(mocks.spawn).toHaveBeenCalledOnce();
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(7);
-        } finally {
-          if (stateFailure === "unsearchable") {
-            await fs.chmod(brokenStateDir, 0o700);
-          }
-        }
-      });
-    },
-  );
 
   it.each(["mkdir", "writeFile"] as const)(
     "launches native recovery when the prompt artifact %s is denied",
@@ -362,7 +298,7 @@ describe("triage external recovery handoff", () => {
           new Error(`EACCES: support artifact permission denied; token=${secret}`),
           { code: "EACCES" },
         );
-        vi.spyOn(fs, operation).mockRejectedValueOnce(artifactError);
+        vi.spyOn(fs, operation).mockRejectedValue(artifactError);
         const runtime = createRuntime();
 
         await withTerminal(true, () =>
@@ -371,7 +307,7 @@ describe("triage external recovery handoff", () => {
             recovery: {
               target,
               cwd: state.workspaceDir,
-              update: failedUpdate(state.statePath("install")),
+              updateFailure: { result: failedUpdate(state.statePath("install")) },
             },
           }),
         );
@@ -390,15 +326,12 @@ describe("triage external recovery handoff", () => {
     },
   );
 
-  it.each([
-    { json: true, terminal: true },
-    { json: false, terminal: false },
-  ])(
-    "keeps prompt artifact failure explicit without interactive handoff (json=$json)",
-    async ({ json, terminal }) => {
+  it.each(printOnlyModes)(
+    "keeps prompt artifact failure explicit without interactive handoff in $mode mode",
+    async ({ json, nonInteractive, terminal }) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
         const target = resolveInstallationTarget();
-        vi.spyOn(fs, "writeFile").mockRejectedValueOnce(
+        vi.spyOn(fs, "writeFile").mockRejectedValue(
           Object.assign(new Error("EACCES: support artifact permission denied"), {
             code: "EACCES",
           }),
@@ -409,8 +342,12 @@ describe("triage external recovery handoff", () => {
           withTerminal(terminal, () =>
             triageCommand(runtime, {
               json,
+              nonInteractive,
               noExport: true,
-              recovery: { target, update: failedUpdate(state.statePath("install")) },
+              recovery: {
+                target,
+                updateFailure: { result: failedUpdate(state.statePath("install")) },
+              },
             }),
           ),
         ).rejects.toMatchObject({ code: "EACCES" });
@@ -423,54 +360,63 @@ describe("triage external recovery handoff", () => {
 });
 
 describe("standalone triage update evidence", () => {
-  it("reads an offline failed-update sentinel without consuming it or exposing routing instructions", async () => {
-    await withOpenClawTestState({ layout: "split" }, async (state) => {
-      const saved = await writeRestartSentinel({
-        kind: "update",
-        status: "error",
-        ts: 1,
-        sessionKey: "private-session-route",
-        message: "private-operator-note",
-        continuation: { kind: "agentTurn", message: "untrusted-continuation-instruction" },
-        stats: {
-          mode: "npm",
-          root: state.statePath("install"),
-          reason: "background-doctor-failure",
-          before: { version: "2026.8.25", unrelated: "private-before-metadata" },
-          after: { version: "2026.8.26", instructions: "untrusted-version-instruction" },
-          steps: [
-            {
-              name: "doctor",
-              command: "openclaw doctor --fix",
-              log: {
-                exitCode: 1,
-                stderrTail: " \n",
-                stdoutTail: `EACCES: cannot open ${state.statePath("install", "runtime-entry.js")} token=${secret}`,
+  it.each([
+    { status: "error" as const, reason: "background-doctor-failure" },
+    { status: "skipped" as const, reason: "dirty" },
+  ])(
+    "reads a failed $status sentinel without consuming it or exposing routing instructions",
+    async ({ status, reason }) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const saved = await writeRestartSentinel({
+          kind: "update",
+          status,
+          ts: 1,
+          sessionKey: "private-session-route",
+          message: "private-operator-note",
+          continuation: { kind: "agentTurn", message: "untrusted-continuation-instruction" },
+          stats: {
+            mode: "npm",
+            root: state.statePath("install"),
+            reason,
+            before: { version: "2026.8.25", unrelated: "private-before-metadata" },
+            after: { version: "2026.8.26", instructions: "untrusted-version-instruction" },
+            steps: [
+              {
+                name: "doctor",
+                command: "openclaw doctor --fix",
+                log: {
+                  exitCode: 1,
+                  stderrTail: " \n",
+                  stdoutTail: `EACCES: cannot open ${state.statePath("install", "runtime-entry.js")} token=${secret}`,
+                },
               },
-            },
-          ],
-        },
+            ],
+          },
+        });
+        const runtime = createRuntime();
+        await triageCommand(runtime, { json: true, noExport: true });
+        const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
+        expect(prompt).toContain(reason);
+        expect(prompt).toContain("2026.8.26");
+        const evidence = JSON.parse(/```json\n([\s\S]+?)\n```/u.exec(prompt)?.[1] ?? "");
+        expect(evidence.result.recovery).toBeUndefined();
+        expect(prompt).toContain(
+          "EACCES: cannot open $OPENCLAW_STATE_DIR/install/runtime-entry.js",
+        );
+        for (const omitted of [
+          secret,
+          "private-session-route",
+          "private-operator-note",
+          "untrusted-continuation-instruction",
+          "private-before-metadata",
+          "untrusted-version-instruction",
+        ]) {
+          expect(prompt).not.toContain(omitted);
+        }
+        expect(await readRestartSentinelReadOnly()).toEqual(saved);
       });
-      const runtime = createRuntime();
-      await triageCommand(runtime, { json: true, noExport: true });
-      const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
-      expect(prompt).toContain("background-doctor-failure");
-      expect(prompt).toContain("2026.8.26");
-      expect(prompt).toContain('"serviceRestartSafe": null');
-      expect(prompt).toContain("EACCES: cannot open $OPENCLAW_STATE_DIR/install/runtime-entry.js");
-      for (const omitted of [
-        secret,
-        "private-session-route",
-        "private-operator-note",
-        "untrusted-continuation-instruction",
-        "private-before-metadata",
-        "untrusted-version-instruction",
-      ]) {
-        expect(prompt).not.toContain(omitted);
-      }
-      expect(await readRestartSentinelReadOnly()).toEqual(saved);
-    });
-  });
+    },
+  );
 
   it("prefers the current updater failure over an older pending notification", async () => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
@@ -486,7 +432,7 @@ describe("standalone triage update evidence", () => {
         noExport: true,
         recovery: {
           target: resolveInstallationTarget(),
-          update: failedUpdate(state.statePath("install")),
+          updateFailure: { result: failedUpdate(state.statePath("install")) },
         },
       });
       const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
@@ -495,20 +441,24 @@ describe("standalone triage update evidence", () => {
     });
   });
 
-  it.each(["ok", "skipped"] as const)(
-    "does not interpret a %s update notification as recovery authority",
-    async (status) => {
+  it.each([
+    { status: "ok" as const, reason: "completed-update" },
+    { status: "skipped" as const, reason: "already-current" },
+    { status: "skipped" as const, reason: "managed-service-handoff-started" },
+  ])(
+    "does not project a $status/$reason notification as a failed update",
+    async ({ status, reason }) => {
       await withOpenClawTestState({ layout: "split" }, async () => {
         await writeRestartSentinel({
           kind: "update",
           status,
           ts: 1,
-          stats: { reason: "not-a-failed-update" },
+          stats: { reason },
         });
         const runtime = createRuntime();
         await triageCommand(runtime, { json: true, noExport: true });
         const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
-        expect(prompt).not.toContain("not-a-failed-update");
+        expect(prompt).not.toContain(reason);
       });
     },
   );

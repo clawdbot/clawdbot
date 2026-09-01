@@ -71,7 +71,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
   };
 }
 
-describe("survivor first-hop observation", () => {
+describe.skipIf(process.platform === "win32")("survivor first-hop observation", () => {
   it.each(["base", "configured-plugin-installs", "sqlite-volume"])(
     "rejects missing automatic migration before manual Doctor can repair %s",
     (scenario) => {

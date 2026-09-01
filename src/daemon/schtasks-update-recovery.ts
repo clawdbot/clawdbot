@@ -4,7 +4,7 @@ export class ScheduledTaskAutoStartRecoveryError extends AggregateError {
   readonly #serviceEnv: NodeJS.ProcessEnv;
 
   constructor(errors: unknown[], message: string, serviceEnv: NodeJS.ProcessEnv) {
-    super(errors, message, { cause: errors[0] });
+    super(errors, message, { cause: errors.at(-1) });
     this.name = "ScheduledTaskAutoStartRecoveryError";
     this.#serviceEnv = { ...serviceEnv };
   }
