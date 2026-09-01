@@ -22,9 +22,11 @@ import {
 } from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
+import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
 import {
@@ -781,6 +783,9 @@ const configs = [
             name,
             entry: unifiedDistEntries,
             deps: unifiedDeps,
+            ...(TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => group === name)
+              ? { hooks: { "build:done": createDeclarationInputCapture(name) } }
+              : {}),
           },
           { emitDtsOnly: true, entry: sources },
         ),

@@ -129,11 +129,12 @@ preparation and follow-ups during a run, remain visible with a waiting notice
 until their own turn starts. Inputs accepted through `sessions_send` or the
 Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
-the input stays readable with its recorded disposition and is never resent
-automatically. Copy it into the composer to start a new attempt. **Earlier
-accepted inputs** pages through retained inputs; **Latest accepted inputs**
-returns to the newest page. Long accepted input uses the normal full-message
-reader without becoming a transcript reply, fork, or rewind target.
+the message stays readable with its recorded disposition and is never resent
+automatically. Copy it into the composer to start a new attempt. **Show earlier
+messages** pages through messages that are still waiting or were stopped before
+processing; **Show latest messages** returns to the newest page. A long message
+uses the normal full-message reader without becoming a transcript reply, fork,
+or rewind target.
 
 Browser drafts and unsent messages remain in the local queue. Once the Gateway
 accepts an ordinary browser message, it owns the approved input in durable

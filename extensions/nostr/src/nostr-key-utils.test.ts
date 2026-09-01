@@ -1,5 +1,4 @@
-// Nostr tests cover nostr bus plugin behavior.
-import { nip19 } from "nostr-tools";
+import * as nip19 from "nostr-tools/nip19";
 import { describe, expect, it } from "vitest";
 import { validatePrivateKey, getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
 import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
@@ -20,11 +19,6 @@ describe("validatePrivateKey", () => {
       const result = validatePrivateKey(TEST_HEX_PRIVATE_KEY);
       expect(result).toBeInstanceOf(Uint8Array);
       expect(result.length).toBe(32);
-    });
-
-    it("accepts lowercase hex", () => {
-      const result = validatePrivateKey(TEST_HEX_PRIVATE_KEY.toLowerCase());
-      expect(result).toBeInstanceOf(Uint8Array);
     });
 
     it("accepts mixed case hex", () => {
@@ -130,10 +124,6 @@ describe("normalizePubkey", () => {
       expect(result.length).toBe(64);
     });
 
-    it("survives a hex→npub→normalizePubkey roundtrip", () => {
-      expect(normalizePubkey(nip19.npubEncode(HEX))).toBe(HEX);
-    });
-
     it("trims surrounding whitespace before decoding", () => {
       expect(normalizePubkey(`  ${NPUB}  `)).toBe(HEX);
     });
@@ -153,15 +143,92 @@ describe("getPublicKeyFromPrivate", () => {
     const pubkey = getPublicKeyFromPrivate(TEST_HEX_PRIVATE_KEY);
     expect(pubkey).toMatch(/^[0-9a-f]{64}$/);
     expect(pubkey.length).toBe(64);
-  });
-
-  it("derives consistent public key", () => {
-    const pubkey1 = getPublicKeyFromPrivate(TEST_HEX_PRIVATE_KEY);
-    const pubkey2 = getPublicKeyFromPrivate(TEST_HEX_PRIVATE_KEY);
-    expect(pubkey1).toBe(pubkey2);
+    expect(getPublicKeyFromPrivate(TEST_HEX_PRIVATE_KEY)).toBe(pubkey);
   });
 
   it("throws for invalid private key", () => {
     expectThrowsError(() => getPublicKeyFromPrivate("invalid"));
+  });
+});
+
+describe("validatePrivateKey malformed inputs", () => {
+  describe("validatePrivateKey type confusion", () => {
+    it("rejects non-string input", () => {
+      for (const value of [null, undefined, 123, true, {}, [], () => {}]) {
+        expectThrowsError(() => validatePrivateKey(value as unknown as string));
+      }
+    });
+  });
+
+  describe("unicode attacks", () => {
+    it("rejects unicode and control-character attacks", () => {
+      const invalidKeys = [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u200Bf",
+        `\u202E${TEST_HEX_PRIVATE_KEY}`,
+        "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff",
+      ];
+
+      for (const key of invalidKeys) {
+        expectThrowsError(() => validatePrivateKey(key));
+      }
+    });
+  });
+
+  describe("edge cases", () => {
+    it("rejects very long string", () => {
+      const veryLong = "a".repeat(10000);
+      expectThrowsError(() => validatePrivateKey(veryLong));
+    });
+
+    it("rejects string of spaces matching length", () => {
+      const spaces = " ".repeat(64);
+      expectThrowsError(() => validatePrivateKey(spaces));
+    });
+
+    it("rejects hex with spaces between characters", () => {
+      const withSpaces =
+        "01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef";
+      expectThrowsError(() => validatePrivateKey(withSpaces));
+    });
+  });
+
+  describe("nsec format edge cases", () => {
+    it("rejects nsec with invalid bech32 characters", () => {
+      // 'b', 'i', 'o' are not valid bech32 characters
+      const invalidBech32 = "nsec1qypqxpq9qtpqscx7peytbfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
+      expectThrowsError(() => validatePrivateKey(invalidBech32));
+    });
+
+    it("rejects nsec with wrong prefix", () => {
+      expectThrowsError(() => validatePrivateKey("nsec0aaaa"));
+    });
+
+    it("rejects partial nsec", () => {
+      expectThrowsError(() => validatePrivateKey("nsec1"));
+    });
+  });
+});
+
+describe("normalizePubkey malformed inputs", () => {
+  describe("prototype pollution attempts", () => {
+    it("throws for prototype property names", () => {
+      for (const value of ["__proto__", "constructor", "prototype"]) {
+        expectThrowsError(() => normalizePubkey(value));
+      }
+    });
+  });
+
+  describe("case sensitivity", () => {
+    it("normalizes mixed case to lowercase", () => {
+      const mixed = "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf";
+      expect(normalizePubkey(mixed)).toBe(TEST_HEX_PRIVATE_KEY);
+    });
   });
 });

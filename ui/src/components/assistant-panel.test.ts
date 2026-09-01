@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
+import { createAgentCapability } from "../lib/agents/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { publishChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
@@ -38,7 +39,7 @@ async function mountPanel(options: { global?: boolean } = {}) {
     reply: "Ready.",
     action: "none",
   });
-  const { context: baseContext } = createContext(
+  const { context: baseContext, setGatewaySnapshot } = createContext(
     request,
     ["openclaw.chat", "chat.history", "chat.send"],
     {
@@ -64,7 +65,7 @@ async function mountPanel(options: { global?: boolean } = {}) {
   provider.append(panel);
   document.body.append(provider);
   await panel.updateComplete;
-  return { context, panel, request, store };
+  return { context, panel, provider, request, setGatewaySnapshot, store };
 }
 
 describe("assistant panel", () => {
@@ -153,7 +154,9 @@ describe("assistant panel", () => {
   );
 
   it("prepares current route and pane context when Home opens and the visible work changes", async () => {
-    const { context, panel } = await mountPanel({ global: true });
+    const { context, panel, provider, request, setGatewaySnapshot } = await mountPanel({
+      global: true,
+    });
     context.sessions.state.result = {
       ts: 0,
       path: "",
@@ -213,6 +216,75 @@ describe("assistant panel", () => {
     await panel.updateComplete;
     const { file: _file, ...withoutFile } = expected;
     expect(workContext()).toEqual(withoutFile);
+
+    // Capability snapshots can change while every route and pane input stays fixed.
+    const agents = createAgentCapability(context.gateway);
+    try {
+      agents.state.agentsList = {
+        defaultId: "research",
+        mainKey: "home",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "research", workspace: "/projects/research" }],
+      };
+      context.sessions.state.result = {
+        ...context.sessions.state.result!,
+        sessions: [
+          { key: "agent:research:home", agentId: "research", kind: "direct", updatedAt: 0 },
+          { key: "agent:research:current", agentId: "research", kind: "direct", updatedAt: 0 },
+        ],
+      };
+      provider.setContext({ ...context, agents });
+      panel.pageSessionKey = "agent:research:main";
+      await panel.updateComplete;
+      expect(workContext()).toMatchObject({
+        sessionKey: "agent:research:home",
+        agentId: "research",
+        workspace: "/projects/research",
+      });
+
+      request.mockResolvedValueOnce({
+        ...agents.state.agentsList,
+        agents: [{ id: "main" }, { id: "research", workspace: "/worktrees/research" }],
+      });
+      await agents.refreshList();
+      await panel.updateComplete;
+      expect(workContext()?.workspace).toBe("/worktrees/research");
+
+      request.mockResolvedValue(context.sessions.state.result);
+      const hello = context.gateway.snapshot.hello!;
+      setGatewaySnapshot({
+        hello: {
+          ...hello,
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "research",
+              mainKey: "home",
+              mainSessionKey: "agent:research:current",
+            },
+          },
+        },
+      });
+      await panel.updateComplete;
+      expect(workContext()).toMatchObject({
+        title: "agent:research:current",
+        sessionKey: "agent:research:current",
+        agentId: "research",
+        workspace: "/worktrees/research",
+      });
+
+      const disconnectedContext = workContext();
+      panel.remove();
+      request.mockResolvedValueOnce({
+        ...agents.state.agentsList,
+        agents: [{ id: "main" }, { id: "research", workspace: "/projects/other" }],
+      });
+      await agents.refreshList();
+      setGatewaySnapshot({ hello });
+      await panel.updateComplete;
+      expect(workContext()).toEqual(disconnectedContext);
+    } finally {
+      agents.dispose();
+    }
   });
 
   it("restores the Home destination after remount and shares one dock with Ask", async () => {

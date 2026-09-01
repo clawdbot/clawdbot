@@ -288,6 +288,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
         installScripts(root, [script, "run-tsgo.mts"]);
+        write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
         fs.mkdirSync(path.join(root, "packages"), { recursive: true });
         fs.symlinkSync(
           path.join(sourceRoot, "packages/normalization-core"),

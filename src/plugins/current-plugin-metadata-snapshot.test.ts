@@ -7,6 +7,7 @@ import {
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
@@ -17,6 +18,7 @@ import {
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
+import { withPluginInstallRoots } from "./install-root-context.js";
 import * as installedPluginIndexPolicy from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -208,6 +210,7 @@ describe("current plugin metadata snapshot", () => {
         expect(
           getCurrentPluginMetadataSnapshot({
             config: { plugins: { allow: ["derived-run-policy"] } },
+            env: { OPENCLAW_BUNDLED_PLUGINS_DIR: "/plugins/redirected-run" },
             workspaceDir: agentWorkspaceDir,
           }),
         ).toBe(metadataSnapshot);
@@ -458,17 +461,45 @@ describe("current plugin metadata snapshot", () => {
     );
   });
 
-  it("trusts the config identity paired with an immutable runtime generation", () => {
+  it("enters an immutable runtime generation without probing discovery roots", () => {
     const sourceConfig = { plugins: { allow: ["source"] } };
     const runtimeConfig = { plugins: { allow: ["runtime"] } };
     const workspaceDir = "/workspace";
     const snapshot = createSnapshot({ config: sourceConfig, workspaceDir });
 
-    withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
-      expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
-        snapshot,
-      );
-    });
+    const rootProbes = vi.spyOn(fs, "existsSync");
+    try {
+      withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
+        expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
+          snapshot,
+        );
+      });
+      expect(rootProbes).not.toHaveBeenCalled();
+    } finally {
+      rootProbes.mockRestore();
+    }
+  });
+
+  it("keeps prepared metadata usable when the launch directory is removed", () => {
+    const config = {};
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+    const launchCwd = process.cwd();
+    const cwd = vi.spyOn(process, "cwd");
+    try {
+      cwd.mockImplementation(() => {
+        throw new Error("ENOENT: uv_cwd");
+      });
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+      withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
+        expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+      });
+
+      cwd.mockReturnValue(launchCwd);
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {
@@ -530,18 +561,92 @@ describe("current plugin metadata snapshot", () => {
     }
   });
 
-  it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
-    const config = { plugins: { allow: ["demo"] } };
-    const snapshot = createSnapshot({ config });
-    setCurrentPluginMetadataSnapshot(snapshot, { config });
+  it.each([
+    {
+      name: "development root",
+      env: { HOME: "/home/metadata" },
+      changedEnv: { HOME: "/home/metadata", OPENCLAW_DEV_SOURCE_ROOT: process.cwd() },
+    },
+    {
+      name: "Termux prefix",
+      env: { PREFIX: "/data/data/com.termux/files/usr", ANDROID_DATA: "/data" },
+      changedEnv: { PREFIX: "/other/com.termux/files/usr", ANDROID_DATA: "/data" },
+    },
+    {
+      name: "Termux detection",
+      env: { PREFIX: "/data/data/com.termux/files/usr", ANDROID_DATA: "/data" },
+      changedEnv: { PREFIX: "/data/data/com.termux/files/usr" },
+    },
+  ])(
+    "reuses configless metadata without probing discovery roots and checks $name",
+    ({ env, changedEnv }) => {
+      const config = { plugins: { allow: ["demo"] } };
+      const snapshot = createSnapshot({ config });
+      setCurrentPluginMetadataSnapshot(snapshot, { config, env });
 
-    expect(
-      getCurrentPluginMetadataSnapshot({
-        allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
-      }),
-    ).toBe(snapshot);
-  });
+      const rootProbes = vi.spyOn(fs, "existsSync");
+      try {
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            env,
+            allowWorkspaceScopedSnapshot: true,
+            requireDefaultDiscoveryContext: true,
+          }),
+        ).toBe(snapshot);
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            env: changedEnv,
+            requireDefaultDiscoveryContext: true,
+          }),
+        ).toBeUndefined();
+        expect(rootProbes).not.toHaveBeenCalled();
+      } finally {
+        rootProbes.mockRestore();
+      }
+    },
+  );
+
+  it.each(["supplied", "ambient"] as const)(
+    "rejects configless default-discovery reuse when %s bundled-directory trust changes",
+    (trustSource) => {
+      const overrideRoot = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-metadata-bundled-trust-")),
+      );
+      const originalTrust = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      const env: NodeJS.ProcessEnv = {
+        VITEST: "true",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: overrideRoot,
+      };
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
+      try {
+        const snapshot = createSnapshot();
+        const originalRoot = resolveBundledPluginsDir(env);
+        expect(originalRoot).toBeDefined();
+        expect(originalRoot).not.toBe(overrideRoot);
+        setCurrentPluginMetadataSnapshot(snapshot, { env });
+        const request = { env, requireDefaultDiscoveryContext: true };
+        expect(getCurrentPluginMetadataSnapshot(request)).toBe(snapshot);
+
+        withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
+          const trustEnv = trustSource === "supplied" ? env : process.env;
+          trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+          expect(resolveBundledPluginsDir(env)).toBe(overrideRoot);
+          expect(getCurrentPluginMetadataSnapshot(request)).toBe(snapshot);
+        });
+
+        expect(getCurrentPluginMetadataSnapshot(request)).toBeUndefined();
+      } finally {
+        clearCurrentPluginMetadataSnapshot();
+        if (originalTrust === undefined) {
+          delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+        } else {
+          process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrust;
+        }
+        fs.rmSync(overrideRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects configless default-discovery reuse for scoped snapshots", () => {
     const config = { plugins: { allow: ["demo"] } };
@@ -589,38 +694,50 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config, pluginIdScope })).toBe(scoped);
   });
 
-  it("reuses exact cached config when env-resolved plugin load paths change before reload", () => {
-    const config = { plugins: { load: { paths: ["~/plugins"] } } };
+  it.each([
+    { config: { plugins: { load: { paths: ["~/plugins"] } } }, key: "HOME" },
+    { config: {}, key: "HOME" },
+    { config: {}, key: "OPENCLAW_BUNDLED_PLUGINS_DIR" },
+  ])("rejects ordinary metadata when $key changes for $config", ({ config, key }) => {
     const snapshot = createSnapshot({ config });
     const snapshotEnv = {
       HOME: "/home/snapshot",
       OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    const requestedEnv = {
-      HOME: "/home/requested",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
+      [key]: "/plugins/snapshot",
+    };
+    const requestedEnv = { ...snapshotEnv, [key]: "/plugins/requested" };
     setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
 
     expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
-    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
+        expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+      },
+      { config, env: snapshotEnv },
+    );
   });
 
-  it("reuses exact cached config when env-resolved plugin roots change before reload", () => {
+  it("keeps ordinary metadata within its captured pinned install roots", () => {
     const config = {};
     const snapshot = createSnapshot({ config });
-    const snapshotEnv = {
-      HOME: "/home/snapshot",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    const requestedEnv = {
-      HOME: "/home/requested",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
-
-    expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
-    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBe(snapshot);
+    const roots = {
+      extensionsDir: "/plugins/extensions",
+      gitDir: "/plugins/git",
+      npmDir: "/plugins/npm",
+      stateDir: "/plugins/state",
+    };
+    withPluginInstallRoots(roots, () => {
+      setCurrentPluginMetadataSnapshot(snapshot, { config });
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+      withPluginInstallRoots({ ...roots, npmDir: "/plugins/replacement/npm" }, () => {
+        expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+      });
+      expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+    });
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
   it("reuses exact cached config after in-place policy changes before reload", () => {
@@ -647,7 +764,7 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
   });
 
-  it("reuses exact cached config after in-place env root changes before reload", () => {
+  it("rejects exact cached config after in-place env root changes", () => {
     const config = {};
     const snapshot = createSnapshot({ config });
     const env = {
@@ -660,7 +777,7 @@ describe("current plugin metadata snapshot", () => {
 
     env.HOME = "/home/requested";
 
-    expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeUndefined();
   });
 
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
@@ -724,7 +841,9 @@ describe("current plugin metadata snapshot", () => {
 
   it("restores the previous current snapshot after a temporary lease", () => {
     const firstConfig = { plugins: { allow: ["first"] } };
-    const secondConfig = { plugins: { allow: ["second"] } };
+    const secondConfig = {
+      plugins: { allow: ["second"], load: { paths: ["/plugins/temporary"] } },
+    };
     const first = createSnapshot({ config: firstConfig });
     const second = createSnapshot({ config: secondConfig });
     setCurrentPluginMetadataSnapshot(first, { config: firstConfig });
@@ -733,13 +852,17 @@ describe("current plugin metadata snapshot", () => {
       config: secondConfig,
     });
     expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBe(second);
+    expect(
+      getCurrentPluginMetadataSnapshot({ requireDefaultDiscoveryContext: true }),
+    ).toBeUndefined();
     expect(lease.release()).toBe(true);
 
     expect(getCurrentPluginMetadataSnapshot({ config: firstConfig })).toBe(first);
+    expect(getCurrentPluginMetadataSnapshot({ requireDefaultDiscoveryContext: true })).toBe(first);
     expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBeUndefined();
   });
 
-  it("restores exact config identity across a temporary metadata snapshot", () => {
+  it("restores exact config identity and environment across a temporary metadata snapshot", () => {
     const config = { plugins: { load: { paths: ["~/plugins"] } } };
     const snapshot = createSnapshot({ config });
     const originalEnv = {
@@ -755,7 +878,8 @@ describe("current plugin metadata snapshot", () => {
     const lease = installTemporaryCurrentPluginMetadataSnapshot(createSnapshot());
     expect(lease.release()).toBe(true);
 
-    expect(getCurrentPluginMetadataSnapshot({ config, env: changedEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: originalEnv })).toBe(snapshot);
+    expect(getCurrentPluginMetadataSnapshot({ config, env: changedEnv })).toBeUndefined();
   });
 
   it("restores exact config identity after in-place changes", () => {

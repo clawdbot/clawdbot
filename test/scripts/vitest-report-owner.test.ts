@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createVitestReportFixture, type ReportFixtureMode } from "./vitest-report-fixture.js";
 
@@ -128,9 +129,8 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(fs.readFileSync(path.join(capture.root, "ready"), "utf8")).toBe(
           String(events[0].pid),
         );
-        expect(() => process.kill(events[0].pid, 0)).toThrow(
-          expect.objectContaining({ code: "ESRCH" }),
-        );
+        // The joined group may leave an unreaped Linux zombie, but no live worker.
+        expect(isPidDefinitelyDead(events[0].pid)).toBe(true);
       } else if (mode === "fail-fast" || mode === "batch-fail-fast") {
         const report = json(first.json);
         expect(inventory(report)).toEqual([

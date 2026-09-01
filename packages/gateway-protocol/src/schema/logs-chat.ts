@@ -8,6 +8,7 @@ import {
 } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
+import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 /** Cursor-based request for the gateway log tail endpoint. */
 export const LogsTailParamsSchema = closedObject({
@@ -245,6 +246,8 @@ export const ChatSendParamsSchema = closedObject({
   // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedToolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   idempotencyKey: NonEmptyString,
 });
 

@@ -152,9 +152,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ) => {
           active += 1;
           peakActive = Math.max(peakActive, active);
-          await new Promise((resolve) => {
-            setTimeout(resolve, 10);
-          });
+          await Promise.resolve();
           seen.push({ args, cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH, label });
           active -= 1;
           return 0;
@@ -163,7 +161,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       },
     );
     expect(exitCode).toBe(0);
-    expect(peakActive).toBeLessThanOrEqual(2);
+    expect(peakActive).toBe(2);
     expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
@@ -279,9 +277,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           }
           activeCaches.add(cache);
           seenCaches.add(cache);
-          await new Promise((resolve) => {
-            setTimeout(resolve, 10);
-          });
+          await Promise.resolve();
           activeCaches.delete(cache);
           return 0;
         },

@@ -629,6 +629,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
             import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
             import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
+            import {clearActivePluginRegistry,setActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
+            import {withPluginRuntimeGenerationScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/generation-scope.ts")).href)};
+            import {createPluginMetadataSnapshot} from ${JSON.stringify(pathToFileURL(path.join(root, "src/config/plugin-auto-enable.test-helpers.ts")).href)};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
@@ -646,11 +649,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             registry.providers.push({pluginId:'fixture-hook',provider:{id:'fixture-provider',label:'Fixture',auth:[],
               classifyFailoverReason(context) {
                 assert.equal(context.provider,'fixture-provider');assert.equal(context.status,403);
-                scopedCalls++;return 'overloaded';
+                scopedCalls++;return ${JSON.stringify(scope === "prepared" ? "billing" : "overloaded")};
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.ok(unprepared.some(payload=>payload.isError), 'an unprepared error still needs a visible outcome');
+            assert.deepEqual(unprepared,[{text:'⚠️ fixture-provider/fixture-model request failed (authentication failed, HTTP 403). Re-authenticate the provider and try again.',isError:true}], 'an unprepared error must retain safe provider, model and status facts');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
             if (${scope === "prepared"}) {
@@ -658,14 +661,17 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
+            const render = providerOwner => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
+            const prepare = () => resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin;
             const call = () => {
-              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              const activeProviderOwner = ${scope === "scoped" ? "prepare()" : "providerOwner"};
               if (${scope === "scoped"}) {
                 assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
               }
-              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+              assert.deepEqual(render(),unprepared,'ownerless presentation must ignore loaded provider policy');
+              return render(activeProviderOwner);
             };
-            const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
+            const payloads = withPluginRuntimeRegistryScope(registry,call);
             const callMs = performance.now()-callStarted;
             const records = observed();
             if (${scope === "scoped"}) {
@@ -679,6 +685,29 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             }
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
+            if (${scope === "scoped"}) {
+              const config = {};
+              const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry:{plugins:[],diagnostics:[]}});
+              setActivePluginRegistry(registry,'fixture-active');
+              try {
+                assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
+                withPluginRuntimeGenerationScope({metadataSnapshot,pluginRegistry:registry},()=>{
+                  assert.deepEqual(call(),payloads,'preparation must select the generation provider');
+                  const callsBeforeEmptyGeneration = scopedCalls;
+                  withPluginRuntimeGenerationScope({metadataSnapshot},()=>{
+                    withPluginRuntimeRegistryScope(registry,()=>{
+                      const absentOwner = prepare();
+                      assert.equal(absentOwner,undefined,'an empty generation must fence request and active providers');
+                      assert.deepEqual(render(absentOwner),unprepared);
+                      assert.equal(scopedCalls,callsBeforeEmptyGeneration);
+                    });
+                  });
+                  assert.deepEqual(call(),payloads,'the outer generation must be restored');
+                });
+              } finally {await clearActivePluginRegistry();}
+              assert.deepEqual(render(),unprepared,'presentation outside the scope still needs an explicit owner');
+              assert.deepEqual(observed(),[],'loaded lookups must not import the fixture plugin');
+            }
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,
             );

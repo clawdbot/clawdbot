@@ -3769,11 +3769,15 @@ main() {
         return 0
     fi
 
-    # bootstrap_gum_temp may perform network downloads before any spinner is available.
-    echo -e "${INFO}Preparing installer interface...${NC}"
-    bootstrap_gum_temp || true
+    # A dry run must stay side-effect free; gum bootstrap may download binaries.
+    if [[ "$DRY_RUN" != "1" ]]; then
+        echo -e "${INFO}Preparing installer interface...${NC}"
+        bootstrap_gum_temp || true
+    fi
     print_installer_banner
-    print_gum_status
+    if [[ "$DRY_RUN" != "1" ]]; then
+        print_gum_status
+    fi
     detect_os_or_die
 
     if [[ "$OS" == "linux" ]]; then

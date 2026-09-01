@@ -2053,7 +2053,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.239",
+    "@anthropic-ai/claude-agent-sdk": "0.3.241",
     "@anthropic-ai/sdk": "0.120.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
@@ -2110,11 +2110,11 @@
     "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.11.0",
-    "typebox": "1.3.16",
+    "typebox": "1.3.17",
     "typescript": "6.0.3",
     "undici": "8.10.0",
     "web-push": "3.6.7",
-    "web-tree-sitter": "0.26.12",
+    "web-tree-sitter": "0.26.13",
     "ws": "8.21.3",
     "yaml": "2.9.0",
     "zod": "4.4.3"

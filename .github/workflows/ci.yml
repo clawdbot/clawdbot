@@ -2231,13 +2231,19 @@ jobs:
   checks-ui:
     permissions:
       contents: read
-    name: checks-ui
+    name: ${{ needs.preflight.outputs.frozen_target == 'true' && 'checks-ui' || format('checks-ui ({0}/3)', matrix.shard) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
-    # Measured 177s body on hosted 4-core (run 31861511624); hybrid attempt 1
-    # rides the 8 vCPU class like the ui-e2e shards, retries stay hosted.
+    # Each Vitest row retains three root workers. Hybrid first attempts use
+    # the existing 8 vCPU class; retries and manual dispatch stay hosted.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        # Frozen checkouts retain their original unsharded test envelope.
+        shard: ${{ fromJSON(needs.preflight.outputs.frozen_target == 'true' && '[1]' || '[1,2,3]') }}
     env:
       COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -2278,13 +2284,14 @@ jobs:
           fi
 
       - name: Lint Control UI window.open usage
+        if: ${{ matrix.shard == 1 }}
         run: pnpm lint:ui:no-raw-window-open
 
       - name: Test Control UI
         env:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"]'
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.frozen_target != 'true' && format(', "--shard={0}/3"', matrix.shard) || '') }}
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
@@ -4113,6 +4120,7 @@ jobs:
     timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -4292,10 +4300,16 @@ jobs:
           set -euo pipefail
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
           trap 'rm -rf "$openclawkit_scratch"' EXIT
-          swift test \
-            --package-path apps/shared/OpenClawKit \
-            --scratch-path "$openclawkit_scratch" \
-            --parallel
+          openclawkit_test_args=(
+            --package-path apps/shared/OpenClawKit
+            --scratch-path "$openclawkit_scratch"
+          )
+          if [[ "$OPENCLAWKIT_TEST_EXECUTION" == "parallel" ]]; then
+            openclawkit_test_args+=(--parallel)
+          else
+            openclawkit_test_args+=(--no-parallel)
+          fi
+          swift test "${openclawkit_test_args[@]}"
 
       - name: Swift test
         id: swift-test
@@ -4543,32 +4557,41 @@ jobs:
               process.stdout.write(simulator.udid);
             '
           )"
-          derived_data_path="$RUNNER_TEMP/openclaw-watch-lifecycle"
-          xcodebuild \
-            -project apps/ios/OpenClaw.xcodeproj \
-            -scheme OpenClawWatchApp \
-            -configuration Debug \
-            -destination "platform=watchOS Simulator,id=${simulator_id}" \
-            -derivedDataPath "$derived_data_path" \
-            -parallel-testing-enabled NO \
-            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
-            CODE_SIGNING_ALLOWED=NO \
-            build-for-testing
+          # Reuse the Watch products already compiled by the generic iOS build.
+          # Resolve the selected target product from Xcode, not its DerivedData naming.
+          xcodebuild_args=(
+            -project apps/ios/OpenClaw.xcodeproj
+            -scheme OpenClawWatchApp
+            -configuration Debug
+            -destination "platform=watchOS Simulator,id=${simulator_id}"
+            CODE_SIGNING_ALLOWED=NO
+          )
+          test_args=(
+            -parallel-testing-enabled NO
+            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests
+          )
+          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
+          app_path="$(
+            xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json |
+              node --input-type=module -e '
+                import path from "node:path";
+                const chunks = [];
+                for await (const chunk of process.stdin) chunks.push(chunk);
+                const targets = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+                  .filter((target) => target.target === "OpenClawWatchApp");
+                if (targets.length !== 1) throw new Error("Expected one Watch app target from Xcode");
+                const { TARGET_BUILD_DIR, FULL_PRODUCT_NAME } = targets[0].buildSettings;
+                if (!path.isAbsolute(TARGET_BUILD_DIR) || !FULL_PRODUCT_NAME) {
+                  throw new Error("Expected an absolute Watch app product from Xcode");
+                }
+                process.stdout.write(path.join(TARGET_BUILD_DIR, FULL_PRODUCT_NAME));
+              '
+          )"
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator_id" -b
-          xcrun simctl install \
-            "$simulator_id" \
-            "$derived_data_path/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app"
-          xcodebuild \
-            -project apps/ios/OpenClaw.xcodeproj \
-            -scheme OpenClawWatchApp \
-            -configuration Debug \
-            -destination "platform=watchOS Simulator,id=${simulator_id}" \
-            -derivedDataPath "$derived_data_path" \
+          xcrun simctl install "$simulator_id" "$app_path"
+          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
-            -parallel-testing-enabled NO \
-            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
-            CODE_SIGNING_ALLOWED=NO \
             test-without-building
 
       - name: Upload iOS lifecycle simulator evidence
