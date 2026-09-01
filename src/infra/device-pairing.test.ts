@@ -7,12 +7,18 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import { registerDeviceBootstrapApprovalRequest } from "./device-bootstrap-pairing-approval.js";
+import {
+  issueDeviceBootstrapToken,
+  verifyDeviceBootstrapToken,
+  verifyDeviceBootstrapTokenContext,
+} from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
   loadDevicePairingStoreState,
+  loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
@@ -870,6 +876,68 @@ describe("device pairing tokens", () => {
     expect(paired?.scopes).toEqual(["operator.read"]);
     expect(paired?.approvedScopes).toEqual(["operator.read"]);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+  });
+
+  test("binds an observable bootstrap token after direct owner approval across a restart", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: { roles: ["node"], scopes: [] },
+    });
+    const requestIds: Record<"attacker" | "victim", string> = {
+      attacker: "",
+      victim: "",
+    };
+    for (const identity of ["attacker", "victim"] as const) {
+      await expect(
+        verifyDeviceBootstrapTokenContext({
+          token: issued.token,
+          deviceId: `${identity}-device`,
+          publicKey: `${identity}-key`,
+          role: "node",
+          scopes: [],
+          bindIdentity: false,
+          baseDir,
+        }),
+      ).resolves.toMatchObject({ ok: true, context: { identityBound: false } });
+      const pairing = await requestDevicePairing(
+        {
+          deviceId: `${identity}-device`,
+          publicKey: `${identity}-key`,
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      requestIds[identity] = pairing.request.requestId;
+      await expect(
+        registerDeviceBootstrapApprovalRequest({
+          token: issued.token,
+          requestId: pairing.request.requestId,
+          role: "node",
+          scopes: [],
+          baseDir,
+        }),
+      ).resolves.toBe(true);
+    }
+
+    closeOpenClawStateDatabaseForTest();
+    await expect(approveDevicePairing(requestIds.victim, baseDir)).resolves.toMatchObject({
+      status: "approved",
+      device: { deviceId: "victim-device", publicKey: "victim-key" },
+    });
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toMatchObject({
+      deviceId: "victim-device",
+      publicKey: "victim-key",
+    });
+
+    await expect(approveDevicePairing(requestIds.attacker, baseDir)).resolves.toMatchObject({
+      status: "approved",
+    });
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toMatchObject({
+      deviceId: "victim-device",
+      publicKey: "victim-key",
+    });
   });
 
   test("rejecting a bootstrap-bound pending request revokes the bootstrap token", async () => {

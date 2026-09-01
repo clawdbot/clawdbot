@@ -156,6 +156,11 @@ export type DeviceBootstrapTokenRecord = {
   profile?: DeviceBootstrapProfile;
   redeemedProfile?: DeviceBootstrapProfile;
   pendingProfile?: DeviceBootstrapProfile;
+  pendingApprovalRequests?: Array<{
+    requestId: string;
+    role: string;
+    scopes: string[];
+  }>;
   issuedAtMs: number;
   lastUsedAtMs?: number;
 };

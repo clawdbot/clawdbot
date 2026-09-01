@@ -9,8 +9,7 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
-import { takeApprovedBootstrapIdentityBinding } from "./device-bootstrap-pairing-approval.js";
-import { verifyDeviceBootstrapTokenContext } from "./device-bootstrap.js";
+import { bindDeviceBootstrapAfterOwnerApproval } from "./device-bootstrap.js";
 import {
   loadDevicePairingState,
   mergeDevicePairingRoles,
@@ -402,14 +401,12 @@ async function approveDevicePairingWithOptions(
   if ((options?.approvedVia ?? "owner") !== "owner") {
     return result;
   }
-  const binding = takeApprovedBootstrapIdentityBinding({
+  await bindDeviceBootstrapAfterOwnerApproval({
     requestId,
     deviceId: result.device.deviceId,
     publicKey: result.device.publicKey,
+    baseDir,
   });
-  if (binding) {
-    await verifyDeviceBootstrapTokenContext({ ...binding, bindIdentity: true, baseDir });
-  }
   return result;
 }
 

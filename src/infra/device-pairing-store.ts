@@ -1,5 +1,3 @@
-// SQLite row mapping for device pairing and bootstrap-token snapshots.
-// Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
 import type { DatabaseSync } from "node:sqlite";
 import {
   resolvePairingSetupAccess,
@@ -22,6 +20,11 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  decodePendingBootstrapState,
+  DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP,
+  encodePendingBootstrapState,
+} from "./device-bootstrap-store-codec.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type {
   DeviceAuthToken,
@@ -44,19 +47,6 @@ export type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
-
-const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
-  "device_id",
-  "issued_at_ms",
-  "last_used_at_ms",
-  "pending_profile_json",
-  "profile_json",
-  "public_key",
-  "redeemed_profile_json",
-  "token",
-  "token_key",
-  "ts",
-] as const satisfies readonly (keyof DeviceBootstrapTokens)[];
 
 type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
@@ -329,13 +319,16 @@ function toBootstrapRow(
     public_key: record.publicKey ?? null,
     profile_json: toJsonColumn(record.profile),
     redeemed_profile_json: toJsonColumn(record.redeemedProfile),
-    pending_profile_json: toJsonColumn(record.pendingProfile),
+    pending_profile_json: toJsonColumn(encodePendingBootstrapState(record)),
     issued_at_ms: record.issuedAtMs,
     last_used_at_ms: record.lastUsedAtMs ?? null,
   };
 }
 
 function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecord {
+  const pendingState = decodePendingBootstrapState(
+    fromJsonColumn<unknown>(row.pending_profile_json),
+  );
   return {
     token: row.token,
     ...optional("setupId", row.setup_id),
@@ -351,11 +344,7 @@ function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecor
       fromJsonColumn<DeviceBootstrapTokenRecord["redeemedProfile"]>(row.redeemed_profile_json) ??
         null,
     ),
-    ...optional(
-      "pendingProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["pendingProfile"]>(row.pending_profile_json) ??
-        null,
-    ),
+    ...pendingState,
     issuedAtMs: row.issued_at_ms,
     ...optional("lastUsedAtMs", row.last_used_at_ms),
   };
@@ -524,7 +513,6 @@ export function persistDevicePairingStoreState(
   });
 }
 
-/** Load all bootstrap token records keyed by token key. */
 export function loadDeviceBootstrapTokenRecords(
   baseDir?: string,
 ): Record<string, DeviceBootstrapTokenRecord> {
