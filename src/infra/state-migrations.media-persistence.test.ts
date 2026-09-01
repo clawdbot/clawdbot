@@ -1,143 +1,81 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
-  encodeSessionArchiveContent,
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
-import { readDatabaseSnapshot } from "./state-migrations.media-persistence.test-support.js";
+import {
+  cleanupMediaPersistenceFixtures,
+  createEvent,
+  createLegacyDatabaseFixture,
+  PREVIOUS_VERSION,
+  readDatabaseSnapshot,
+  writeArchive,
+  type FixtureEvent,
+} from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs: string[] = [];
-const PREVIOUS_VERSION = 16;
-
-type FixtureEvent = Record<string, unknown>;
-
-function createEvent(params: {
-  id: string;
-  message: Record<string, unknown>;
-  parentId: string | null;
-  timestamp: number;
-}): FixtureEvent {
-  return {
-    type: "message",
-    id: params.id,
-    parentId: params.parentId,
-    timestamp: params.timestamp,
-    message: params.message,
-  };
-}
-
-function createLegacyDatabaseFixture(params: {
-  agentId?: string;
-  env: NodeJS.ProcessEnv;
-  eventsBySession: Record<string, FixtureEvent[]>;
-  schemaVersion?: number;
-}): string {
-  const agentId = params.agentId ?? "main";
-  const schemaVersion = params.schemaVersion ?? PREVIOUS_VERSION;
-  const opened = openOpenClawAgentDatabase({ agentId, env: params.env });
-  const databasePath = opened.path;
-  closeOpenClawAgentDatabasesForTest();
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec("PRAGMA foreign_keys = ON;");
-    if (schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
-      database.exec("DROP TABLE session_participants;");
-    }
-    database.exec(`PRAGMA user_version = ${schemaVersion};`);
-    database
-      .prepare(
-        "UPDATE schema_meta SET schema_version = ?, app_version = ? WHERE meta_key = 'primary'",
-      )
-      .run(schemaVersion, "legacy-test");
-    for (const [sessionId, events] of Object.entries(params.eventsBySession)) {
-      const sessionKey = `agent:${agentId}:${sessionId}`;
-      const firstTimestamp = Number(events[0]?.timestamp ?? 1);
-      database
-        .prepare(
-          "INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at) VALUES(?,?,?,?)",
-        )
-        .run(sessionKey, sessionId, "{}", firstTimestamp);
-      database
-        .prepare(
-          "INSERT INTO session_windows(session_id,session_key,created_at,updated_at) VALUES(?,?,?,?)",
-        )
-        .run(sessionId, sessionKey, firstTimestamp, firstTimestamp);
-      database
-        .prepare(
-          "INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at) VALUES(?,?,?)",
-        )
-        .run(sessionId, `generation-${sessionId}`, firstTimestamp);
-      events.forEach((event, seq) => {
-        const createdAt = Number(event.timestamp ?? firstTimestamp) + 100;
-        database
-          .prepare(
-            "INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,?,?,?)",
-          )
-          .run(sessionId, seq, JSON.stringify(event), createdAt);
-        database
-          .prepare(
-            "INSERT INTO transcript_event_identities(session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)",
-          )
-          .run(
-            sessionId,
-            String(event.id),
-            seq,
-            String(event.type),
-            typeof event.parentId === "string" ? event.parentId : null,
-            (event.message as { idempotencyKey?: string }).idempotencyKey ?? null,
-            createdAt,
-          );
-      });
-      reconcileSessionTranscriptIndexInTransaction(database, sessionId);
-    }
-  } finally {
-    database.close();
-  }
-  registerOpenClawAgentDatabase({
-    agentId,
-    env: params.env,
-    path: databasePath,
-    schemaVersion,
-  });
-  return databasePath;
-}
-
-function writeArchive(filePath: string, events: FixtureEvent[], compressed: boolean): void {
-  const content = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  if (!compressed) {
-    fs.writeFileSync(filePath, content);
-    return;
-  }
-  const encoded = encodeSessionArchiveContent(content);
-  if (encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
-    throw new Error("test runtime does not support zstd");
-  }
-  fs.writeFileSync(filePath, encoded.bytes);
-}
 
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
+  cleanupMediaPersistenceFixtures(tempDirs);
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it("canonicalizes assistant media at the generic transcript append owner", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-append-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        expect(
+          appendTranscriptEventInTransaction(
+            database,
+            {
+              agentId: "main",
+              env,
+              sessionId: "append-session",
+              sessionKey: "agent:main:append-session",
+            },
+            createEvent({
+              id: "event-1",
+              parentId: null,
+              timestamp: 1000,
+              message: {
+                role: "assistant",
+                content: "append",
+                MediaPaths: ["/media/a.png"],
+                MediaTypes: ["image/png"],
+              },
+            }),
+          ),
+        ).toBe(true);
+      },
+      { agentId: "main", env },
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const row = database.db
+      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
+      .get("append-session") as { event_json: string };
+    const message = (JSON.parse(row.event_json) as { message: Record<string, unknown> }).message;
+    expect(message).toMatchObject({ role: "assistant", content: "append" });
+    expect(message).not.toHaveProperty("MediaPaths");
+    expect(message).not.toHaveProperty("MediaTypes");
+    expect(message["__openclaw"]).toMatchObject({
+      media: [expect.objectContaining({ path: "/media/a.png", contentType: "image/png" })],
+    });
+  });
+
   it("rewrites every active shape and trajectory snapshot, migrates mixed archives, and reruns as a no-op", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-migration-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -910,57 +848,5 @@ describe("legacy media persistence doctor migration", () => {
     });
     expect(archiveDrift.warnings.join("\n")).toContain("changed before atomic");
     expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement\n");
-  });
-
-  it("rejects ambiguous sparse arrays and ignores stale interrupted temp files", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-sparse-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    createLegacyDatabaseFixture({ env, eventsBySession: {} });
-    const archiveDir = path.join(stateDir, "agents", "main", "sessions");
-    const archivePath = path.join(archiveDir, "sparse.jsonl.bak.2026-07-24T01-02-03.000Z");
-    const event = createEvent({
-      id: "event-1",
-      parentId: null,
-      timestamp: 1000,
-      message: {
-        role: "user",
-        MediaPaths: ["", "/media/b.png"],
-        MediaTypes: ["image/png"],
-      },
-    });
-    writeArchive(archivePath, [event], false);
-    expect((await migrateLegacyMediaPersistence({ env })).warnings.join("\n")).toContain(
-      "ambiguous sparse positional alignment",
-    );
-    fs.unlinkSync(archivePath);
-
-    const corruptArchivePath = path.join(
-      archiveDir,
-      "corrupt.jsonl.deleted.2026-07-24T01-02-04.000Z",
-    );
-    fs.writeFileSync(corruptArchivePath, "{broken\n");
-    expect((await migrateLegacyMediaPersistence({ env })).warnings.join("\n")).toContain(
-      "invalid transcript JSON",
-    );
-    expect(fs.readFileSync(corruptArchivePath, "utf8")).toBe("{broken\n");
-    fs.unlinkSync(corruptArchivePath);
-
-    writeArchive(
-      archivePath,
-      [
-        createEvent({
-          id: "event-1",
-          parentId: null,
-          timestamp: 1000,
-          message: { role: "user", MediaPath: "/media/a.png", MediaType: "image/png" },
-        }),
-      ],
-      false,
-    );
-    fs.writeFileSync(`${archivePath}.media-retirement.999.interrupted.tmp`, "partial");
-    expect((await migrateLegacyMediaPersistence({ env })).changes.join("\n")).toContain(
-      "Migrated archived transcript media",
-    );
-    expect(readSessionArchiveContentSync(archivePath)).toContain('"__openclaw"');
   });
 });

@@ -2,6 +2,7 @@
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -74,6 +75,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath?: string;
   storePath?: string;
   sessionId?: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   sessionKey?: string;
   agentId?: string;
   message: string;
@@ -159,6 +162,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       {
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
         updateMode: "inline",
         ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
         touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
@@ -189,6 +194,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         ],
       },
     );
+    if (turn.rejectedReason) {
+      return { ok: false, error: turn.rejectedReason };
+    }
     const appended = turn.messages[0];
     if (!appended) {
       // A declined predicate is a decision, not a failure: no row was wanted.

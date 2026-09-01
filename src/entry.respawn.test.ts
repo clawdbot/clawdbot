@@ -95,6 +95,35 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.detachForProcessTree).toBe(true);
   });
 
+  it("does not respawn gateway status only to suppress warnings", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "gateway", "status", "--json"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: undefined,
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves NODE_EXTRA_CA_CERTS respawn for gateway status", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "gateway", "status", "--json"],
+      env: {},
+      execArgv: [],
+      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["openclaw", "gateway", "status", "--json"]);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+    expect(respawnPlan.detachForProcessTree).toBe(true);
+  });
+
   it.each(["tui", "terminal", "chat"] as const)(
     "preserves NODE_EXTRA_CA_CERTS respawn for interactive %s",
     (command) => {
@@ -202,6 +231,25 @@ describe("buildCliRespawnPlan", () => {
 
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
+  });
+
+  it.each([
+    ["injects a discovered CA for whitespace", "linux", " ", "/etc/ca.pem", "/etc/ca.pem", "1"],
+    ["drops an empty value without discovery", "linux", "", undefined, undefined, undefined],
+    ["drops whitespace without discovery", "linux", " ", undefined, undefined, undefined],
+    ["drops whitespace on Windows", "win32", " ", undefined, undefined, undefined],
+  ] as const)("%s", (_label, platform, inherited, discovered, expected, expectedReady) => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "status"],
+      env: { NODE_EXTRA_CA_CERTS: inherited },
+      execArgv: [],
+      autoNodeExtraCaCerts: discovered,
+      platform,
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe(expected);
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe(expectedReady);
   });
 
   it("returns null when both respawn guards are already satisfied", () => {

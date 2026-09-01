@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
+import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
@@ -154,6 +155,7 @@ function createFullModelCatalogAccess(params: {
     input: createPreparedModelCatalogWorkerInput({
       agentFacts: params.agentFacts,
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
     }),
     isCurrent: params.isCurrent,
   });
@@ -219,6 +221,11 @@ function createFullModelCatalogAccess(params: {
         });
         pending = build
           .then((catalog) => {
+            prepareModelCatalogThinkingPolicies({
+              catalog,
+              metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+              providers: params.pluginGeneration.pluginRegistry?.providers,
+            });
             fullCatalog = catalog;
             notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
             return catalog;
@@ -244,6 +251,11 @@ function createSnapshot(
     pluginGeneration;
   const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
     catalogFacts;
+  prepareModelCatalogThinkingPolicies({
+    catalog: modelCatalog,
+    metadataSnapshot: pluginMetadataSnapshot,
+    providers: pluginRegistry?.providers,
+  });
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the
     // credential map and parsed catalog remain owned by the lifecycle snapshot.
@@ -286,21 +298,25 @@ async function buildSnapshotBatch(
   agentBuildCompletions: Map<string, Promise<void>>,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
+  includeCredentialProviders = catalogMode === "live",
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const freshGroups = new Map<string, PreparedModelRuntimeBuildCandidate[]>();
   const reusableGroups = new Map<
     PreparedModelRuntimePluginGeneration,
-    PreparedModelRuntimeBuildCandidate[]
+    Map<string, PreparedModelRuntimeBuildCandidate[]>
   >();
   for (const candidate of candidates) {
     const { input, pluginGeneration: reusablePluginGeneration } = candidate;
     if (reusablePluginGeneration) {
-      const group = reusableGroups.get(reusablePluginGeneration);
+      const workspaceGroups = reusableGroups.get(reusablePluginGeneration) ?? new Map();
+      const key = preparedModelRuntimeWorkspaceFactsKey(input);
+      const group = workspaceGroups.get(key);
       if (group) {
         group.push(candidate);
       } else {
-        reusableGroups.set(reusablePluginGeneration, [candidate]);
+        workspaceGroups.set(key, [candidate]);
       }
+      reusableGroups.set(reusablePluginGeneration, workspaceGroups);
       continue;
     }
     const ownerKind = candidate.prepareInboundPluginRegistry ? "configured" : "dynamic";
@@ -316,10 +332,12 @@ async function buildSnapshotBatch(
     groupCandidates: PreparedModelRuntimeBuildCandidate[];
     pluginGeneration?: PreparedModelRuntimePluginGeneration;
   }> = [
-    ...[...reusableGroups].map(([pluginGeneration, groupCandidates]) => ({
-      groupCandidates,
-      pluginGeneration,
-    })),
+    ...[...reusableGroups].flatMap(([pluginGeneration, workspaceGroups]) =>
+      [...workspaceGroups.values()].map((groupCandidates) => ({
+        groupCandidates,
+        pluginGeneration,
+      })),
+    ),
     ...[...freshGroups.values()].map((groupCandidates) => ({ groupCandidates })),
   ];
   const preparedInputs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeAgentFacts>();
@@ -349,7 +367,10 @@ async function buildSnapshotBatch(
     const prepared = await prepareWorkspaceBuildGroup(
       groupCandidates.map(({ input }) => input),
       catalogMode,
-      { preferBuiltPluginArtifacts },
+      {
+        preferBuiltPluginArtifacts,
+        includeCredentialProviders,
+      },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
       pluginMetadataSnapshot,
@@ -552,6 +573,7 @@ export function startSerializedSnapshotBuildBatch(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  includeCredentialProviders = catalogMode === "live",
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -577,6 +599,7 @@ export function startSerializedSnapshotBuildBatch(
         agentBuildCompletions,
         pluginMetadataSnapshot,
         onBuildStats,
+        includeCredentialProviders,
       ),
     };
   })();

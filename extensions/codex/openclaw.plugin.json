@@ -21,6 +21,7 @@
     "configRepair": true,
     "stateMigrations": true
   },
+  "doctorHealthChecks": true,
   "sessionRouteStateOwners": [
     {
       "id": "codex",

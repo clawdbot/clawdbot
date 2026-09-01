@@ -68,6 +68,8 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
+import { closeCliResources } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
@@ -265,57 +267,6 @@ async function tryRunGatewayRunFastPath(
   return true;
 }
 
-async function closeCliResources(): Promise<void> {
-  const finalizers = [
-    async () => {
-      const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
-        await import("../agents/harness/registry.js");
-      if (listRegisteredAgentHarnesses().length > 0) {
-        await disposeRegisteredAgentHarnesses();
-      }
-    },
-    async () => {
-      const { hasManagedProviderLocalServices } =
-        await import("../agents/provider-runtime-lifecycle.js");
-      if (hasManagedProviderLocalServices()) {
-        const { stopManagedProviderLocalServices } =
-          await import("../agents/provider-local-service.js");
-        stopManagedProviderLocalServices();
-      }
-    },
-    async () => {
-      const { hasProviderTransportDispatcherPool } =
-        await import("../agents/provider-runtime-lifecycle.js");
-      if (hasProviderTransportDispatcherPool()) {
-        const { closeProviderTransportDispatcherPool } =
-          await import("../agents/provider-transport-dispatcher-pool.js");
-        await closeProviderTransportDispatcherPool();
-      }
-    },
-    async () => {
-      const { getActiveMcpLoopbackRuntime } =
-        await import("../gateway/mcp-http.loopback-runtime.js");
-      if (getActiveMcpLoopbackRuntime()) {
-        const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-        await closeMcpLoopbackServer();
-      }
-    },
-    async () => {
-      const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
-      if (hasMemoryRuntime()) {
-        const { closeActiveMemorySearchManagersCore } =
-          await import("../plugins/memory-runtime.js");
-        await closeActiveMemorySearchManagersCore();
-      }
-    },
-  ];
-  // Teardown is sequential and best-effort so one stale lazy chunk or plugin
-  // failure cannot mask the CLI command's result or skip later resources.
-  for (const finalize of finalizers) {
-    await finalize().catch(() => undefined);
-  }
-}
-
 function isUnconfiguredConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
 ): boolean {
@@ -510,14 +461,11 @@ async function resolveReachableGateway(
     if (options.hasConfiguredGateway && !configuredGateway) {
       configuredGateway = toReachableGateway(target, auth);
     }
-    const probeOptions: {
-      url: string;
-      config?: OpenClawConfig;
-      token?: string;
-      password?: string;
-      tlsFingerprint?: string;
-      preauthHandshakeTimeoutMs?: number;
-    } = { url: target.url };
+    const probeOptions: Parameters<typeof probeGatewayConfiguredModel>[0] = {
+      url: target.url,
+      // A configured remote origin stays remote through a loopback tunnel.
+      ...(target.scope === "remote" ? { originScopedDeviceAuth: true } : {}),
+    };
     if (config.gateway?.remote?.edgeAuth) {
       probeOptions.config = config;
     }
@@ -1081,13 +1029,34 @@ export async function runCli(
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
     () => {
-      const run = () =>
-        runCliWithPreparedOutputMode(originalArgv, { ...options, builtInMachineOutput });
+      const run = async (harnessCleanup?: CliHarnessCleanup) => {
+        try {
+          return await runCliWithPreparedOutputMode(originalArgv, {
+            ...options,
+            builtInMachineOutput,
+            harnessCleanup,
+          });
+        } catch (error) {
+          // Selection and Commander preactions run before the Gateway action's failure boundary.
+          if (
+            isGatewayRunInvocationArgv(originalArgv) &&
+            !resolveCliArgvInvocation(originalArgv).hasHelpOrVersion
+          ) {
+            const { handleGatewayStartupMaintenance } =
+              await import("./gateway-cli/startup-maintenance.js");
+            if (await handleGatewayStartupMaintenance(error)) {
+              return;
+            }
+          }
+          throw error;
+        }
+      };
       // Nested registrars and late actions share this lightweight owner, even when no
       // top-level plugin preparation is needed. Gateway retains its boot/process owner.
-      return isGatewayRunInvocationArgv(originalArgv)
-        ? run()
-        : withPluginCache(createPluginCache(), run);
+      const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
+      return withCliCommandCleanup(gatewayRun, (cleanup) =>
+        gatewayRun ? run() : withPluginCache(createPluginCache(), () => run(cleanup)),
+      );
     },
     {
       machineOutput: builtInMachineOutput,
@@ -1102,6 +1071,7 @@ async function runCliWithPreparedOutputMode(
   options: {
     additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     builtInMachineOutput: boolean;
+    harnessCleanup?: CliHarnessCleanup;
   },
 ) {
   const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
@@ -1256,13 +1226,13 @@ async function runCliWithPreparedOutputMode(
         if (useSourceOnlyBestEffortConfig) {
           return configIo.readSourceConfigBestEffort();
         }
-        const readOptions = {
-          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
-          ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
-          bestEffortConfigStartupPolicy.validateConfigOnly
-            ? { observe: false }
-            : {}),
-          skipPluginValidation: true,
+        const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
+          // Routing must not create state before Doctor decides whether migrations are needed.
+          observe: false,
+          ...(isolateProxyConfigEnv ? { isolateEnv: true } : {}),
+          ...(bestEffortConfigStartupPolicy.validateConfigOnly
+            ? { pluginValidation: "core-only" }
+            : { skipPluginValidation: true }),
         };
         if (!resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
           return configIo.readBestEffortConfig(readOptions);
@@ -1747,7 +1717,7 @@ async function runCliWithPreparedOutputMode(
     pluginCliSession?.close();
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
-    await closeCliResources();
+    await closeCliResources(options.harnessCleanup);
     pauseNonTtyStdinForCliExit();
   }
 }

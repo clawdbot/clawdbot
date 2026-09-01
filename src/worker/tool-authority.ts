@@ -7,7 +7,7 @@ export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "process",
 ] as const;
 
-const WORKER_OPTIONAL_LOCAL_TOOL_NAMES = ["browser"] as const;
+const WORKER_OPTIONAL_LOCAL_TOOL_NAMES = ["browser", "computer"] as const;
 
 export const WORKER_LOCAL_TOOL_NAMES = [
   ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,

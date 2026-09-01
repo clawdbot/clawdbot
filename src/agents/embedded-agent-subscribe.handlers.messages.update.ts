@@ -20,6 +20,7 @@ import {
   appendBlockReplyChunk,
   buildAssistantStreamData,
   copyPartialBlockState,
+  emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
@@ -37,7 +38,6 @@ import {
   resolveStreamingReplyText,
   resolveTextAppendDelta,
   scopeAssistantMessageToStreamBlock,
-  shouldSuppressAssistantVisibleOutput,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type {
@@ -89,11 +89,12 @@ export function handleMessageUpdate(
   const isResponsesTextEvent =
     isResponsesApiAssistantMessage(eventAssistantMessage) &&
     (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
+  const assistantPhase = resolveAssistantMessagePhase(msg);
+  const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
     const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
     if (commentaryText) {
-      appendRawStream({
+      appendRawStream(() => ({
         ts: Date.now(),
         event: "assistant_text_stream",
         runId: ctx.params.runId,
@@ -101,17 +102,13 @@ export function handleMessageUpdate(
         evtType: "commentary_update",
         delta: "",
         content: commentaryText,
-      });
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
-      );
+      }));
+      emitAssistantCommentaryStreamData(ctx, msg);
     }
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
-
-  const assistantPhase = resolveAssistantMessagePhase(msg);
 
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
     capturePendingAssistantUsage(ctx, evt);
@@ -130,7 +127,7 @@ export function handleMessageUpdate(
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
-    appendRawStream({
+    appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_thinking_stream",
       runId: ctx.params.runId,
@@ -138,7 +135,7 @@ export function handleMessageUpdate(
       evtType,
       delta: thinkingDelta,
       content: thinkingContent,
-    });
+    }));
     // Emit-always: emitReasoningStream always reaches the bus/archive; the
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
@@ -166,7 +163,7 @@ export function handleMessageUpdate(
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
-  appendRawStream({
+  appendRawStream(() => ({
     ts: Date.now(),
     event: "assistant_text_stream",
     runId: ctx.params.runId,
@@ -174,7 +171,7 @@ export function handleMessageUpdate(
     evtType,
     delta,
     content,
-  });
+  }));
 
   const chunk = resolveAssistantTextChunk({
     evtType,

@@ -1035,7 +1035,7 @@ describe("GatewayBrowserClient", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("reports failed request timing without including request params", async () => {
+  it("retains negative response payloads without leaking them into timing or error JSON", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -1064,17 +1064,36 @@ describe("GatewayBrowserClient", () => {
       type: "res",
       id: frame.id,
       ok: false,
-      error: { code: "CONFIG_ERROR", message: "config failed" },
+      payload: { runId: "browser-run", privateResult: "not-for-logs" },
+      error: {
+        code: "CONFIG_ERROR",
+        message: "config failed",
+        details: { reason: "busy" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
     });
 
     try {
       await request;
       throw new Error("expected config.get request to reject");
     } catch (error) {
-      expect((error as { gatewayCode?: string }).gatewayCode).toBe("CONFIG_ERROR");
+      expect(error).toBeInstanceOf(GatewayRequestError);
+      expect(error).toMatchObject({
+        name: "GatewayRequestError",
+        code: "CONFIG_ERROR",
+        gatewayCode: "CONFIG_ERROR",
+        message: "config failed",
+        details: { reason: "busy" },
+        retryable: true,
+        retryAfterMs: 250,
+        responsePayload: { runId: "browser-run", privateResult: "not-for-logs" },
+      });
+      expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
     expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
+    expect(JSON.stringify(onRequestTiming.mock.calls)).not.toContain("not-for-logs");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
       method: "config.get",

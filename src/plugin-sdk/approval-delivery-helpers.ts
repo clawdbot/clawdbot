@@ -2,6 +2,7 @@ import type { ChannelApprovalKind } from "../infra/approval-types.js";
 // Approval delivery helpers format approval prompts and results for channel plugins.
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -16,7 +17,10 @@ import { normalizeMessageChannel } from "./routing.js";
 import { normalizeOptionalString } from "./string-coerce-runtime.js";
 
 type NativeApprovalDeliveryMode = "dm" | "channel" | "both";
-type NativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type NativeApprovalRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 type NativeApprovalSurface = "origin" | "approver-dm";
 type ChannelApprovalCapabilitySurfaces = Pick<
   ChannelApprovalCapability,

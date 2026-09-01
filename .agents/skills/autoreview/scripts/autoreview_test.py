@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 import runpy
@@ -110,12 +111,79 @@ class AutoreviewPriorityTests(unittest.TestCase):
             args = AUTOREVIEW.parse_args()
         self.assertEqual(args.max_priority, "P0")
 
-    def test_priority_filter_omits_lower_findings_and_cleans_verdict(self) -> None:
+    def test_priority_filter_preserves_lower_findings_and_provider_verdict(self) -> None:
         report = copy.deepcopy(DRAFT_REPORT)
         AUTOREVIEW.filter_findings_by_priority(report, "P0")
         self.assertEqual(report["findings"], [])
-        self.assertEqual(report["overall_correctness"], "patch is correct")
-        self.assertIn("below the requested P0", report["overall_explanation"])
+        self.assertEqual(report["priority_filtered_findings"], DRAFT_REPORT["findings"])
+        for key in ("overall_correctness", "overall_explanation", "overall_confidence"):
+            self.assertEqual(report[key], DRAFT_REPORT[key])
+
+
+class AutoreviewResultScopeTests(unittest.TestCase):
+    def test_scope_rejection_preserves_provider_conclusion_and_audit(self) -> None:
+        report = copy.deepcopy(DRAFT_REPORT)
+        with contextlib.redirect_stderr(io.StringIO()):
+            AUTOREVIEW.validate_report(report, Path.cwd(), {"changed.js"}, [])
+        self.assertEqual(report["findings"], [])
+        for key in ("overall_correctness", "overall_explanation", "overall_confidence"):
+            self.assertEqual(report[key], DRAFT_REPORT[key])
+        self.assertEqual(report["scope_rejected_findings"], DRAFT_REPORT["findings"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            AUTOREVIEW.print_report(report)
+        self.assertIn("incomplete", output.getvalue())
+        self.assertIn("Draft finding", output.getvalue())
+        self.assertIn("draft.js:1", output.getvalue())
+        self.assertNotIn("clean:", output.getvalue())
+
+    def test_chunk_merge_keeps_rejections_explanations_and_conservative_confidence(self) -> None:
+        rejected = copy.deepcopy(DRAFT_REPORT)
+        with contextlib.redirect_stderr(io.StringIO()):
+            AUTOREVIEW.validate_report(rejected, Path.cwd(), {"changed.js"}, [])
+        reports = [("chunk 1/2", copy.deepcopy(FINAL_REPORT)), ("chunk 2/2", rejected)]
+        merged = AUTOREVIEW.merge_chunk_reports(reports)
+        self.assertEqual(merged["overall_correctness"], "patch is incorrect")
+        self.assertEqual(merged["overall_confidence"], 0.2)
+        self.assertEqual(len(merged["scope_rejected_findings"]), 1)
+        self.assertEqual(merged["pass_reports"][1]["report"], rejected)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            AUTOREVIEW.print_report(merged)
+        self.assertIn("draft", output.getvalue())
+        self.assertIn("incomplete", output.getvalue())
+        self.assertNotIn("clean:", output.getvalue())
+
+    def test_required_finding_must_survive_priority_filter_for_every_pass_count(self) -> None:
+        args = argparse.Namespace(engine="codex", max_priority="P0", require_finding=["Draft finding"])
+        for count in (1, 2):
+            with self.subTest(count=count), mock.patch.object(
+                AUTOREVIEW, "run_engine", return_value=json.dumps(DRAFT_REPORT)
+            ):
+                reports = AUTOREVIEW.run_review_passes(
+                    args, [args], Path.cwd(), ["pack"] * count, {"draft.js"}, False
+                )
+            report = reports[0][1] if count == 1 else AUTOREVIEW.merge_chunk_reports(reports)
+            self.assertEqual(
+                AUTOREVIEW.missing_required_findings(report, args.require_finding), ["Draft finding"]
+            )
+            self.assertEqual(report["overall_correctness"], "patch is incorrect")
+            self.assertTrue(report["priority_filtered_findings"])
+
+    def test_provider_cannot_supply_local_audit_metadata(self) -> None:
+        for key in ("scope_rejected_findings", "priority_filtered_findings", "pass_reports", "review_status"):
+            report = copy.deepcopy(FINAL_REPORT)
+            report[key] = []
+            with self.subTest(key=key), self.assertRaisesRegex(SystemExit, "unexpected top-level"):
+                AUTOREVIEW.validate_report(report, Path.cwd(), set(), [])
+
+    def test_required_finding_survives_merge_deduplication_and_body_prefix(self) -> None:
+        first = copy.deepcopy(DRAFT_REPORT)
+        second = copy.deepcopy(DRAFT_REPORT)
+        second["findings"][0]["body"] = "x" * 1980 + " required tail"
+        merged = AUTOREVIEW.merge_chunk_reports([("chunk 1/2", first), ("chunk 2/2", second)])
+        self.assertEqual(len(merged["findings"]), 1)
+        self.assertEqual(AUTOREVIEW.missing_required_findings(merged, ["required tail"]), [])
 
 
 def amp_test_stream(
@@ -676,113 +744,6 @@ class AutoreviewAmpTests(unittest.TestCase):
                     AUTOREVIEW.run_amp(args, repo, "review")
 
 
-class AutoreviewTruffleHogTests(unittest.TestCase):
-    def test_findings_map_to_prompt_dataset_untracked_and_diff_paths(self) -> None:
-        prompt = "\n".join(
-            (
-                "# Prompt file: review-notes.md",
-                "prompt body",
-                "# Dataset: evidence.json",
-                "dataset body",
-                "# Untracked File",
-                'path: "new/config.ts"',
-                "source-line 1: redacted example",
-                "diff --git a/old.ts b/new.ts",
-                "--- a/old.ts",
-                "+++ b/new.ts",
-                "@@ -1 +1 @@",
-                "+redacted example",
-            )
-        )
-        output = "\n".join(
-            json.dumps(
-                {
-                    "SourceMetadata": {
-                        "Data": {"Filesystem": {"line": line_number}}
-                    }
-                }
-            )
-            for line_number in (2, 4, 7, 12)
-        )
-
-        self.assertEqual(
-            AUTOREVIEW.trufflehog_review_pack_paths(prompt, output),
-            ["evidence.json", "new.ts", "new/config.ts", "review-notes.md"],
-        )
-
-    def test_deleted_diff_finding_maps_to_original_path(self) -> None:
-        prompt = "\n".join(
-            (
-                "# Change Bundle",
-                "diff --git a/config.ts b/config.ts",
-                "deleted file mode 100644",
-                "--- a/config.ts",
-                "+++ /dev/null",
-                "@@ -1 +0,0 @@",
-                "-redacted example",
-            )
-        )
-        output = json.dumps(
-            {
-                "SourceMetadata": {
-                    "Data": {"Filesystem": {"Line": 7}}
-                }
-            }
-        )
-
-        self.assertEqual(
-            AUTOREVIEW.trufflehog_review_pack_paths(prompt, output),
-            ["config.ts"],
-        )
-
-    def test_unusable_scanner_output_falls_back_without_echoing_it(self) -> None:
-        output = "not-json\n" + json.dumps(
-            {
-                "SourceMetadata": {
-                    "Data": {"Filesystem": {"line": "invalid"}}
-                },
-                "Raw": "must-not-be-returned",
-            }
-        )
-
-        self.assertEqual(
-            AUTOREVIEW.trufflehog_review_pack_paths("prompt", output),
-            ["review pack"],
-        )
-
-    def test_scanner_command_requests_verified_and_unknown_results(self) -> None:
-        prompt = "review pack with redacted examples only"
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = Path(tempdir)
-
-            def run_scanner(
-                command: list[str],
-                cwd: Path,
-                **kwargs: object,
-            ) -> subprocess.CompletedProcess[str]:
-                self.assertEqual(cwd, Path(command[2]).parent)
-                self.assertEqual(Path(command[2]).read_text(encoding="utf-8"), prompt)
-                self.assertEqual(
-                    command[3:],
-                    [
-                        "--json",
-                        "--no-color",
-                        "--results=verified,unknown",
-                        "--fail",
-                        "--fail-on-scan-errors",
-                    ],
-                )
-                self.assertEqual(kwargs["check"], False)
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            with mock.patch.object(
-                AUTOREVIEW,
-                "find_command",
-                return_value="/trusted/trufflehog",
-            ), mock.patch.object(AUTOREVIEW, "run", side_effect=run_scanner):
-                AUTOREVIEW.scan_outgoing_review_pack(repo, prompt)
-
-
 class AutoreviewCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -954,6 +915,8 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
 
     def test_codex_retries_terra_after_sol_access_failure(self) -> None:
         args = argparse.Namespace(
+            engine="codex",
+            max_priority="P0",
             codex_bin="codex",
             codex_config=None,
             codex_speed=None,
@@ -964,43 +927,31 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             tools=True,
             web_search=False,
         )
-        models: list[str] = []
+        prompt = "complete retry pack: unicode \u03c0\r\n-deleted line\n unchanged context\n"
+        with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir:
+            events: list[str] = []
 
-        def fake_run(command: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-            model = command[command.index("--model") + 1]
-            models.append(model)
-            if model == "gpt-5.6-sol":
-                return subprocess.CompletedProcess(
-                    command,
-                    1,
-                    "",
-                    "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
-                )
-            output_path = Path(command[command.index("--output-last-message") + 1])
-            output_path.write_text(json.dumps(FINAL_REPORT))
-            return subprocess.CompletedProcess(command, 0, "", "")
+            def fake_run(command, _cwd, **kwargs):
+                self.assertEqual(kwargs["input_text"], prompt)
+                model = command[command.index("--model") + 1]
+                events.append(model)
+                if model == "gpt-5.6-sol":
+                    return subprocess.CompletedProcess(
+                        command, 1, "",
+                        "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
+                    )
+                output_path = Path(command[command.index("--output-last-message") + 1])
+                output_path.write_text(json.dumps(FINAL_REPORT))
+                return subprocess.CompletedProcess(command, 0, "", "")
 
-        with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
-            AUTOREVIEW,
-            "resolve_command",
-            return_value="/usr/bin/codex",
-        ), mock.patch.object(
-            AUTOREVIEW,
-            "ensure_codex_isolation_supported",
-            return_value="/usr/bin/codex",
-        ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
-            AUTOREVIEW,
-            "prepare_codex_runtime_auth",
-            return_value=None,
-        ), mock.patch.object(
-            AUTOREVIEW,
-            "run_with_heartbeat",
-            side_effect=fake_run,
-        ):
-            output = AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
-
-        self.assertEqual(json.loads(output), FINAL_REPORT)
-        self.assertEqual(models, ["gpt-5.6-sol", "gpt-5.6-terra"])
+            with mock.patch.object(AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"), \
+                    mock.patch.object(AUTOREVIEW, "ensure_codex_isolation_supported", return_value="/usr/bin/codex"), \
+                    mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), \
+                    mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=None), \
+                    mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=fake_run):
+                report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), prompt, set(), [])
+                self.assertEqual(report["findings"], [])
+            self.assertEqual(events, ["gpt-5.6-sol", "gpt-5.6-terra"])
 
     def test_codex_runs_outside_repo_with_bundle_only_workspace(self) -> None:
         args = argparse.Namespace(

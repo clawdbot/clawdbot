@@ -3,7 +3,6 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import { pluginLoaderCacheState } from "./loader-cache.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
@@ -14,6 +13,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import type { PluginLogger } from "./types.js";
 
 type ResolvedPluginLoadDiscovery = {

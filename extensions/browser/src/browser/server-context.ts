@@ -306,11 +306,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                   })
                     ? 200
                     : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning = await isChromeReachable(
-                    activeProfile.cdpUrl,
-                    probeTimeoutMs,
-                    resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                  );
+                  activeRunning =
+                    capabilities.mode === "local-extension"
+                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
+                      : await isChromeReachable(
+                          activeProfile.cdpUrl,
+                          probeTimeoutMs,
+                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                        );
                   if (activeRunning) {
                     const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
                     activeTabCount = tabs.filter((tab) => tab.type === "page").length;

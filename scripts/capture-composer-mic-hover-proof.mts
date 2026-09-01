@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Captures composer mic-hover proof shots: idle vs hovered talk control, plus
-// the mic button's x position in both states (the hover-shift regression).
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+// Captures composer mic-hover proof shots: idle vs hovered talk control, plus
+// the mic button's x position in both states (the hover-shift regression).
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -21,7 +21,8 @@ function readOption(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-const outputDir = path.resolve(
+const outputDir = createControlUiE2eArtifactDir(
+  "composer-mic-hover-proof",
   readOption("output-dir") ?? ".artifacts/control-ui-e2e/composer-mic-hover-proof",
 );
 const label = readOption("label") ?? "after";
@@ -30,7 +31,6 @@ if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
 }
 
-await mkdir(outputDir, { recursive: true });
 const server = await startControlUiE2eServer(undefined, { source: true });
 const browser = await chromium.launch({ executablePath });
 const context = await browser.newContext({

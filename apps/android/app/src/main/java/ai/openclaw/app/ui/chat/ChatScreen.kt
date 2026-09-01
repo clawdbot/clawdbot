@@ -4,6 +4,7 @@ import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.R
@@ -61,6 +62,7 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
@@ -139,6 +141,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -285,6 +288,7 @@ fun ChatScreen(
   onOpenSessions: () -> Unit,
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
+  onOpenProvidersModels: () -> Unit = onOpenGatewaySettings,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
@@ -436,6 +440,13 @@ fun ChatScreen(
       modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
         ?: selected.substringAfterLast('/')
     } ?: nativeString("Model")
+  val modelUnavailableReason =
+    selectedChatModelSendBlockingReason(
+      gatewayReady = healthOk,
+      selectedModelRef = selectedModelRef,
+      catalog = modelCatalog,
+    )
+  val modelUnavailableMessage = chatModelUnavailableText(modelUnavailableReason)
   val micCaptureActive = micEnabled || micIsListening || micCooldown || talkModeEnabled || talkModeListening
   val voiceNoteRecorder =
     rememberVoiceNoteRecorderController(
@@ -669,6 +680,7 @@ fun ChatScreen(
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      sessionColor = sessions.firstOrNull { it.key == sessionKey }?.color,
       showSidebarButton = showSidebarButton,
       onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
@@ -834,6 +846,7 @@ fun ChatScreen(
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,
       shareImportNotice = shareImportNotice,
+      modelUnavailableMessage = modelUnavailableMessage,
       onDismissShareImportNotice = {
         sendMessageTooLong = false
         sendCheckpointFull = false
@@ -927,6 +940,7 @@ fun ChatScreen(
       talkActive = talkActive,
       onToggleTalk = onToggleTalk,
       onFixConnection = onOpenGatewaySettings,
+      onOpenProvidersModels = onOpenProvidersModels,
       onCopyDiagnostics = {
         copyGatewayDiagnosticsReport(
           context = context,
@@ -963,6 +977,10 @@ fun ChatScreen(
       onSelect = { modelRef ->
         viewModel.setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
         showModelPicker = false
+      },
+      onOpenProviders = {
+        showModelPicker = false
+        onOpenProvidersModels()
       },
       onToggleFavorite = viewModel::toggleModelFavorite,
     )
@@ -1135,6 +1153,7 @@ internal fun canStartNewChat(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
+  sessionColor: String?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
   healthOk: Boolean,
@@ -1247,13 +1266,18 @@ private fun ChatHeader(
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
       Text(text = nativeString("Chat"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
-      Text(
-        text = sessionTitle,
-        style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
-        color = ClawTheme.colors.textMuted,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ClawTheme.colors.sessionColor(sessionColor)?.let { color ->
+          Box(modifier = Modifier.size(7.dp).background(color, CircleShape).clearAndSetSemantics {})
+        }
+        Text(
+          text = sessionTitle,
+          style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
     }
   }
 }
@@ -2284,6 +2308,7 @@ private fun ChatComposer(
   shareStaging: Boolean,
   sendInFlight: Boolean,
   shareImportNotice: NativeText?,
+  modelUnavailableMessage: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
@@ -2305,6 +2330,7 @@ private fun ChatComposer(
   talkActive: Boolean,
   onToggleTalk: () -> Unit,
   onFixConnection: () -> Unit,
+  onOpenProvidersModels: () -> Unit,
   onCopyDiagnostics: () -> Unit,
   onAbort: () -> Unit,
   onSend: () -> Unit,
@@ -2330,6 +2356,7 @@ private fun ChatComposer(
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,
       dictationActive = dictationActive,
+      modelUnavailable = modelUnavailableMessage != null,
     )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2347,6 +2374,23 @@ private fun ChatComposer(
         )
         IconButton(onClick = onDismissShareImportNotice, modifier = Modifier.size(32.dp)) {
           Icon(Icons.Default.Close, contentDescription = nativeString("Dismiss shared-image warning"))
+        }
+      }
+    }
+    if (modelUnavailableMessage != null) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(
+          text = modelUnavailableMessage.resolveNativeTextResource(),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.warning,
+          modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onOpenProvidersModels) {
+          Text(nativeString("Providers"))
         }
       }
     }
@@ -2544,6 +2588,7 @@ private fun ChatModelPickerSheet(
   favorites: Set<String>,
   onDismiss: () -> Unit,
   onSelect: (String?) -> Unit,
+  onOpenProviders: () -> Unit,
   onToggleFavorite: (String) -> Unit,
 ) {
   ModalBottomSheet(
@@ -2595,6 +2640,7 @@ private fun ChatModelPickerSheet(
               model = model,
               pinned = ref in favorites,
               onSelect = { onSelect(ref) },
+              onOpenProviders = onOpenProviders,
               onToggleFavorite = { onToggleFavorite(ref) },
             )
           }
@@ -2609,13 +2655,35 @@ private fun ChatModelPickerRow(
   model: GatewayModelSummary,
   pinned: Boolean,
   onSelect: () -> Unit,
+  onOpenProviders: () -> Unit,
   onToggleFavorite: () -> Unit,
 ) {
+  val action = chatModelPickerAction(model)
+  val unavailable = model.available == false
+  val availabilityLabel =
+    if (!unavailable) {
+      null
+    } else {
+      when (model.unavailableReason) {
+        GatewayModelUnavailableReason.MissingAuth,
+        GatewayModelUnavailableReason.AuthFailed,
+        -> nativeString("Authentication needed")
+        GatewayModelUnavailableReason.Cooldown -> nativeString("Unavailable")
+        null -> nativeString("Unavailable")
+      }
+    }
   Surface(
-    onClick = onSelect,
+    onClick = {
+      when (action) {
+        ChatModelPickerAction.Select -> onSelect()
+        ChatModelPickerAction.OpenProviders -> onOpenProviders()
+        ChatModelPickerAction.Disabled -> Unit
+      }
+    },
+    enabled = action != ChatModelPickerAction.Disabled,
     modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
     color = Color.Transparent,
-    contentColor = ClawTheme.colors.text,
+    contentColor = if (unavailable) ClawTheme.colors.textMuted else ClawTheme.colors.text,
   ) {
     Row(
       modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -2623,10 +2691,22 @@ private fun ChatModelPickerRow(
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = model.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = model.provider, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+          text = model.name,
+          style = ClawTheme.type.body,
+          color = if (unavailable) ClawTheme.colors.textMuted else ClawTheme.colors.text,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          text = listOfNotNull(model.provider, availabilityLabel).joinToString(" · "),
+          style = ClawTheme.type.caption,
+          color = if (unavailable) ClawTheme.colors.warning else ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
-      IconButton(onClick = onToggleFavorite) {
+      IconButton(onClick = onToggleFavorite, enabled = !unavailable) {
         Icon(
           imageVector = if (pinned) Icons.Default.Star else Icons.Default.StarBorder,
           contentDescription = if (pinned) nativeString("Unpin model") else nativeString("Pin model"),

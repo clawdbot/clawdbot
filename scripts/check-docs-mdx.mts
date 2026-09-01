@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import {
   checkMintlifyAccordionIndentation,
   MINTLIFY_ACCORDION_INDENT_MESSAGE,
@@ -100,14 +101,6 @@ function parsePositiveIntegerArg(raw: string | undefined, label: string): number
   return value;
 }
 
-function readRequiredValue(argv: string[], index: number, label: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${label} requires a value`);
-  }
-  return value;
-}
-
 /**
  * Parses docs MDX check arguments.
  */
@@ -122,13 +115,13 @@ export function parseArgs(argv: string[]) {
       continue;
     }
     if (part === "--json-out") {
-      jsonOut = readRequiredValue(argv, index, "--json-out");
+      jsonOut = requireOptionArgument(argv, index, "--json-out");
       index += 1;
       continue;
     }
     if (part === "--max-errors") {
       maxErrors = parsePositiveIntegerArg(
-        readRequiredValue(argv, index, "--max-errors"),
+        requireOptionArgument(argv, index, "--max-errors"),
         "--max-errors",
       );
       index += 1;

@@ -85,7 +85,9 @@ it("converges an older current-watermark rebuild and a following append without 
       sessionId,
       sessionKey: "agent:main:eligibility",
     };
-    await replaceTranscriptEvents(scope, [...entries]);
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, entries)).toBe(entries.length);
+    }, scope);
     const { db } = openOpenClawAgentDatabase(scope);
     const expectedRows = projectionRows(db);
     expect(expectedRows.map((row) => row.context_eligible)).toEqual([1, 1, 0, 1]);
@@ -114,12 +116,14 @@ it("converges an older current-watermark rebuild and a following append without 
     );
     runOpenClawAgentWriteTransaction((database) => {
       appendTranscriptEventsInTransaction(database, scope, [
+        entries[3],
         {
           type: "message",
           id: "new",
           parentId: "answer",
           message: { role: "user", content: "next" },
         },
+        entries[3],
       ]);
       expect(
         db

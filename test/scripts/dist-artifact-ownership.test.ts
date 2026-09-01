@@ -2,22 +2,18 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+} from "../../scripts/lib/tsdown-config-groups.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
 
-const tempDirs: string[] = [];
-const activeFixtures: Promise<void>[] = [];
-afterEach(async () => {
-  // Vitest aborts timed-out tests before their async body finishes unwinding.
-  // Join fixture teardown before removing directories still used by children.
-  await Promise.allSettled(activeFixtures.splice(0));
-  for (const directory of tempDirs.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
 const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
 const tsgoArgs = ["-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"];
@@ -31,8 +27,7 @@ function write(root: string, relative: string, content: string) {
 }
 
 function createCheckout() {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dist-owner-")));
-  tempDirs.push(root);
+  const root = fs.realpathSync(fixture.createTempDir("openclaw-dist-owner-"));
   write(root, "package.json", '{"type":"module"}');
   write(root, "pnpm-workspace.yaml", "packages: []\n");
   write(root, "src/plugin-sdk/qa-channel-protocol.ts", "export interface Channel { id: string }\n");
@@ -74,6 +69,18 @@ function installCompiler(root: string, afterEmit = "") {
   fs.chmodSync(compiler, 0o755);
 }
 
+function installBuildCheckpoint(root: string, checkpoint: string) {
+  // Both build launch paths must reach the fixture's same completion barrier.
+  write(
+    root,
+    "node_modules/tsdown/dist/run.mjs",
+    `import { createRequire } from 'node:module';
+    const require = createRequire(import.meta.url);
+    ${checkpoint}`,
+  );
+  write(root, "pnpm.cjs", 'import("./node_modules/tsdown/dist/run.mjs");\n');
+}
+
 function installScripts(root: string, scripts: string[]) {
   for (const script of scripts) {
     write(
@@ -105,7 +112,7 @@ function installScripts(root: string, scripts: string[]) {
     path.join(root, "scripts/windows-cmd-helpers.mjs"),
   );
   fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-  for (const name of ["tsx", "tsdown", "typescript", "@typescript", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe"]) {
     fs.mkdirSync(path.dirname(path.join(root, "node_modules", name)), { recursive: true });
     fs.symlinkSync(
       path.join(sourceRoot, "node_modules", name),
@@ -115,9 +122,7 @@ function installScripts(root: string, scripts: string[]) {
 }
 
 function withProcesses(...args: Parameters<typeof runWithProcesses>) {
-  const work = runWithProcesses(...args);
-  activeFixtures.push(work);
-  return work;
+  return fixture.run(() => runWithProcesses(...args));
 }
 
 async function runWithProcesses(
@@ -164,7 +169,7 @@ async function runWithProcesses(
   const diagnostics: (() => string)[] = [];
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
-    (cleanupPromise ??= (async () => {
+    (cleanupPromise ??= fixture.verifyCleanup(async () => {
       cleaning = true;
       for (const socket of sockets) {
         socket.end("continue");
@@ -177,18 +182,29 @@ async function runWithProcesses(
       await Promise.allSettled(completions);
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
-      await Promise.all([...checkpointPids].map((pid) => waitForDead(pid, 2_000)));
+      const orphans = await Promise.allSettled(
+        [...checkpointPids].map((pid) => waitForDead(pid, 2_000)),
+      );
       for (const socket of sockets) {
         socket.destroy();
       }
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
-    })());
+      const failures = orphans.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Fixture orphan cleanup unverified");
+      }
+    }));
   const abort = () => {
     void cleanup().catch((error: unknown) => console.error(error));
   };
   signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    abort();
+  }
   const waitEvent = (name: string) =>
     new Promise<net.Socket>((resolve, reject) => {
       signal.throwIfAborted();
@@ -234,7 +250,12 @@ async function runWithProcesses(
             announceWait();
           }
         });
-        const done = once(child, "close").then(([code]) => ({ code, output }));
+        child.once("error", (error) => {
+          output += String(error);
+        });
+        const done = new Promise<{ code: number | null; output: string }>((resolve) => {
+          child.once("close", (code) => resolve({ code, output }));
+        });
         completions.push(done);
         return {
           waiting,
@@ -265,12 +286,15 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     { script: "prepare-extension-package-boundary-artifacts.mts", failStagingCleanup: false },
     { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: false },
     { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: true },
+    { script: "write-unified-entry-dts.ts", failStagingCleanup: false },
+    { script: "write-unified-entry-dts.ts", failStagingCleanup: true },
   ])(
     "retains nested $script cleanup metadata (staging cleanup failure=$failStagingCleanup)",
     async ({ script, failStagingCleanup }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        installScripts(root, [script]);
+        installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
+        write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
         fs.mkdirSync(path.join(root, "packages"), { recursive: true });
         fs.symlinkSync(
           path.join(sourceRoot, "packages/normalization-core"),
@@ -279,12 +303,20 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
         const moduleUrl = (name: string) =>
           pathToFileURL(path.join(sourceRoot, "scripts/lib", name)).href;
+        write(
+          root,
+          "tsdown.config.ts",
+          `export default ${JSON.stringify([...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS, ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS])}.map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
+        );
         const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
         const replacements = {
-          "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
-          "../tsdown.config.ts": `export default ['openclaw-dts-plugin-sdk-1', 'openclaw-dts-plugin-sdk-2'].map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
-          "./tsdown-build.mts": "export const prepareTsdownBuildExecution = () => ({});",
-          "./lib/declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
+          [scriptUrl]: {
+            "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
+          },
+          [moduleUrl("tsdown-declaration-writer.mts")]: {
+            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
+            "./declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
+          },
         };
         const hook = write(
           root,
@@ -301,8 +333,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           }
           const replacements = ${JSON.stringify(replacements)};
           registerHooks({ resolve(specifier, context, next) {
-            if (context.parentURL === ${JSON.stringify(scriptUrl)} && Object.hasOwn(replacements, specifier)) {
-              return { url: 'data:text/javascript,' + encodeURIComponent(replacements[specifier]), shortCircuit: true };
+            const sources = replacements[context.parentURL];
+            if (sources && Object.hasOwn(sources, specifier)) {
+              return { url: 'data:text/javascript,' + encodeURIComponent(sources[specifier]), shortCircuit: true };
             }
             return next(specifier, context);
           }});
@@ -316,7 +349,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           import { runManagedCommand } from ${JSON.stringify(moduleUrl("managed-child-process.mts"))};
           process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManagedCommand({
             bin: process.execPath,
-            args: ['--import', ${JSON.stringify(hook)}, ...distArtifactEntryArgs(${JSON.stringify(path.join(root, "scripts", script))})],
+            args: ['--import', ${JSON.stringify(pathToFileURL(hook).href)}, ...distArtifactEntryArgs(${JSON.stringify(path.join(root, "scripts", script))})],
             requireProcessTreeExit: true,
           }));
         `,
@@ -420,7 +453,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         if (directory !== ".") {
           fs.symlinkSync(path.join(root, "node_modules"), path.join(cwd, "node_modules"));
         }
-        write(root, "pnpm.cjs", checkpoint("build-started"));
+        installBuildCheckpoint(root, checkpoint("build-started"));
         const writerArgs = [
           "-p",
           path.join(root, "tsconfig.plugin-sdk.dts.json"),
@@ -513,7 +546,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         root,
         `require('node:fs').writeFileSync('compiler.pid', String(process.pid)); ${checkpoint("orphan-ready")}`,
       );
-      write(root, "pnpm.cjs", checkpoint("orphan-build-started"));
+      installBuildCheckpoint(root, checkpoint("orphan-build-started"));
       const owner = write(
         root,
         "owner.mts",
@@ -561,7 +594,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         path.join(sourceRoot, "node_modules/tsx"),
         path.join(root, "node_modules/tsx"),
       );
-      write(root, "pnpm.cjs", checkpoint("nested-build-started"));
+      installBuildCheckpoint(root, checkpoint("nested-build-started"));
       const owner = write(
         root,
         "owner.mts",
@@ -604,7 +637,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       `,
       );
       fs.chmodSync(compiler, 0o755);
-      write(root, "pnpm.cjs", checkpoint("shard-build-started"));
+      installBuildCheckpoint(root, checkpoint("shard-build-started"));
       write(root, "dist/still-consumed.txt", "owned");
       const shards = start(root, path.join(root, "scripts/run-tsgo-core-test-shards.mts"), [
         "ui",
@@ -682,10 +715,10 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       );
       fs.chmodSync(lint, 0o755);
       write(root, "dist/still-consumed.txt", "owned by lint");
-      write(root, "pnpm.cjs", checkpoint("lint-build-started"));
+      installBuildCheckpoint(root, checkpoint("lint-build-started"));
       const consumer = start(root, path.join(root, "scripts/run-oxlint.mts"), [
         "--tsconfig",
-        "config/tsconfig/oxlint.extensions.json",
+        "extensions/tsconfig.json",
         "extensions",
       ]);
       const ready = await consumer.event("lint-consuming");

@@ -97,6 +97,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -936,42 +937,63 @@ describe("runWithModelFallback – probe logic", () => {
     expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
   });
 
-  it("discards deferred suspension when the outer run is aborted", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
-    mockedIsProfileInCooldown.mockReturnValue(false);
-    const controller = new AbortController();
-    const disconnect = new Error("client disconnected");
-    disconnect.name = "ClientDisconnectError";
-    const run = vi.fn().mockImplementation(async () => {
-      controller.abort(disconnect);
-      throw disconnect;
-    });
-
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-        sessionId: "test-session",
-        lane: "main",
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toBe(disconnect);
-
-    expect(run).toHaveBeenCalledOnce();
-    expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
-    expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
-  });
+  it.each(["caller abort", "terminal throw", "terminal classified result"])(
+    "settles deferred suspension for %s",
+    async (mode) => {
+      const { FailoverError } = await import("./failover-error.js");
+      const cfg = makeCfg();
+      mockedIsProfileInCooldown.mockReturnValue(false);
+      const controller = new AbortController();
+      const disconnect = new Error("client disconnected");
+      disconnect.name = "ClientDisconnectError";
+      const error =
+        mode === "caller abort"
+          ? disconnect
+          : new AggregateError(
+              [
+                new FailoverError("recorded terminal stop", {
+                  reason: "unknown",
+                  code: "cli_max_turns",
+                }),
+              ],
+              "wrapper",
+            );
+      const run = vi.fn(async () => {
+        if (mode === "caller abort") {
+          controller.abort(disconnect);
+        }
+        if (mode === "terminal classified result") {
+          return "partial result";
+        }
+        throw error;
+      });
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          run,
+          classifyResult: () => ({ error }),
+          sessionId: "test-session",
+          lane: "main",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(error);
+      expect(run).toHaveBeenCalledOnce();
+      expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
+      if (mode === "caller abort") {
+        expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
+      } else {
+        expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledExactlyOnceWith({
+          cfg: {},
+          sessionId: "test-session",
+          reason: "quota_exhausted",
+          failedProvider: "openai",
+          failedModel: "gpt-4.1-mini",
+        });
+      }
+    },
+  );
 
   it("keeps generic no-lane terminal suspension unbound", async () => {
     const cfg = makeCfg({

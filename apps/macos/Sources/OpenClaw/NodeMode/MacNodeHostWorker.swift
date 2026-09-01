@@ -381,7 +381,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             !CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.contains { key.hasPrefix($0) }
         }
         environment.merge(launch.environment, uniquingKeysWith: { _, explicit in explicit })
-        environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        let privateRuntimePath = launch.environment["PATH"].map { $0 + ":" } ?? ""
+        environment["PATH"] = privateRuntimePath + CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
         environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
         self.launchedWorker = launch

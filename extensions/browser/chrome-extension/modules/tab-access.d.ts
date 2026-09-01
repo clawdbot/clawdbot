@@ -12,7 +12,7 @@ export type CreatedTabOperation = {
     tabId: number,
     assertCurrent: () => void,
     creationEpoch?: TabAccessEpoch,
-  ): Promise<{ targetId: string }>;
+  ): Promise<{ targetId: string; assertCurrent(): void }>;
   handoff(result: { tabId: number; targetId: string }): void;
 };
 
@@ -54,6 +54,7 @@ export type TabAccessChromeApi = {
 export type TabAccessPolicy = {
   initialize(initialMode?: TabAccessMode, initialEnabled?: boolean): Promise<void>;
   readonly mode: TabAccessMode;
+  readonly discoveryRevision: number;
   setMode(nextMode: TabAccessMode): TabAccessMode;
   setEnabled(nextEnabled: boolean): void;
   beginTransition(): void;

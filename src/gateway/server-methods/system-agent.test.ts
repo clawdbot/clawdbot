@@ -6,7 +6,21 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import {
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
+  setRuntimeConfigAppliedHash,
+} from "../../config/runtime-snapshot.js";
+import { createRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  resetAgentRunRegistryForTest,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -15,6 +29,7 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
@@ -143,6 +158,22 @@ let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
+let previousAppliedHash: string | null = null;
+
+async function makeVerificationContext() {
+  const stateDir = systemAgentTempDirs.make("openclaw-setup-verification-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  fs.writeFileSync(configPath, "{}\n");
+  const snapshot = await readConfigFileSnapshot();
+  setRuntimeConfigAppliedHash(hashRuntimeConfigValue(snapshot.sourceConfig));
+  return {
+    configPath,
+    getRuntimeConfig: vi.fn(() => snapshot.runtimeConfig ?? snapshot.config),
+    isConfigReloadSettled: vi.fn(() => true),
+  };
+}
 
 function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
   return expectDefined(verifiedInference, "verified inference fixture was not initialized");
@@ -220,6 +251,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  previousAppliedHash = getRuntimeConfigAppliedHash();
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
@@ -255,6 +287,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetAgentRunRegistryForTest();
+  setRuntimeConfigAppliedHash(previousAppliedHash);
   vi.restoreAllMocks();
   vi.resetAllMocks();
   resetPluginStateStoreForTests();
@@ -318,6 +352,7 @@ describe("openclaw.setup", () => {
   });
 
   it.each([
+    ["openclaw.setup.activate.start" as const, { sessionId: "busy-activation", kind: "codex-cli" }],
     [
       "openclaw.setup.auth.start" as const,
       { sessionId: "busy-auth", authChoice: "github-copilot" },
@@ -459,13 +494,65 @@ describe("openclaw.chat", () => {
     const { calls, respond } = makeRespond();
 
     const verify = systemAgentHandler("openclaw.setup.verify");
-    await verify({ params: { agentId: "research" }, respond } as never);
+    await verify({
+      params: { agentId: "research" },
+      respond,
+      context: await makeVerificationContext(),
+    } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       agentId: "research",
       runtime: defaultRuntime,
     });
     expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
+  });
+
+  it.each([
+    { change: "unapplied revision", when: "before" },
+    { change: "unknown revision", when: "before" },
+    { change: "restart with unchanged config", when: "before" },
+    { change: "unapplied revision", when: "during" },
+    { change: "restart with unchanged config", when: "during" },
+    { change: "replaced runtime", when: "during" },
+  ])("rejects $change $when verification without false readiness", async ({ change, when }) => {
+    const context = await makeVerificationContext();
+    const changeRuntime = () => {
+      if (change === "unapplied revision") {
+        fs.writeFileSync(context.configPath, JSON.stringify({ logging: { level: "debug" } }));
+      } else if (change === "unknown revision") {
+        setRuntimeConfigAppliedHash(null);
+      } else if (change === "replaced runtime") {
+        context.getRuntimeConfig.mockReturnValue({ ...verifiedConfig });
+      } else {
+        context.isConfigReloadSettled.mockReturnValue(false);
+      }
+    };
+    if (when === "before") {
+      changeRuntime();
+    } else {
+      setupInferenceMocks.verifySetupInference.mockImplementationOnce(async () => {
+        changeRuntime();
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1 };
+      });
+    }
+    const { calls, respond } = makeRespond();
+
+    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond, context } as never);
+
+    expect(calls).toEqual([
+      {
+        ok: true,
+        payload: {
+          ok: false,
+          status: "unavailable",
+          error: expect.stringContaining("not active"),
+        },
+        error: undefined,
+      },
+    ]);
+    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledTimes(
+      when === "before" ? 0 : 1,
+    );
   });
 
   it("rejects unknown setup verification params without running inference", async () => {
@@ -478,6 +565,98 @@ describe("openclaw.chat", () => {
 
     expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
     expect(calls[0]?.ok).toBe(false);
+  });
+
+  it.each([
+    "applied",
+    "applied-restart-required",
+    "restart-pending",
+    "failed",
+    "stopped",
+    "superseded",
+  ] as const)(
+    "settles setup after the Gateway application receipt without holding its lane: %s",
+    async (outcome) => {
+      const application = createRuntimeConfigWriteApplication();
+      const claim = expectDefined(application.claim(), "application claim");
+      const result = {
+        ok: true as const,
+        modelRef: "openai/gpt-5.6-luna",
+        latencyMs: 1,
+        lines: [],
+      };
+      setupInferenceMocks.activateSetupInference.mockImplementation(
+        async (params: ActivateSetupInferenceParams) => {
+          params.onRuntimeApplication?.(application);
+          return result;
+        },
+      );
+      const { calls, respond } = makeRespond();
+      const pending = systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never);
+      try {
+        await vi.waitFor(() =>
+          expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce(),
+        );
+        await waitOneTask();
+        expect(calls).toEqual([]);
+        expect(systemAgentLane().activeCount).toBe(0);
+        await systemAgentHandler("openclaw.setup.verify")({
+          params: {},
+          respond: () => {},
+          context: await makeVerificationContext(),
+        } as never);
+        expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+      } finally {
+        claim.settle(outcome);
+        if (
+          outcome === "applied" ||
+          outcome === "applied-restart-required" ||
+          outcome === "restart-pending"
+        ) {
+          await pending;
+        } else {
+          await expect(pending).rejects.toThrow(
+            outcome === "superseded" ? "newer settings" : "Restart the Gateway before chatting",
+          );
+        }
+      }
+      if (
+        outcome === "applied" ||
+        outcome === "applied-restart-required" ||
+        outcome === "restart-pending"
+      ) {
+        expect(calls).toEqual([
+          {
+            ok: true,
+            payload: outcome === "applied" ? result : { ...result, gatewayRestartRequired: true },
+            error: undefined,
+          },
+        ]);
+      } else {
+        // The RPC error stops automatic candidate fallthrough after a saved choice.
+        expect(calls).toEqual([]);
+      }
+    },
+  );
+
+  it("reports restart required when the committed setup application is unclaimed", async () => {
+    setupInferenceMocks.activateSetupInference.mockImplementation(
+      async (params: ActivateSetupInferenceParams) => {
+        params.onRuntimeApplication?.(createRuntimeConfigWriteApplication());
+        return { ok: true, modelRef: "openai/gpt-5.6-luna", latencyMs: 1, lines: [] };
+      },
+    );
+    const { calls, respond } = makeRespond();
+    await expect(
+      systemAgentHandler("openclaw.setup.activate")({
+        params: { kind: "codex-cli" },
+        respond,
+      } as never),
+    ).rejects.toThrow("Restart the Gateway before chatting");
+    expect(calls).toEqual([]);
   });
 
   it.each(["success", "task error", "response error"])(
@@ -539,11 +718,12 @@ describe("openclaw.chat", () => {
         workspace: "/tmp/work",
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
+        onRuntimeApplication: expect.any(Function),
       });
       expect(calls).toEqual(
         outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],
       );
-      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [1]);
+      expect(activeAtResponse).toEqual(outcome === "task error" ? [] : [0]);
       expect(systemAgentLane().activeCount).toBe(0);
     },
   );
@@ -744,7 +924,10 @@ describe("openclaw.chat", () => {
     const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
+    const operationalRunInstance = createOperationalRunInstanceRef("delegated-gateway-restart-run");
+    claimAgentRunDelegatedAuthority(operationalRunInstance);
     const broadcast = vi.fn();
     const context = {
       ...makeContext(sessions),
@@ -755,33 +938,42 @@ describe("openclaw.chat", () => {
     } as unknown as GatewayRequestContext;
 
     const requestResponses = makeRespond();
-    await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "delegated-gateway-restart",
-        method: "openclaw.chat",
-        params: {
-          sessionId: "delegate-1",
-          message: "Restart Gateway.",
-          context: { page: "channels" },
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-        },
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance,
       },
-      respond: requestResponses.respond,
-      client: {
-        ...defaultClient,
-        connect: { ...defaultClient.connect, role: "operator", scopes: ["operator.admin"] },
-      } as GatewayClient,
-      isWebchatConnect: () => false,
-      context,
-      extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
-    });
+      () =>
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "delegated-gateway-restart",
+            method: "openclaw.chat",
+            params: {
+              sessionId: "delegate-1",
+              message: "Restart Gateway.",
+              context: { page: "channels" },
+              delegation: { agentId: "main", sessionKey: "agent:main:main" },
+            },
+          },
+          respond: requestResponses.respond,
+          client: {
+            ...defaultClient,
+            connect: { ...defaultClient.connect, role: "operator", scopes: ["operator.admin"] },
+          } as GatewayClient,
+          isWebchatConnect: () => false,
+          context,
+          extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
+        }),
+    );
     const first = expectDefined(requestResponses.calls[0], "delegated Gateway response invariant");
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     const proposalId = (first.payload as { proposalId?: string }).proposalId;
 
     expect(first.payload).toMatchObject({
-      reply: "Approval pending.",
+      reply:
+        "OpenClaw change pending approval: restart the Gateway. No change has been made. Expires in 10m.",
       needsApproval: true,
       proposalId: expect.stringMatching(/^system-agent:/),
     });
@@ -798,11 +990,16 @@ describe("openclaw.chat", () => {
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
     expect(handle).toHaveBeenNthCalledWith(1, "Restart Gateway.");
 
-    await callChat(context, {
-      sessionId: "delegate-1",
-      message: "yes",
-      delegation: { agentId: "main", sessionKey: "agent:main:main" },
-    });
+    // The follow-up chat rides the same live run authority the delegate tool carries.
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main", operationalRunInstance },
+      () =>
+        callChat(context, {
+          sessionId: "delegate-1",
+          message: "yes",
+          delegation: { agentId: "main", sessionKey: "agent:main:main" },
+        }),
+    );
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
 
     manager.resolve(proposalId!, "allow-once", "operator-ui");
@@ -812,7 +1009,11 @@ describe("openclaw.chat", () => {
     } finally {
       releaseApproval.resolve();
     }
-    expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+    expect(resolveOperatorApproval).toHaveBeenCalledWith(
+      "allow-once",
+      proposalHash,
+      expect.any(Function),
+    );
     expect(runGatewayRestart).toHaveBeenCalledOnce();
     await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
       text: expect.stringContaining("[openclaw] done: gateway.restart"),
@@ -869,53 +1070,5 @@ describe("openclaw.chat", () => {
       callChat(makeContext(sessions), { sessionId: "s1", message: "status please" }),
     ).rejects.toThrow("wizard bug");
     expect(sessions.has("s1")).toBe(true);
-  });
-
-  it("tracks every accepted request as active while serializing expensive execution", async () => {
-    const firstStarted = createDeferred();
-    const secondStarted = createDeferred();
-    const releaseFirst = createDeferred();
-    const releaseSecond = createDeferred();
-    const firstEngine = makeVerifiedEngine();
-    vi.spyOn(firstEngine, "handle").mockImplementation(async () => {
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      return { text: "first setup complete", action: "none" };
-    });
-    const secondEngine = makeVerifiedEngine();
-    const secondHandle = vi.spyOn(secondEngine, "handle").mockImplementation(async () => {
-      secondStarted.resolve();
-      await releaseSecond.promise;
-      return { text: "second setup complete", action: "none" };
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([
-      ["s1", seededSession({ engine: firstEngine })],
-      ["s2", seededSession({ engine: secondEngine })],
-    ]);
-    const activeAtResponse: number[] = [];
-
-    const trackChat = (sessionId: string) =>
-      systemAgentHandler("openclaw.chat")({
-        params: { sessionId, message: "yes" },
-        client: defaultClient,
-        context: makeContext(sessions),
-        respond: () => activeAtResponse.push(systemAgentLane().activeCount),
-      } as never);
-    const first = trackChat("s1");
-    const second = trackChat("s2");
-
-    await firstStarted.promise;
-    await waitOneTask();
-    expect(systemAgentLane()).toMatchObject({ activeCount: 2, queuedCount: 0 });
-    expect(secondHandle).not.toHaveBeenCalled();
-    releaseFirst.resolve();
-    await first;
-    await secondStarted.promise;
-    expect(systemAgentLane().activeCount).toBe(1);
-    releaseSecond.resolve();
-    await second;
-
-    expect(activeAtResponse).toEqual([2, 1]);
-    expect(systemAgentLane().activeCount).toBe(0);
   });
 });

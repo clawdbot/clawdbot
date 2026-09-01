@@ -366,7 +366,6 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       itemId: "cmd-snapshot",
       name: "bash",
     }).data;
-    expect(toolStart.hideFromChannelProgress).toBe(true);
     expect(toolStart.args).toEqual({ command: "pnpm test extensions/codex", cwd: "/workspace" });
     const toolResult = findAgentEvent(onAgentEvent, {
       stream: "tool",
@@ -374,7 +373,6 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       itemId: "cmd-snapshot",
       name: "bash",
     }).data;
-    expect(toolResult.hideFromChannelProgress).toBe(true);
     expect(toolResult.status).toBe("completed");
     expect(toolResult.isError).toBe(false);
     expect(onToolResult).toHaveBeenCalledWith({

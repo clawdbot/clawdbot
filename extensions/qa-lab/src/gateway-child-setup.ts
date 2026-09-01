@@ -4,10 +4,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
@@ -26,7 +24,7 @@ import {
 } from "./gateway-child-env.js";
 import type { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChildLogCollector } from "./gateway-child-process.js";
-import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
+import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import { createQaGatewayProcessBoundaryController } from "./gateway-process-boundary.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
@@ -48,7 +46,6 @@ import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
-const QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS = 2_048;
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -118,17 +115,14 @@ async function runQaPackagedBootstrap(
   try {
     await operation();
   } catch (error) {
-    const details = sliceUtf16Safe(
-      redactQaGatewayDebugText(toErrorObject(error, failureMessage).message),
-      0,
-      QA_PACKAGE_BOOTSTRAP_FAILURE_MAX_CHARS,
-    );
+    const details = createQaGatewayCliError(error).message;
     // oxlint-disable-next-line preserve-caught-error -- Candidate CLI output can contain credentials; only the bounded redacted message crosses this boundary, never its raw cause.
     throw new Error(`${failureMessage}: ${details}`);
   }
 }
 
 async function stageQaPackagedMockAuthProfiles(params: {
+  lifetime: QaGatewayChildLifecycle;
   command: QaGatewayChildCommand;
   configPath: string;
   cwd: string;
@@ -140,6 +134,7 @@ async function stageQaPackagedMockAuthProfiles(params: {
       `installed package mock auth bootstrap failed for ${provider}`,
       () =>
         runQaGatewayCliCommand({
+          lifetime: params.lifetime,
           executablePath: params.command.executablePath,
           argsPrefix: params.command.argsPrefix ?? [],
           args: [
@@ -424,6 +419,7 @@ export async function prepareQaGatewayChild(
             mode: 0o600,
           });
           await stageQaPackagedMockAuthProfiles({
+            lifetime,
             command: gatewayCommand,
             configPath: packagedAuthConfigPath,
             cwd: gatewayCwd,
@@ -437,6 +433,7 @@ export async function prepareQaGatewayChild(
         }
         if (usesPackagedCandidate && gatewayCommand) {
           const command = {
+            lifetime,
             executablePath: gatewayCommand.executablePath,
             argsPrefix: gatewayCommand.argsPrefix ?? [],
             cwd: gatewayCwd,

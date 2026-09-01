@@ -569,23 +569,51 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (opts.deep) {
       for (const entry of drift.drifts) {
         const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+        const resolvedTarget =
+          entry.targetResolution?.status === "resolved"
+            ? `; npm target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
+            : "";
         defaultRuntime.log(
-          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}${resolvedTarget}`,
         );
       }
-      const updateCommands = drift.drifts.map((entry) =>
-        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
-      );
-      if (updateCommands.length === 1) {
+      const repairs = drift.drifts.map((entry) => ({
+        entry,
+        command: resolvePluginVersionDriftUpdateCommand(entry),
+      }));
+      const updateCommands = repairs
+        .map(({ command }) => command)
+        .filter((command): command is string => Boolean(command))
+        .map((command) => formatCliCommand(command));
+      const unresolvedRepairs = repairs.filter(({ command }) => !command);
+      if (unresolvedRepairs.length > 0) {
+        defaultRuntime.error(errorText("Plugin repair target resolution failed:"));
+        for (const { entry } of unresolvedRepairs) {
+          const targetResolution = entry.targetResolution;
+          const detail =
+            targetResolution?.status === "unresolved"
+              ? targetResolution.error
+              : "npm registry target was not resolved";
+          defaultRuntime.error(`- ${entry.pluginId}: ${detail}`);
+        }
+        defaultRuntime.error(
+          errorText(
+            "No install command was generated for unresolved plugin targets. Retry gateway status --deep after checking registry availability.",
+          ),
+        );
+      }
+      if (updateCommands.length === 1 && unresolvedRepairs.length === 0) {
         defaultRuntime.log(
           `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
         );
-      } else {
+      } else if (updateCommands.length > 0) {
         defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
         for (const command of updateCommands) {
           defaultRuntime.log(`- ${command}`);
         }
-        defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+        if (unresolvedRepairs.length === 0) {
+          defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+        }
       }
     } else {
       defaultRuntime.log(

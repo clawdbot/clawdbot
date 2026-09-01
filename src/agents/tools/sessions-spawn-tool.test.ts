@@ -541,7 +541,7 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.attachAs?.description).toContain(
       "only an omitted or blank mountPath",
     );
-    expect(schema.properties?.category?.description).toContain("leave it ungrouped");
+    expect(schema.properties?.group?.description).toContain("leave it ungrouped");
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
@@ -583,7 +583,7 @@ describe("sessions_spawn tool", () => {
           await tool.execute("visible", {
             task: "inspect issue",
             label: "Issue review",
-            category: "P1 issues from beta feedback",
+            group: "P1 issues from beta feedback",
             model: "anthropic/claude-sonnet-4-6",
             cwd: dir,
             context: "fork",
@@ -688,8 +688,8 @@ describe("sessions_spawn tool", () => {
 
   it.each([
     { label: "omitted", optional: {} },
-    { label: "empty category", optional: { category: "" } },
-    { label: "whitespace category", optional: { category: " \t\n " } },
+    { label: "empty group", optional: { group: "" } },
+    { label: "whitespace group", optional: { group: " \t\n " } },
     { label: "empty attachment hint", optional: { mode: "run", attachments: [], attachAs: {} } },
     {
       label: "empty attachment mount path",
@@ -875,10 +875,10 @@ describe("sessions_spawn tool", () => {
       other: hoisted.spawnAcpDirectMock,
     },
     { runtime: "acp", spawn: hoisted.spawnAcpDirectMock, other: hoisted.spawnSubagentDirectMock },
-  ])("$runtime category preflight", ({ runtime, spawn, other }) => {
+  ])("$runtime group preflight", ({ runtime, spawn, other }) => {
     beforeEach(() => registerAcpBackendForTest());
 
-    it.each([undefined, "", " \t\n "])("dispatches once with category %j", async (category) => {
+    it.each([undefined, "", " \t\n "])("dispatches once with group %j", async (group) => {
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
       const request = {
@@ -890,10 +890,10 @@ describe("sessions_spawn tool", () => {
         mode: "run",
       };
 
-      const result = await tool.execute("hidden-category", {
+      const result = await tool.execute("hidden-group", {
         ...request,
         visible: false,
-        ...(category !== undefined ? { category } : {}),
+        ...(group !== undefined ? { group } : {}),
       });
 
       expect(result.details).toMatchObject({ status: "accepted", runId: `run-${runtime}` });
@@ -906,7 +906,7 @@ describe("sessions_spawn tool", () => {
     });
 
     it.each([
-      { category: "Projects" },
+      { group: "Projects" },
       { worktree: true },
       { worktreeName: "repair" },
       { worktreeBaseRef: "main" },
@@ -1273,6 +1273,55 @@ describe("sessions_spawn tool", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each(["off", "all"] as const)(
+    "uses the global requester sandbox mode %s for visible children",
+    async (sandboxMode) => {
+      const callGateway = vi.fn().mockResolvedValue({
+        key: "agent:worker:dashboard:global-child",
+        runStarted: true,
+        runId: "global-visible-run",
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "research",
+        config: {
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              research: { sandbox: { mode: sandboxMode }, subagents: { allowAgents: ["worker"] } },
+              worker: {},
+            },
+          },
+        },
+        callGateway,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("global-visible", {
+        task: "inspect",
+        visible: true,
+        agentId: "worker",
+      });
+
+      expect(result.details).toMatchObject({
+        status: sandboxMode === "all" ? "forbidden" : "accepted",
+      });
+      if (sandboxMode === "all") {
+        expect(result.details).toMatchObject({
+          error: "Sandboxed sessions cannot spawn unsandboxed sessions.",
+        });
+        expect(callGateway).not.toHaveBeenCalled();
+      } else {
+        expect(callGateway).toHaveBeenCalledWith(
+          "sessions.create",
+          expect.objectContaining({ agentId: "worker", parentSessionKey: "global" }),
+        );
+      }
+    },
+  );
 
   it("reserves visible child capacity before session creation", async () => {
     let resolveCreate!: (value: { key: string; runStarted: true; runId: string }) => void;

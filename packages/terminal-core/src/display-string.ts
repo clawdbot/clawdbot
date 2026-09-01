@@ -1,4 +1,3 @@
-// Terminal Core module implements display string behavior.
 import os from "node:os";
 import path from "node:path";
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
@@ -126,11 +125,8 @@ function replaceHomePath(input: string, display: { home: string; prefix: string 
   return output;
 }
 
-/** Replace the effective home path with "~" or "$OPENCLAW_HOME" for terminal display. */
-export function displayString(input: string): string {
-  if (!input) {
-    return input;
-  }
+/** Prepare one home snapshot for a synchronous render; new renders observe environment changes. */
+export function createDisplayStringFormatter(): (input: string) => string {
   const display = resolveHomeDisplayPrefix();
-  return display ? replaceHomePath(input, display) : input;
+  return (input) => (display ? replaceHomePath(input, display) : input);
 }

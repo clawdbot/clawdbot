@@ -13,6 +13,53 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 describe("chat pane assistant identity snapshots", () => {
+  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    (pane as TestChatPane & { agentId: string }).agentId = "personal";
+    pane.sessionKey = "global";
+    state.sessionKey = "global";
+    state.assistantAgentId = "personal";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    pane.context.agentSelection.set("work");
+
+    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+
+    expect(state.assistantAgentId).toBe("personal");
+    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+  });
+
+  it("rebinds agent-owned presentation when a retained fixed route changes owner", () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const retireModelOverride = vi.fn();
+    const sessions = createSessionCapabilityFixture({ retireModelOverride });
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.sessionKey = "agent:main:main";
+    state.assistantAgentId = "main";
+    state.assistantName = "Main Agent";
+    state.chatAvatarUrl = "https://example.test/main-avatar.png";
+    state.modelAuthStatusResult = { ts: 1, providers: [] };
+    state.chatModelSwitchPromises = {
+      "agent:main:main": new Promise<boolean>(() => {}),
+    };
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
+    pane.sessionKey = "agent:work:main";
+
+    (
+      pane as TestChatPane & {
+        willUpdate: (changedProperties: Map<PropertyKey, unknown>) => void;
+      }
+    ).willUpdate(new Map([["sessionKey", "agent:main:main"]]));
+
+    expect(state.sessionKey).toBe("agent:work:main");
+    expect(state.assistantAgentId).toBe("work");
+    expect(state.assistantName).toBe("");
+    expect(state.chatAvatarUrl).toBeNull();
+    expect(state.modelAuthStatusResult).toBeNull();
+    expect(state.loadAssistantIdentity).toHaveBeenCalledOnce();
+    expect(retireModelOverride).toHaveBeenCalledWith("agent:work:main");
+  });
+
   it("rebinds approval delivery when the selected global agent changes", async () => {
     const replacement = createDeferred<{
       key: string;
@@ -52,6 +99,7 @@ describe("chat pane assistant identity snapshots", () => {
         groupSettings: [],
         sectionOrder: [],
       },
+      refresh: vi.fn().mockResolvedValue(undefined),
       subscribe: () => () => undefined,
       subscribeMessages,
       unsubscribeMessages,
@@ -102,6 +150,7 @@ describe("chat pane assistant identity snapshots", () => {
         },
       ];
 
+      pane.state.loadAssistantIdentity = vi.fn(async () => undefined);
       context.agentSelection.set("research");
 
       expect(pane.state.chatSessionApprovalQueue).toEqual([]);

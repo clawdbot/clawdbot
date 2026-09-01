@@ -1,7 +1,7 @@
-// Line plugin module implements actions behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isHttpsUrl } from "./media-url.js";
 
 export type Action = messagingApi.Action;
 type Message = messagingApi.Message;
@@ -41,42 +41,10 @@ function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 
-const UNDELIVERABLE_IMAGE_WARNING = "Image unavailable: URL must be a public https URL.";
+const UNDELIVERABLE_IMAGE_WARNING = "Image unavailable: URL must use HTTPS.";
 
-// LINE fetches a Flex image itself and rejects the whole message when the URL is
-// not https, so a card carrying one costs the reply rather than just the picture.
-function isDeliverableLineImageUrl(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-/**
- * A Flex picture LINE will refuse to fetch, wherever it sits.
- *
- * The scheme is rejected per URL, not per position: a hero, a video hero's own
- * two URLs, and an image anywhere in a box all sink the same message. Matching
- * on the component rather than on the key it is stored under keeps every
- * position covered by one rule. Flex components carry `url`/`previewUrl`, while
- * standalone image and video messages carry `originalContentUrl`, so this never
- * matches those.
- */
-function isUndeliverableFlexImage(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (value.type === "image" && "url" in value) {
-    return !isDeliverableLineImageUrl(value.url);
-  }
-  if (value.type === "video" && ("url" in value || "previewUrl" in value)) {
-    return !isDeliverableLineImageUrl(value.url) || !isDeliverableLineImageUrl(value.previewUrl);
-  }
-  return false;
+function flexWarning(text: string): messagingApi.FlexText {
+  return { type: "text", text, wrap: true, size: "sm", color: "#B45309", margin: "md" };
 }
 
 const unavailableActionMarker = Symbol("lineUnavailableAction");
@@ -114,20 +82,18 @@ function isUnavailableAction(action: Action): action is UnavailableAction {
   return (action as Partial<UnavailableAction>)[unavailableActionMarker] === true;
 }
 
-function normalizeNestedActions(value: unknown, labelLimit: number, warnings?: string[]): unknown {
+function normalizeNestedContent(value: unknown, labelLimit: number, warnings?: string[]): unknown {
   if (Array.isArray(value)) {
-    const normalized: unknown[] = [];
-    for (const item of value) {
-      if (isUndeliverableFlexImage(item)) {
-        warnings?.push(UNDELIVERABLE_IMAGE_WARNING);
-        continue;
-      }
-      normalized.push(normalizeNestedActions(item, labelLimit, warnings));
-    }
-    return normalized;
+    return value
+      .map((item) => normalizeNestedContent(item, labelLimit, warnings))
+      .filter((item) => item !== undefined);
   }
   if (!isRecord(value)) {
     return value;
+  }
+  if (warnings && (value.type === "image" || value.type === "icon") && !isHttpsUrl(value.url)) {
+    warnings.push(UNDELIVERABLE_IMAGE_WARNING);
+    return undefined;
   }
 
   const normalized: Record<string, unknown> = { ...value };
@@ -149,48 +115,47 @@ function normalizeNestedActions(value: unknown, labelLimit: number, warnings?: s
       } else {
         normalized[key] = action;
       }
-    } else if (isUndeliverableFlexImage(nested)) {
-      // Drop the picture LINE will not accept and say so where the card has room,
-      // the same way an action it cannot honor is replaced rather than allowed to
-      // sink the send. The drop is unconditional: a card missing one image still
-      // reaches the user, while keeping it costs the whole message.
-      delete normalized[key];
-      warnings?.push(UNDELIVERABLE_IMAGE_WARNING);
-    } else if (key === "thumbnailImageUrl" && !isDeliverableLineImageUrl(nested)) {
-      // Optional on every template that offers it, and a template carries no
-      // place for a note that would not rewrite the sender's own text, so an
-      // unusable thumbnail simply goes rather than taking the message with it.
-      delete normalized[key];
     } else if (key === "actions" && Array.isArray(nested)) {
       normalized[key] = nested.map((action) =>
         isLineAction(action) ? normalizeLineAction(action, labelLimit) : action,
       );
     } else {
-      normalized[key] = normalizeNestedActions(nested, labelLimit, warnings);
+      const content = normalizeNestedContent(nested, labelLimit, warnings);
+      if (content === undefined) {
+        delete normalized[key];
+      } else {
+        normalized[key] = content;
+      }
     }
+  }
+  if (warnings && value.type === "video") {
+    // LINE requires a Box or Image alternative even when the video itself is valid.
+    const altContent = normalized.altContent ?? {
+      type: "box",
+      layout: "vertical",
+      contents: [flexWarning(UNDELIVERABLE_IMAGE_WARNING)],
+    };
+    if (!isHttpsUrl(value.url) || !isHttpsUrl(value.previewUrl)) {
+      warnings.push("Video unavailable: video and preview URLs must use HTTPS.");
+      return altContent;
+    }
+    normalized.altContent = altContent;
   }
   return normalized;
 }
 
-function normalizeFlexBubbleActions(value: unknown): unknown {
+function normalizeFlexBubble(value: unknown): unknown {
   if (!isRecord(value) || value.type !== "bubble") {
-    return normalizeNestedActions(value, 40);
+    return normalizeNestedContent(value, 40);
   }
 
   const warnings: string[] = [];
-  const normalized = normalizeNestedActions(value, 40, warnings);
+  const normalized = normalizeNestedContent(value, 40, warnings);
   if (!isRecord(normalized) || warnings.length === 0) {
     return normalized;
   }
 
-  const warning = {
-    type: "text",
-    text: [...new Set(warnings)].join("\n"),
-    wrap: true,
-    size: "sm",
-    color: "#B45309",
-    margin: "md",
-  };
+  const warning = flexWarning([...new Set(warnings)].join("\n"));
   const body = normalized.body;
   if (isRecord(body) && Array.isArray(body.contents)) {
     normalized.body = { ...body, contents: [...body.contents, warning] };
@@ -200,20 +165,20 @@ function normalizeFlexBubbleActions(value: unknown): unknown {
   return normalized;
 }
 
-function normalizeFlexContainerActions(value: unknown): unknown {
+function normalizeFlexContainer(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
   if (value.type === "bubble") {
-    return normalizeFlexBubbleActions(value);
+    return normalizeFlexBubble(value);
   }
   if (value.type === "carousel" && Array.isArray(value.contents)) {
     return {
       ...value,
-      contents: value.contents.map((bubble) => normalizeFlexBubbleActions(bubble)),
+      contents: value.contents.map((bubble) => normalizeFlexBubble(bubble)),
     };
   }
-  return normalizeNestedActions(value, 40);
+  return normalizeNestedContent(value, 40);
 }
 
 function unavailableImagemapAction(
@@ -287,19 +252,29 @@ function normalizeImagemapVideo(video: ImagemapVideo): {
   return { video: { ...video, externalLink: { ...externalLink, label } } };
 }
 
-export function normalizeLineMessageActions(message: Message): Message {
+export function normalizeLineMessage(message: Message): Message {
   let normalized: Message;
   if (message.type === "flex") {
     normalized = {
       ...message,
-      contents: normalizeFlexContainerActions(message.contents) as messagingApi.FlexContainer,
+      contents: normalizeFlexContainer(message.contents) as messagingApi.FlexContainer,
     };
   } else if (message.type === "template") {
     const labelLimit = message.template.type === "image_carousel" ? 12 : 20;
-    normalized = {
-      ...message,
-      template: normalizeNestedActions(message.template, labelLimit) as messagingApi.Template,
-    };
+    const template = normalizeNestedContent(message.template, labelLimit) as messagingApi.Template;
+    const columns =
+      template.type === "carousel"
+        ? template.columns
+        : template.type === "buttons"
+          ? [template]
+          : [];
+    // Template carousel columns must agree on image presence; a partial strip is invalid.
+    if (columns.some((column) => !isHttpsUrl(column.thumbnailImageUrl))) {
+      for (const column of columns) {
+        delete column.thumbnailImageUrl;
+      }
+    }
+    normalized = { ...message, template };
   } else if (message.type === "imagemap") {
     const actions = message.actions.map(normalizeImagemapAction);
     const videoResult = message.video ? normalizeImagemapVideo(message.video) : undefined;
@@ -322,7 +297,7 @@ export function normalizeLineMessageActions(message: Message): Message {
   if (message.quickReply) {
     normalized = {
       ...normalized,
-      quickReply: normalizeNestedActions(message.quickReply, 20) as messagingApi.QuickReply,
+      quickReply: normalizeNestedContent(message.quickReply, 20) as messagingApi.QuickReply,
     };
   }
 

@@ -83,6 +83,7 @@ import {
   SKILL_PROPOSAL_STATUSES,
   SKILL_WORKSHOP_ACTIONS,
 } from "./skill-workshop-tool-schema.js";
+import { textResult } from "./tool-results.js";
 
 const SKILL_WORKSHOP_MUTATION_ACTIONS = new Set(["create", "patch", "update", "revise"]);
 function requireProposalContent(content: string | undefined): string {
@@ -279,10 +280,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               readMaxChars,
             )
           : skill.content;
-        return {
-          content: [{ type: "text", text }],
-          details: { skillKey: skill.skillKey, sizeBytes, contentIncluded: !truncated },
-        };
+        return textResult(text, {
+          skillKey: skill.skillKey,
+          sizeBytes,
+          contentIncluded: !truncated,
+        });
       }
 
       if (action === "prepare_patch") {
@@ -335,12 +337,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           query,
           limit,
         });
-        return {
-          content: [{ type: "text", text: formatProposalList(proposals) }],
-          details: {
-            proposals,
-          },
-        };
+        return textResult(formatProposalList(proposals), { proposals });
       }
 
       if (action === "inspect") {
@@ -392,20 +389,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
           correlationId: readToolStringParam(params, "correlation_id"),
         });
-        return {
-          content: [
-            {
-              type: "text",
-              text: formatProposalEvaluation(evaluated.evaluation, evaluated.record.id),
-            },
-          ],
-          details: {
-            id: evaluated.record.id,
-            proposedVersion: evaluated.evaluation.proposedVersion,
-            revisionHash: evaluated.evaluation.revisionHash,
-            evaluation: evaluated.evaluation,
-          },
-        };
+        return textResult(formatProposalEvaluation(evaluated.evaluation, evaluated.record.id), {
+          id: evaluated.record.id,
+          proposedVersion: evaluated.evaluation.proposedVersion,
+          revisionHash: evaluated.evaluation.revisionHash,
+          evaluation: evaluated.evaluation,
+        });
       }
 
       if (action === "apply") {

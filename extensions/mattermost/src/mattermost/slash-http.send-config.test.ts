@@ -3,7 +3,7 @@ import { ServerResponse, type IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
 const mockState = vi.hoisted(() => ({
@@ -144,6 +144,7 @@ vi.mock("./slash-commands.js", () => ({
 }));
 
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
+let clearMattermostSlashCommandValidationCacheForAccount: typeof import("./slash-http.js").clearMattermostSlashCommandValidationCacheForAccount;
 const callbackUrlFixture = "https://gateway.example.com/slash";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
@@ -211,22 +212,21 @@ const accountFixture: ResolvedMattermostAccount = {
 };
 
 describe("slash-http cfg threading", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    mockState.readRequestBodyWithLimit.mockClear();
-    mockState.parseSlashCommandPayload.mockClear();
-    mockState.resolveCommandText.mockClear();
-    mockState.buildPreparedModelsProviderData.mockClear();
-    mockState.resolveMattermostModelPickerEntry.mockClear();
-    mockState.authorizeMattermostCommandInvocation.mockClear();
-    mockState.createMattermostClient.mockClear();
-    mockState.fetchMattermostChannel.mockClear();
-    mockState.sendMessageMattermost.mockClear();
-    mockState.normalizeMattermostAllowList.mockClear();
-    mockState.getMattermostCommand.mockClear();
-    mockState.listMattermostCommands.mockClear();
-    mockState.dispatchInbound.mockClear();
-    ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
+    ({ createSlashCommandHttpHandler, clearMattermostSlashCommandValidationCacheForAccount } =
+      await import("./slash-http.js"));
+  });
+
+  afterEach(() => {
+    clearMattermostSlashCommandValidationCacheForAccount(accountFixture.accountId);
+  });
+
+  beforeEach(() => {
+    // Rejected-before-lookup cases can leave one-shot responses unconsumed.
+    for (const mock of Object.values(mockState)) {
+      mock.mockReset();
+    }
   });
 
   it("passes cfg through the no-models slash reply send path", async () => {

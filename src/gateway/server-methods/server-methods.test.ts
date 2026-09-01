@@ -144,9 +144,15 @@ function projectedSessionsSendHistoryMessage(
   timestamp: number,
   fields: ChatHistoryTestMessage = {},
 ): ChatHistoryTestMessage {
+  const provenance = (fields.provenance ?? sessionsSendProvenance()) as {
+    sourceSessionKey?: string;
+  };
+  const sessionKey = provenance.sourceSessionKey;
+  const agentId = sessionKey?.split(":")[1];
   return assistantHistoryMessage(text, {
     senderLabel: "Forwarded from main",
     provenance: sessionsSendProvenance(),
+    ...(sessionKey ? { senderSession: { sessionKey, ...(agentId ? { agentId } : {}) } } : {}),
     timestamp,
     ...fields,
   });
@@ -2872,6 +2878,11 @@ describe("exec approval handlers", () => {
   }
 
   function createForwardingExecApprovalFixture(opts?: {
+    webPushDelivery?: {
+      handleRequested: ReturnType<typeof vi.fn>;
+      handleResolved: ReturnType<typeof vi.fn>;
+      handleExpired: ReturnType<typeof vi.fn>;
+    };
     iosPushDelivery?: {
       handleRequested: ReturnType<typeof vi.fn>;
       handleResolved: ReturnType<typeof vi.fn>;
@@ -2893,11 +2904,13 @@ describe("exec approval handlers", () => {
       getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
+      approvalWebPushDelivery: opts?.webPushDelivery,
     };
     return {
       manager,
       handlers,
       forwarder,
+      webPushDelivery: opts?.webPushDelivery,
       iosPushDelivery: opts?.iosPushDelivery,
       respond,
       context,
@@ -2905,6 +2918,16 @@ describe("exec approval handlers", () => {
   }
 
   function createIosPushDelivery(
+    handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
+  ) {
+    return {
+      handleRequested,
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+  }
+
+  function createWebPushDelivery(
     handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
   ) {
     return {
@@ -4345,6 +4368,36 @@ describe("exec approval handlers", () => {
     await waitForFast(() => {
       expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
         id: "approval-ios-cleanup",
+        decision: "allow-once",
+      });
+    });
+  });
+
+  it("sends Web Push terminal replacement on resolve", async () => {
+    const webPushDelivery = createWebPushDelivery();
+    const { handlers, respond, context } = createForwardingExecApprovalFixture({
+      webPushDelivery,
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-web-push-cleanup", host: "gateway" },
+    });
+    await waitForFast(() => {
+      expect(webPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    });
+
+    await resolveExecApprovalForTest({
+      handlers,
+      id: "approval-web-push-cleanup",
+      context,
+    });
+    await requestPromise;
+
+    await waitForFast(() => {
+      expectRecordFields(mockCallArg(webPushDelivery.handleResolved), {
+        id: "approval-web-push-cleanup",
         decision: "allow-once",
       });
     });

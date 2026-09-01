@@ -106,6 +106,7 @@ function resolveThinkingPolicyContext(params: {
     ? normalizeProviderId(thinkingPolicyProvider ?? providerRaw)
     : "";
   return {
+    catalogEntry: candidate,
     normalizedProvider,
     modelId,
     modelKey,
@@ -203,7 +204,7 @@ function appendCatalogAdvancedThinkingLevels(
   }
   const runtime = normalizeOptionalLowercaseString(agentRuntime);
   if (supportsMax && (runtime === "openclaw" || runtime === "auto")) {
-    // Ultra is OpenClaw's orchestration tier; provider requests use Max.
+    // Max-only catalogs synthesize Ultra only for OpenClaw; other runtimes must advertise it.
     appendProfileLevel(profile, "ultra");
   }
 }
@@ -233,6 +234,7 @@ export function resolveThinkingProfile(params: {
   const providerProfileParams = {
     provider: context.normalizedProvider,
     context: providerContext,
+    ...(context.catalogEntry ? { catalogEntry: context.catalogEntry } : {}),
   };
   const providerProfile =
     typeof params.providerPolicySource === "object"

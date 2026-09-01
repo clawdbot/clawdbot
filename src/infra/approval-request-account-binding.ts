@@ -18,10 +18,14 @@ import {
 } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
 export type ApprovalRequestLike = {
   id: string;
-  request: ExecApprovalRequest["request"] | PluginApprovalRequest["request"];
+  request:
+    | ExecApprovalRequest["request"]
+    | PluginApprovalRequest["request"]
+    | SystemAgentApprovalRequest["request"];
   createdAtMs: number;
   expiresAtMs: number;
 };

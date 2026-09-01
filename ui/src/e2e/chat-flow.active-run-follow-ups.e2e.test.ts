@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   chatSessionListResponse,
@@ -93,7 +93,7 @@ suite.define(() => {
       expect(requireRecord(sends[1]?.params)).toMatchObject({
         message: queuedPrompt,
         queueMode: "followup",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
     } finally {
@@ -130,7 +130,7 @@ suite.define(() => {
         },
       ],
       inFlightRun: { runId, text: "" },
-      sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "main" },
+      sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" },
     });
 
     try {
@@ -156,7 +156,7 @@ suite.define(() => {
         },
         runId,
         seq: ++agentSequence,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         stream: "item",
         ts: Date.now(),
       });
@@ -167,7 +167,7 @@ suite.define(() => {
           data,
           runId,
           seq: ++agentSequence,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           stream: "tool",
           ts: Date.now(),
         });
@@ -178,12 +178,25 @@ suite.define(() => {
       await composer.fill(steerText);
       await composer.press("Control+Enter");
       const steerSend = await gateway.waitForRequest("chat.send", { after: sendsBeforeSteer });
+      await gateway.emitGatewayEvent("chat", {
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "status",
+        phase: "naming_worktree",
+      });
+      const startupIndicator = page.locator('.chat-working-indicator[role="status"]');
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const startupProofDir = path.join(suite.artifactDir, "duplicate-session-naming");
+        await page.screenshot({ path: path.join(startupProofDir, "steer.png"), fullPage: true });
+      }
+      await expect.poll(() => startupIndicator.textContent()).not.toContain("Naming worktree…");
       const steerParams = requireRecord(steerSend.params);
       expect(steerParams).toMatchObject({
         deliver: false,
         message: steerText,
         queueMode: "steer",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(steerParams).not.toHaveProperty("expectedRunId");
       expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
@@ -217,17 +230,17 @@ suite.define(() => {
         session: {
           activeRunIds: [runId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await page.locator(".chat-group.user", { hasText: steerText }).waitFor();
       await gateway.emitGatewayEvent("chat", {
         runId: steerRunId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "final",
       });
 
@@ -261,7 +274,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       const streamingBubble = page.locator(".chat-bubble.streaming", {
@@ -304,7 +317,7 @@ suite.define(() => {
         messageId: "ui4-final",
         messageSeq: 5,
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await page.evaluate(
         () =>
@@ -353,7 +366,7 @@ suite.define(() => {
         messageId: "ui4-final",
         messageSeq: 5,
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect
         .poll(() =>
@@ -407,7 +420,7 @@ suite.define(() => {
           steerTargetRunId: runId,
         },
       };
-      const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "main" };
+      const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" };
       const gateway = await installMockGateway(page, {
         historyMessages: [userMessage],
         inFlightRun: { runId, startedAt, text: "" },
@@ -420,13 +433,13 @@ suite.define(() => {
           message: steerMessage,
           messageId: "order-steer",
           messageSeq: 2,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
       const emitDelta = (text: string) =>
         gateway.emitGatewayEvent("chat", {
           message: { role: "assistant", content: [{ type: "text", text }] },
           runId,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
 
@@ -469,9 +482,11 @@ suite.define(() => {
             )
             .toEqual([initialText, beforeText, steerText, afterText]);
         } finally {
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactDirParent
+            ? createControlUiE2eArtifactDir("chat-flow.active-run-follow-ups", artifactDirParent)
+            : undefined;
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               fullPage: true,
               path: path.join(artifactDir, `steer-history-${historyOrder}-live-event.png`),
@@ -516,7 +531,7 @@ suite.define(() => {
         steerTargetRunId: runId,
       },
     };
-    const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "main" };
+    const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" };
     const gateway = await installMockGateway(page, {
       historyMessages: [userMessage],
       inFlightRun: { runId, startedAt, text: "" },
@@ -526,13 +541,15 @@ suite.define(() => {
       gateway.emitGatewayEvent("chat", {
         message: { role: "assistant", content: [{ type: "text", text }] },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
     const capture = async (name: string) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.active-run-follow-ups", artifactDirParent)
+        : undefined;
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, `steer-split-commentary-${name}.png`),
@@ -557,7 +574,7 @@ suite.define(() => {
         message: steerMessage,
         messageId: "split-steer",
         messageSeq: 5,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect.poll(bubbleTexts).toEqual([initialText, beforeText, steerText]);
       await capture("retained-prefix");
@@ -668,8 +685,31 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("keep the disconnect run active");
       await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
+      const initial = requireRecord((await gateway.waitForRequest("chat.send")).params);
+      const activeRunId = requireString(initial.idempotencyKey, "initial accepted run");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      // Establish delivery before disconnect; the follow-up is the only unsent turn.
+      const acceptedSession = {
+        key: "agent:main:main",
+        sessionId: "session:agent:main:main",
+        hasActiveRun: true,
+        activeRunIds: [activeRunId],
+        status: "running",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: acceptedSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the disconnect run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
+      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+      await page.locator(".chat-send-status").waitFor({ state: "detached" });
 
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
@@ -752,6 +792,7 @@ suite.define(() => {
             activeRunIds: [],
             hasActiveRun: false,
             key: activeSessionKey,
+            sessionId: `session:${activeSessionKey}`,
             kind: "direct",
             label: "Main",
             lastRunId: activeRunId,
@@ -776,7 +817,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const sessionKey = "main";
+    const sessionKey = "agent:main:main";
     const runtimeConfig = {
       messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
     };
@@ -854,7 +895,7 @@ suite.define(() => {
       expect(requireRecord(request.params)).toMatchObject({
         message: "start over cleanly",
         queueMode: "interrupt",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         idempotencyKey: expect.any(String),
       });
       await page.getByText("Redirected.").waitFor({ timeout: 10_000 });
@@ -905,7 +946,7 @@ suite.define(() => {
             activeLeafEntryId: "leaf-active",
             activeRunIds: ["active-run"],
             hasActiveRun: true,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             label: "Main",
             updatedAt: Date.now(),
@@ -925,7 +966,7 @@ suite.define(() => {
         deliver: false,
         message: queuedPrompt,
         queueMode: "steer",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(steerParams).not.toHaveProperty("expectedRunId");
       expect(steerParams).not.toHaveProperty("expectedLeafEntryId");

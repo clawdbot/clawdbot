@@ -1,18 +1,87 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecException } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
+import type { JsonTestResults } from "vitest/reporters";
+import packageJson from "../../package.json" with { type: "json" };
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixIt = process.platform === "win32" ? it.skip : it;
 
-posixIt.each([
+const intentionalFailure = "intentional failure after SQLite allocation";
+const counterfactualFailure = "counterfactual first-file failure after allocation receipt";
+const fixtureTests = [
+  [
+    "tui-pty-harness.e2e.test.ts",
+    "opens actual fallback SQLite and retains it until the worker finishes",
+  ],
+  [
+    "tui-pty-local.e2e.test.ts",
+    "keeps the same worker namespace alive across files and module resets",
+  ],
+] as const;
+
+function expectFixtureResults(
+  report: JsonTestResults,
+  testRoot: string,
+  failRun: boolean,
+  failFirstFile = false,
+) {
+  expect(report.testResults.map((file) => file.name)).toEqual(
+    fixtureTests.map(([filename]) => path.join(testRoot, filename)),
+  );
+  for (const [index, [, title]] of fixtureTests.entries()) {
+    const file = report.testResults[index]!;
+    const failure =
+      index === 0
+        ? failFirstFile
+          ? counterfactualFailure
+          : undefined
+        : failRun
+          ? intentionalFailure
+          : undefined;
+    const expectedStatus = failure ? "failed" : "passed";
+    expect(file.status, file.name).toBe(expectedStatus);
+    expect(file.message, file.name).toBe("");
+    expect(
+      file.assertionResults.map(({ ancestorTitles, fullName, title, status, failureMessages }) => ({
+        ancestorTitles,
+        fullName,
+        title,
+        status,
+        failureMessages: failureMessages?.map((message) => message.split("\n")[0]),
+      })),
+      file.name,
+    ).toEqual([
+      {
+        ancestorTitles: [],
+        fullName: title,
+        title,
+        status: expectedStatus,
+        failureMessages: failure ? [`AssertionError: ${failure}`] : [],
+      },
+    ]);
+  }
+  const failed = Number(failRun) + Number(failFirstFile);
+  expect(report).toMatchObject({
+    numTotalTests: 2,
+    numPassedTests: 2 - failed,
+    numFailedTests: failed,
+    numPendingTests: 0,
+    numTodoTests: 0,
+    numTotalTestSuites: 2,
+    numPassedTestSuites: 2 - failed,
+    numFailedTestSuites: failed,
+    numPendingTestSuites: 0,
+    success: failed === 0,
+  });
+}
+
+const cleanupCases = [
   { route: "main", pool: "threads", failRun: false },
   { route: "main", pool: "threads", failRun: true },
   { route: "main", pool: "forks", failRun: false },
@@ -21,15 +90,37 @@ posixIt.each([
     { route, pool: "threads", failRun: false },
     { route, pool: "forks", failRun: true },
   ]),
+  ...["profile-main", "profile-runner"].flatMap((route) => [
+    { route, pool: "forks", failRun: false },
+    { route, pool: "threads", failRun: true },
+  ]),
+].map((testCase) => Object.assign(testCase, { pauseAfterAck: false }));
+cleanupCases.push({ route: "profile-runner", pool: "forks", failRun: true, pauseAfterAck: true });
+
+posixIt.each([
+  ...cleanupCases.map((testCase) => ({ ...testCase, failFirstFile: false })),
+  ...["threads", "forks"].map((pool) => ({
+    route: "main",
+    pool,
+    failRun: true,
+    pauseAfterAck: false,
+    failFirstFile: true,
+  })),
 ])(
-  "$route cleans its namespace after $pool completion (failed run: $failRun)",
-  async ({ route, pool, failRun }) => {
+  "$route cleans its namespace after $pool completion (failed run: $failRun, paused after acknowledgement: $pauseAfterAck, first-file failure: $failFirstFile)",
+  async ({ route, pool, failRun, pauseAfterAck, failFirstFile }) => {
     const root = tempDirs.make("oc-vt-state-");
     const tmp = path.join(root, "tmp");
     const home = path.join(root, "home");
     fs.mkdirSync(tmp);
     fs.mkdirSync(home);
-    fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, type: "module", packageManager: packageJson.packageManager }),
+    );
+    // pnpm records the pinned toolchain in its lockfile even for exec. Keep that
+    // dependency record with the installed modules without sharing lockfile writes.
+    fs.copyFileSync(path.join(repoRoot, "pnpm-lock.yaml"), path.join(root, "pnpm-lock.yaml"));
     fs.symlinkSync(
       path.join(repoRoot, "node_modules"),
       path.join(root, "node_modules"),
@@ -78,13 +169,13 @@ export async function allocateResources() {
 `,
     );
     fs.writeFileSync(
-      path.join(testRoot, "tui-pty-harness.e2e.test.ts"),
+      path.join(testRoot, fixtureTests[0][0]),
       `import fs from "node:fs";
 import { expect, it } from "vitest";
 import { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } from ${databaseModule};
 import { allocateResources } from "../../resources.ts";
 const resources = await allocateResources();
-it("opens actual fallback SQLite and retains it until the worker finishes", () => {
+it(${JSON.stringify(fixtureTests[0][1])}, () => {
   const first = openOpenClawStateDatabase();
   expect(first.db.prepare("SELECT count(*) AS count FROM sqlite_schema").get().count).toBeGreaterThan(0);
   closeOpenClawStateDatabaseForTest();
@@ -93,11 +184,12 @@ it("opens actual fallback SQLite and retains it until the worker finishes", () =
   const explicit = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: ${JSON.stringify(path.dirname(path.dirname(explicitPath)))} } });
   globalThis[Symbol.for("openclaw.stateLeakFixture")] = { reopened, explicit, resources, pid: process.pid };
   fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ path: reopened.path }));
+  ${failFirstFile ? `expect.fail(${JSON.stringify(counterfactualFailure)});` : ""}
 });
 `,
     );
     fs.writeFileSync(
-      path.join(testRoot, "tui-pty-local.e2e.test.ts"),
+      path.join(testRoot, fixtureTests[1][0]),
       `import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 const previous = globalThis[Symbol.for("openclaw.stateLeakFixture")];
@@ -105,7 +197,7 @@ vi.resetModules();
 const { openOpenClawStateDatabase } = await import(${databaseModule});
 const { allocateResources } = await import("../../resources.ts");
 const resources = await allocateResources();
-it("keeps the same worker namespace alive across files and module resets", () => {
+it(${JSON.stringify(fixtureTests[1][1])}, () => {
   expect(process.pid).toBe(previous.pid);
   expect(previous.reopened.db.isOpen).toBe(true);
   expect(previous.explicit.db.isOpen).toBe(true);
@@ -117,7 +209,7 @@ it("keeps the same worker namespace alive across files and module resets", () =>
   expect(resources.roots).not.toEqual(previous.resources.roots);
   fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ path: current.path, resetVerified: true, resources: [previous.resources, resources] }));
   if (process.env.OPENCLAW_TUI_PTY_MIRROR_PATH) fs.appendFileSync(process.env.OPENCLAW_TUI_PTY_MIRROR_PATH, "namespace fixture frame\\n");
-  ${failRun ? 'expect.fail("intentional failure after SQLite allocation");' : ""}
+  ${failRun ? `expect.fail(${JSON.stringify(intentionalFailure)});` : ""}
 });
 `,
     );
@@ -136,6 +228,8 @@ export default {
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
   test: {
     include: ["src/tui/*.e2e.test.ts"],
+    reporters: ["default", "json"],
+    outputFile: ${JSON.stringify(path.join(root, "report.json"))},
     pool: ${JSON.stringify(pool)}, isolate: false, fileParallelism: false, maxWorkers: 1,
     sequence: { sequencer: AlphabeticalSequencer },
     runner: ${JSON.stringify(path.join(repoRoot, "test/non-isolated-runner.ts"))},
@@ -146,6 +240,7 @@ export default {
     );
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
+      COREPACK_HOME: process.env.COREPACK_HOME,
       HOME: home,
       USERPROFILE: home,
       TMPDIR: tmp,
@@ -164,6 +259,48 @@ export default {
     };
     const vitestArgs = ["--root", root, "--configLoader", "native"];
     const profileDir = path.join(root, "profiles");
+    const pauseReceipt = path.join(root, "pause.json");
+    if (pauseAfterAck) {
+      const preload = path.join(root, "pause-after-ack.cjs");
+      fs.writeFileSync(
+        preload,
+        `
+const { subscribe } = require("node:diagnostics_channel");
+const fs = require("node:fs");
+const isVitestFork = arg => typeof arg === "string" && arg.replaceAll("\\\\", "/").endsWith("/vitest/dist/workers/forks.js");
+if (isVitestFork(process.argv[1]) && process.send) {
+  const send = process.send;
+  process.send = function(message, ...args) {
+    if (message?.__vitest_worker_response__ === true && message.type === "stopped" && message.willExit === true) {
+      const callbackIndex = args.length - 1;
+      const callback = args[callbackIndex];
+      args[callbackIndex] = function(...callbackArgs) {
+        // The patched transport exits in this callback. Stop after its response
+        // flushes, before that exit can race the parent's message observation.
+        if (!callbackArgs[0]) process.kill(process.pid, "SIGSTOP");
+        return callback.apply(this, callbackArgs);
+      };
+    }
+    return send.call(this, message, ...args);
+  };
+}
+subscribe("child_process", ({ process: child }) => {
+  let selected = false;
+  let acknowledged = false;
+  child.once("spawn", () => {
+    selected = child.spawnargs.some(isVitestFork);
+  });
+  child.on("message", message => {
+    if (selected && message?.__vitest_worker_response__ === true && message.type === "stopped") acknowledged = true;
+  });
+  child.once("exit", (code, signal) => {
+    if (selected) fs.writeFileSync(${JSON.stringify(pauseReceipt)}, JSON.stringify({ acknowledged, code, signal }));
+  });
+});
+`,
+      );
+      env.NODE_OPTIONS = `--require=${preload}`;
+    }
     const mirrorPath = path.join(root, "mirror.ansi");
     const batchEntry = path.join(root, "batch.mts");
     fs.writeFileSync(
@@ -193,6 +330,9 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
                   "--mirror-path",
                   mirrorPath,
                   "--",
+                  // The watcher supplies --reporter=dot, overriding config reporters.
+                  "--reporter=default",
+                  "--reporter=json",
                   ...vitestArgs,
                 ]
               : [
@@ -204,15 +344,24 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
                   ...vitestArgs,
                 ];
     try {
-      const result = await execFileAsync(process.execPath, args, { cwd: root, env }).then(
-        ({ stdout, stderr }) => ({ code: 0, output: stdout + stderr }),
-        (error: { code: number; stdout: string; stderr: string }) => ({
-          code: error.code,
-          output: error.stdout + error.stderr,
-        }),
+      const result = await new Promise<{ code: ExecException["code"]; output: string }>(
+        (resolve) => {
+          execFile(process.execPath, args, { cwd: root, env }, (error, stdout, stderr) => {
+            resolve({ code: error ? error.code : 0, output: stdout + stderr });
+          });
+        },
       );
       expect(result.code, result.output).toBe(failRun ? 1 : 0);
-      if (failRun) expect(result.output).toContain("intentional failure after SQLite allocation");
+      if (failRun) {
+        expect(result.output).toContain(intentionalFailure);
+      }
+      if (pauseAfterAck) {
+        expect(JSON.parse(fs.readFileSync(pauseReceipt, "utf8"))).toEqual({
+          acknowledged: true,
+          code: null,
+          signal: "SIGKILL",
+        });
+      }
       const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
         path: string;
         resetVerified: boolean;
@@ -226,12 +375,32 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
       }
       if (route.startsWith("profile-")) {
         const artifacts = fs.readdirSync(profileDir);
-        expect(artifacts.some((file) => file.endsWith(".cpuprofile"))).toBe(true);
-        if (route === "profile-runner")
-          expect(artifacts.some((file) => file.endsWith(".heapprofile"))).toBe(true);
+        const profileEvidence = `${result.output}\nProfile artifacts: ${JSON.stringify(artifacts)}`;
+        expect(
+          artifacts.some((file) => file.endsWith(".cpuprofile")),
+          profileEvidence,
+        ).toBe(true);
+        if (route === "profile-runner") {
+          expect(
+            artifacts.some((file) => file.endsWith(".heapprofile")),
+            profileEvidence,
+          ).toBe(true);
+        }
+        for (const artifact of artifacts) {
+          const profile = JSON.parse(fs.readFileSync(path.join(profileDir, artifact), "utf8"));
+          if (artifact.endsWith(".cpuprofile")) {
+            expect(profile.nodes.length, artifact).toBeGreaterThan(0);
+            expect(profile.samples.length, artifact).toBeGreaterThan(0);
+            expect(profile.endTime, artifact).toBeGreaterThan(profile.startTime);
+          } else if (artifact.endsWith(".heapprofile")) {
+            expect(profile.head.children.length, artifact).toBeGreaterThan(0);
+            expect(profile.samples.length, artifact).toBeGreaterThan(0);
+          }
+        }
       }
-      if (route === "pty")
+      if (route === "pty") {
         expect(fs.readFileSync(mirrorPath, "utf8")).toContain("namespace fixture frame");
+      }
       expect(fs.existsSync(path.dirname(path.dirname(receipt.path)))).toBe(false);
       expect(sibling.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(fs.existsSync(siblingRoot)).toBe(true);
@@ -242,6 +411,24 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
         ).toBeGreaterThan(0);
       } finally {
         explicit.close();
+      }
+      // Receipts can be written before Vitest marks a callback failed. Require its verdict,
+      // independently of the paused-worker control's separately asserted forced teardown.
+      const report = JSON.parse(
+        fs.readFileSync(path.join(root, "report.json"), "utf8"),
+      ) as JsonTestResults;
+      if (failFirstFile) {
+        // Both failures must be exact before testing rejection by the normal matrix validator.
+        expectFixtureResults(report, testRoot, failRun, true);
+        expect(() => expectFixtureResults(report, testRoot, failRun)).toThrowError(
+          expect.objectContaining({
+            actual: "failed",
+            expected: "passed",
+            message: expect.stringContaining(path.join(testRoot, fixtureTests[0][0])),
+          }),
+        );
+      } else {
+        expectFixtureResults(report, testRoot, failRun);
       }
     } finally {
       sibling.close();
@@ -279,11 +466,15 @@ posixIt(
       ],
       options: { env: { TMPDIR: root }, stdio: "ignore" },
     });
-    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
     const nativeKill = process.kill.bind(process);
     const failure = Object.assign(new Error("injected group probe failure"), { code: "EIO" });
     const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      if (pid === -child.pid! && signal === 0) throw failure;
+      if (pid === -child.pid! && signal === 0) {
+        throw failure;
+      }
       return nativeKill(pid, signal);
     });
     try {

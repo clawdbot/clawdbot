@@ -450,7 +450,17 @@ jobs:
       - name: Verify release contents
         env:
           OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR: ${{ steps.core_package_tarballs.outputs.dir }}
-        run: pnpm release:generated:check && node --import tsx scripts/release-check.ts
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          pnpm release:generated:check
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] || [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
+            echo "Trusted release-check tooling does not match the workflow SHA." >&2
+            exit 1
+          fi
+          TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/release-check.ts"
 
       - name: Exercise all extended-stable plugin npm packages
         id: plugin_npm_preflight
@@ -503,11 +513,19 @@ jobs:
       - name: Generate dependency release evidence
         id: dependency_evidence
         env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          node --import tsx scripts/generate-dependency-release-evidence.mts \
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] || [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
+            echo "Trusted dependency release tooling must match the unmodified workflow SHA." >&2
+            exit 1
+          fi
+          node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/generate-dependency-release-evidence.mts" \
+            --root "$GITHUB_WORKSPACE" \
             --release-ref "$RELEASE_REF" \
             --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
             --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
@@ -517,6 +535,8 @@ jobs:
       - name: Pack prepared npm tarball
         id: packed_tarball
         env:
+          PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
+          PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           OPENCLAW_PREPACK_PREPARED: "1"
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -722,7 +742,14 @@ jobs:
             fs.readFileSync(".artifacts/plugin-sdk-api-release-evidence.json", "utf8"),
           );
           const manifest = {
-            version: 1,
+            version: 2,
+            producer: {
+              repository: process.env.GITHUB_REPOSITORY,
+              workflowRef: process.env.PREFLIGHT_WORKFLOW_REF,
+              workflowSha: process.env.PREFLIGHT_WORKFLOW_SHA,
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            },
             releaseTag: process.env.RELEASE_TAG,
             releaseSha: process.env.RELEASE_SHA,
             npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
@@ -804,6 +831,7 @@ jobs:
           node --import tsx scripts/openclaw-npm-prepublish-verify.ts "${verify_args[@]}"
 
       - name: Upload dependency release evidence
+        if: ${{ always() && steps.dependency_evidence.outputs.dir != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
@@ -1151,12 +1179,18 @@ jobs:
               echo "Protected release-publish tag moved after npm-release approval." >&2
               exit 1
             }
-            if [[ "$preflight_head_branch" == "$workflow_tag" && "$preflight_head_sha" == "$WORKFLOW_SHA" ]]; then
-              protected_release_publish_preflight=true
-            fi
+          fi
+          if [[ "$preflight_head_branch" == release-publish/* ]]; then
+            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --repository "$GITHUB_REPOSITORY" \
+              --workflow-ref "$preflight_head_branch" \
+              --workflow-full-ref "refs/tags/${preflight_head_branch}" \
+              --workflow-sha "$preflight_head_sha" \
+              --publisher-sha "$WORKFLOW_SHA"
+            protected_release_publish_preflight=true
           fi
           if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" ]]; then
-            echo "OpenClaw npm preflight run must come from main, the active protected release branch, or the exact protected release-publish tag." >&2
+            echo "OpenClaw npm preflight run must come from main, the active protected release branch, or a verified protected release-publish tag." >&2
             exit 1
           fi
           if ! git -C trusted-workflow cat-file -e "${preflight_head_sha}^{commit}" 2>/dev/null; then
@@ -1173,6 +1207,7 @@ jobs:
             exit 1
           fi
           echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
+          echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
           echo "run_attempt=${preflight_run_attempt}" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
@@ -1189,6 +1224,7 @@ jobs:
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
@@ -1352,6 +1388,9 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
           PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
+          PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_run.outputs.head_branch }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -1361,6 +1400,17 @@ jobs:
             ls -la preflight-tarball >&2 || true
             exit 1
           fi
+          producer_full_ref="refs/heads/${PREFLIGHT_WORKFLOW_BRANCH}"
+          if [[ "$PREFLIGHT_WORKFLOW_BRANCH" == release-publish/* ]]; then
+            producer_full_ref="refs/tags/${PREFLIGHT_WORKFLOW_BRANCH}"
+          fi
+          node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+            --manifest "$MANIFEST_FILE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-full-ref "$producer_full_ref" \
+            --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" \
+            --run-id "$PREFLIGHT_RUN_ID" \
+            --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           ARTIFACT_RELEASE_TAG="$(jq -r '.releaseTag // ""' "$MANIFEST_FILE")"
           ARTIFACT_RELEASE_SHA="$(jq -r '.releaseSha // ""' "$MANIFEST_FILE")"
           ARTIFACT_RELEASE_NPM_DIST_TAG="$(jq -r '.npmDistTag // ""' "$MANIFEST_FILE")"

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
@@ -40,7 +41,6 @@ import {
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import {
@@ -115,7 +115,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     cfg,
     agentId,
     agentDir,
-    agentCfg,
     command,
     provider,
     model,
@@ -187,6 +186,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
       AccountId: ctx.AccountId ?? sessionCtx.AccountId,
       InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
       ChatType: ctx.ChatType ?? sessionCtx.ChatType,
     },
     entry: preparedSessionState.sessionEntry,
@@ -351,6 +351,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   if (queuedToolsAllow && queuedToolIntersections) {
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
+  const admittedSessionSettings = opts?.admittedSessionSettings;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -436,10 +437,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
-      permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+      permissionMode: admittedSessionSettings
+        ? admittedSessionSettings.permissionMode
+        : preparedSessionState.sessionEntry?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings
+        ? admittedSessionSettings.toolOverrides
+        : preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
@@ -594,9 +599,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       storePath,
       defaultModel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-      toolProgressDetail:
-        normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
-        normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
+      toolProgressDetail: resolveAgentConfig(cfg, agentId)?.toolProgressDetail,
       isNewSession: params.isNewSession,
       blockStreamingEnabled,
       blockReplyChunking,

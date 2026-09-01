@@ -7,10 +7,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import {
-  buildPluginCapabilityConsentReview,
-  type PluginCapabilityConsentHandler,
-} from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -1798,6 +1796,7 @@ describe("doctor config flow", () => {
   it("stamps explicit ownership when Doctor migrates a markerless multi-agent list", async () => {
     const rawConfig = {
       agents: {
+        defaults: { workspace: "/srv/legacy-shared" },
         list: [{ id: "ops" }, { id: "research", model: "openai/research" }],
       },
     };
@@ -1814,9 +1813,10 @@ describe("doctor config flow", () => {
       ["agents", "ownership"],
     ]);
     expect(result.cfg.agents).toEqual({
+      defaults: { workspace: "/srv/legacy-shared" },
       ownership: "explicit",
       entries: {
-        ops: {},
+        ops: { workspace: "/srv/legacy-shared" },
         research: { model: "openai/research" },
       },
     });

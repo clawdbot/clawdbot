@@ -37,7 +37,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 14
+    private static let maximumSupportedSchemaVersion: Int64 = 15
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {

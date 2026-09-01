@@ -228,7 +228,7 @@ test("e2e #76482: session matching default model inherits default thinking level
   expect(resolved).toContain("high");
 });
 
-test("session rows keep the selected Codex Sol model when runtime metadata contains a response family", async () => {
+test("active Codex sessions patch and list catalog-advertised Ultra", async () => {
   const loadSolCatalog = async () => [
     {
       provider: "openai",
@@ -256,10 +256,11 @@ test("session rows keep the selected Codex Sol model when runtime metadata conta
   });
   expect(session?.agentRuntime?.id).toBe("codex");
   expect(session?.thinkingOptions).toContain("max");
+  expect(session?.thinkingOptions).toContain("ultra");
 
   const patchResponse = await directSessionReq(
     "sessions.patch",
-    { key: "main", thinkingLevel: "max" },
+    { key: "main", thinkingLevel: "ultra" },
     { context: { loadGatewayModelCatalog: loadSolCatalog } },
   );
   expect(patchResponse.ok, patchResponse.error?.message).toBe(true);
@@ -269,9 +270,25 @@ test("session rows keep the selected Codex Sol model when runtime metadata conta
     resolved: {
       modelProvider: "openai",
       model: "gpt-5.6-sol",
-      thinkingLevel: "max",
+      thinkingLevel: "ultra",
     },
   });
+
+  const listResponse = await directSessionReq<SessionsListResult>(
+    "sessions.list",
+    {},
+    { context: { loadGatewayModelCatalog: loadSolCatalog } },
+  );
+  expect(listResponse.ok, listResponse.error?.message).toBe(true);
+  const listedSession = listResponse.payload?.sessions?.find(
+    (candidate) => candidate.key === "agent:main:main",
+  );
+  expect(listedSession).toMatchObject({
+    modelProvider: "openai",
+    model: "gpt-5.6-sol",
+    thinkingLevel: "ultra",
+  });
+  expect(listedSession?.thinkingOptions).toContain("ultra");
 });
 
 test("unsupported generic stored levels clamp through the current profile", async () => {

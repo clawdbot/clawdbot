@@ -85,6 +85,33 @@ describe("settings preference persistence", () => {
     expect(loadSettings().chatFollowUpMode).toBeUndefined();
   });
 
+  it("defaults task progress auto-collapse off and persists only the opt-in", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+
+    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatCollapseTaskProgress).toBe(true);
+    expect(loadSettings().chatCollapseTaskProgress).toBe(true);
+
+    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "chatCollapseTaskProgress",
+    );
+
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({ gatewayUrl: gwUrl, chatCollapseTaskProgress: "yes" }),
+    );
+    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+  });
+
   it("persists only the non-default catalog open target", () => {
     setTestLocation({
       protocol: "https:",

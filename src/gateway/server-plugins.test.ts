@@ -98,6 +98,7 @@ vi.mock("./server-methods.js", () => ({
 
 vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
   dispatchReplyFromConfig,
+  dispatchLowLevelChannelReplyFromConfig: dispatchReplyFromConfig,
 }));
 
 vi.mock("./agent-turn/internal-facade.js", () => ({
@@ -225,6 +226,7 @@ function createLookUpTableForTest(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     startup: {
       channelPluginIds: [],

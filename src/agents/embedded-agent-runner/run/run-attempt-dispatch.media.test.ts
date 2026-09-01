@@ -117,6 +117,9 @@ describe("plugin harness prompt media", () => {
           sessionId: "session-canonical-media",
           userTurnTranscriptRecorder: {
             message: { role: "user", content: "inspect", __openclaw: { media } },
+            async resolveMessage() {
+              return this.message;
+            },
           },
         },
         runtime: {
@@ -164,11 +167,18 @@ describe("plugin harness prompt media", () => {
         userTurnTranscriptRecorder: {
           message: {
             role: "user",
-            content: "inspect",
-            __openclaw: {
-              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
-              mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
-            },
+            content: "stale initial facts",
+            __openclaw: { media: [documentFact] },
+          },
+          async resolveMessage() {
+            return {
+              role: "user",
+              content: "inspect",
+              __openclaw: {
+                media: [{ path: imagePath, contentType: "image/png" }, documentFact],
+                mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+              },
+            };
           },
         },
       },
@@ -484,6 +494,9 @@ describe("plugin harness prompt media", () => {
         ],
         sessionId: "session-layout-suppressed",
         userTurnTranscriptRecorder: {
+          async resolveMessage() {
+            return this.message;
+          },
           message: {
             role: "user",
             content: "compare",

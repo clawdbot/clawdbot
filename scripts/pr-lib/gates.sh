@@ -25,7 +25,7 @@ run_hosted_prepare_gates() {
   fi
 
   local repo
-  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -209,8 +209,8 @@ require_remote_testbox_gate_stamp() {
 
 require_active_org_admin_for_crabbox_gate() {
   local actor membership
-  actor=$(gh api user --jq .login)
-  membership=$(gh api "orgs/openclaw/memberships/$actor")
+  actor=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login) || return
+  membership=$(gh_plain api "orgs/openclaw/memberships/$actor" -H 'Cache-Control: max-age=0') || return
   if [ "$(printf '%s\n' "$membership" | jq -r .state)" != "active" ] ||
     [ "$(printf '%s\n' "$membership" | jq -r .role)" != "admin" ]; then
     echo "OPENCLAW_PR_GATES_REMOTE=crabbox-aws requires an active openclaw organization admin." >&2
@@ -319,7 +319,7 @@ write_gates_env_stamp() {
 }
 
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...HEAD")
+  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true

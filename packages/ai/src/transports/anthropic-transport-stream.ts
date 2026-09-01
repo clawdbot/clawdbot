@@ -1774,21 +1774,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
       } catch (error) {
-        if (refusalBuffer) {
-          refusalBuffer.discard();
-          output.content = [];
-        } else {
-          output.content = output.content.filter((block) => block.type !== "toolCall");
-        }
-        if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
-          suppressAnthropicCompaction(output, model, options);
-        }
         failTransportStream({
           stream,
           output,
           signal: options?.signal,
           error,
           cleanup: () => {
+            if (refusalBuffer) {
+              refusalBuffer.discard();
+              output.content = [];
+            } else {
+              output.content = output.content.filter((block) => block.type !== "toolCall");
+            }
+            if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
+              suppressAnthropicCompaction(output, model, options);
+            }
             for (const block of output.content) {
               delete block.index;
             }

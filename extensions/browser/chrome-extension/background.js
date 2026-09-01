@@ -2,6 +2,7 @@ import {
   createNativeBootstrapController,
   discardRetiredCopilotState,
   prepareRetiredCopilotState,
+  requestRelayEnsure,
 } from "./modules/native-bootstrap.js";
 import { createPopupMessageHandler } from "./modules/popup-background.js";
 import { createRelayCommandHandler } from "./modules/relay-command-handler.js";
@@ -16,6 +17,7 @@ import { openAuthenticatedRelaySocket } from "./modules/relay-connection.js";
 import {
   ACCESS_MODE_SELECTED,
   createPairingConfigStore,
+  directLoopbackRelayPort,
   reconnectDelayMs,
   toRelayTabInfo,
 } from "./modules/relay-core.js";
@@ -30,6 +32,7 @@ const BADGE = {
   on: { text: "ON", color: "#0F9D58" },
   error: { text: "!", color: "#B91C1C" },
 };
+const RELAY_ENSURE_MIN_INTERVAL_MS = 60_000;
 const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
 const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
 const RELAY_AUTH_TIMEOUT_MS = 10_000;
@@ -44,6 +47,7 @@ let relayOpeningDeadlineTimer = null;
 let relayAuthenticatedSocket = null;
 let relaySocketOwner = null;
 let relayStatusHint = "";
+let lastRelayEnsureAtMs = 0;
 let reconciledPairingInvalidationRevision = 0;
 let relayConnectionGeneration = 0;
 let relayConnectionsSuspended = false;
@@ -59,7 +63,7 @@ const tabAccessPolicy = createTabAccessPolicy({
   getGroupColor: async () => (await getConfig()).groupColor,
 });
 const relayDebugger = createRelayDebugger({ policy: tabAccessPolicy, requireAutomationAllowed });
-const { attachedTabs, attachedAccessEpochs, attachingTabs, detach: detachDebugger } = relayDebugger;
+const { attachments, detach: detachDebugger } = relayDebugger;
 const tabAccessReady = (async () => {
   const retiredState = await prepareRetiredCopilotState();
   retiredCopilotCustodyBlocked = retiredState.blocked;
@@ -189,14 +193,28 @@ async function syncTabsToRelay() {
   if (!socket || socket.readyState !== WebSocket.OPEN || relayAuthenticatedSocket !== socket) {
     return;
   }
-  const accessible = await tabAccessPolicy.listAccessibleTabs();
-  if (relayWs !== socket || relayAuthenticatedSocket !== socket) {
+  const generations = [...attachments].filter(([, record]) => !record.retired);
+  let accessible;
+  let inventoryRevision;
+  // A handoff can overtake even a completed read before this caller resumes.
+  // Publish and retire attachments only from the current inventory generation.
+  do {
+    inventoryRevision = tabAccessPolicy.discoveryRevision;
+    accessible = await tabAccessPolicy.listAccessibleTabs();
+  } while (inventoryRevision !== tabAccessPolicy.discoveryRevision);
+  if (
+    relayWs !== socket ||
+    relayAuthenticatedSocket !== socket ||
+    socket.readyState !== WebSocket.OPEN
+  ) {
     return;
   }
   const accessibleIds = new Set(accessible.map((tab) => tab.id));
-  for (const tabId of attachedTabs) {
-    if (!accessibleIds.has(tabId)) {
-      void detachDebugger(tabId);
+  for (const [tabId, generation] of generations) {
+    if (!accessibleIds.has(tabId) && attachments.get(tabId) === generation) {
+      void detachDebugger(tabId).catch((error) =>
+        console.warn("Debugger access cleanup failed", error),
+      );
     }
   }
   // A creation is authorized internally, but discovery must wait for handoff.
@@ -209,17 +227,7 @@ async function syncTabsToRelay() {
 // ---------------------------------------------------------------------------
 
 async function detachAllDebuggerSessions() {
-  await relayDebugger.detachAll();
-  if (retiredCopilotCustodyBlocked) {
-    // Startup recovery must also release inherited copilot attachments. Chrome
-    // detach addresses only this extension's client; it never adopts a target.
-    const targets = await chrome.debugger.getTargets();
-    await Promise.all(
-      targets
-        .filter((target) => target.attached && typeof target.tabId === "number")
-        .map((target) => detachDebugger(target.tabId)),
-    );
-  }
+  await relayDebugger.detachAll(retiredCopilotCustodyBlocked);
 }
 
 async function reconcileAccessMode(nextMode, { transitioning = false } = {}) {
@@ -232,7 +240,8 @@ async function reconcileAccessMode(nextMode, { transitioning = false } = {}) {
     }
     return mode;
   }
-  await Promise.allSettled(attachingTabs.values());
+  const generations = [...attachments].filter(([, record]) => !record.retired);
+  await Promise.allSettled([...attachments.values()].map((record) => record.pending));
   if (mode === ACCESS_MODE_SELECTED) {
     const selectedIds = new Set(
       (
@@ -242,26 +251,28 @@ async function reconcileAccessMode(nextMode, { transitioning = false } = {}) {
       ).map((tab) => tab.id),
     );
     await Promise.allSettled(
-      [...attachedTabs]
-        .filter((tabId) => !selectedIds.has(tabId))
-        .map((tabId) => detachDebugger(tabId)),
+      generations
+        .filter(
+          ([tabId, generation]) => !selectedIds.has(tabId) && attachments.get(tabId) === generation,
+        )
+        .map(([tabId]) => detachDebugger(tabId)),
     );
   }
   if (transitioning) {
     tabAccessPolicy.endTransition();
   }
-  for (const tabId of attachedTabs) {
+  for (const [tabId, generation] of generations) {
     const epoch = tabAccessPolicy.capture(tabId);
     const state = await tabAccessPolicy.inspectTab(tabId, epoch);
-    if (!tabAccessPolicy.epochIsCurrent(tabId, epoch)) {
+    if (attachments.get(tabId) !== generation || !tabAccessPolicy.epochIsCurrent(tabId, epoch)) {
       // A post-transition tab event owns the newer revision. Keep this
       // attachment fail-closed until that handler reconciles it.
       continue;
     }
     if (!state.accessible) {
       await detachDebugger(tabId);
-    } else if (attachedTabs.has(tabId)) {
-      attachedAccessEpochs.set(tabId, epoch);
+    } else {
+      generation.epoch = epoch;
     }
   }
   await syncTabsToRelay();
@@ -269,14 +280,16 @@ async function reconcileAccessMode(nextMode, { transitioning = false } = {}) {
 }
 
 async function pauseTab(tabId) {
+  // Pause records controlled-document revocation before detach retires that document.
+  const pausing = tabAccessPolicy.pause(tabId);
+  const detaching = detachDebugger(tabId);
   let storageError = null;
   try {
-    await tabAccessPolicy.pause(tabId);
+    await pausing;
   } catch (error) {
     storageError = error;
   }
-  await Promise.allSettled([attachingTabs.get(tabId)]);
-  await detachDebugger(tabId);
+  await detaching;
   await syncTabsToRelay();
   if (storageError) {
     throw storageError instanceof Error
@@ -336,7 +349,12 @@ function failRelayAuthentication(ws, error) {
 }
 
 async function sendHello(socket) {
-  const accessible = await tabAccessPolicy.listAccessibleTabs();
+  let accessible;
+  let inventoryRevision;
+  do {
+    inventoryRevision = tabAccessPolicy.discoveryRevision;
+    accessible = await tabAccessPolicy.listAccessibleTabs();
+  } while (inventoryRevision !== tabAccessPolicy.discoveryRevision);
   const uaMatch = /Chrom(?:e|ium)\/[\d.]+/.exec(navigator.userAgent);
   send(
     {
@@ -388,14 +406,15 @@ async function connectRelay(isConnectionAllowed = () => true) {
     return;
   }
   closeRelaySocket();
+  void maybeEnsureRelayDaemon(relayUrl, connectionIsCurrent).catch(() => {});
   setBadge("connecting");
   let ws;
   const owner = relayDebugger.createOwner(
     () =>
+      connectionIsCurrent() &&
       relayWs === ws &&
       relayAuthenticatedSocket === ws &&
-      ws.readyState === WebSocket.OPEN &&
-      connectionIsCurrent(),
+      ws.readyState === WebSocket.OPEN,
   );
   const handleRelayCommand = createRelayCommandHandler({
     send: (message) => send(message, ws),
@@ -405,18 +424,21 @@ async function connectRelay(isConnectionAllowed = () => true) {
     createTab: (message, operation) => tabAccessPolicy.createTab(message, operation),
     focusWindowForTab,
     scheduleTabsSync,
+    captureDebugger: owner.capture,
     captureAccess: (tabId, method) => tabAccessPolicy.capture(tabId, method),
     requireAccessibleTab: owner.requireTab,
     requireNavigatedTab: (tabId, epoch) => owner.requireTab(tabId, epoch, true),
-    navigateTab: (tabId, epoch, params, isCurrent, sendCommand) =>
-      tabAccessPolicy.navigateTab(
+    navigateTab: (tabId, epoch, params, isCurrent, sendCommand) => {
+      const generation = attachments.get(tabId);
+      return tabAccessPolicy.navigateTab(
         tabId,
         epoch,
         params,
-        () => attachedAccessEpochs.get(tabId),
+        () => (attachments.get(tabId) === generation ? generation?.epoch : undefined),
         isCurrent,
         sendCommand,
-      ),
+      );
+    },
   });
   try {
     ws = openAuthenticatedRelaySocket({
@@ -491,6 +513,29 @@ function handleRelayOpeningDeadline() {
   scheduleReconnect();
 }
 
+/**
+ * On a reconnect cycle against a direct loopback relay URL, ask the native
+ * host (rate-limited) to spawn the standalone relay daemon so the extension
+ * has something to connect to without a running Gateway.
+ */
+async function maybeEnsureRelayDaemon(relayUrl, connectionIsCurrent) {
+  const relayPort = directLoopbackRelayPort(relayUrl);
+  if (reconnectAttempt === 0 || relayPort === null) {
+    return;
+  }
+  const { disabled } = await nativeBootstrap.status();
+  // Opt-out or pair revocation can win the storage read above.
+  if (disabled || retiredCopilotCustodyBlocked || !connectionIsCurrent()) {
+    return;
+  }
+  const now = Date.now();
+  if (now - lastRelayEnsureAtMs < RELAY_ENSURE_MIN_INTERVAL_MS) {
+    return;
+  }
+  lastRelayEnsureAtMs = now;
+  await requestRelayEnsure(relayPort, chrome);
+}
+
 function scheduleReconnect() {
   if (reconnectTimer) {
     return;
@@ -559,7 +604,6 @@ const handlePopupMessage = createPopupMessageHandler({
   closeRelaySocket,
   connectRelay,
   setBadge,
-  attachingTabs,
   detachDebugger,
   removeTabFromOpenClawGroup,
   addTabToOpenClawGroup: (tabId) => tabAccessPolicy.addTabToGroup(tabId),
@@ -575,9 +619,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => handlePopupMessage
 registerTabAccessEvents({
   accessReady: tabAccessReady,
   policy: tabAccessPolicy,
-  attachedTabs,
-  attachedAccessEpochs,
-  attachingTabs,
+  attachments,
+  nativeDetached: relayDebugger.nativeDetached,
   send,
   scheduleTabsSync,
   detachDebugger,

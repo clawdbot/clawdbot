@@ -1,22 +1,31 @@
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
+  isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
@@ -97,6 +106,73 @@ async function waitForCurrentProjection(databasePath: string, sessionId: string)
 }
 
 describe("session transcript reconcile worker lifecycle", () => {
+  it("drains later fixture owners without waiting for an unrelated state directory", async () => {
+    const root = tempDirs.make("openclaw-reconcile-scope-");
+    const stateDir = path.join(root, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const first = { agentId: "main", env };
+    const later = { agentId: "later", env };
+    const unrelated = {
+      agentId: "main",
+      env: { ...env, OPENCLAW_STATE_DIR: `${stateDir}-unrelated` },
+    };
+    const realSetImmediate = globalThis.setImmediate;
+    const immediateSpy = vi.spyOn(globalThis, "setImmediate");
+    const checkpoint = () =>
+      new Promise<void>((resolve) => {
+        realSetImmediate(resolve);
+      });
+    const startDeferred = (options: OpenClawAgentDatabaseOptions) => {
+      const release = createDeferred();
+      immediateSpy.mockImplementationOnce((callback) => {
+        void release.promise.then(() => callback());
+        return realSetImmediate(() => undefined);
+      });
+      startSessionTranscriptIndexReconcile(options);
+      return release;
+    };
+    const releaseFirst = startDeferred(first);
+    const releaseUnrelated = startDeferred(unrelated);
+    let settled = false;
+    const scopedWait = waitForSessionTranscriptIndexReconcilesInStateDir(stateDir).then(() => {
+      settled = true;
+    });
+    // This owner did not exist in the waiter's initial snapshot, and no owner
+    // has opened its database yet: scope must come from the registered keys.
+    const releaseLater = startDeferred(later);
+    try {
+      releaseFirst.resolve();
+      await waitForSessionTranscriptIndexReconcile(first);
+      await checkpoint();
+      expect(settled).toBe(false);
+      expect(isSessionTranscriptIndexReconcileRunning(later)).toBe(true);
+
+      releaseLater.resolve();
+      await waitForSessionTranscriptIndexReconcile(later);
+      // A checkpoint makes a wrongly global wait fail here, while finally can
+      // still release the unrelated owner instead of deadlocking the test.
+      await checkpoint();
+      expect(settled).toBe(true);
+      expect(isSessionTranscriptIndexReconcileRunning(unrelated)).toBe(true);
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(unrelated))).toBe(false);
+    } finally {
+      immediateSpy.mockRestore();
+      releaseFirst.resolve();
+      releaseLater.resolve();
+      releaseUnrelated.resolve();
+      await Promise.all([
+        scopedWait,
+        ...[first, later, unrelated].map(waitForSessionTranscriptIndexReconcile),
+      ]);
+      for (const options of [first, later, unrelated]) {
+        closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath(options));
+      }
+      for (const options of [first, unrelated]) {
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(options.env));
+      }
+    }
+  });
+
   it("resolves one session before unrelated projection repair completes", async () => {
     const stateDir = tempDirs.make("openclaw-active-transcript-");
     const scope = {

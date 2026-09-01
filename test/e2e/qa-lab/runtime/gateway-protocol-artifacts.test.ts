@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { buildProtocolSchemaDocument } from "../../../../scripts/lib/protocol-schema-document.mts";
 import {
   assertPublishedProtocolSchema,
-  buildCanonicalProtocolSchema,
   buildInstalledProtocolInspectionScript,
   buildPortableSwiftAnyCodableSource,
   buildSwiftProtocolCompatibilityHarness,
@@ -22,23 +22,6 @@ describe("Gateway protocol artifact producer", () => {
     ).toThrow("--artifact-base was provided more than once");
   });
 
-  it("builds the same schema envelope as the protocol generator", () => {
-    const request = { type: "object", properties: { type: { const: "req" } } };
-    const canonical = buildCanonicalProtocolSchema(
-      {
-        ConnectParams: { type: "object" },
-        EventFrame: { type: "object" },
-        RequestFrame: request,
-        ResponseFrame: { type: "object" },
-      },
-      [{ name: "health", scope: "operator.read", since: "2026.7" }],
-    );
-
-    expect(canonical.definitions.RequestFrame).toEqual(request);
-    expect(canonical.methods.health).toEqual({ scope: "operator.read", since: "2026.7" });
-    expect(canonical.discriminator.mapping.req).toBe("#/definitions/RequestFrame");
-  });
-
   it("requires the published schema and built registry to match canonical definitions", () => {
     const definitions = {
       ConnectParams: { type: "object" },
@@ -46,7 +29,10 @@ describe("Gateway protocol artifact producer", () => {
       RequestFrame: { type: "object" },
       ResponseFrame: { type: "object" },
     };
-    const canonical = buildCanonicalProtocolSchema(definitions, []);
+    const canonical = buildProtocolSchemaDocument({
+      methods: [{ name: "health", scope: "operator.read", since: "2026.7" }],
+      schemas: definitions,
+    });
 
     expect(() =>
       assertPublishedProtocolSchema({

@@ -2,7 +2,7 @@ import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/s
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
-import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
@@ -335,6 +335,7 @@ export async function mintMcpAppViewFromTranscript(params: {
 }): Promise<ReconstructionResult | undefined> {
   return await reconstructMcpAppView({
     cfg: params.cfg,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     lookup: { descriptor: params.descriptor },
     allowedAppToolNames: params.allowedAppToolNames,

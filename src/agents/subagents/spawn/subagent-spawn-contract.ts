@@ -53,6 +53,8 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: () => void;
 };
 
 export type SpawnSubagentResult = {
@@ -61,6 +63,7 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;

@@ -565,7 +565,10 @@ describe("OpenClaw database schema preflight", () => {
       const result = preflightOpenClawDatabaseSchemas({
         env,
         verifyCurrentSchemaShape: true,
-        supportedVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 18 },
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
       });
       expect(result.incompatible).toEqual([]);
       expect(result.indeterminate).toEqual(
@@ -588,12 +591,51 @@ describe("OpenClaw database schema preflight", () => {
             )
             .get(),
         ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
-        expect(inspected.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
+        expect(inspected.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
       } finally {
         inspected.close();
       }
     },
   );
+
+  it("checks every registered owner before permitting Gateway restart", () => {
+    const stateDir = tempDirs.make("openclaw-preflight-conflicting-owners-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    const statePath = resolveOpenClawStateSqlitePath(env);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const registry = new DatabaseSync(statePath);
+    registry
+      .prepare(
+        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("ops", agentPath, OPENCLAW_AGENT_SCHEMA_VERSION, 1, null);
+    registry.close();
+
+    expect(() => assertOpenClawDatabasesReady({ env, operation: "gateway-restart" })).toThrow(
+      /Gateway refused restart.*belongs to agent main; requested agent ops/,
+    );
+    const result = preflightOpenClawDatabaseSchemas({
+      env,
+      supportedVersions: {
+        state: OPENCLAW_STATE_SCHEMA_VERSION,
+        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+      verifyCurrentSchemaShape: true,
+      configuredAgentDatabaseCandidatePaths: [agentPath],
+    });
+    expect(result.indeterminate).toEqual([
+      {
+        kind: "agent",
+        path: agentPath,
+        reason: expect.stringContaining("belongs to agent main; requested agent ops"),
+      },
+    ]);
+  });
 
   it("reports a current but noncanonical registered agent schema as indeterminate", () => {
     const stateDir = tempDirs.make("openclaw-database-preflight-noncanonical-agent-");

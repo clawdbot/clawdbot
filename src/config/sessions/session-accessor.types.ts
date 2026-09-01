@@ -60,6 +60,8 @@ export type SessionAccessScope = {
 };
 
 export type LogicalSessionAccessScope = {
+  /** Prepared agent owner for unscoped keys; must agree with agent-scoped keys. */
+  agentId?: string;
   /** Runtime config whose session store rules define the logical session owner. */
   cfg: OpenClawConfig;
   /** Environment override used when resolving configured/discovered agent stores. */
@@ -111,7 +113,7 @@ export type ResolvedSessionEntryCandidateTarget = {
   agentId: string;
   /** Candidate key that selected the result, or the fallback key. */
   candidateKey: string;
-  /** Session metadata cloned from storage or from the synthesized fallback. */
+  /** Fresh owned session metadata, or a clone of the synthesized fallback. */
   entry: SessionEntry;
   /** False only for synthesized fallback entries that have not been written. */
   persisted: boolean;
@@ -419,6 +421,11 @@ export type SessionTranscriptTurnPersistOptions = {
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
+  /**
+   * Complete appended or matched committed messages before owner drain or publication.
+   * The canonical result preserves replay bytes. Throws cannot roll back committed rows.
+   */
+  onMessageCommitted?: (result: TranscriptMessageAppendResult<unknown>) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
@@ -825,15 +832,6 @@ export type RestoreSessionFromCompactionCheckpointParams = {
   sessionStoreKey?: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
-};
-
-export type TemporarySessionMappingPreservationResult<T> = {
-  /** Result returned by the operation while the temporary mapping may exist. */
-  result: T;
-  /** Snapshot failure; callers may continue when temporary cleanup is best-effort. */
-  snapshotFailure?: string;
-  /** Restore/delete failure for the original temporary mapping state. */
-  restoreFailure?: string;
 };
 
 export type SessionEntryCreateWithTranscriptContext = {

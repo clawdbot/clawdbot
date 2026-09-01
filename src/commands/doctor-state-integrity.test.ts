@@ -11,8 +11,10 @@ import {
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
+  collectWorkspaceBackupTip,
   detectStateIntegrityHealthIssues,
   noteStateIntegrity as noteStateIntegrityRaw,
   stateIntegrityIssueToHealthFinding,
@@ -30,6 +32,42 @@ import {
   withMainAgentRoster,
   writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
+
+const WORKSPACE_BACKUP_TIP =
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+
+describe("workspace backup tip", () => {
+  it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
+    await withTestDir({ prefix: "openclaw-doctor-workspace-git-" }, async (tempDir) => {
+      const repoRoot = path.join(tempDir, "repo");
+      const nestedWorkspace = path.join(repoRoot, "agents", "direct");
+      const deeplyNestedWorkspace = path.join(
+        repoRoot,
+        ...Array.from({ length: 12 }, (_, index) => `workspace-level-${index}`),
+      );
+      const linkedWorkspace = path.join(tempDir, "linked-workspace");
+      const outsideWorkspace = path.parse(tempDir).root;
+      const missingWorkspace = path.join(tempDir, "missing");
+      fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+      fs.mkdirSync(nestedWorkspace, { recursive: true });
+      fs.mkdirSync(deeplyNestedWorkspace, { recursive: true });
+      fs.symlinkSync(
+        nestedWorkspace,
+        linkedWorkspace,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(collectWorkspaceBackupTip(repoRoot)).toBeNull();
+      expect(
+        [nestedWorkspace, deeplyNestedWorkspace, linkedWorkspace]
+          .map((workspaceDir) => collectWorkspaceBackupTip(workspaceDir))
+          .filter((tip) => tip !== null),
+      ).toEqual([]);
+      expect(collectWorkspaceBackupTip(outsideWorkspace)).toBe(WORKSPACE_BACKUP_TIP);
+      expect(collectWorkspaceBackupTip(missingWorkspace)).toBeNull();
+    });
+  });
+});
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],

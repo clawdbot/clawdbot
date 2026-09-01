@@ -9,15 +9,6 @@ export npm_config_fund=false
 export npm_config_audit=false
 export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 
-# Stub the systemd manager and loginctl so doctor + daemon flows work in Docker.
-export PATH="/tmp/openclaw-bin:$PATH"
-mkdir -p /tmp/openclaw-bin
-cp scripts/e2e/lib/doctor-install-switch/shims/systemctl /tmp/openclaw-bin/systemctl
-cp scripts/e2e/lib/doctor-install-switch/shims/loginctl /tmp/openclaw-bin/loginctl
-cp scripts/e2e/lib/doctor-install-switch/shims/busctl /tmp/openclaw-bin/busctl
-cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs /tmp/openclaw-bin/systemd-exec-start.mjs
-chmod +x /tmp/openclaw-bin/systemctl /tmp/openclaw-bin/loginctl /tmp/openclaw-bin/busctl
-
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 git_root="/tmp/openclaw-git"
 mkdir -p "$git_root"
@@ -46,6 +37,7 @@ fi
 
 npm_bin="/tmp/npm-prefix/bin/openclaw"
 npm_root="/tmp/npm-prefix/lib/node_modules/openclaw"
+export OPENCLAW_E2E_REDACTOR_MODULE="$npm_root/dist/plugin-sdk/logging-core.js"
 if [ -f "$npm_root/dist/index.mjs" ]; then
   npm_entry="$npm_root/dist/index.mjs"
 else
@@ -94,7 +86,7 @@ assert_entrypoint() {
   if ! node scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs \
     entrypoint "$unit_path" "$expected"; then
     if [ -n "${doctor_log:-}" ] && [ -f "$doctor_log" ]; then
-      grep -E "Gateway service entrypoint|operator-owned systemd drop-in|managed externally" "$doctor_log" || true
+      openclaw_e2e_print_log "$doctor_log"
     fi
     exit 1
   fi
@@ -132,16 +124,45 @@ assert_no_env_key() {
   fi
 }
 
-# Each flow: install service with one variant, run doctor from the other,
-# and verify ExecStart entrypoint switches accordingly.
+service_definition_fingerprint() {
+  sha256sum "$1"
+  local env_file="$HOME/.openclaw/gateway.systemd.env"
+  if [ -f "$env_file" ]; then
+    sha256sum "$env_file"
+  else
+    echo "No generated systemd environment file"
+  fi
+}
+
+run_doctor_preserving_service() {
+  local unit_path="$1"
+  local doctor_log="$2"
+  local command_timeout="$3"
+  local doctor_cmd="$4"
+  local before
+  before="$(service_definition_fingerprint "$unit_path")"
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd" >"$doctor_log" 2>&1; then
+    openclaw_e2e_print_log "$doctor_log"
+    exit 1
+  fi
+  if [ "$(service_definition_fingerprint "$unit_path")" != "$before" ]; then
+    echo "Doctor changed the installed service definition during maintenance"
+    openclaw_e2e_print_log "$doctor_log"
+    exit 1
+  fi
+}
+
+# Doctor preserves the service definition; explicit gateway install owns switching.
 run_flow() {
   local name="$1"
   local install_cmd="$2"
   local install_expected="$3"
   local doctor_cmd="$4"
-  local doctor_expected="$5"
+  local switch_expected="$5"
+  local switch_cmd="$6"
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
+  local switch_log="/tmp/openclaw-doctor-switch-${name}-switch.log"
   local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
@@ -163,12 +184,14 @@ run_flow() {
   fi
   assert_entrypoint "$unit_path" "$install_expected"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd" >"$doctor_log" 2>&1; then
-    openclaw_e2e_print_log "$doctor_log"
+  run_doctor_preserving_service "$unit_path" "$doctor_log" "$command_timeout" "$doctor_cmd"
+  assert_entrypoint "$unit_path" "$install_expected"
+
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$switch_cmd" >"$switch_log" 2>&1; then
+    openclaw_e2e_print_log "$switch_log"
     exit 1
   fi
-
-  assert_entrypoint "$unit_path" "$doctor_expected"
+  assert_entrypoint "$unit_path" "$switch_expected"
 }
 
 run_flow \
@@ -176,14 +199,16 @@ run_flow \
   "$npm_bin daemon install --force" \
   "$npm_entry" \
   "$update_doctor_env node $git_cli doctor --repair --force --yes --non-interactive" \
-  "$git_entry"
+  "$git_entry" \
+  "node $git_cli gateway install --force"
 
 run_flow \
   "git-to-npm" \
   "node $git_cli daemon install --force" \
   "$git_entry" \
   "$update_doctor_env $npm_bin doctor --repair --force --yes --non-interactive" \
-  "$npm_entry"
+  "$npm_entry" \
+  "$npm_bin gateway install --force"
 
 plugin_binding_approval_count() {
   local database_path="$1"
@@ -267,6 +292,7 @@ run_proxy_env_flow() {
   local name="proxy-env-cleanup"
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
   local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
+  local reinstall_log="/tmp/openclaw-doctor-switch-${name}-reinstall.log"
   local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
 
   echo "== Flow: $name =="
@@ -291,14 +317,13 @@ run_proxy_env_flow() {
     printf "%s\n" "Environment=HTTP_PROXY=http://stale-proxy.local:7890"
     printf "%s\n" "Environment=HTTPS_PROXY=https://stale-proxy.local:7890"
   } >>"$unit_path"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
-    OPENCLAW_UPDATE_IN_PROGRESS=1 \
-    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
-    OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1 \
-    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1 \
-    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0 \
-    node "$git_cli" doctor --repair --force --yes --non-interactive >"$doctor_log" 2>&1; then
-    openclaw_e2e_print_log "$doctor_log"
+  run_doctor_preserving_service "$unit_path" "$doctor_log" "$command_timeout" \
+    "$update_doctor_env node $git_cli doctor --repair --force --yes --non-interactive"
+  assert_env_value "$unit_path" "HTTP_PROXY" "http://stale-proxy.local:7890"
+  assert_env_value "$unit_path" "HTTPS_PROXY" "https://stale-proxy.local:7890"
+
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" gateway install --force >"$reinstall_log" 2>&1; then
+    openclaw_e2e_print_log "$reinstall_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "HTTP_PROXY"
@@ -361,16 +386,10 @@ run_wrapper_flow() {
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes >"$doctor_log" 2>&1; then
-    openclaw_e2e_print_log "$doctor_log"
-    exit 1
-  fi
-  if ! grep -Fq "Gateway service invokes OPENCLAW_WRAPPER:" "$doctor_log"; then
-    echo "Expected doctor to report active wrapper"
-    openclaw_e2e_print_log "$doctor_log"
-    exit 1
-  fi
+  run_doctor_preserving_service "$unit_path" "$doctor_log" "$command_timeout" \
+    "node $git_cli doctor --repair --force --yes"
   assert_exec_arg "$unit_path" 1 "$wrapper"
+  assert_exec_arg "$unit_path" 2 "gateway"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_WRAPPER= "$npm_bin" gateway install --force >"$clear_log" 2>&1; then

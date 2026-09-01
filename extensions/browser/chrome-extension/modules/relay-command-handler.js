@@ -7,6 +7,7 @@ export function createRelayCommandHandler({
   createTab,
   focusWindowForTab,
   scheduleTabsSync,
+  captureDebugger,
   captureAccess,
   requireAccessibleTab,
   requireNavigatedTab,
@@ -35,25 +36,32 @@ export function createRelayCommandHandler({
         case "ping":
           reply({ type: "pong" });
           return;
-        case "attach":
-          reply({
-            type: "result",
-            seq,
-            result: await attachDebugger(message.tabId, assertCurrent),
-          });
+        case "attach": {
+          const attached = await attachDebugger(message.tabId, assertCurrent);
+          attached.assertCurrent();
+          reply({ type: "result", seq, result: { targetId: attached.targetId } });
           return;
+        }
         case "detach":
           await detachDebugger(message.tabId);
           reply({ type: "result", seq, result: {} });
           return;
         case "cdp": {
+          const assertAttachment = captureDebugger(message.tabId);
           const epoch = captureAccess(message.tabId, message.method);
           await requireTab(message.tabId, epoch);
+          assertAttachment();
           const target = message.sessionId
             ? { tabId: message.tabId, sessionId: message.sessionId }
             : { tabId: message.tabId };
-          const sendCommand = (method, params) =>
-            chrome.debugger.sendCommand(target, method, params);
+          // Provenance preflight and navigation share the command's original
+          // native generation, including policy awaits before either dispatch.
+          const sendCommand = async (method, params) => {
+            assertAttachment();
+            const result = await chrome.debugger.sendCommand(target, method, params);
+            assertAttachment();
+            return result;
+          };
           const controlledBlank =
             !message.sessionId &&
             message.method === "Page.navigate" &&
@@ -61,11 +69,13 @@ export function createRelayCommandHandler({
           const result = controlledBlank
             ? await navigateTab(message.tabId, epoch, message.params, isCurrent, sendCommand)
             : await sendCommand(message.method, message.params ?? {});
+          assertAttachment();
           await requireTab(
             message.tabId,
             epoch,
             controlledBlank ? requireNavigatedTab : requireAccessibleTab,
           );
+          assertAttachment();
           reply({ type: "result", seq, result: result ?? {} });
           return;
         }

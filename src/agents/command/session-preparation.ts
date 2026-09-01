@@ -50,6 +50,8 @@ export async function prepareEmbeddedSessionState(params: {
       lifecycleGeneration: params.lifecycleGeneration,
       verboseLevel: resolvedVerboseLevel,
       isControlUiVisible: !params.suppressVisibleSessionEffects,
+      // Node and local command ingress may not have a separate chat activity owner.
+      projectSessionActive: !params.suppressVisibleSessionEffects,
     });
   }
 

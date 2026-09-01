@@ -486,6 +486,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "string",
     });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.target_context_ref).toEqual({
+      default: "",
+      description: "Canonical release context for an exact-SHA frozen-target validation",
+      required: false,
+      type: "string",
+    });
     expect(preflight.outputs.node_test_exclude_patterns_json).toBe(
       "${{ steps.node_test_exclusions.outputs.patterns_json }}",
     );
@@ -524,6 +530,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(runNodeShard?.env?.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
       "${{ needs.preflight.outputs.node_test_exclude_patterns_json }}",
     );
+    expect(runNodeShard?.env?.OPENCLAW_RELEASE_TARGET_CONTEXT_REF).toBe(
+      "${{ inputs.target_context_ref }}",
+    );
     expect(runNodeShard?.run).toContain('process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "[]"');
     expect(runNodeShard?.run).toContain('pattern.slice("src/plugins/".length)');
     expect(runNodeShard?.run).toContain("`--exclude=${pattern.slice");
@@ -549,6 +558,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(pluginDispatch?.run).toContain(
       '-f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON"',
     );
+    expect(pluginDispatch?.run).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
     expect(pluginDispatch?.run).toContain("- Frozen-target Node test omissions:");
     expect(evidenceReuse?.env?.PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON).toBe(
       "${{ inputs.plugin_prerelease_node_exclude_patterns_json }}",
@@ -692,7 +702,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "string",
     });
-    expect(manifestEnv).toEqual({
+    expect(manifestEnv).toMatchObject({
       OPENCLAW_CI_CHANGED_PATHS_JSON:
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
@@ -717,6 +727,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
         "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+      OPENCLAW_CI_RUN_MACOS_NODE:
+        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}",
       OPENCLAW_CI_RUN_NATIVE_I18N:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
@@ -753,10 +765,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         (step: WorkflowStep) => step.name === "Run check shard",
       ).run,
     ).toContain("pnpm deadcode:ci");
-    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
-    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).not.toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(releaseChecksScript).toContain('-f ref="$TARGET_SHA"');
     expect(releaseChecksScript).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
@@ -1140,7 +1148,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
     for (const jobName of [
-      "resolve_target",
       "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",

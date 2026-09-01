@@ -2,13 +2,9 @@ import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, OPENCLAW_TAB_GROUP_TITLE } from 
 import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
-import { effectiveTabUrl, tabEligibility } from "./tab-eligibility.js";
+import { effectiveTabUrl, isValidTabId, tabEligibility } from "./tab-eligibility.js";
 
 const DENIED_TAB_IDS_KEY = "deniedTabIdsV1";
-
-function isValidTabId(value) {
-  return Number.isSafeInteger(value) && value >= 0;
-}
 
 function initialBlankDocument(tab) {
   return tab.url === "about:blank" || (!tab.url && tab.pendingUrl === "about:blank");
@@ -275,6 +271,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     } finally {
       pendingCreations.delete(pending);
     }
+    let assertAttachment;
     const created = {
       tab,
       // Creation owns a tab, not its first HTTP document (which may redirect).
@@ -288,6 +285,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       namingGroup: undefined,
       initialGroup: false,
       assertCurrent: () => {
+        assertAttachment?.();
         if (createdTabs.get(tab.id) !== created || !epochIsCurrent(tab.id, created.epoch)) {
           throw new Error(`tab ${tab.id} creation access was revoked`);
         }
@@ -310,6 +308,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       await requireTab(tab.id, created.epoch);
       created.assertCurrent();
       const attached = await attachDebugger(tab.id, created.assertCurrent, created.epoch);
+      assertAttachment = attached.assertCurrent;
       created.assertCurrent();
       if (message.focus === true && typeof tab.windowId === "number") {
         await chromeApi.windows.update(tab.windowId, { focused: true });
@@ -317,11 +316,16 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       }
       await requireTab(tab.id, created.epoch);
       created.assertCurrent();
-      handoff({ tabId: tab.id, ...attached });
+      handoff({ tabId: tab.id, targetId: attached.targetId });
       created.handedOff = true;
+      // Earlier inventory reads must not retract the target just handed to a
+      // client. Self-group events need not change discovery's revision.
+      discoveryRevision += 1;
     } catch (error) {
       // Rollback belongs to the creator, before any id is handed to the relay.
       // Never use ordinary close as a privileged bypass or close a user-revoked tab.
+      // Socket/native closure ends handoff authority, but not ownership of this
+      // unhanded tab. Rollback uses the creator epoch and unchanged tab identity.
       const ownsRollback = () =>
         createdTabs.get(tab.id) === created &&
         !deniedTabIds.has(tab.id) &&
@@ -632,10 +636,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         if (listRevision !== discoveryRevision) {
           break;
         }
-        if (tabIsRevoking(tab.id)) {
-          continue;
-        }
-        if (!eligibilityForTab(tab).eligible) {
+        if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }
         if (mode === ACCESS_MODE_ALL) {
@@ -732,6 +733,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     initialize,
     get mode() {
       return mode;
+    },
+    get discoveryRevision() {
+      return discoveryRevision;
     },
     setMode,
     setEnabled,

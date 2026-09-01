@@ -1425,6 +1425,36 @@ jobs:
             exec sudo -n -- "$0" --root-terminate-uid
           fi
 
+          if [[ "${1:-}" == "--cleanup-temp-root" ]]; then
+            shift
+            exec sudo -n -- "$0" --root-cleanup-temp-root "$@"
+          fi
+
+          if [[ "${1:-}" == "--root-cleanup-temp-root" ]]; then
+            [[ "$EUID" == "0" && "$#" == "2" ]]
+            source /etc/openclaw-telegram-sut.conf
+            temp_root="$2"
+            case "$(dirname "$temp_root")" in
+              "$RUNTIME_ROOT/tmp" | "$RUNTIME_ROOT/tmp/openclaw-$RUNNER_UID") ;;
+              *) echo "SUT cleanup escaped the workflow runtime root." >&2; exit 1 ;;
+            esac
+            [[ "$(basename "$temp_root")" == openclaw-qa-suite-* ]]
+            if sut_uid_processes_alive; then
+              echo "SUT runtime cleanup requires isolated UID quiescence." >&2
+              exit 1
+            fi
+            [[ ! -L "$temp_root" ]]
+            if [[ ! -e "$temp_root" ]]; then
+              exit 0
+            fi
+            [[ -d "$temp_root" && "$(realpath -e "$temp_root")" == "$temp_root" ]]
+            [[ "$(stat -c '%u' "$temp_root")" == "$RUNNER_UID" ]]
+            # Preserve SUT-private modes until final shutdown. Unlink its tree
+            # without changing ownership or following links into other roots.
+            rm -rf --one-file-system -- "$temp_root"
+            exit 0
+          fi
+
           if [[ "${1:-}" == "--verify" ]]; then
             shift
             exec sudo -n -- "$0" --root-verify "$@"
@@ -1937,8 +1967,6 @@ jobs:
       - name: Validate required QA credential env
         id: validate_credentials
         env:
-          # Release trains share a bounded Telegram pool; wait through overlapping lanes.
-          CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           JOB_TIMEOUT_MINUTES: "60"
           LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -1960,8 +1988,6 @@ jobs:
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          # Keep the CLI lease wait aligned with the validated workflow contract above.
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: trusted-parent-${{ github.run_id }}-${{ github.run_attempt }}

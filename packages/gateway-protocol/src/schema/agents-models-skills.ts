@@ -5,6 +5,7 @@ import { closedObject } from "./closed-object.js";
 import { WorkerExecutionModeSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
+import { SessionPermissionModeSchema } from "./sessions-row.js";
 
 /**
  * Agent, model, skill, and tool catalog schemas.
@@ -131,6 +132,8 @@ export const AgentSummarySchema = closedObject({
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  // Configured posture for display only, never an authorization decision.
+  defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
 });
 
 /** Empty request payload for listing configured agents. */

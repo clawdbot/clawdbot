@@ -18,6 +18,7 @@ import {
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
+import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
   measureLocalWorkspaceReconciliation,
@@ -66,7 +67,7 @@ import {
 import {
   createWorkspaceGitTransferList,
   filterExistingGitTransferList,
-  runWorkspaceInventoryCommandToFile,
+  readWorkspaceStagedInputDirectories,
 } from "./workspace-sync-inventory.js";
 import {
   REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
@@ -270,29 +271,11 @@ export function createWorkerWorkspaceActions(
           timeoutMs: WORKSPACE_TIMEOUT_MS,
         });
 
-        const objectListPath = path.join(temporaryDirectory, "base-objects");
-        const packPath = path.join(temporaryDirectory, "base.pack");
-        await runWorkspaceInventoryCommandToFile({
-          argv: [
-            "git",
-            "-C",
-            gitRoot,
-            "rev-list",
-            "--objects",
-            "--no-object-names",
-            `${baseCommit}^{tree}`,
-          ],
-          outputPath: objectListPath,
+        const packPath = await prepareWorkerWorkspaceGitPack({
+          root: gitRoot,
+          baseCommit,
+          temporaryRoot: temporaryDirectory,
           signal: options.ownerSignal,
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
-        });
-        await fs.appendFile(objectListPath, `${baseCommit}\n`);
-        await runWorkspaceInventoryCommandToFile({
-          argv: ["git", "-C", gitRoot, "pack-objects", "--stdout"],
-          inputPath: objectListPath,
-          outputPath: packPath,
-          signal: options.ownerSignal,
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
         });
         const packTransfer = await runRsync(prepared, (rsyncSsh) => [
           "rsync",
@@ -336,6 +319,13 @@ export function createWorkerWorkspaceActions(
         }
       }
 
+      const stagedInputDirectories = await readWorkspaceStagedInputDirectories(gitRoot);
+      const inputIncludes = path.join(temporaryDirectory, "input-includes");
+      await fs.writeFile(
+        inputIncludes,
+        stagedInputDirectories.map((directory) => `/${directory}/***\0`).join(""),
+        { mode: 0o600 },
+      );
       const localSource = gitRoot.endsWith(path.sep) ? gitRoot : `${gitRoot}${path.sep}`;
       const transferArgv = (rsyncSsh: string, fileListPath?: string) => [
         "rsync",
@@ -343,8 +333,10 @@ export function createWorkerWorkspaceActions(
         "--checksum",
         "--delete-delay",
         "--exclude=.git",
+        "--from0",
+        `--include-from=${inputIncludes}`,
         ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
-        ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
+        ...(fileListPath ? ["--recursive", `--files-from=${fileListPath}`] : []),
         `--rsync-path=${mutationReceiverPath("workspace-root")}`,
         "-e",
         rsyncSsh,

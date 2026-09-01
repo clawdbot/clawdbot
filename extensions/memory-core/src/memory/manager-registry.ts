@@ -19,7 +19,15 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
 );
 const log = createSubsystemLogger("memory");
 
-export type MemoryIndexManagerPurpose = "default" | "status" | "cli";
+export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
+
+export function normalizeMemoryIndexManagerPurpose(
+  purpose: MemoryIndexManagerPurpose | undefined,
+): MemoryIndexManagerPurpose {
+  return purpose === "status" || purpose === "cli" || purpose === "maintenance"
+    ? purpose
+    : "default";
+}
 
 type ClosableMemoryManager = {
   close(): Promise<void>;
@@ -84,6 +92,14 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     params: { agentId: string; purpose: MemoryIndexManagerPurpose },
     callbacks: MemoryManagerRegistryCallbacks<T>,
   ): Promise<T | null> {
+    // A detached search handoff may race global teardown. Decline late
+    // maintenance acquisition so closing the default manager cannot wait on itself.
+    if (
+      params.purpose === "maintenance" &&
+      (this.globalLifecycle.closePromise || this.globalLifecycle.closeFailed)
+    ) {
+      return null;
+    }
     return await this.runScopeOperation(params, async () => {
       if (this.globalLifecycle.closeFailed) {
         await this.retryFailedGlobalClose(callbacks.close);

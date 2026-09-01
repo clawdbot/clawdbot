@@ -12,8 +12,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-const providerUsageArtifactDir = path.resolve(".artifacts/control-ui-e2e/provider-usage-outcomes");
-const usageFilterArtifactDir = path.resolve(".artifacts/control-ui-e2e/usage-filter-repair");
 
 const totals = {
   input: 1_200_000,
@@ -156,8 +154,7 @@ suite.define(() => {
             .getByRole("button", { name: "Visible C", exact: true })
             .click({ modifiers: ["Shift"] });
           if (recordVisuals) {
-            const artifactDir = path.resolve(".artifacts/control-ui-e2e/usage-range-selection");
-            await mkdir(artifactDir, { recursive: true });
+            const artifactDir = path.join(suite.artifactDir, "usage-range-selection");
             await card.screenshot({ path: path.join(artifactDir, `${scenario}.png`) });
           }
           await expect
@@ -210,10 +207,13 @@ suite.define(() => {
           .poll(() => page.locator(".usage-page").textContent())
           .toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
         if (recordVisuals) {
-          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
           await page.locator(".usage-page").screenshot({
             animations: "disabled",
-            path: path.join(providerUsageArtifactDir, "usage-status-request-failed.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "provider-usage-outcomes"),
+              "usage-status-request-failed.png",
+            ),
           });
         }
       },
@@ -246,10 +246,13 @@ suite.define(() => {
             "Provider usage is unavailable; the last request failed. Refresh to retry.",
           );
         if (recordVisuals) {
-          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
           await page.locator(".usage-page").screenshot({
             animations: "disabled",
-            path: path.join(providerUsageArtifactDir, "usage-status-empty.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "provider-usage-outcomes"),
+              "usage-status-empty.png",
+            ),
           });
         }
       },
@@ -374,7 +377,7 @@ suite.define(() => {
     }));
     const empty = emptyUsageResponses();
     if (recordVisuals) {
-      await mkdir(usageFilterArtifactDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "usage-filter-repair"), { recursive: true });
     }
 
     await suite.withPage(
@@ -383,7 +386,12 @@ suite.define(() => {
         serviceWorkers: "block",
         viewport: { height: 1_000, width: 1_440 },
         ...(recordVisuals
-          ? { recordVideo: { dir: usageFilterArtifactDir, size: { height: 1_000, width: 1_440 } } }
+          ? {
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "usage-filter-repair"),
+                size: { height: 1_000, width: 1_440 },
+              },
+            }
           : {}),
       },
       async ({ page }) => {
@@ -418,7 +426,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(usageFilterArtifactDir, "01-provider-alternatives.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "usage-filter-repair"),
+              "01-provider-alternatives.png",
+            ),
           });
         }
 
@@ -430,7 +441,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(usageFilterArtifactDir, "02-quoted-session-label.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "usage-filter-repair"),
+              "02-quoted-session-label.png",
+            ),
           });
         }
       },
@@ -756,13 +770,7 @@ suite.define(() => {
         await expect.poll(() => topProviders.textContent()).not.toContain("openai");
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const artifactDir = path.join(
-            process.cwd(),
-            ".artifacts",
-            "control-ui-e2e",
-            "provider-plans",
-          );
-          await mkdir(artifactDir, { recursive: true });
+          const artifactDir = path.join(suite.artifactDir, "provider-plans");
           await page.locator(".usage-page").screenshot({
             path: path.join(artifactDir, "after.png"),
           });

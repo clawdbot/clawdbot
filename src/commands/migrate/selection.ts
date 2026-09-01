@@ -260,13 +260,36 @@ export function formatMigrationPluginSelectionHint(item: MigrationItem): string 
   return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
 
-/** Marks unselected selectable skill items as skipped and recomputes plan summary. */
+/** Keeps skill copies and their per-skill config patches inside the same selection. */
 export function applyMigrationSelectedSkillItemIds(
   plan: MigrationPlan,
   selectedItemIds: ReadonlySet<string>,
 ): MigrationPlan {
-  const selectableIds = new Set(getSelectableMigrationSkillItems(plan).map((item) => item.id));
+  const selectable = getSelectableMigrationSkillItems(plan);
+  const selectableIds = new Set(selectable.map((item) => item.id));
+  const selectedSkillNames = new Set(
+    selectable
+      .filter((item) => selectedItemIds.has(item.id))
+      .map(
+        (item) =>
+          readMigrationSkillName(item) ?? (item.source ? path.basename(item.source) : undefined),
+      )
+      .filter((name) => name !== undefined),
+  );
   const items = plan.items.map((item) => {
+    const configPath = item.kind === "config" ? item.details?.path : undefined;
+    // Per-skill patches keep conflicts independent, so a deselected skill's
+    // policy cannot mutate the target or block an otherwise valid import.
+    if (
+      Array.isArray(configPath) &&
+      configPath.length === 3 &&
+      configPath[0] === "skills" &&
+      configPath[1] === "entries" &&
+      !selectedSkillNames.has(configPath[2]) &&
+      (item.status === "planned" || item.status === "conflict")
+    ) {
+      return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
+    }
     if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
       return item;
     }

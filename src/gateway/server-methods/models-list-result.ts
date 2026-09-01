@@ -14,7 +14,6 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
@@ -211,6 +210,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     preparedAuthStore: params.preparedAuthStore,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
+    preparedSyntheticAuthComplete: isPreparedModelCatalogFull(params.snapshot),
     workspaceDir,
     routeResolverFactory: params.routeResolverFactory,
   });
@@ -336,16 +336,10 @@ function createPublicModelsListProjector(params: {
       };
       prepared.set(entry, preparedEntry);
     }
-    const syntheticLocalAvailable =
-      evaluation.availability === undefined &&
-      evaluation.routeResolution === null &&
-      normalizeProviderId(entry.provider) !== "openai" &&
-      hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider: entry.provider });
-    const available = evaluation.availability ?? (syntheticLocalAvailable ? true : undefined);
     // Legacy views require a boolean; inventory consumers preserve unknown state.
     const projectedAvailability = params.preserveUnknownAvailability
-      ? available
-      : (available ?? false);
+      ? evaluation.availability
+      : (evaluation.availability ?? false);
     return Object.assign(
       {},
       preparedEntry,
@@ -452,7 +446,7 @@ export async function prepareModelsListResult(
       loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, {
         readOnly: loadedReadOnly,
         refreshAuth: refresh && loadedReadOnly,
-        refreshFullCatalog: loadParams.refresh === true,
+        ...(!preparedOnly ? { refreshFullCatalog: true } : {}),
       });
       return loadedSnapshot;
     },
@@ -480,7 +474,7 @@ export async function prepareModelsListResult(
         fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, {
           readOnly,
           refreshAuth: refresh && readOnly,
-          refreshFullCatalog: refresh,
+          refreshFullCatalog: true,
         });
         return fullSnapshot;
       },
@@ -566,6 +560,9 @@ export async function prepareModelsListResult(
     : {};
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
+  // A complete catalog and its synthetic-auth probe results cross the worker boundary together.
+  // Only that paired generation may turn an absent synthetic credential into missing-auth.
+  const preparedSyntheticAuthComplete = ownerSnapshot?.catalogComplete === true;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
@@ -575,7 +572,7 @@ export async function prepareModelsListResult(
     agentId,
     defaultModel,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot.plugins,
+    manifestPlugins: metadataSnapshot,
   }).byKey;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
@@ -636,7 +633,7 @@ export async function prepareModelsListResult(
     defaultModel,
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: metadataSnapshot?.plugins,
+    manifestPlugins: metadataSnapshot,
   });
   const evaluateEntry =
     (usedPreloadedCatalog ? params.catalogProjector?.evaluateEntry : undefined) ??
@@ -650,6 +647,7 @@ export async function prepareModelsListResult(
         preparedAuthStore,
         preparedRuntimeAuthModes,
         preparedRuntimeAuthMaterializations,
+        preparedSyntheticAuthComplete,
         workspaceDir,
         routeResolverFactory: params.routeResolverFactory,
       }),

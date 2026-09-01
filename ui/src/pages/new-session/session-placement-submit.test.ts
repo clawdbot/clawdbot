@@ -34,7 +34,7 @@ function advanceSessionPlacementDraft(params: AdvanceParams) {
   } = params;
   return advanceSessionPlacementDraftWithRecovery({
     ...options,
-    cleanupOnCancellation: options.cleanupOnCancellation ?? true,
+    cleanupOnCancellation: () => options.cleanupOnCancellation ?? true,
     recovery: {
       sessionKey: key,
       messageId,

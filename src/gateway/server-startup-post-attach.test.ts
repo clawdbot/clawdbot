@@ -7,10 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
-import type {
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
-} from "../plugins/hook-types.js";
+import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -26,6 +23,8 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import "./server-startup-outcomes.test-support.js";
+
+type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn<
@@ -3513,36 +3512,40 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("fences plugin publication when close begins during deferred plugin loading", async () => {
+  it("retires unadopted startup plugins when close begins during deferred loading", async () => {
     let closeStarted = false;
-    let releasePluginLoad: (() => void) | undefined;
-    const pluginLoadReady = new Promise<void>((resolve) => {
-      releasePluginLoad = resolve;
-    });
+    const pluginLoadStarted = createDeferred();
+    const pluginLoadReady = createDeferred();
+    const retireGatewayRuntimeBindings = vi.fn();
     const onStartupPluginsLoaded = vi.fn();
     const startGatewaySidecarsValue = vi.fn(async () => ({
       pluginServices: null,
       postReadySidecars: [],
     }));
     const runtime = await startGatewayPostAttachRuntime(
-      {
-        ...createPostAttachParams({
-          sidecarStartup: "defer",
-          isClosing: () => closeStarted,
-          loadStartupPlugins: async () => {
-            await pluginLoadReady;
-            return { pluginRegistry: createPostAttachParams().pluginRegistry, gatewayMethods: [] };
-          },
-          onStartupPluginsLoaded,
-        }),
-      },
+      createPostAttachParams({
+        sidecarStartup: "defer",
+        isClosing: () => closeStarted,
+        loadStartupPlugins: async () => {
+          pluginLoadStarted.resolve();
+          await pluginLoadReady.promise;
+          return {
+            pluginRegistry: createPostAttachParams().pluginRegistry,
+            gatewayMethods: [],
+            retireGatewayRuntimeBindings,
+          };
+        },
+        onStartupPluginsLoaded,
+      }),
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
 
+    await pluginLoadStarted.promise;
     closeStarted = true;
-    releasePluginLoad?.();
+    pluginLoadReady.resolve();
     await expect(runtime.startupSettled).resolves.toBeUndefined();
 
+    expect(retireGatewayRuntimeBindings).toHaveBeenCalledOnce();
     expect(onStartupPluginsLoaded).not.toHaveBeenCalled();
     expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
   });

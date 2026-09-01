@@ -699,14 +699,21 @@ describe("install smoke no-push root image transport", () => {
 
   it("passes package changelog intent only to the candidate packager", () => {
     const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
-    expect(
-      step(
-        job(workflow, "installer_smoke_candidate_payload"),
-        "Package candidate only inside pinned harness",
-      ).env,
-    ).toMatchObject({
+    const packageCandidate = step(
+      job(workflow, "installer_smoke_candidate_payload"),
+      "Package candidate only inside pinned harness",
+    );
+    expect(packageCandidate.env).toMatchObject({
       ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
     });
+    expect(packageCandidate.run).toContain("--output-name candidate.tgz");
+    expect(packageCandidate.run).not.toContain("--pack-json");
+    expect(packageCandidate.run).toContain("scripts/package-openclaw-for-docker.mts");
+    expect(packageCandidate.run).toContain(
+      "grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts",
+    );
+    expect(packageCandidate.run).not.toContain("[[ -f scripts/package-openclaw-for-docker.mts ]]");
+    expect(packageCandidate.run).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(JSON.stringify(job(workflow, "bun_global_install_smoke"))).not.toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG",
     );

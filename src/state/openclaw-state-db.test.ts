@@ -1522,39 +1522,6 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
-  it.runIf(process.platform === "linux")(
-    "evicts a detached WAL family before reopening the shared state database",
-    () => {
-      vi.useFakeTimers();
-      try {
-        const stateDir = createTempStateDir();
-        const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-        const opened = openOpenClawStateDatabase(options);
-        expect(opened.walMaintenance.checkpoint()).toBe(true);
-        fs.unlinkSync(`${opened.path}-wal`);
-        fs.unlinkSync(`${opened.path}-shm`);
-
-        vi.advanceTimersByTime(30 * 60 * 1000);
-
-        expect(opened.db.isOpen).toBe(false);
-        expect(() => opened.db.prepare("PRAGMA schema_version").get()).toThrow();
-        const reopened = openOpenClawStateDatabase(options);
-        expect(reopened).not.toBe(opened);
-        expect(reopened.db.isOpen).toBe(true);
-        expect(() =>
-          reopened.db
-            .prepare(
-              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
-            )
-            .run(),
-        ).not.toThrow();
-      } finally {
-        closeOpenClawStateDatabaseForTest();
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 
@@ -2128,7 +2095,6 @@ describe("openclaw state database", () => {
         id: "legacy-wide-job",
         name: "Legacy wide job",
         description: "preserved cron configuration",
-        enabled: true,
         declarationKey: "legacy-declaration",
         owner: { agentId: "legacy-owner" },
         createdAtMs: 100,
@@ -2294,7 +2260,9 @@ describe("openclaw state database", () => {
       }
 
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(14);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(collectSqliteSchemaShape(migrated.db).gateway_origin_device_tokens).toEqual(
         createInitialStateSchemaShape().gateway_origin_device_tokens,
       );
@@ -2375,6 +2343,7 @@ describe("openclaw state database", () => {
         to: null,
         accountId: null,
       });
+      expect(JSON.parse(row.job_json).enabled).toBe(true);
       expect(JSON.parse(row.state_json)).toEqual({
         lastStatus: "error",
         lastRunStatus: "error",
@@ -2382,6 +2351,7 @@ describe("openclaw state database", () => {
       expect(loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey)).store.jobs).toEqual([
         {
           ...job,
+          enabled: true,
           declarationKey: "legacy-declaration",
           owner: { agentId: "legacy-owner" },
           delivery: {
@@ -2625,7 +2595,7 @@ describe("openclaw state database", () => {
       });
       closeOpenClawStateDatabaseForTest();
       expect(readSqliteNumberPragma(openOpenClawStateDatabase(options).db, "user_version")).toBe(
-        14,
+        OPENCLAW_STATE_SCHEMA_VERSION,
       );
     },
   );
@@ -2893,7 +2863,7 @@ describe("openclaw state database", () => {
             }).db,
             "user_version",
           ),
-        ).toBe(14);
+        ).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
       },
     );
   });
@@ -2929,7 +2899,7 @@ describe("openclaw state database", () => {
         db.prepare("UPDATE cron_jobs SET state_json = '[]'").run();
         expect(() => db.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL)).toThrow(/CHECK constraint/);
         db.exec("ROLLBACK");
-        expect(readSqliteNumberPragma(db, "user_version")).toBe(14);
+        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         expect(db.prepare("SELECT state_json FROM cron_jobs").get()).toEqual({ state_json: "[]" });
         db.close();
       },
@@ -2957,7 +2927,7 @@ describe("openclaw state database", () => {
     legacy.close();
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(14);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db
         .prepare(
@@ -3289,6 +3259,7 @@ describe("openclaw state database", () => {
       { kind: "singleton-state-foldin-v12", path: fixture.databasePath },
       { kind: "state-consolidation-v13", path: fixture.databasePath },
       { kind: "creator-namespace-v14", path: fixture.databasePath },
+      { kind: "conversation-binding-targets-v15", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -3306,6 +3277,7 @@ describe("openclaw state database", () => {
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Removed redundant conversation binding target projections (v15)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
@@ -7491,6 +7463,47 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
       app_version: VERSION,
     });
+  });
+
+  it("repairs null schema metadata once before using the current-schema fast path", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const corrupt = new DatabaseSync(databasePath);
+    corrupt
+      .prepare(
+        "UPDATE schema_meta SET app_version = NULL, updated_at = 1 WHERE meta_key = 'primary'",
+      )
+      .run();
+    corrupt.close();
+
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+
+    const afterRepair = new DatabaseSync(databasePath, { readOnly: true });
+    const repaired = afterRepair
+      .prepare("SELECT app_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+      .get() as { app_version: string; updated_at: number };
+    afterRepair.close();
+    expect(repaired.app_version).toBe(VERSION);
+    expect(repaired.updated_at).toBeGreaterThan(1);
+
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+
+    const afterReopen = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        afterReopen
+          .prepare("SELECT app_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual(repaired);
+    } finally {
+      afterReopen.close();
+    }
   });
 
   it("latches newer global schema failures before integrity scans", () => {

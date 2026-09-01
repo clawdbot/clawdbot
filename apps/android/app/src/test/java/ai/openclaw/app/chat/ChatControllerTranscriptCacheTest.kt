@@ -864,7 +864,7 @@ class ChatControllerTranscriptCacheTest {
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","pinned":true,"unread":true}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","color":"green","pinned":true,"unread":true}]}""")
         }
       controller.refreshSessions()
       advanceUntilIdle()
@@ -879,6 +879,7 @@ class ChatControllerTranscriptCacheTest {
       assertEquals("Work", session.category)
       assertEquals(true, session.pinned)
       assertEquals(true, session.unread)
+      assertEquals("green", session.color)
       assertEquals(30L, session.lastActivityAt)
     }
 

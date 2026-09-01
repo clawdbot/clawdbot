@@ -13,6 +13,21 @@ SPEC.loader.exec_module(driver)
 
 
 class PhotoContentTest(unittest.TestCase):
+    def test_rejects_unsafe_prebuilt_archive_members(self):
+        class FakeTar:
+            extracted = False
+
+            def getmembers(self):
+                return [driver.tarfile.TarInfo("../escape")]
+
+            def extractall(self, _destination):
+                self.extracted = True
+
+        archive = FakeTar()
+        with self.assertRaisesRegex(driver.DriverError, "unsafe member"):
+            driver.extract_prebuilt_archive(archive, tempfile.mkdtemp())
+        self.assertFalse(archive.extracted)
+
     def test_uses_current_tdlib_photo_shape(self):
         instance = driver.UserDriver.__new__(driver.UserDriver)
         instance.config = {}
@@ -76,6 +91,62 @@ class PhotoContentTest(unittest.TestCase):
         )
         self.assertEqual(formatted["entities"][0]["offset"], 3)
         self.assertEqual(formatted["entities"][0]["length"], 8)
+
+    def test_normalizes_serve_messages_and_edits(self):
+        known = {}
+        message_id = 42 << 20
+        message = {
+            "id": message_id,
+            "chat_id": -1001,
+            "sender_id": {"user_id": 101},
+            "date": 123,
+            "reply_to": {"message_id": 7},
+            "content": {
+                "@type": "messageText",
+                "text": {"@type": "formattedText", "text": "first", "entities": []},
+            },
+        }
+        users = {101: {"username": "sut_bot"}}
+
+        created = driver.serve_update(
+            {"@type": "updateNewMessage", "message": message}, users, known
+        )
+        edited = driver.serve_update(
+            {
+                "@type": "updateMessageContent",
+                "chat_id": -1001,
+                "message_id": message_id,
+                "new_content": {
+                    "@type": "messageText",
+                    "text": {"@type": "formattedText", "text": "final", "entities": []},
+                },
+            },
+            users,
+            known,
+        )
+
+        self.assertEqual(created["kind"], "message")
+        self.assertEqual(created["botApiMessageId"], 42)
+        self.assertEqual(created["senderUsername"], "sut_bot")
+        self.assertEqual(created["replyToMessageId"], 7)
+        self.assertEqual(created["timestamp"], 123000)
+        self.assertEqual(edited["kind"], "edit")
+        self.assertEqual(edited["text"], "final")
+        self.assertEqual(edited["senderId"], 101)
+
+    def test_ignores_unknown_edit_in_serve_mode(self):
+        event = driver.serve_update(
+            {
+                "@type": "updateMessageContent",
+                "chat_id": -1001,
+                "message_id": 99,
+                "new_content": {},
+            },
+            {},
+            {},
+        )
+
+        self.assertIsNone(event)
 
 
 if __name__ == "__main__":

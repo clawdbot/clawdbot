@@ -402,6 +402,13 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   if (userVersion < 14 && tableExists(db, "cron_jobs")) {
     migrations.push({ kind: "creator-namespace-v14", path: pathname });
   }
+  if (
+    userVersion < 15 &&
+    (tableHasColumn(db, "current_conversation_bindings", "target_agent_id") ||
+      tableHasColumn(db, "current_conversation_bindings", "target_session_id"))
+  ) {
+    migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

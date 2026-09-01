@@ -139,25 +139,35 @@ describe("worker provider node teardown", () => {
     },
   );
 
-  it("requires confirmed worker stop before retiring a disconnected shared lease", async () => {
-    const environmentId = "worker-offline-shared-destroy";
-    const { nodeTunnels, reconnect } = await disconnectedNodeOwner(environmentId, true);
-    const destroy = vi.fn(async () => {});
-    const service = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn", "remote-exec"],
-        destroy,
-      }),
-      { nodeTunnelManager: nodeTunnels },
-    );
-    try {
-      await expect(service.destroy(environmentId)).rejects.toThrow("not connected");
-      expect(destroy).not.toHaveBeenCalled();
-      expect(support.testState.store.get(environmentId)?.state).toBe("attached");
-    } finally {
-      reconnect();
-    }
-  });
+  it.each([
+    { sharedHost: true, providersEnabled: true },
+    { sharedHost: true, providersEnabled: false },
+    { sharedHost: null, providersEnabled: true },
+    { sharedHost: null, providersEnabled: false },
+  ])(
+    "requires confirmed worker stop before retiring a disconnected lease ($sharedHost, provider=$providersEnabled)",
+    async ({ sharedHost, providersEnabled }) => {
+      const environmentId = "worker-offline-shared-destroy";
+      const { nodeTunnels, reconnect } = await disconnectedNodeOwner(environmentId, sharedHost);
+      const destroy = vi.fn(async () => {});
+      const service = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          destroy,
+        }),
+        { nodeTunnelManager: nodeTunnels },
+      );
+      support.testState.providersEnabled = providersEnabled;
+      try {
+        await expect(service.destroy(environmentId)).rejects.toThrow("not connected");
+        expect(destroy).not.toHaveBeenCalled();
+        expect(support.testState.store.get(environmentId)?.state).toBe("attached");
+        expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      } finally {
+        reconnect();
+      }
+    },
+  );
 
   it.each([
     { status: "destroyed", isolation: "shared", sharedHost: true },

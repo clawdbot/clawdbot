@@ -159,7 +159,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var session: TalkRealtimeClientSession?
     private var toolBuffers: [String: ToolBuffer] = [:]
     private var activeToolTasks: [String: Task<Void, Never>] = [:]
-    private var activeToolRunIds: [String: String] = [:]
+    private typealias ConsultRun = (id: String, target: OpenClawChatSessionTarget)
+    private var activeToolRuns: [String: ConsultRun] = [:]
     private var stopped = false
     private var timelineStartedAt = ProcessInfo.processInfo.systemUptime
     private var seenRealtimeEventTypes: Set<String> = []
@@ -404,21 +405,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func cancelActiveToolCalls() {
-        let runIds = Array(Set(activeToolRunIds.values))
+        let runs = Array(activeToolRuns.values)
         for task in self.activeToolTasks.values {
             task.cancel()
         }
         self.activeToolTasks.removeAll()
-        self.activeToolRunIds.removeAll()
-        for runId in runIds {
-            Task { [gateway, sessionKey] in
-                let request = OpenClawChatGatewayRequests.abortRun(
-                    sessionKey: sessionKey,
-                    agentID: nil,
-                    runID: runId,
-                    requestTimeoutMs: 5000)
-                _ = try? await gateway.request(request)
-            }
+        self.activeToolRuns.removeAll()
+        for run in runs {
+            _ = Self.abortChatRun(gateway: self.gateway, run: run)
         }
     }
 
@@ -628,13 +622,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
         defer {
             statusTask.cancel()
             self.activeToolTasks[callId] = nil
-            self.activeToolRunIds[callId] = nil
+            self.activeToolRuns[callId] = nil
         }
         do {
             let args = try Self.decodeJSONObject(argsJSON)
             await self.flushTranscriptWrites()
-            try Task.checkCancellation()
-            try self.checkNotStopped()
             var params: [String: Any] = [
                 "sessionKey": sessionKey,
                 "callId": callId,
@@ -652,12 +644,17 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 ])
             }
             let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
+            try Task.checkCancellation()
+            try self.checkNotStopped()
             self.trace("tool call gateway request start callId=\(callId)")
             let requestStartedAt = ProcessInfo.processInfo.systemUptime
-            let res = try await gateway.request(
-                method: "talk.client.toolCall",
-                paramsJSON: json,
-                timeoutSeconds: Self.toolCallTimeoutSeconds)
+            // Retain the bounded acknowledgement after Stop so its exact run can be aborted.
+            let res = try await Task { [gateway] in
+                try await gateway.request(
+                    method: "talk.client.toolCall",
+                    paramsJSON: json,
+                    timeoutSeconds: Self.toolCallTimeoutSeconds)
+            }.value
             let response = try JSONDecoder().decode(TalkRealtimeToolCallResponse.self, from: res)
             let requestElapsed = Int((ProcessInfo.processInfo.systemUptime - requestStartedAt) * 1000)
             guard let runId = response.runId ?? response.idempotencyKey else {
@@ -666,13 +663,17 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 ])
             }
             self.trace("tool call gateway request done callId=\(callId) runId=\(runId) elapsedMs=\(requestElapsed)")
-            self.activeToolRunIds[callId] = runId
+            // v2026.8.1 Gateways returned only run ids; retain their original-key contract.
+            let run: ConsultRun = (runId, OpenClawChatSessionTarget(
+                sessionKey: response.agentSessionKey ?? self.sessionKey,
+                agentID: response.agentId))
             if Task.isCancelled || self.stopped {
-                await self.abortChatRun(runId: runId)
+                await Self.abortChatRun(gateway: self.gateway, run: run).value
                 return
             }
+            self.activeToolRuns[callId] = run
             let result = try await waitForChatResult(
-                runId: runId,
+                run: run,
                 stream: stream,
                 since: historySince,
                 timeoutSeconds: Self.toolResultTimeoutSeconds)
@@ -682,12 +683,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped { return }
             Self.logger.error("realtime tool call failed: \(error.localizedDescription, privacy: .public)")
             self.trace("tool call failed callId=\(callId) error=\(error.localizedDescription)")
-            if let runId = activeToolRunIds[callId] {
-                await self.abortChatRun(runId: runId)
+            if let run = activeToolRuns[callId] {
+                await Self.abortChatRun(gateway: self.gateway, run: run).value
             }
+            if Task.isCancelled || self.stopped { return }
             let confirmationInstruction = Self.voiceConfirmationInstruction(from: error)
             self.delegate?.realtimeSession(
                 self,
@@ -798,13 +799,16 @@ final class TalkRealtimeWebRTCSession: NSObject {
         return Self.nonEmptyString(record["message"])
     }
 
-    private func abortChatRun(runId: String) async {
-        let request = OpenClawChatGatewayRequests.abortRun(
-            sessionKey: self.sessionKey,
-            agentID: nil,
-            runID: runId,
-            requestTimeoutMs: 5000)
-        _ = try? await self.gateway.request(request)
+    private static func abortChatRun(gateway: GatewayNodeSession, run: ConsultRun) -> Task<Void, Never> {
+        // Cleanup must dispatch even when the consult task that awaits it was cancelled.
+        Task {
+            let request = OpenClawChatGatewayRequests.abortRun(
+                sessionKey: run.target.sessionKey,
+                agentID: run.target.agentID,
+                runID: run.id,
+                requestTimeoutMs: 5000)
+            _ = try? await gateway.request(request)
+        }
     }
 
     private static func decodeJSONObject(_ json: String) throws -> Any {
@@ -815,14 +819,15 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func waitForChatResult(
-        runId: String,
+        run: ConsultRun,
         stream: AsyncStream<EventFrame>,
         since: Double,
         timeoutSeconds: Int = 120) async throws -> String
     {
-        let currentSessionKey = self.sessionKey
+        let runId = run.id
+        let target = run.target
         return try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask { [runId, currentSessionKey] in
+            group.addTask { [runId, target] in
                 for await evt in stream {
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
@@ -833,7 +838,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     }
                     guard chatEvent.runId == runId else { continue }
                     if let eventSessionKey = chatEvent.sessionKey,
-                       !Self.matchesSessionKey(eventSessionKey, currentSessionKey)
+                       !Self.matchesSessionKey(eventSessionKey, target.sessionKey)
+                    {
+                        continue
+                    }
+                    if let eventAgentId = chatEvent.agentId, let agentId = target.agentID,
+                       eventAgentId != agentId
                     {
                         continue
                     }
@@ -858,10 +868,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     NSLocalizedDescriptionKey: "OpenClaw realtime tool event stream ended",
                 ])
             }
-            group.addTask { [gateway, sessionKey] in
+            group.addTask { [gateway, target] in
                 try await Self.waitForAgentResult(
                     gateway: gateway,
-                    sessionKey: sessionKey,
+                    target: target,
                     runId: runId,
                     since: since,
                     timeoutSeconds: timeoutSeconds)
@@ -892,7 +902,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private static func waitForAgentResult(
         gateway: GatewayNodeSession,
-        sessionKey: String,
+        target: OpenClawChatSessionTarget,
         runId: String,
         since: Double,
         timeoutSeconds: Int) async throws -> String
@@ -920,7 +930,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             case "ok":
                 if let text = try await Self.waitForAssistantTextFromHistory(
                     gateway: gateway,
-                    sessionKey: sessionKey,
+                    target: target,
                     since: since,
                     timeoutSeconds: Self.historyFallbackTimeoutSeconds)
                 {
@@ -962,7 +972,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private static func waitForAssistantTextFromHistory(
         gateway: GatewayNodeSession,
-        sessionKey: String,
+        target: OpenClawChatSessionTarget,
         since: Double,
         timeoutSeconds: Int) async throws -> String?
     {
@@ -970,7 +980,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         while Date() < deadline {
             if let text = try await Self.latestAssistantTextFromHistory(
                 gateway: gateway,
-                sessionKey: sessionKey,
+                target: target,
                 since: since)
             {
                 return text
@@ -982,10 +992,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private static func latestAssistantTextFromHistory(
         gateway: GatewayNodeSession,
-        sessionKey: String,
+        target: OpenClawChatSessionTarget,
         since: Double) async throws -> String?
     {
-        let request = OpenClawChatGatewayRequests.history(sessionKey: sessionKey, agentID: nil)
+        let request = OpenClawChatGatewayRequests.history(sessionKey: target.sessionKey, agentID: target.agentID)
         let response = try await gateway.request(request)
         let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: response)
         let messages = history.messages ?? []

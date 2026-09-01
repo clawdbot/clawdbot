@@ -11,7 +11,7 @@ import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
-import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
+import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getLoadedPwAiModule } from "./pw-ai-module.js";
 import type { PlaywrightConnectionRetirement } from "./pw-session.js";
@@ -30,7 +30,7 @@ type ProfileLifecycleActor = {
   handles: Set<RunningChrome>;
   cleanupChromeMcp: Set<string>;
   cleanupPlaywright: Map<string, PlaywrightConnectionRetirement>;
-  cleanupRelays: Set<ExtensionRelayHandle>;
+  cleanupRelays: Set<ExtensionRelayResource>;
   terminal: ProfileLifecycleTerminal | null;
   transitionReason: string | null;
   blockedReason: string | null;

@@ -325,6 +325,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
         this.focusDashboardRoute = { kind: "not-found" };
         return;
       }
+      if (result.kind === "route-error") {
+        this.focusDashboardRoute = { kind: "error", message: result.message };
+        return;
+      }
       if (result.kind === "ambiguous") {
         this.focusDashboardRoute = {
           kind: "ambiguous",
@@ -598,7 +602,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (runtime.documentMode?.kind === "approval") {
       return html`
         <openclaw-tooltip-provider>
-          ${gatewayUrlConfirmation} ${this.renderApprovalDocument(runtime)}
+          ${this.pendingGatewayUrl ? gatewayUrlConfirmation : this.renderApprovalDocument(runtime)}
         </openclaw-tooltip-provider>
       `;
     }

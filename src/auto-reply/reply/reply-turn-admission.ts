@@ -45,6 +45,7 @@ import {
   waitForReplyRunFollowupAdmission,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
+import { isReplyRunWaitingForHumanInput } from "./reply-run-registry.state.js";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
@@ -124,7 +125,7 @@ function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boo
 }
 
 function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
-  if (!operation) {
+  if (!operation || isReplyRunWaitingForHumanInput(operation)) {
     return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
   }
   const ageMs = Date.now() - operation.lastActivityAtMs;

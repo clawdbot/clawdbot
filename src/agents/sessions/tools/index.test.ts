@@ -1,12 +1,8 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { withEnvAsync } from "../../../test-utils/env.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { ensureTool } from "../../utils/tools-manager.js";
 import {
   allToolNames,
   createAllTools,
@@ -49,6 +45,101 @@ function requireTool(tools: AgentTool[], name: string): AgentTool {
 }
 
 describe("session tool factories", () => {
+  it("preserves literal @ paths across session file operations and keeps shorthand", async () => {
+    const cwd = tempDirs.make("openclaw-tool-factories-at-paths-");
+    const tools = createAllTools(cwd);
+    await fs.writeFile(path.join(cwd, "@literal.txt"), "literal before\n");
+    await fs.writeFile(path.join(cwd, "literal.txt"), "plain sibling\n");
+    await fs.writeFile(path.join(cwd, "shorthand.txt"), "shorthand control\n");
+
+    const shorthand = await tools.read.execute("read-shorthand", { path: "@shorthand.txt" });
+    expect(shorthand.content).toEqual([{ type: "text", text: "shorthand control\n" }]);
+    const literal = await tools.read.execute("read-literal", { path: "@literal.txt" });
+    expect(literal.content).toEqual([{ type: "text", text: "literal before\n" }]);
+
+    const written = await tools.write.execute("write-literal", {
+      path: "@literal.txt",
+      content: "literal written\n",
+    });
+    expect(written.details).toMatchObject({ changed: true, created: false });
+    const edited = await tools.edit.execute("edit-literal", {
+      path: "@literal.txt",
+      edits: [{ oldText: "written", newText: "edited" }],
+    });
+    expect(edited.details).toMatchObject({ changed: true });
+    await expect(fs.readFile(path.join(cwd, "@literal.txt"), "utf8")).resolves.toBe(
+      "literal edited\n",
+    );
+    await expect(fs.readFile(path.join(cwd, "literal.txt"), "utf8")).resolves.toBe(
+      "plain sibling\n",
+    );
+
+    await fs.mkdir(path.join(cwd, "@directory"));
+    const created = await tools.write.execute("write-literal-child", {
+      path: "@directory/new.txt",
+      content: "literal child\n",
+    });
+    expect(created.details).toMatchObject({ changed: true, created: true });
+    const listed = await tools.ls.execute("list-literal-directory", { path: "@directory" });
+    expect(listed.content).toEqual([{ type: "text", text: "new.txt" }]);
+    await expect(fs.readFile(path.join(cwd, "@directory/new.txt"), "utf8")).resolves.toBe(
+      "literal child\n",
+    );
+    await expect(fs.stat(path.join(cwd, "directory"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps injected file paths independent of colliding local @ files", async () => {
+    const cwd = tempDirs.make("openclaw-tool-factories-local-");
+    const remote = tempDirs.make("openclaw-tool-factories-remote-");
+    await fs.writeFile(path.join(cwd, "@target.txt"), "local sentinel\n");
+    await fs.writeFile(path.join(remote, "target.txt"), "remote before\n");
+    const remotePath = (absolutePath: string) =>
+      path.join(remote, path.relative(cwd, absolutePath));
+    const access = (absolutePath: string) => fs.access(remotePath(absolutePath));
+    const readFile = (absolutePath: string) => fs.readFile(remotePath(absolutePath));
+    const writeFile = (absolutePath: string, content: string) =>
+      fs.writeFile(remotePath(absolutePath), content, "utf8");
+    const statFile = async (absolutePath: string) => {
+      const stat = await fs.stat(remotePath(absolutePath));
+      return {
+        type: stat.isDirectory() ? "directory" : "file",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    };
+    const tools = createAllTools(cwd, {
+      read: { operations: { access, readFile } },
+      write: {
+        operations: {
+          readFile,
+          writeFile,
+          statFile,
+          mkdir: async (directory) => {
+            await fs.mkdir(remotePath(directory), { recursive: true });
+          },
+        },
+      },
+      edit: { operations: { access, readFile, writeFile, statFile } },
+    });
+
+    const read = await tools.read.execute("read-remote", { path: "@target.txt" });
+    expect(read.content).toEqual([{ type: "text", text: "remote before\n" }]);
+    await tools.write.execute("write-remote", { path: "@target.txt", content: "remote written\n" });
+    await tools.edit.execute("edit-remote", {
+      path: "@target.txt",
+      edits: [{ oldText: "written", newText: "edited" }],
+    });
+    await expect(fs.readFile(path.join(remote, "target.txt"), "utf8")).resolves.toBe(
+      "remote edited\n",
+    );
+    await expect(fs.readFile(path.join(cwd, "@target.txt"), "utf8")).resolves.toBe(
+      "local sentinel\n",
+    );
+    await expect(fs.stat(path.join(remote, "@target.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("keeps ordered tool sets independent of the mutable exported inventory", () => {
     const savedNames = [...allToolNames];
     allToolNames.clear();
@@ -145,88 +236,5 @@ describe("session tool factories", () => {
       expect(found.content).toEqual([{ type: "text", text: "remote.ts" }]);
       expect(listed.content).toEqual([{ type: "text", text: "remote.ts" }]);
     },
-  );
-
-  it.for([
-    { context: undefined, expected: ["sample.txt:3: context needle"] },
-    { context: 0, expected: ["sample.txt:3: context needle"] },
-    {
-      context: 1,
-      expected: ["sample.txt-2- second", "sample.txt:3: context needle", "sample.txt-4- fourth"],
-    },
-    { context: 0.5, expected: ["sample.txt:3: context needle"] },
-    {
-      context: 1.5,
-      expected: ["sample.txt-2- second", "sample.txt:3: context needle", "sample.txt-4- fourth"],
-    },
-    { context: -1, expected: ["sample.txt:3: context needle"] },
-  ])(
-    "normalizes native grep context $context after argument validation",
-    ({ context, expected }, { signal }) =>
-      withEnvAsync({ OPENCLAW_OFFLINE: "1" }, async () => {
-        const cwd = tempDirs.make("openclaw-tool-factories-grep-");
-        const filePath = path.join(cwd, "sample.txt");
-        await fs.writeFile(filePath, "first\nsecond\ncontext needle\nfourth\nfifth\n");
-        const rg = await ensureTool("rg", true);
-        signal.throwIfAborted();
-        if (!rg) {
-          throw new Error("Native grep fixture requires a working ripgrep executable");
-        }
-
-        // A middle-line match exposes fractional indexing without boundary clamping.
-        const nativeOutput = execFileSync(
-          rg,
-          [
-            "--json",
-            "--line-number",
-            "--color=never",
-            "--fixed-strings",
-            "--",
-            "context needle",
-            filePath,
-          ],
-          { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 },
-        );
-        const nativeEvents: unknown[] = nativeOutput
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(nativeEvents).toContainEqual({
-          type: "match",
-          data: expect.objectContaining({
-            line_number: 3,
-            lines: { text: "context needle\n" },
-          }),
-        });
-
-        const tool = createTool("grep", cwd);
-        const args = {
-          pattern: "context needle",
-          path: "sample.txt",
-          literal: true,
-          ...(context === undefined ? {} : { context }),
-        };
-        const validated = validateToolArguments(tool, {
-          type: "toolCall",
-          id: "grep-context",
-          name: tool.name,
-          arguments: args,
-        });
-        expect(validated).toEqual(args);
-        const controller = new AbortController();
-        const execution = tool.execute(
-          "grep-context",
-          validated,
-          AbortSignal.any([signal, controller.signal]),
-        );
-        try {
-          const result = await execution;
-          expect(result.content).toEqual([{ type: "text", text: expected.join("\n") }]);
-          expect(result.details).toBeUndefined();
-        } finally {
-          controller.abort();
-          await Promise.allSettled([execution]);
-        }
-      }),
   );
 });

@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   resolvePreparedRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import {
@@ -26,16 +27,15 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection-config
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
+  fitWorkerReplayImages,
   type WorkerReplayMessageWindowUnavailable,
 } from "../../worker/replay-message-window.js";
 import {
-  cloneImageContent,
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
@@ -48,40 +48,7 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  bindWorkerTurnAdmissionContinuation,
-  bindWorkerTurnExecutionIdentity,
-} from "./placement-turn-claim-events.js";
-import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
-
-export async function prepareWorkerTurnImages(
-  turn: SessionPlacementTurnParams,
-  agentId: string,
-  workspaceDir: string,
-) {
-  // Managed image references belong to the Gateway filesystem. Rendered PDF
-  // pages use the same ordered image input before crossing the worker boundary.
-  const { prepareEmbeddedAttemptPromptExecution } =
-    await import("../../agents/embedded-agent-runner/run/prompt-image-preparation.js");
-  const result = await prepareEmbeddedAttemptPromptExecution({
-    attempt: {
-      ...turn,
-      model: { input: turn.modelHasVision === false ? ["text"] : ["text", "image"] },
-    },
-    mediaOwnerAgentId: agentId,
-    effectiveFsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: turn.config, agentId }),
-    effectiveWorkspace: workspaceDir,
-    prompt: "",
-    skipPromptSubmission: false,
-  });
-  if (result.failedMediaCount > 0) {
-    throw new WorkerTurnExecutionError(
-      `Cloud worker could not load ${result.failedMediaCount} image attachment(s). Resend the attachments and retry.`,
-    );
-  }
-  // Ingress metadata such as sourceIndex stays on the Gateway, outside the closed wire shape.
-  return result.images.map(cloneImageContent);
-}
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -140,27 +107,30 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
-  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
-  // Worker session RPC carries no raw identity token. Bind provenance to the exact
-  // host claim before launch so child lineage cannot become bearer authority.
-  if (runtimeIdentity.executionIdentityToken) {
-    bindWorkerTurnExecutionIdentity(
-      params.placements,
-      params.turnClaim,
-      runtimeIdentity.executionIdentityToken,
-      admittedRunContext.operationalRunInstance,
-      { agentId: params.agentId, sessionKey: params.sessionKey },
-    );
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.turn.abortSignal,
+  );
+  if (!assertActive) {
+    throw new Error("Worker turn has no active admitted execution authority");
   }
-  bindWorkerTurnAdmissionContinuation(
+  assertActive();
+  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  // Stop closes the operational run before its placement claim finishes draining.
+  // Worker tools must retain both owners even when audit collection is disabled.
+  bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
+    runtimeIdentity.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
+    { agentId: params.agentId, sessionKey: params.sessionKey },
+    assertActive,
     params.turn.prepareAssistantTranscriptMessage,
   );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
+    assertActive,
   };
 }
 
@@ -197,14 +167,10 @@ export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMe
   return { kind: "complete", messages: projected };
 }
 
-// Node hosts append their own bounded websocket endpoint after sizing; reserve
-// its 4 KiB URL, TLS pin, keys, and JSON escaping before admitting replay bytes.
-const WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES = 4_608;
-
 type WorkerLaunchFit =
   | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
-      kind: "local-fallback";
+      kind: "provider-replay-unavailable";
       reason: "provider-replay-launch-payload-limit";
       bytes: number;
       limitBytes: number;
@@ -215,11 +181,13 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
   build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchPlan;
   messages: WorkerTranscriptMessage[];
   runtimeIdentity: AgentRuntimeIdentityTokenParams;
+  measure: (plan: WorkerLaunchPlan) => number;
 }): Promise<WorkerLaunchFit> {
   const tokenBytes = measureAgentRuntimeIdentityTokenBytes(params.runtimeIdentity);
   const plan = fitLaunchDescriptor(
     (messages) => params.build("x".repeat(tokenBytes), messages),
     params.messages,
+    params.measure,
   );
   if (plan.kind !== "launch") {
     return plan;
@@ -240,12 +208,13 @@ export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
 function fitLaunchDescriptor(
   build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchPlan,
   messages: WorkerTranscriptMessage[],
+  measure: (plan: WorkerLaunchPlan) => number,
 ): WorkerLaunchFit {
-  let initialMessages = messages;
+  let initialMessages =
+    fitWorkerReplayImages(messages, (candidate) => measure(build(candidate))) ?? messages;
   while (true) {
     const plan = build(initialMessages);
-    const bytes =
-      Buffer.byteLength(JSON.stringify(plan), "utf8") + WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES;
+    const bytes = measure(plan);
     if (bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
       return { kind: "launch", plan };
     }
@@ -254,7 +223,7 @@ function fitLaunchDescriptor(
     );
     if (replayIndex === 0) {
       return {
-        kind: "local-fallback",
+        kind: "provider-replay-unavailable",
         reason: "provider-replay-launch-payload-limit",
         bytes,
         limitBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
@@ -348,9 +317,7 @@ export function buildWorkerTurnResult(params: {
         sessionFile: params.sessionFile,
         provider: reportedModelRef.provider,
         model: reportedModelRef.model,
-        usage: usageMeta.usage,
-        lastCallUsage: usageMeta.lastCallUsage,
-        promptTokens: usageMeta.promptTokens,
+        ...usageMeta,
       },
       stopReason: params.terminal.stopReason,
       finalAssistantVisibleText: resolveFinalAssistantVisibleText(params.terminal),

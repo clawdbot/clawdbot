@@ -6,6 +6,7 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -54,6 +55,46 @@ function launchDescriptor(): WorkerLaunchDescriptor {
 }
 
 describe("worker launch descriptor", () => {
+  it("admits bounded image-only input and replay without raising the text budget", () => {
+    const descriptor = launchDescriptor();
+    const image = {
+      type: "image" as const,
+      data: createNoisyPngBuffer(256, 256).toString("base64"),
+      mimeType: "image/png",
+    };
+    expect(image.data.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
+    descriptor.assignment.prompt = [image];
+    descriptor.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
+    for (const suppressPromptTranscript of [false, true]) {
+      descriptor.assignment.suppressPromptTranscript = suppressPromptTranscript;
+      expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    }
+    for (const invalidImage of [
+      { ...image, data: "" },
+      { ...image, type: "text" },
+      { ...image, extra: true },
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, prompt: [invalidImage] },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+    descriptor.assignment.prompt = [
+      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
+      image,
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.prompt = [
+      { ...image, data: "x".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
+    ];
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+  });
   it("accepts the exact admitted single-session launch shape", () => {
     const descriptor = launchDescriptor();
 
@@ -65,34 +106,15 @@ describe("worker launch descriptor", () => {
     });
   });
 
-  it("admits current images above the transcript frame ceiling using the inference budget", () => {
+  it("rejects a launch version inherited from the prototype", () => {
     const descriptor = launchDescriptor();
-    const images = [
-      {
-        type: "image" as const,
-        data: createNoisyPngBuffer(320, 240).toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-    descriptor.assignment.images = images;
-    descriptor.assignment.suppressPromptTranscript = true;
-    expect(images[0]?.data.length).toBeGreaterThan(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES);
+    const { version, ...ownFields } = descriptor;
+    const candidate = Object.assign(
+      Object.create({ version }) as Record<string, unknown>,
+      ownFields,
+    );
 
-    expect(parseWorkerLaunchDescriptor(descriptor).assignment).toMatchObject({ images });
-    for (const invalidImage of [
-      { ...images[0], data: "" },
-      { ...images[0], type: "text" },
-      { ...images[0], extra: true },
-    ]) {
-      expect(() =>
-        parseWorkerLaunchDescriptor({
-          ...descriptor,
-          assignment: { ...descriptor.assignment, images: [invalidImage] },
-        }),
-      ).toThrow("invalid worker launch descriptor");
-    }
-    descriptor.assignment.suppressPromptTranscript = false;
-    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+    expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
       "invalid worker launch descriptor",
     );
   });
@@ -299,6 +321,54 @@ describe("worker launch descriptor", () => {
         parseWorkerLaunchDescriptor({
           ...descriptor,
           assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("requires a computer descriptor and grant together and rejects target substitution fields", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.computer = {
+      nodeId: "worker-desktop",
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      },
+    };
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
+    descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
+    expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    const { computer, ...assignmentFields } = descriptor.assignment;
+    const inheritedComputerAssignment = Object.assign(
+      Object.create({ computer }),
+      assignmentFields,
+    );
+    expect(() =>
+      parseWorkerLaunchDescriptor({
+        ...descriptor,
+        assignment: inheritedComputerAssignment,
+      }),
+    ).toThrow("invalid worker launch descriptor");
+    const { nodeId, ...computerFields } = descriptor.assignment.computer;
+    const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
+    for (const candidateComputer of [
+      undefined,
+      { ...descriptor.assignment.computer, gatewayUrl: "ws://other" },
+      { ...descriptor.assignment.computer, nodeId: "" },
+      inheritedNodeIdComputer,
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, computer: candidateComputer },
         }),
       ).toThrow("invalid worker launch descriptor");
     }

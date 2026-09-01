@@ -137,6 +137,19 @@ data class ChatOutboxBranchState(
   val revision: Int,
 )
 
+sealed interface ChatOutboxBranchEvidence {
+  val previousState: ChatOutboxBranchState
+
+  data class History(
+    override val previousState: ChatOutboxBranchState,
+  ) : ChatOutboxBranchEvidence
+
+  data class BranchListing(
+    override val previousState: ChatOutboxBranchState,
+    val leafEntryIds: Set<String>,
+  ) : ChatOutboxBranchEvidence
+}
+
 data class ChatOutboxMutationLease(
   val revision: Int,
   val startedAtMs: Long,
@@ -342,23 +355,18 @@ interface ChatCommandOutbox {
     lease: ChatOutboxMutationLease? = null,
   ): ChatOutboxBranchState? = null
 
-  suspend fun updateLastActiveLeafEntryId(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    leafEntryId: String,
-    expectedEpoch: Int,
-    expectedRevision: Int,
-  ): Boolean = false
-
+  /**
+   * Returns committed authority. History publication never adopts earlier input; branch listing
+   * retains the admission boundary captured before the request or ambiguous local mutation.
+   */
   suspend fun reconcileBranchScope(
     gatewayId: String,
     scope: ChatOutboxScope,
-    previousState: ChatOutboxBranchState,
+    evidence: ChatOutboxBranchEvidence,
     activeLeafEntryId: String?,
-    branchLeafEntryIds: Set<String>,
     activeTranscriptEntryIds: Set<String>,
     lastError: String,
-  ): Boolean = false
+  ): ChatOutboxBranchState? = null
 
   suspend fun confirmBranchChange(
     gatewayId: String,
@@ -1149,59 +1157,38 @@ class RoomChatCommandOutbox internal constructor(
     lease: ChatOutboxMutationLease?,
   ): ChatOutboxBranchState? = updateBranchMutationState(gatewayId, scope, needsReconciliation = true, lease = lease)
 
-  override suspend fun updateLastActiveLeafEntryId(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    leafEntryId: String,
-    expectedEpoch: Int,
-    expectedRevision: Int,
-  ): Boolean {
-    val gateway = scopedGatewayId(gatewayId) ?: return false
-    val normalized = normalizedScope(scope) ?: return false
-    val leaf = leafEntryId.trim().takeIf { it.isNotEmpty() } ?: return false
-    return database.withTransaction {
-      ensureBranchStorageLocked()
-      ensureBranchScopeLocked(gateway, normalized)
-      val state = readBranchStateLocked(gateway, normalized) ?: return@withTransaction false
-      if (
-        state.epoch != expectedEpoch ||
-        state.revision != expectedRevision ||
-        state.switchPendingSinceMs != null ||
-        state.needsReconciliation ||
-        unresolvedCountLocked(gateway, normalized, includingFailed = false) > 0
-      ) {
-        return@withTransaction false
-      }
-      writeBranchStateLocked(gateway, normalized, expectedEpoch, leaf, expectedRevision = expectedRevision)
-    }
-  }
-
   override suspend fun reconcileBranchScope(
     gatewayId: String,
     scope: ChatOutboxScope,
-    previousState: ChatOutboxBranchState,
+    evidence: ChatOutboxBranchEvidence,
     activeLeafEntryId: String?,
-    branchLeafEntryIds: Set<String>,
     activeTranscriptEntryIds: Set<String>,
     lastError: String,
-  ): Boolean {
-    val gateway = scopedGatewayId(gatewayId) ?: return false
-    val normalized = normalizedScope(scope) ?: return false
+  ): ChatOutboxBranchState? {
+    val gateway = scopedGatewayId(gatewayId) ?: return null
+    val normalized = normalizedScope(scope) ?: return null
     val leaf = activeLeafEntryId?.trim()?.takeIf { it.isNotEmpty() }
-    if (activeLeafEntryId != null && leaf == null) return false
+    if (activeLeafEntryId != null && leaf == null) return null
+    val previousState = evidence.previousState
+    val listing = evidence as? ChatOutboxBranchEvidence.BranchListing
     return database.withTransaction {
       ensureBranchStorageLocked()
       ensureBranchScopeLocked(gateway, normalized)
-      val expiredLease = expireBranchSwitchLeaseLocked(gateway, normalized, System.currentTimeMillis())
-      val state = readBranchStateLocked(gateway, normalized) ?: return@withTransaction false
-      if ((!expiredLease && state.revision != previousState.revision) || state.switchPendingSinceMs != null) {
-        return@withTransaction false
+      var state = readBranchStateLocked(gateway, normalized) ?: return@withTransaction null
+      // Expiry may retire this captured lease, but must never authorize an older response.
+      if (state.revision != previousState.revision || state.epoch != previousState.epoch) return@withTransaction null
+      if (listing != null && expireBranchSwitchLeaseLocked(gateway, normalized, System.currentTimeMillis())) {
+        state = readBranchStateLocked(gateway, normalized) ?: return@withTransaction null
       }
+      if (state.switchPendingSinceMs != null) return@withTransaction null
       val pending = unresolvedCountLocked(gateway, normalized, includingFailed = true)
       val previousLeaf = previousState.lastActiveLeafEntryId
       val canAdoptQueuedDuringReconciliation =
-        previousState.needsReconciliation && !previousState.hadDeliverableCommands
-      if (leaf != null && previousLeaf != null && previousLeaf != leaf && previousLeaf in branchLeafEntryIds) {
+        listing != null && previousState.needsReconciliation && !previousState.hadDeliverableCommands
+      val advancedOnActivePath = previousLeaf?.let(activeTranscriptEntryIds::contains) == true
+      val knownBranchSwitch =
+        leaf != null && previousLeaf != null && previousLeaf != leaf && listing?.leafEntryIds?.contains(previousLeaf) == true
+      if (knownBranchSwitch || (previousLeaf != leaf && !advancedOnActivePath && canAdoptQueuedDuringReconciliation)) {
         installConfirmedBranchChangeLocked(
           gateway,
           normalized,
@@ -1211,30 +1198,22 @@ class RoomChatCommandOutbox internal constructor(
           adoptQueuedCommands = canAdoptQueuedDuringReconciliation,
         )
       } else {
-        val advancedOnActivePath = previousLeaf?.let(activeTranscriptEntryIds::contains) == true
-        if (previousLeaf != leaf && !advancedOnActivePath && canAdoptQueuedDuringReconciliation) {
-          installConfirmedBranchChangeLocked(
-            gateway,
-            normalized,
-            state.epoch,
-            leaf,
-            lastError,
-            adoptQueuedCommands = true,
-          )
-          return@withTransaction true
-        }
-        if (
-          previousLeaf != leaf &&
-          !advancedOnActivePath &&
-          ((pending > 0 && (previousState.hadPendingCommands || previousState.needsReconciliation)) || leaf == null)
-        ) {
+        // Before history publication every existing row predates the visible branch, including
+        // input admitted while its RPC was in flight. Only explicit branch reconciliation adopts.
+        val earlierInput =
+          pending > 0 &&
+            (evidence is ChatOutboxBranchEvidence.History || previousState.hadPendingCommands || previousState.needsReconciliation)
+        if (previousLeaf != leaf && !advancedOnActivePath && (earlierInput || leaf == null)) {
           parkPendingCommandsLocked(gateway, normalized, lastError)
         }
         if (!writeBranchStateLocked(gateway, normalized, state.epoch, leaf, expectedRevision = state.revision)) {
-          return@withTransaction false
+          return@withTransaction null
         }
       }
-      true
+      readBranchStateLocked(gateway, normalized)?.copy(
+        hadPendingCommands = unresolvedCountLocked(gateway, normalized, includingFailed = true) > 0,
+        hadDeliverableCommands = unresolvedCountLocked(gateway, normalized, includingFailed = false) > 0,
+      )
     }
   }
 

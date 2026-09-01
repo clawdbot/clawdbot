@@ -51,6 +51,8 @@ export type DoctorHealthFlowContext = {
   /** Whether the selected state directory already existed before doctor startup work. */
   stateDirExistedAtStart?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** State migration owns service activation until final readiness passes. */
+  gatewayMaintenanceActive?: boolean;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;

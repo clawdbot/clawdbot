@@ -255,8 +255,8 @@ export function assertMatrixQaExpectedBootstrapFailure(params: {
   faultHits: MatrixQaFaultProxyHit[];
   result: MatrixQaE2eeBootstrapResult;
 }) {
-  if (params.faultHits.length === 0) {
-    throw new Error("Matrix E2EE bootstrap fault proxy was not exercised");
+  if (!params.faultHits.some((hit) => hit.method === "POST")) {
+    throw new Error("Matrix E2EE bootstrap did not attempt faulted room-key backup creation");
   }
   if (params.result.success) {
     throw new Error(

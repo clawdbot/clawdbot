@@ -1,9 +1,10 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
@@ -470,7 +471,10 @@ function writeLegacySessionEntriesState(stateDir: string): void {
   }
 }
 
-function runSessionStateAssertion(setup: (stateDir: string) => void): void {
+function runSessionStateAssertion(
+  setup: (stateDir: string) => void | NodeJS.ProcessEnv,
+  options: { scenario?: string; commands?: string[] } = {},
+): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-session-state-"));
   try {
     const stateDir = join(root, "state");
@@ -481,17 +485,19 @@ function runSessionStateAssertion(setup: (stateDir: string) => void): void {
     writeJson(join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
       id: "legacy-session",
     });
-    setup(stateDir);
-
-    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
-      },
-      stdio: "pipe",
-    });
+    const fixtureEnv = setup(stateDir);
+    for (const command of options.commands ?? ["assert-state"]) {
+      execFileSync(process.execPath, [ASSERTIONS_PATH, command], {
+        env: {
+          ...process.env,
+          ...(fixtureEnv ?? {}),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
+        },
+        stdio: "pipe",
+      });
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -554,6 +560,7 @@ function assertConfig(params: {
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
+  updateChannel?: string;
 }): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-"));
   try {
@@ -572,6 +579,7 @@ function assertConfig(params: {
         OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: params.stage ?? "survival",
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: params.updateChannel ?? "",
       },
       stdio: "pipe",
     });
@@ -812,6 +820,241 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 }
 
 describe("upgrade survivor assertions", () => {
+  it.each([
+    {
+      name: "legacy default-only doctor export",
+      sdkPath: "runtime-doctor",
+      declaresTypes: false,
+      runtime: 'throw new Error("undeclared SDK must not be imported");\n',
+      failure: undefined,
+    },
+    {
+      name: "declared constructor missing at runtime",
+      sdkPath: "runtime-doctor",
+      declaresTypes: true,
+      runtime: "export {};\n",
+      failure: "declared a keyed store constructor but did not export it",
+    },
+    {
+      name: "declared SDK import failure",
+      sdkPath: "runtime-doctor",
+      declaresTypes: true,
+      runtime: 'throw new Error("synthetic SDK import failure");\n',
+      failure: "synthetic SDK import failure",
+    },
+    {
+      name: "dedicated default-only store export missing its constructor",
+      sdkPath: "plugin-state-store-runtime",
+      declaresTypes: false,
+      runtime: "export {};\n",
+      failure: "declared a keyed store constructor but did not export it",
+    },
+    {
+      name: "dedicated default-only store constructor failure",
+      sdkPath: "plugin-state-store-runtime",
+      declaresTypes: false,
+      runtime:
+        'export function createPluginStateSyncKeyedStore() { throw new Error("synthetic store failure"); }\n',
+      failure: "synthetic store failure",
+    },
+  ])(
+    "classifies baseline shared state for $name",
+    ({ sdkPath, declaresTypes, runtime, failure }) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-baseline-sdk-"));
+      try {
+        const packageRoot = join(root, "package");
+        const stateDir = join(root, "state");
+        const version = "1.0.0";
+        mkdirSync(packageRoot);
+        mkdirSync(stateDir);
+        writeJson(join(packageRoot, "package.json"), {
+          name: "openclaw",
+          version,
+          type: "module",
+          exports: {
+            [`./plugin-sdk/${sdkPath}`]: {
+              ...(declaresTypes ? { types: "./runtime-doctor.d.ts" } : {}),
+              default: "./runtime-doctor.js",
+            },
+          },
+        });
+        // An undeclared sibling file must not become a guessed declaration fallback.
+        writeFileSync(
+          join(packageRoot, "runtime-doctor.d.ts"),
+          "export declare function createPluginStateSyncKeyedStore(): unknown;\n",
+        );
+        writeFileSync(join(packageRoot, "runtime-doctor.js"), runtime);
+        const baselinePath = join(stateDir, "survivor-baseline.json");
+        writeJson(baselinePath, { marker: "existing fixture" });
+        const result = spawnSync(
+          process.execPath,
+          [
+            "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
+            "seed-baseline-plugin-state",
+            packageRoot,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
+            },
+          },
+        );
+        const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+        if (failure) {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(failure);
+          expect(baseline).toEqual({ marker: "existing fixture" });
+        } else {
+          expect(result.status, result.stderr).toBe(0);
+          expect(baseline).toEqual({
+            marker: "existing fixture",
+            sharedState: {
+              status: "not-applicable",
+              packageVersion: version,
+              reason: "baseline SDK does not declare createPluginStateSyncKeyedStore",
+            },
+          });
+          expect(result.stdout).toContain("not-applicable");
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("verifies legacy auth import in the current shared owner without losing credentials or state", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+        "utf8",
+      ),
+    );
+    const verify = (corruption?: "credential" | "state" | "archive") =>
+      runSessionStateAssertion(
+        (stateDir) => {
+          writeMigratedSessionState(stateDir);
+          const sources = [
+            ["agents/main/agent/auth-profiles.json", fixture.authProfiles],
+            ["agents/main/agent/auth-state.json", fixture.authState],
+            ["agents/main/agent/auth.json", fixture.legacyAuth],
+            ["credentials/oauth.json", fixture.legacyOAuth],
+          ] as const;
+          mkdirSync(join(stateDir, "credentials"), { recursive: true });
+          for (const [source, contents] of sources) {
+            writeJson(
+              join(stateDir, `${source}.migrated-fixture`),
+              corruption === "archive" ? {} : contents,
+            );
+          }
+          const store = {
+            ...fixture.authProfiles,
+            profiles: {
+              ...fixture.authProfiles.profiles,
+              "xai:default": fixture.legacyAuth.xai,
+              "anthropic:default": {
+                type: "oauth",
+                provider: "anthropic",
+                ...fixture.legacyOAuth.anthropic,
+              },
+            },
+          };
+          if (corruption === "credential") {
+            store.profiles["anthropic:default"].access = "changed-access";
+          }
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          try {
+            db.exec(`
+              CREATE TABLE config_machine_state (state_key PRIMARY KEY, value_json);
+              CREATE TABLE migration_sources (migration_kind, status, removed_source);
+            `);
+            const insert = db.prepare("INSERT INTO config_machine_state VALUES (?, ?)");
+            insert.run("authProfiles.store", JSON.stringify(store));
+            insert.run(
+              "authProfiles.state",
+              JSON.stringify(corruption === "state" ? {} : fixture.authState),
+            );
+            for (const _source of sources) {
+              db.prepare("INSERT INTO migration_sources VALUES (?, 'completed', 1)").run(
+                "auth-profile-json-to-sqlite-v2",
+              );
+            }
+          } finally {
+            db.close();
+          }
+        },
+        { scenario: "auth-profile-v2026-7-2-beta-5" },
+      );
+    expect(() => verify()).not.toThrow();
+    for (const corruption of ["credential", "state", "archive"] as const) {
+      expect(() => verify(corruption)).toThrow(/auth (?:profile|state|archive)/);
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rechecks migrated meeting state before materializing transcript exports",
+    () => {
+      expect(() =>
+        runSessionStateAssertion(
+          (stateDir) => {
+            writeMigratedSessionState(stateDir);
+            const archive = join(
+              stateDir,
+              "transcripts.migrated-fixture",
+              "2026-07-01",
+              "design-review",
+            );
+            mkdirSync(archive, { recursive: true });
+            writeFileSync(
+              join(archive, "transcript.jsonl"),
+              ["legacy-u-1", "legacy-u-2"].map((id) => JSON.stringify({ id })).join("\n") + "\n",
+            );
+            writeFileSync(join(archive, "summary.md"), "Shipped transcript summary\n");
+            mkdirSync(join(stateDir, "state"), { recursive: true });
+            const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+            try {
+              db.exec(`
+              CREATE TABLE meeting_transcript_sessions (session_id, started_at, next_utterance_seq);
+              INSERT INTO meeting_transcript_sessions VALUES ('design-review', '2026-07-01T10:00:00.000Z', 2);
+              CREATE TABLE meeting_transcript_utterances (session_id, sequence, utterance_id, text);
+              INSERT INTO meeting_transcript_utterances VALUES ('design-review', 0, 'legacy-u-1', 'First shipped transcript line');
+              INSERT INTO meeting_transcript_utterances VALUES ('design-review', 1, 'legacy-u-2', 'Second shipped transcript line');
+              CREATE TABLE migration_sources (migration_kind, status, removed_source, source_record_count);
+              INSERT INTO migration_sources VALUES ('meeting-transcripts-files-v1', 'archived', 1, 2);
+            `);
+            } finally {
+              db.close();
+            }
+            const binDir = join(stateDir, "bin");
+            mkdirSync(binDir);
+            writeFileSync(
+              join(binDir, "openclaw"),
+              `#!/usr/bin/env node
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+assert.deepEqual(process.argv.slice(2), ["transcripts", "path", "2026-07-01/design-review", "--dir"]);
+const root = process.env.OPENCLAW_STATE_DIR;
+const sessionDir = path.join(root, "transcripts", "2026-07-01", "design-review");
+fs.cpSync(path.join(root, "transcripts.migrated-fixture", "2026-07-01", "design-review"), sessionDir, { recursive: true });
+process.stdout.write(sessionDir + "\\n");
+`,
+              { mode: 0o755 },
+            );
+            return { PATH: `${binDir}${delimiter}${process.env.PATH}` };
+          },
+          {
+            scenario: "meeting-transcripts-sqlite",
+            commands: ["assert-state", "assert-state", "assert-meeting-transcript-export"],
+          },
+        ),
+      ).not.toThrow();
+    },
+  );
+
   it("lists the dependency-free scenario contract", () => {
     const scenarios = JSON.parse(
       execFileSync(process.execPath, [ASSERTIONS_PATH, "list-scenarios"], {
@@ -827,82 +1070,135 @@ describe("upgrade survivor assertions", () => {
   });
 
   it.each([
-    ["base", "stable", "beta"],
-    ["prerelease-plugin-registry", "beta", "stable"],
+    ["base", undefined, "stable", "beta"],
+    ["base", "beta", "beta", "stable"],
+    ["prerelease-plugin-registry", undefined, "beta", "stable"],
   ])(
-    "requires the %s scenario to preserve the %s update channel",
-    (scenario, expectedChannel, wrongChannel) => {
+    "requires the %s scenario with override %s to preserve the %s update channel",
+    (scenario, updateChannel, expectedChannel, wrongChannel) => {
       const run = (channel: string) =>
         assertConfig({
           acceptedIntents: ["update"],
           config: { update: { channel } },
           scenario,
+          updateChannel,
         });
       expect(() => run(expectedChannel)).not.toThrow();
       expect(() => run(wrongChannel)).toThrow(/update.channel/);
     },
   );
 
-  it("seeds recent ordered legacy session timestamps", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+  it.each(["base", "sqlite-volume"])(
+    "seeds recent ordered session timestamps for %s",
+    (scenario) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+      try {
+        const stateDir = join(root, "state");
+        const workspace = join(root, "workspace");
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(workspace, { recursive: true });
+
+        const beforeSeed = Date.now();
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+          },
+          stdio: "pipe",
+        });
+        const afterSeed = Date.now();
+
+        const sessionsDir = join(
+          stateDir,
+          scenario === "sqlite-volume" ? "agents/main/sessions" : "sessions",
+        );
+        const otherStore = join(
+          stateDir,
+          scenario === "sqlite-volume" ? "sessions" : "agents/main/sessions",
+          "sessions.json",
+        );
+        expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
+        const sessions = JSON.parse(
+          readFileSync(join(sessionsDir, "sessions.json"), "utf8"),
+        ) as Record<string, { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }>;
+        const keys =
+          scenario === "sqlite-volume"
+            ? ["agent:main:main", "agent:main:+15551234567", "agent:main:slack:channel:cupgrade"]
+            : ["main", "+15551234567", "slack:channel:CUPGRADE"];
+        expect(Object.keys(sessions)).toEqual(keys);
+        const seededRows = keys.map((key) => sessions[key]);
+        expect(seededRows.map((row) => row?.sessionId)).toEqual([
+          "upgrade-main-session",
+          "upgrade-direct-session",
+          "upgrade-group-session",
+        ]);
+
+        for (const row of seededRows) {
+          assert(row);
+          const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
+          expect(row.sessionFile).toBe(transcriptPath);
+          expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
+        }
+
+        const timestamps = seededRows.map((row) => row?.updatedAt);
+        for (const timestamp of timestamps) {
+          expect(typeof timestamp).toBe("number");
+        }
+        const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
+          number,
+          number,
+          number,
+        ];
+        expect(directUpdatedAt - mainUpdatedAt).toBe(100);
+        expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
+        expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
+        expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
+
+        const dayMs = 24 * 60 * 60 * 1000;
+        const thirtyDaysMs = 30 * dayMs;
+        for (const [timestamp, offset] of [
+          [mainUpdatedAt, 0],
+          [directUpdatedAt, 100],
+          [groupUpdatedAt, 200],
+        ] as const) {
+          expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
+          expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
+          expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
+          expect(timestamp).toBeLessThanOrEqual(afterSeed);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("requires every seeded legacy cron specimen before update", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
     try {
       const stateDir = join(root, "state");
       const workspace = join(root, "workspace");
-      mkdirSync(stateDir, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
-
-      const beforeSeed = Date.now();
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
-        },
-        stdio: "pipe",
-      });
-      const afterSeed = Date.now();
-
-      const sessions = JSON.parse(
-        readFileSync(join(stateDir, "sessions", "sessions.json"), "utf8"),
-      ) as Record<string, { sessionId?: unknown; updatedAt?: unknown }>;
-      const seededRows = [
-        sessions.main,
-        sessions["+15551234567"],
-        sessions["slack:channel:CUPGRADE"],
-      ];
-      expect(seededRows.map((row) => row?.sessionId)).toEqual([
-        "upgrade-main-session",
-        "upgrade-direct-session",
-        "upgrade-group-session",
-      ]);
-
-      const timestamps = seededRows.map((row) => row?.updatedAt);
-      for (const timestamp of timestamps) {
-        expect(typeof timestamp).toBe("number");
-      }
-      const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
-        number,
-        number,
-        number,
-      ];
-      expect(directUpdatedAt - mainUpdatedAt).toBe(100);
-      expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
-      expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
-      expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
-
-      const dayMs = 24 * 60 * 60 * 1000;
-      const thirtyDaysMs = 30 * dayMs;
-      for (const [timestamp, offset] of [
-        [mainUpdatedAt, 0],
-        [directUpdatedAt, 100],
-        [groupUpdatedAt, 200],
-      ] as const) {
-        expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
-        expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
-        expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
-        expect(timestamp).toBeLessThanOrEqual(afterSeed);
-      }
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "cron-scheduled-authority",
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
+      };
+      const run = (command: string) =>
+        spawnSync(process.execPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
+      const seeded = run("seed");
+      expect(seeded.status, seeded.stderr).toBe(0);
+      const cronStore = join(stateDir, "cron", "jobs.json");
+      const baseline = run("assert-state");
+      expect(baseline.status, baseline.stderr).toBe(0);
+      const store = JSON.parse(readFileSync(cronStore, "utf8"));
+      store.jobs.pop();
+      writeJson(cronStore, store);
+      const missingRow = run("assert-state");
+      expect(missingRow.status).not.toBe(0);
+      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

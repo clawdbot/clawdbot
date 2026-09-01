@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
   activateChatHeaderPanelAction,
@@ -17,7 +17,10 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-const artifactDirectory = path.resolve(".artifacts/mobile-desktop");
+let artifactDirectory: string;
+beforeEach(() => {
+  artifactDirectory = createControlUiE2eArtifactDir("mobile-desktop");
+});
 const gatewayEnvironment = {
   id: "gateway",
   type: "local",
@@ -160,7 +163,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await waitForControlUiGatewayReady(page);
         if (initialState !== "active") {
           await openChatSidePanelType(page, "Desktop");
@@ -221,7 +224,6 @@ suite.define(() => {
         expect(await popout.getAttribute("href")).toBe(
           `/focus/desktop/session/${encodeURIComponent(sessionKey)}`,
         );
-        await mkdir(artifactDirectory, { recursive: true });
         await page.screenshot({
           path: path.join(artifactDirectory, `chat-session-${initialState}-connected.png`),
         });
@@ -262,7 +264,6 @@ suite.define(() => {
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
 
-      await mkdir(artifactDirectory, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDirectory, "picker-390x844.png"),
         fullPage: false,
@@ -368,7 +369,6 @@ suite.define(() => {
         source: scenario.source,
         control: false,
       });
-      await mkdir(artifactDirectory, { recursive: true });
       await page.screenshot({
         path: path.join(
           artifactDirectory,
@@ -425,7 +425,6 @@ suite.define(() => {
         .waitFor();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-      await mkdir(artifactDirectory, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDirectory, "unknown-session-picker-390x844.png"),
         fullPage: false,
@@ -554,7 +553,6 @@ suite.define(() => {
       });
       await expect.poll(() => panel.getAttribute("data-last-keyboard-text")).toBe("m");
 
-      await mkdir(artifactDirectory, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDirectory, "connected-toolbar-390x844.png"),
         fullPage: false,

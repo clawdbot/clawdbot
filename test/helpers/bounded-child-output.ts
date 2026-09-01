@@ -35,7 +35,7 @@ export function createBoundedChildOutput(maxBytes = DEFAULT_CHILD_OUTPUT_TAIL_BY
   };
 
   return {
-    append(chunk: unknown): void {
+    append(this: void, chunk: unknown): void {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       if (buffer.byteLength >= limit) {
         chunks = [Buffer.from(buffer.subarray(buffer.byteLength - limit))];

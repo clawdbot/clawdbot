@@ -52,8 +52,8 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 - Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and get the design accepted. See the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
 - When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
-- Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
-- Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
+- Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
+- Do not edit `CHANGELOG.md` in normal PRs or at merge. Changelogs are generated at release time from merged PRs and commits; keep release-note context in PR bodies or commit messages until then.
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - For iterative local commits after running equivalent targeted validation for the touched surface, `git commit --no-verify` skips commit hooks.
 - For extension/plugin changes, run the fast local lane first:
@@ -128,18 +128,16 @@ build tooling to support standard decorators.
 
 ## AI/Vibe-Coded PRs Welcome! 🤖
 
-Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
+Built with Codex, Claude, or other AI tools? **Welcome!** No AI-assistance label or disclosure is required.
 
 Please include in your PR:
 
-- [ ] Mark as AI-assisted in the PR title or description
 - [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
-- [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
 - [ ] Run the `autoreview` skill when available and address accepted/actionable findings
 - [ ] Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) after Barnacle, ClawSweeper, or maintainer feedback
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+AI PRs are first-class citizens here and follow the same quality and review standards as any other PR.
 
 ## Current Focus & Roadmap 🗺
 

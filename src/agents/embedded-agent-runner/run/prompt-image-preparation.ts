@@ -1,11 +1,9 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
-import { readPersistedMediaFacts } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { readPersistedMediaImageLayout } from "./prompt-image-metadata.js";
 
 type PromptExecutionAttempt = Pick<
   RunEmbeddedAgentParams,
@@ -46,21 +44,14 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   }
 
   const { attempt } = input;
-  const persistedMessage =
-    attempt.userTurnTranscriptRecorder?.message ??
-    (await attempt.userTurnTranscriptRecorder?.resolveMessage());
-  const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
-
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
     existingImages: attempt.images,
     imageOrder: attempt.imageOrder,
-    media: persistedMedia.length > 0 ? persistedMedia : attempt.media,
-    mediaImageLayout: persistedMessage
-      ? readPersistedMediaImageLayout(persistedMessage)
-      : undefined,
+    media: attempt.media,
+    userTurnTranscriptRecorder: attempt.userTurnTranscriptRecorder,
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
     workspaceOnly: input.effectiveFsWorkspaceOnly,

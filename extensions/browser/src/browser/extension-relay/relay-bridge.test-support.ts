@@ -49,7 +49,7 @@ export function wireExtension(
   return { socket, handlers };
 }
 
-function replyFor(msg: RelayToExtensionMessage): ExtensionToRelayMessage | null {
+export function replyFor(msg: RelayToExtensionMessage): ExtensionToRelayMessage | null {
   switch (msg.type) {
     case "attach":
       return { type: "result", seq: msg.seq, result: { targetId: `target-${msg.tabId}` } };

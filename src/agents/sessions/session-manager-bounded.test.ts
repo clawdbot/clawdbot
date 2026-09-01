@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -12,7 +12,71 @@ import { runWithSessionTranscriptReadFence } from "../../config/sessions/session
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { SessionManager } from "./session-manager.js";
 
+const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomUUID: () =>
+      (uuidQueue.shift() ??
+        actual.randomUUID()) as `${string}-${string}-${string}-${string}-${string}`,
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  uuidQueue.length = 0;
+});
+
+it("keeps generated entry ids unique outside a bounded transcript tail", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-id-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-id-session",
+    sessionKey: "agent:main:bounded-id-session",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "deadbeef",
+    message: { role: "user", content: "omitted" },
+  });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "tail",
+    parentId: "deadbeef",
+    message: { role: "user", content: "retained" },
+  });
+
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  expect(manager.getEntry("deadbeef")).toBeUndefined();
+
+  const messageId = "deadbeef-0000-4000-8000-000000000000";
+  const thinkingId = "deadbeef-0000-4000-8000-000000000001";
+  uuidQueue.push(messageId);
+  const appended = manager.appendMessageWithTranscriptAnchor({
+    role: "user",
+    content: "persisted",
+    timestamp: 2,
+  });
+
+  expect(appended).toMatchObject({ entryId: messageId, anchor: { effectiveParentId: "tail" } });
+  uuidQueue.push(thinkingId);
+  expect(manager.appendThinkingLevelChange("high")).toBe(thinkingId);
+  await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: messageId, parentId: "tail" }),
+      expect.objectContaining({ id: thinkingId, parentId: messageId }),
+    ]),
+  );
+});
 
 it("excludes interleaved display payloads without inventing events or losing fenced append ancestry", async () => {
   const dir = tempDirs.make("openclaw-bounded-display-");

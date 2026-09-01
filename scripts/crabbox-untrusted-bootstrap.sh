@@ -2,7 +2,7 @@
 set -euo pipefail
 
 node_version="24.19.0"
-pnpm_spec="pnpm@12.0.0+sha512.9e2e3dc3911995868dc94b8175c217c27e95408fa03b4a22749778f2b34f773b77cdd3b39ede8171b22fcd53be6a35342e9fac9948a68ef58df6488ce89a7e67"
+pnpm_spec="pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2

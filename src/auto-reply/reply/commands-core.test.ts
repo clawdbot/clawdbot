@@ -268,6 +268,7 @@ function makeParams(): HandleCommandsParams {
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:target:main",
+    agentId: "target",
     sessionEntry: {
       sessionId: "wrapper-session",
       updatedAt: Date.now(),
@@ -334,6 +335,32 @@ describe("handleCommands send policy", () => {
         replyToCurrent: false,
       },
     });
+  });
+
+  it.each([
+    { sessionKey: "agent:target:main", expectedAgentId: "target" },
+    { sessionKey: "global", expectedAgentId: "caller" },
+  ])("dispatches $sessionKey with its selected owner", async ({ sessionKey, expectedAgentId }) => {
+    const { handleCommands } = await import("./commands-core.js");
+    const handler = vi.fn<CommandHandler>(async (params) => ({
+      shouldContinue: false,
+      reply: { text: params.agentId },
+    }));
+    loadCommandHandlersMock.mockReturnValue([handler]);
+    const params = makeParams();
+    params.cfg.agents = {
+      ownership: "explicit",
+      entries: { caller: {}, target: { agentDir: "/tmp/target-agent" } },
+    };
+    params.agentId = "caller";
+    params.agentDir = "/tmp/caller-agent";
+    params.sessionKey = sessionKey;
+
+    expect((await handleCommands(params)).reply?.text).toBe(expectedAgentId);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: `/tmp/${expectedAgentId}-agent` }),
+      true,
+    );
   });
 
   it.each([true, false])(

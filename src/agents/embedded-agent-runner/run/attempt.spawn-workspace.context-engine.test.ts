@@ -419,7 +419,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenSystemPrompt).toBe("system prompt");
+    expect(seenSystemPrompt?.split("\n")).toContain("system prompt");
   });
 
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {

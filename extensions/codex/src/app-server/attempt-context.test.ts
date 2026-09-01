@@ -10,6 +10,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
@@ -119,34 +120,36 @@ describe("Codex app-server attempt context", () => {
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-workspace-"));
-    const sandboxWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-sandbox-"));
-    const memorySummary = "Sandboxed turns need bounded memory fallback.";
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    await withTempDir("codex-memory-workspace-", async (workspaceDir) => {
+      await withTempDir("codex-memory-sandbox-", async (sandboxWorkspaceDir) => {
+        const memorySummary = "Sandboxed turns need bounded memory fallback.";
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
 
-    const context = await buildCodexWorkspaceBootstrapContext({
-      params: {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        config: {
-          agents: {
-            defaults: {
-              workspace: workspaceDir,
+        const context = await buildCodexWorkspaceBootstrapContext({
+          params: {
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+            config: {
+              agents: {
+                defaults: {
+                  workspace: workspaceDir,
+                },
+              },
             },
-          },
-        },
-      } as EmbeddedRunAttemptParams,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: sandboxWorkspaceDir,
-      sessionKey: "agent:main:session-1",
-      sessionAgentId: "main",
-      memoryToolNames: ["memory_search", "memory_get"],
-      ringZeroActive: false,
-    });
+          } as EmbeddedRunAttemptParams,
+          resolvedWorkspace: workspaceDir,
+          effectiveWorkspace: sandboxWorkspaceDir,
+          sessionKey: "agent:main:session-1",
+          sessionAgentId: "main",
+          memoryToolNames: ["memory_search", "memory_get"],
+          ringZeroActive: false,
+        });
 
-    expect(context.memoryReferenceFiles).toEqual([]);
-    expect(context.promptContext).toContain(memorySummary);
-    expect(context.memoryToolRouted).toBe(false);
+        expect(context.memoryReferenceFiles).toEqual([]);
+        expect(context.promptContext).toContain(memorySummary);
+        expect(context.memoryToolRouted).toBe(false);
+      });
+    });
   });
 
   it("passes agent context to Codex memory collaboration guidance", async () => {

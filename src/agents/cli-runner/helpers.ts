@@ -18,6 +18,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
@@ -276,15 +277,6 @@ function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: 
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
-function isFileNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT",
-  );
-}
-
 async function sweepCliImageRoot(imageRoot: string): Promise<void> {
   if (sweptCliImageRoots.has(imageRoot)) {
     return;
@@ -299,7 +291,7 @@ async function sweepCliImageRoot(imageRoot: string): Promise<void> {
       }
       const entryPath = path.join(imageRoot, entry.name);
       const stat = await fs.stat(entryPath).catch((error: unknown) => {
-        if (isFileNotFoundError(error)) {
+        if (hasErrnoCode(error, "ENOENT")) {
           return undefined;
         }
         throw error;
@@ -313,7 +305,7 @@ async function sweepCliImageRoot(imageRoot: string): Promise<void> {
       try {
         await fs.rm(entryPath, { force: true });
       } catch (error) {
-        if (!isFileNotFoundError(error)) {
+        if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
       }

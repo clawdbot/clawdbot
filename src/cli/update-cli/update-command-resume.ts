@@ -2,6 +2,9 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
+  POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
+  POST_CORE_UPDATE_RESULT_PATH_ENV,
+  POST_CORE_UPDATE_STARTED_AT_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -14,6 +17,7 @@ import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
   createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
+  persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
@@ -23,9 +27,6 @@ import {
 } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
-  POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
-  POST_CORE_UPDATE_RESULT_PATH_ENV,
-  POST_CORE_UPDATE_STARTED_AT_ENV,
   readPostCorePluginInstallRecordsFile,
   resolvePostCoreUpdateStartedAtMs,
   writePostCorePluginUpdateResultFile,
@@ -126,7 +127,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     });
   });
   // Fresh doctor acquires this same cross-process lease; completion must run after release.
-  const { pluginUpdate } = await completePostCorePluginUpdate({
+  const completed = await completePostCorePluginUpdate({
     root: params.root,
     pluginUpdate: initialPluginUpdate,
     freshDoctorRequired: initialPluginUpdate.changed,
@@ -134,6 +135,8 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     json: params.opts.json === true,
     timeoutMs: params.timeoutMs,
   });
+  const { pluginUpdate } = completed;
+  await persistValidatedDowngradeConfig(completed.configSnapshot);
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(
       process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],

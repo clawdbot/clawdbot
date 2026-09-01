@@ -7,11 +7,10 @@ read_when:
   - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
+doc-schema-version: 1
 ---
 
 A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
-
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
 macOS can also run in **node mode**: the menu bar app connects to the Gateway's
 WS server as one node (so `openclaw nodes …` works against this Mac). The app
@@ -366,13 +365,22 @@ By default, selecting a row opens the normal Chat pane and reads its persisted t
 through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
 
-The relay does not provide the full OpenClaw harness continuation and archive ownership contracts. **Continue** and **Archive** are therefore unavailable for remote rows. On the Gateway computer, stored and idle
-rows can start a distinct model-locked Chat branch. Either can be archived only
-after the operator confirms that no other Codex client is using it; a stored
-row's live activity remains unknown. Active rows cannot branch or archive.
+The terminal relay is separate from paired-node Chat continuation. A connected
+node that advertises and permits both catalog commands plus
+`codex.cli.session.resume` can continue a stored or idle interactive thread for
+an operator with `operator.admin`. The Chat mirrors bounded visible history;
+later messages run native Codex CLI resume against the exact thread on that
+node and return the final text, without a streaming App Server harness bridge.
+Nodes without the required commands remain readable without Chat continuation.
+Paired-node **Archive** is unavailable.
+
+On the Gateway computer, stored and idle rows can start a distinct model-locked
+Chat branch. Either can be archived only after the operator confirms that no
+other Codex client is using it; a stored row's live activity remains unknown.
+Active rows cannot branch or archive.
 
 See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
-pagination, local continuation, and the metadata security boundary.
+pagination, local and paired-node continuation, and the metadata security boundary.
 
 ### Claude sessions and transcripts
 
@@ -462,6 +470,10 @@ session hosting with the same node-local setting:
   },
 }
 ```
+
+<Warning>
+Only enable session hosting on a machine you trust as shared Gateway infrastructure. Hosting consent applies to the device, not to an individual person's ownership of it. Existing session authorization still controls who may dispatch work.
+</Warning>
 
 Restart the app or node host after enabling this setting. The macOS app owns
 one paired node identity and uses the shared node runtime for session hosting;

@@ -61,6 +61,7 @@ import {
   verifyCliCronMcpProbe,
 } from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -720,13 +721,32 @@ describeLive("gateway live (cli backend)", () => {
         } else if (CLI_RESUME) {
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
           let continuityOwner: Parameters<typeof getCliLiveSessionGeneration>[0] | undefined;
+          let expectedCliSessionId: string | undefined;
           let expectedLiveSessionGeneration: string | undefined;
           if (resumeContinuityProbe) {
             const nativeHistory = await activeClient.request<{
+              messages?: unknown[];
               sessionId?: string;
             }>("chat.history", { sessionKey });
+            // Imported history can be fully deduplicated against local rows; the persisted
+            // binding, not imported-message metadata, owns native session continuity.
+            const { entry: continuityEntry } = loadGatewaySessionEntryReadOnly(sessionKey);
+            expectedCliSessionId = continuityEntry?.cliSessionBindings?.[providerId]?.sessionId;
+            expect(expectedCliSessionId).toBeTruthy();
+            // Native imports must keep private runtime context out of the visible transcript,
+            // while preserving the operator's ordinary user message.
+            expect(JSON.stringify(nativeHistory.messages ?? [])).not.toContain(memoryToken);
+            expect(nativeHistory.messages).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  role: "user",
+                  content: resumeContinuityProbe.firstTurnPrompt,
+                }),
+              ]),
+            );
             const continuitySessionId = nativeHistory.sessionId;
             expect(continuitySessionId).toBeTruthy();
+            expect(continuityEntry?.sessionId).toBe(continuitySessionId);
             if (!continuitySessionId) {
               throw new Error("Claude CLI continuity probe could not resolve its OpenClaw session");
             }
@@ -800,6 +820,10 @@ describeLive("gateway live (cli backend)", () => {
             expect(getCliLiveSessionGeneration(continuityOwner)).toBe(
               expectedLiveSessionGeneration,
             );
+            expect(
+              loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.[providerId]
+                ?.sessionId,
+            ).toBe(expectedCliSessionId);
           } else {
             expect(
               matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),

@@ -92,8 +92,11 @@ vi.mock("./realtime-voice-provider.js", () => ({
   buildXaiRealtimeVoiceProvider: runtimeMocks.buildVoiceProvider,
 }));
 
-async function loadLazyProviders() {
-  return await import("./lazy-capability-providers.js");
+const lazyProvidersUrl = new URL("./lazy-capability-providers.ts", import.meta.url).href;
+let lazyProviderCase = 0;
+
+async function loadLazyProviders(): Promise<typeof import("./lazy-capability-providers.js")> {
+  return await import(`${lazyProvidersUrl}?testCase=${lazyProviderCase}`);
 }
 
 function createVoiceRequest(
@@ -109,7 +112,8 @@ function createVoiceRequest(
 }
 
 beforeEach(() => {
-  vi.resetModules();
+  // Refresh provider caches without reloading unchanged SDK dependencies.
+  lazyProviderCase += 1;
   for (const value of Object.values(runtimeMocks)) {
     value.mockReset();
   }
@@ -181,6 +185,7 @@ describe("xAI lazy capability providers", () => {
     const speech = lazy.createLazyXaiSpeechProvider();
     const transcription = lazy.createLazyXaiRealtimeTranscriptionProvider();
     const voice = lazy.createLazyXaiRealtimeVoiceProvider();
+    await vi.dynamicImportSettled();
 
     expect(
       [
@@ -227,10 +232,12 @@ describe("xAI lazy capability providers", () => {
     await session.connect();
 
     expect(runtimeMocks.buildTranscriptionProvider).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio)).toEqual([
-      second,
-      third,
-    ]);
+    const forwardedAudio = runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio);
+    expect(forwardedAudio).toHaveLength(2);
+    for (const [index, expected] of [second, third].entries()) {
+      const audio = forwardedAudio[index];
+      expect(Buffer.isBuffer(audio) && audio.equals(expected)).toBe(true);
+    }
     expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledOnce();
     expect(runtimeMocks.transcriptionConnect.mock.invocationCallOrder[0]).toBeLessThan(
       runtimeMocks.transcriptionSendAudio.mock.invocationCallOrder[0]!,

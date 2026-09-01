@@ -32,7 +32,7 @@ import {
   isAcpSessionKey,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiCanonicalMainSessionKey,
+  readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
@@ -232,6 +232,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
+      color: normalizeOptionalString(row.color),
       channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
       boardFace: row.boardFace,
       channel: channelInfo.channel,
@@ -519,7 +520,7 @@ export function resolveSidebarMainSessionKey(input: {
   // Global-scope gateways advertise the canonical main session as the
   // literal "global" key; a synthesized agent key would never match it.
   if (isUiGlobalScopeConfigured(host)) {
-    return resolveUiCanonicalMainSessionKey(host);
+    return normalizeOptionalString(readSessionDefaults(host)?.mainSessionKey) ?? "global";
   }
   return buildAgentMainSessionKey({
     agentId: input.agentId,

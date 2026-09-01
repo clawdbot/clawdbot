@@ -259,7 +259,9 @@ describe("Codex node exec-server", () => {
 
     const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { connected: true } }));
     const request = vi.fn();
-    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const { placement } = createManagedWorkspaceInvocation(
+      path.join(process.cwd(), "long-session-workspace-".repeat(20)),
+    );
     const context = {
       nodeId,
       command: CODEX_NODE_EXEC_SERVER_COMMAND,
@@ -270,12 +272,37 @@ describe("Codex node exec-server", () => {
       invokeNode,
     } satisfies OpenClawPluginNodeInvokePolicyContext;
 
-    for (const decision of ["deny", "allow-always", null] as const) {
+    for (const { decision, result } of [
+      {
+        decision: "deny",
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
+          message:
+            "Codex node execution was denied. Retry the action and choose Allow once to continue.",
+        },
+      },
+      {
+        decision: "allow-always",
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_INVALID",
+          message:
+            "Codex node execution cannot use permanent approval. Retry the action and choose Allow once.",
+        },
+      },
+      {
+        decision: null,
+        result: {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+          message:
+            "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+        },
+      },
+    ] as const) {
       request.mockResolvedValueOnce({ decision });
-      await expect(policy.handle(context)).resolves.toMatchObject({
-        ok: false,
-        code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-      });
+      await expect(policy.handle(context)).resolves.toEqual(result);
       expect(invokeNode).not.toHaveBeenCalled();
     }
     await expect(policy.handle({ ...context, approvals: undefined })).resolves.toMatchObject({
@@ -320,8 +347,9 @@ describe("Codex node exec-server", () => {
         allowedDecisions: ["allow-once"],
       }),
     );
-    expect(request.mock.lastCall?.[0].description).toContain(
-      "arbitrary processes and filesystem access across the node account",
+    // Gateway approval descriptions are bounded to 256 characters.
+    expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
+      "arbitrary processes and filesystem access across the node account, not only this workspace",
     );
   });
 

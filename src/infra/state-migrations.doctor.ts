@@ -198,6 +198,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "cron jobs and subagent runs → canonical JSON storage";
     case "creator-namespace-v14":
       return "historical cron creators → unknown source attribution";
+    case "conversation-binding-targets-v15":
+      return "conversation bindings → exact target keys without agent/session projections";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":
@@ -1202,7 +1204,7 @@ export async function autoMigrateLegacyState(params: {
       : { changes: [], warnings: [] };
   const transcriptDirectives =
     mediaPersistence.warnings.length === 0
-      ? migrateHistoricalTranscriptDirectives(agentMigrationOptions)
+      ? await migrateHistoricalTranscriptDirectives(agentMigrationOptions)
       : { changes: [], warnings: [] };
   if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
     return {

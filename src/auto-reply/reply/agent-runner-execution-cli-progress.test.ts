@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createCliJsonlStreamingParser } from "../../agents/cli-output-stream.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
@@ -282,6 +283,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
+    const toolStarted = createDeferred();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -297,6 +299,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         },
         onToolStart: () => {
           callbackOrder.push("tool");
+          toolStarted.resolve();
         },
       },
       typingSignals,
@@ -313,11 +316,13 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
+    onTestFinished(async () => {
+      releaseTyping?.();
+      await runPromise;
+    });
 
     try {
-      await vi.waitFor(() => {
-        expect(callbackOrder).toContain("tool");
-      });
+      await Promise.race([toolStarted.promise, runPromise]);
       expect(callbackOrder).toEqual([
         "partial:answer before tool",
         "partial:answer before tool 2",
@@ -374,6 +379,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
+    const partialReplyStarted = createDeferred();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -386,6 +392,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         preserveProgressCallbackStartOrder: true,
         onPartialReply: (payload) => {
           callbackOrder.push(`partial:${payload.text}`);
+          partialReplyStarted.resolve();
         },
         onToolStart: (payload) => {
           callbackOrder.push(`tool:${payload.phase}`);
@@ -405,11 +412,13 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
+    onTestFinished(async () => {
+      releaseTyping?.();
+      await runPromise;
+    });
 
     try {
-      await vi.waitFor(() => {
-        expect(callbackOrder).toContain("partial:answer after tool");
-      });
+      await Promise.race([partialReplyStarted.promise, runPromise]);
       expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
     } finally {
       releaseTyping?.();

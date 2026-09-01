@@ -25,25 +25,13 @@ export function createTabDocumentProvenance({ access }) {
     document?.navigation.cancel();
   }
 
-  function commitTabDocument(tabId, url) {
-    const document = documents.get(tabId);
-    if (!document || url === "about:blank") {
-      return;
-    }
-    if (document.navigation.confirmed) {
-      documents.delete(tabId);
-    } else {
-      access.invalidateTab(tabId);
-    }
-  }
-
   function observeTab(tab) {
     const document = documents.get(tab?.id);
     if (!document) {
       return;
     }
-    if (tab.url && document.navigation.confirmed) {
-      commitTabDocument(tab.id, tab.url);
+    if (tab.url && tab.url !== "about:blank" && document.navigation.confirmed) {
+      documents.delete(tab.id);
     }
     if (
       !document.isCurrent() ||
@@ -139,7 +127,7 @@ export function createTabDocumentProvenance({ access }) {
         event.params.frame.id === document.navigation.frameId &&
         frameUrl !== "about:blank"
       ) {
-        commitTabDocument(event.tabId, frameUrl);
+        documents.delete(event.tabId);
       } else {
         try {
           document.navigation.observe(event, send);
@@ -148,8 +136,6 @@ export function createTabDocumentProvenance({ access }) {
         }
         return;
       }
-    } else if (root) {
-      commitTabDocument(event.tabId, frameUrl);
     }
     send(event);
   }
@@ -228,18 +214,13 @@ function createDocumentNavigation({ frameId, isCurrent, revoke }) {
           fail();
           return;
         }
-        if (state.kind === "blank") {
-          if (state.loaderId !== frame.loaderId) {
-            fail();
-            return;
-          }
-        } else if (state.kind === "pending") {
+        if (state.kind === "pending") {
           if (state.commit && state.commit !== frame.loaderId) {
             fail();
             return;
           }
           state.commit = frame.loaderId;
-        } else if (state.kind === "responded" && state.loaderId !== frame.loaderId) {
+        } else if (state.loaderId !== frame.loaderId) {
           fail();
           return;
         }

@@ -1,21 +1,21 @@
 /** Holds active secrets runtime snapshots, refresh context, and cleanup hooks. */
 import { isDeepStrictEqual } from "node:util";
 import { AuthProfileMigrationRequiredError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import {
+  getRuntimeAuthProfileStoreCredentialMutationToken,
+  getRuntimeAuthProfileStoreProfileSetMutationToken,
+  getRuntimeAuthProfileStoreStateMutationToken,
+  type RuntimeAuthProfileStoreMutationOwner,
+  type RuntimeAuthProfileStoreMutationToken,
+} from "../agents/auth-profiles/mutation-lineage.js";
 import { loadRuntimeAuthProfileOwnerSnapshot } from "../agents/auth-profiles/runtime-snapshot-owner.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreProfileSetMutationToken,
-  getRuntimeAuthProfileStoreStateMutationToken,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import type {
-  OwnedRuntimeAuthProfileStoreSnapshotEntry,
-  RuntimeAuthProfileStoreMutationOwner,
-  RuntimeAuthProfileStoreMutationToken,
-} from "../agents/auth-profiles/runtime-snapshots.js";
+import type { OwnedRuntimeAuthProfileStoreSnapshotEntry } from "../agents/auth-profiles/runtime-snapshots.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
@@ -94,13 +94,14 @@ function listLocatedSecretRefs(
   return refs;
 }
 
-/** Canonical store SecretRef keys in config that resolve one team entry name. */
-export function collectSecretStoreRefKeysInConfig(
-  config: OpenClawConfig,
+/** Canonical store refs across config and auth profiles for one mutated team entry. */
+export function collectSecretStoreRefKeysInSnapshot(
+  snapshot: Pick<PreparedSecretsRuntimeSnapshot, "sourceConfig" | "authStores">,
   name: string,
 ): Set<string> {
+  const sources = [snapshot.sourceConfig, ...snapshot.authStores.map(({ store }) => store)];
   return new Set(
-    listLocatedSecretRefs(config, config.secrets?.defaults).flatMap(({ ref }) =>
+    listLocatedSecretRefs(sources, snapshot.sourceConfig.secrets?.defaults).flatMap(({ ref }) =>
       ref.source === "store" && ref.id === name ? [secretRefKey(ref)] : [],
     ),
   );
@@ -1217,16 +1218,19 @@ export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
 // Hot-path readers only need the config pair for availability decisions.
 // Return the active references and keep full snapshot clone isolation on
 // getActiveSecretsRuntimeSnapshot() for callers that need mutable data.
-export function getActiveSecretsRuntimeConfigSnapshot(): Pick<
-  PreparedSecretsRuntimeSnapshot,
-  "config" | "sourceConfig"
-> | null {
+export function getActiveSecretsRuntimeConfigSnapshot():
+  | (Pick<PreparedSecretsRuntimeSnapshot, "config" | "sourceConfig"> & {
+      configRefsPrepared: boolean;
+    })
+  | null {
   if (!activeSnapshot) {
     return null;
   }
   return {
     config: activeSnapshot.config,
     sourceConfig: activeSnapshot.sourceConfig,
+    // Auth-only snapshots carry config bytes, but never classified their SecretRef owners.
+    configRefsPrepared: activeRefreshContext?.includeConfigRefs === true,
   };
 }
 

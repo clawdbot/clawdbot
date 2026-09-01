@@ -503,7 +503,11 @@ export function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] 
           succeeded: false,
         });
       }
-    } else if (deliveryMirrorText === undefined && isRenderableAssistantDisplayMessage(record)) {
+    } else if (
+      pending.length > 0 &&
+      deliveryMirrorText === undefined &&
+      isRenderableAssistantDisplayMessage(record)
+    ) {
       clearPending();
     }
 

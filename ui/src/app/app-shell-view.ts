@@ -9,7 +9,6 @@ import type {
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
@@ -50,13 +49,18 @@ import {
   renderFloatingUpdateCard,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
+import {
+  isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
   normalizeCatalogOpenTarget,
   normalizeChatSendShortcut,
 } from "./settings.ts";
+import { renderCollapsedAssistantToggles } from "./shell-assistant-toggles.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
@@ -125,63 +129,35 @@ function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupPr
   if (renderer) {
     return renderer(props);
   }
-  if (host.devicePairSetupLoadFailed) {
-    return renderDevicePairSetupLoadFailure(host, props);
+  const failed = host.devicePairSetupLoadFailed;
+  if (!failed) {
+    host.loadDevicePairSetupRenderer();
   }
-  host.loadDevicePairSetupRenderer();
-  return renderDevicePairSetupLoading(props);
-}
-
-function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  // Loading and failure share the eager modal; a failed chunk remains dismissible and retryable.
   const title = t("devices.pairing.title");
-  const message = t("common.loading");
+  const message = t(failed ? "devices.pairing.loadFailed" : "common.loading");
   return html`<openclaw-modal-dialog
     label=${title}
     description=${message}
     @modal-cancel=${props.onClose}
   >
-    <section class="device-pair-setup" aria-busy="true">
+    <section class="device-pair-setup" aria-busy=${failed ? nothing : "true"}>
       <header class="device-pair-setup__header">
         <div>
           <h2>${title}</h2>
-          <p role="status">${message}</p>
+          <p role=${failed ? nothing : "status"}>${message}</p>
         </div>
       </header>
       <footer class="device-pair-setup__footer">
-        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
-          ${t("common.close")}
-        </button>
-      </footer>
-    </section>
-  </openclaw-modal-dialog>`;
-}
-
-// The pairing chunk failed to load while its overlay is open. Reuse the eager
-// modal chrome so the operator still gets a dialog, a reason, and a retry
-// instead of a silently empty surface.
-function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
-  const title = t("devices.pairing.title");
-  const message = t("devices.pairing.loadFailed");
-  return html`<openclaw-modal-dialog
-    label=${title}
-    description=${message}
-    @modal-cancel=${props.onClose}
-  >
-    <section class="device-pair-setup">
-      <header class="device-pair-setup__header">
-        <div>
-          <h2>${title}</h2>
-          <p>${message}</p>
-        </div>
-      </header>
-      <footer class="device-pair-setup__footer">
-        <button
-          class="btn btn--primary"
-          type="button"
-          @click=${() => host.retryDevicePairSetupRenderer()}
-        >
-          ${t("common.retry")}
-        </button>
+        ${failed
+          ? html`<button
+              class="btn btn--primary"
+              type="button"
+              @click=${() => host.retryDevicePairSetupRenderer()}
+            >
+              ${t("common.retry")}
+            </button>`
+          : nothing}
         <button class="btn btn--ghost" type="button" @click=${props.onClose}>
           ${t("common.close")}
         </button>
@@ -209,24 +185,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const canHoldUpdate =
     canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
-  const outboxStoreRuntime = host.outboxStoreRuntime;
-  const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
-  const outboxAttentionCountForSession = outboxStoreRuntime
-    ? (sessionKey: string) => {
-        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
-        return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
-      }
-    : () => 0;
-  const hasSessionDraft = outboxStoreRuntime
-    ? (sessionKey: string) => {
-        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedOutboxes?.draftScopes.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ===
-          true
-        );
-      }
-    : EMPTY_SESSION_HAS_DRAFT;
+  const storedOutboxes = host.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost);
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   // The install keeps running after `update.run` answers, so the reconciliation
@@ -236,6 +195,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+  const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
@@ -334,7 +294,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
-  const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
@@ -349,8 +308,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       restartPending: gatewaySnapshot.restartPending === true,
       queuedOutboxCount: storedOutboxes?.total ?? 0,
       lastError: gatewaySnapshot.lastError,
-      outboxAttentionCountForSession,
-      hasSessionDraft,
+      outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
+      hasSessionDraft: storedOutboxes?.hasSessionDraft ?? EMPTY_SESSION_HAS_DRAFT,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
@@ -544,18 +503,11 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
-              ${navCollapsed && custodianPanelAvailable
-                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
-                      aria-label=${t("nav.askOpenClaw")}
-                      @click=${() =>
-                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-                    >
-                      ${icons.lobster}
-                    </button>
-                  </openclaw-tooltip>`
+              ${navCollapsed
+                ? renderCollapsedAssistantToggles({
+                    homeAvailable: homePanelAvailable,
+                    custodianAvailable: custodianPanelAvailable,
+                  })
                 : nothing}
             </div>
           `
@@ -596,7 +548,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <main
         id="control-ui-main"
-        class="content ${chatLikeRoute ? "content--chat" : ""} ${custodianRoute
+        class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "custodian"
           ? "content--custodian"
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
@@ -682,12 +634,16 @@ export function renderApplicationShell(host: ShellViewHost) {
               .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
-      <openclaw-custodian-panel
+      <openclaw-assistant-panel
         ?inert=${navDrawerOpen}
-        .available=${custodianPanelAvailable}
-        .suppressed=${activeRoute === "custodian"}
+        .custodianAvailable=${custodianPanelAvailable}
+        .homeAvailable=${homePanelAvailable}
+        .custodianSuppressed=${activeRoute === "custodian"}
+        .pageSessionKey=${host.activeSessionKey}
+        .pageAgentId=${selectedAgentId}
+        .pageRouteId=${activeRoute}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
-      ></openclaw-custodian-panel>
+      ></openclaw-assistant-panel>
       ${isOptionalElementDefined(host.execApprovalElement)
         ? html`<openclaw-exec-approval
             .props=${{

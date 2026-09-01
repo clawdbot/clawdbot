@@ -44,6 +44,7 @@ ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
 DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$HARNESS_ROOT_DIR/scripts/lib/upgrade-survivor-diagnostics.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
@@ -94,8 +95,12 @@ case "$LIVE_OPENAI" in
     ;;
 esac
 
-if [ "$SCENARIO" = "sqlite-volume" ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
-  echo "sqlite-volume requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+  echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+  exit 1
+fi
+if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+  echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
 
@@ -126,28 +131,6 @@ resolve_lane_artifact_suffix() {
 LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
-prepare_diagnostics_capture() {
-  # A previous attempt must never be published as this container's failure.
-  if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] ||
-    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json"; then
-    echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
-    return 0
-  fi
-  diagnostics_ready=1
-}
-publish_diagnostics() {
-  # This directory is host-owned and is never mounted into the candidate.
-  local log_root="${OPENCLAW_DOCKER_ALL_LOG_DIR:-$ROOT_DIR/.artifacts/docker-tests}"
-  local diagnostic_dir
-  local private_root
-  private_root="$(cd "$ARTIFACT_DIR" && pwd)" || return
-  mkdir -p "$log_root" || return
-  log_root="$(cd "$log_root" && pwd)" || return
-  diagnostic_dir="$(mktemp -d "$log_root/upgrade-survivor-$LANE_ARTIFACT_SUFFIX.XXXXXX")" || return
-  (cd "$HARNESS_ROOT_DIR" && node --import "$HARNESS_ROOT_DIR/scripts/tsx.mjs" \
-    "$HARNESS_ROOT_DIR/scripts/upgrade-survivor-diagnostics.mjs" \
-    publish "$private_root" "$diagnostic_dir")
-}
 DOCKER_RUN_USER_ARGS=()
 OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 PROBE_ENV_ARGS=(
@@ -276,7 +259,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS:-}" \
-    -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS:-120}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS:-60}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK="${OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS="$ROOT_MANAGED_VPS" \

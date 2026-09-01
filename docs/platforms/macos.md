@@ -36,8 +36,9 @@ has no macOS app asset, use the newest one that does, or build from source with
 
 1. Install and launch **OpenClaw.app**.
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
-3. Wait while the app installs the matching CLI runtime. In local mode it also
-   installs and starts the Gateway.
+3. For a new local Gateway, wait while the app installs its external CLI runtime
+   and starts the Gateway. Connecting to a remote or independently managed local
+   Gateway does not require installing a CLI on this Mac.
 4. Establish inference with a live model check. If the app reused a login you
    did not want, **Choose a different AI** on the success banner reopens the
    picker, including the API-key option.
@@ -77,9 +78,10 @@ downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 After a successful update, the app finds the most recently human-used,
 top-level direct session and gives that agent a one-time update event. Heartbeat
 and cron activity do not affect this choice. The agent can then welcome you back
-from the conversation you were most likely using. In remote mode, the app
-updates only the local Mac node runtime and skips the notification when the
-remote Gateway is older than the app.
+from the conversation you were most likely using. In remote mode, a separately
+installed, app-managed node service retains its own runtime update and recovery
+flow; the app skips the notification when the remote Gateway is older than the
+app. The app's private node worker updates with the app bundle itself.
 
 Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
 to beta app builds; `extended-stable` accepts only extended-stable app releases,
@@ -115,10 +117,11 @@ While enabled, the app supervises the [`openclaw browser cookie-sync --watch`](/
 | Local  | This Mac should run the Gateway and keep it alive with launchd.                | [Gateway on macOS](/platforms/mac/bundled-gateway) |
 | Remote | Another host runs the Gateway; this Mac controls it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-Both modes need an installed `openclaw` CLI because the app reuses its node-host
-runtime. On a fresh Mac, the app installs the matching CLI automatically; local
-mode then starts the Gateway wizard, while remote mode connects to the selected
-Gateway without starting a second local Gateway.
+The app's Mac node uses its bundled private runtime in both modes. Only setup
+and management of an app-owned local Gateway require the separate CLI install.
+Remote mode and attachment to an independently managed local Gateway skip that
+installation. Optional cookie sync still requires an external CLI on this Mac,
+and an existing separate node service keeps its own CLI lifecycle.
 See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns

@@ -161,7 +161,7 @@ function startThreadWithHarness(
   const paths = overrides?.paths ?? createAttemptPaths();
   const startSpy = overrides?.skipStartSpy
     ? undefined
-    : vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    : vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
   const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
 
   const run = startCodexAttemptThread({
@@ -383,8 +383,8 @@ describe("startCodexAttemptThread", () => {
     };
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(first.client)
-      .mockReturnValueOnce(second.client);
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(second.client);
     const paths = createAttemptPaths();
     let persistedComputerUse = false;
     const { run } = startThreadWithHarness(10_000, new AbortController().signal, {
@@ -455,8 +455,8 @@ describe("startCodexAttemptThread", () => {
       const second = createClientHarness();
       const startSpy = vi
         .spyOn(CodexAppServerClient, "start")
-        .mockReturnValueOnce(first.client)
-        .mockReturnValueOnce(second.client);
+        .mockResolvedValueOnce(first.client)
+        .mockResolvedValueOnce(second.client);
       desktopGeneration.current = { epoch: 1, fingerprint: "desktop-x" };
       if (changeStage === "Computer Use readiness") {
         computerUseReadinessFailure.next = Object.assign(new Error("desktop selection changed"), {
@@ -511,7 +511,7 @@ describe("startCodexAttemptThread", () => {
 
   it("retires the startup generation when context restart sees a new executable owner", async () => {
     const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
     const paths = createAttemptPaths();
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
@@ -547,8 +547,8 @@ describe("startCodexAttemptThread", () => {
     const replacement = createClientHarness();
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(retained.client)
-      .mockReturnValueOnce(replacement.client);
+      .mockResolvedValueOnce(retained.client)
+      .mockResolvedValueOnce(replacement.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const paths = createAttemptPaths();
 
@@ -610,7 +610,7 @@ describe("startCodexAttemptThread", () => {
 
   it("closes indeterminate thread startup even when another lease shares the app-server", async () => {
     const retained = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(retained.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(retained.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const paths = createAttemptPaths();
 
@@ -798,7 +798,7 @@ describe("startCodexAttemptThread", () => {
     const clients = [createClientHarness(), createClientHarness(), createClientHarness()];
     const start = vi.spyOn(CodexAppServerClient, "start");
     for (const harness of clients) {
-      start.mockReturnValueOnce(harness.client);
+      start.mockResolvedValueOnce(harness.client);
     }
     const environmentIds = new Set<string>();
 
@@ -831,7 +831,7 @@ describe("startCodexAttemptThread", () => {
     const runtime = createPairedAttemptRuntime();
     const firstPaths = createAttemptPaths();
     const secondPaths = createAttemptPaths();
-    const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation((options) => {
+    const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation(async (options) => {
       const codexHome = options?.env?.CODEX_HOME;
       if (codexHome?.startsWith(`${firstPaths.agentDir}${path.sep}`)) {
         return first.client;

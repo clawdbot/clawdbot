@@ -49,6 +49,7 @@ describe("canonical declaration stage", () => {
         staging,
         dist,
         ["plugin-sdk/core.d.ts"],
+        ["plugin-sdk/obsolete.d.ts"],
       ),
     ).rejects.toThrow("Incomplete declaration closure");
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
@@ -71,6 +72,7 @@ describe("canonical declaration stage", () => {
         staging,
         dist,
         ["plugin-sdk/core.d.ts"],
+        ["plugin-sdk/obsolete.d.ts"],
       ),
     ).rejects.toThrow("Incomplete declaration closure");
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
@@ -93,6 +95,7 @@ describe("canonical declaration stage", () => {
       staging,
       dist,
       ["plugin-sdk/core.d.ts"],
+      ["plugin-sdk/obsolete.d.ts"],
     );
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/core.d.ts"), "utf8")).toBe(
       files["plugin-sdk/core.d.ts"],
@@ -120,6 +123,7 @@ describe("canonical declaration stage", () => {
           staging,
           dist,
           [],
+          ["plugin-sdk/obsolete.d.ts"],
         ),
       ).rejects.toMatchObject({ exitCode: 124 });
       expect(fs.existsSync(path.join(staging, "ready"))).toBe(true);
@@ -147,10 +151,13 @@ describe("canonical declaration stage", () => {
       };
       const before = fs.readdirSync(dist, { recursive: true }).map(String).toSorted();
       await expect(
-        publishStagedDeclarations(plan, staging, dist, [
-          "plugin-sdk/public.d.ts",
-          "plugin-sdk/private.d.ts",
-        ]),
+        publishStagedDeclarations(
+          plan,
+          staging,
+          dist,
+          ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
+          ["plugin-sdk/obsolete.d.ts"],
+        ),
       ).rejects.toThrow();
       expect(fs.readdirSync(dist, { recursive: true }).map(String).toSorted()).toEqual(before);
       expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
@@ -192,10 +199,13 @@ describe("canonical declaration stage", () => {
       rename(source, target);
     });
     try {
-      await publishStagedDeclarations(plan, staging, dist, [
-        "plugin-sdk/public.d.ts",
-        "plugin-sdk/private.d.ts",
-      ]);
+      await publishStagedDeclarations(
+        plan,
+        staging,
+        dist,
+        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
+        ["plugin-sdk/obsolete.d.ts"],
+      );
     } finally {
       publication.mockRestore();
     }
@@ -216,6 +226,7 @@ describe("canonical declaration stage", () => {
       staging,
       dist,
       ["plugin-sdk/public.d.ts"],
+      ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
     );
     expect(fs.existsSync(path.join(dist, "plugin-sdk/private.d.ts"))).toBe(false);
     expect(fs.statSync(path.join(dist, "plugin-sdk/public.d.ts")).mtimeMs).toBe(unchanged);

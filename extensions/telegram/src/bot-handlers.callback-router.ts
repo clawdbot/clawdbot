@@ -582,13 +582,13 @@ async function handleTelegramModelCallback(params: {
       totalPages,
       modelNames,
     });
-    const text = formatModelsAvailableHeader({
+    const text = `${formatModelsAvailableHeader({
       provider,
       total: models.length,
       cfg: runtimeCfg,
       agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
       sessionEntry: sessionState.sessionEntry,
-    });
+    })}\nSelecting a model also applies its configured runtime.`;
     await retryModelAction(() => editMessageWithButtons(text, buttons));
     return true;
   }
@@ -666,7 +666,7 @@ async function handleTelegramModelCallback(params: {
           provider: selection.provider,
           model: selection.model,
           isDefault: isDefaultSelection,
-          runtime: { kind: "unchanged" },
+          runtime: { kind: "clear" },
         },
         markLiveSwitchPending: true,
       }),
@@ -687,13 +687,10 @@ async function handleTelegramModelCallback(params: {
     const actionText = isDefaultSelection
       ? "reset to default"
       : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
-    const runtimeText =
-      applied.runtimeChange?.kind === "clear"
-        ? "Runtime reset to configured policy."
-        : "Runtime unchanged.";
+    const runtimeText = `Runtime set to <b>${escapeHtml(applied.agentRuntime)}</b> from configured policy.`;
     const scopeText = isDefaultSelection
       ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
-      : `Session-only model selection. ${runtimeText} Use /model ${escapeHtml(selection.provider)}/${escapeHtml(selection.model)} --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
+      : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
     await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
       parse_mode: "HTML",
     });

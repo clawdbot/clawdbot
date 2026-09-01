@@ -44,12 +44,11 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-code-mode-gateway-live
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-code-mode-gateway-live empty)"
 OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+  openclaw_prepublish_plugin_registry_configure_docker_args "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
 fi
 
-# The profile is only a credential source. Keep this lane's OpenClaw runtime
-# isolated from host/testbox mode flags that can change packaged behavior.
+# Pass only the selected provider's credentials into the container; importing
+# the whole profile there also enables unrelated providers during startup.
 unset OPENCLAW_TESTBOX
 
 echo "Running live Docker Gateway code-mode MCP API-file smoke..."
@@ -77,51 +76,7 @@ docker_e2e_run_with_harness \
   -e "OPENCLAW_MCP_CODE_MODE_MODEL=${OPENCLAW_MCP_CODE_MODE_LIVE_MODEL:-openclaw/main}" \
   "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "$IMAGE_NAME" \
-  bash -lc "set -euo pipefail
-    source scripts/lib/openclaw-e2e-instance.sh
-    source scripts/e2e/lib/prepublish-plugin-registry.sh
-    unset OPENCLAW_TESTBOX
-    if [ -z \"\${OPENAI_API_KEY:-}\" ]; then
-      echo \"ERROR: OPENAI_API_KEY was not available inside the container.\" >&2
-      exit 1
-    fi
-    openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
-    entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
-    gateway_pid=
-    plugin_registry_pid=
-    cleanup_inner() {
-      openclaw_e2e_stop_process \"\${gateway_pid:-}\"
-      openclaw_e2e_stop_process \"\${plugin_registry_pid:-}\"
-    }
-    dump_logs_on_error() {
-      status=\$?
-      if [ \"\$status\" -ne 0 ]; then
-        openclaw_e2e_dump_logs \
-          /tmp/mcp-code-mode-live-gateway.log \
-          /tmp/mcp-code-mode-live-plugin-install.log \
-          /tmp/mcp-code-mode-live-seed.log
-        if [ -d \"\${OPENCLAW_STATE_DIR:-}/agents/main/sessions\" ]; then
-          echo \"--- session MCP/code-mode excerpts ---\" >&2
-          grep -R -n -E 'API\\.|MCP\\.fixture|fixture__lookup_note|Unknown API file|\"telemetry\"|\"sources\"' \
-            \"\$OPENCLAW_STATE_DIR/agents/main/sessions\" >&2 || true
-        fi
-      fi
-      cleanup_inner
-      exit \"\$status\"
-    }
-    trap cleanup_inner EXIT
-    trap dump_logs_on_error ERR
-    openclaw_prepublish_plugin_registry_start_mounted \
-      /tmp/openclaw-mcp-code-mode-live-registry plugin_registry_pid '[\"@openclaw/codex\"]'
-    openclaw_e2e_enable_openclaw_cli_timeout
-    openclaw_e2e_fixture_plugin_command openclaw -- plugins install \
-      \"npm:@openclaw/codex\${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:+@\$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION}\" \
-      --force >/tmp/mcp-code-mode-live-plugin-install.log 2>&1
-    tsx scripts/e2e/mcp-code-mode-gateway-seed.ts >/tmp/mcp-code-mode-live-seed.log
-    gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-code-mode-live-gateway.log)\"
-    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-code-mode-live-gateway.log 480 $PORT
-    tsx scripts/e2e/mcp-code-mode-gateway-client.ts
-  " >"$CLIENT_LOG" 2>&1
+  bash scripts/e2e/lib/mcp-code-mode/scenario.sh live "$PORT" >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e
 

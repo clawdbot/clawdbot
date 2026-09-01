@@ -6,12 +6,7 @@ import {
 } from "./candidate-install-owner.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import {
-  getReusableCachedPluginRegistry,
-  isPluginRegistryCacheEnabled,
-  pluginLoaderCacheState,
-  setCachedPluginRegistry,
-} from "./loader-cache.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import {
   resolvePluginLoadCacheContext,
@@ -33,6 +28,7 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -102,7 +98,7 @@ function loadOpenClawPluginsInternal(
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
   const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry(context.cacheKey);
+    const cached = pluginLoaderCacheState.get(context.cacheKey);
     if (cached) {
       maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
@@ -296,7 +292,7 @@ function loadOpenClawPluginsInternal(
     // Publish only complete registries: failed activation restores the prior runtime selection,
     // then the catch below can discard this builder without poisoning a reusable cache value.
     if (cacheEnabled) {
-      setCachedPluginRegistry(context.cacheKey, registry);
+      pluginLoaderCacheState.set(context.cacheKey, registry);
     }
     return registry;
   } catch (error) {

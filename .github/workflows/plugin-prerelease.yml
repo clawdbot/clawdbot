@@ -15,6 +15,11 @@ on:
         required: false
         default: ""
         type: string
+      target_context_ref:
+        description: Canonical release context for an exact-SHA frozen-target validation
+        required: false
+        default: ""
+        type: string
       full_release_validation:
         description: Enable release-only Docker prerelease lanes from Full Release Validation
         required: false
@@ -539,6 +544,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.preflight.outputs.node_test_exclude_patterns_json }}
+          OPENCLAW_RELEASE_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
