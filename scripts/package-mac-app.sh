@@ -149,18 +149,22 @@ helper_build_path_for_arch() {
 }
 
 helper_bin_for_arch() {
-  echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
+  local products
+  products="$(build_mlx_tts_helper "$1" --show-bin-path)" || return
+  echo "$products/$MLX_TTS_HELPER_PRODUCT"
 }
 
 build_mlx_tts_helper() {
   local arch="$1"
-  # Native SwiftPM omits Metal shaders; select Swift Build even on Swift 6.3.
+  shift
+  # Swift 6.3 needs Swift Build for Metal and --show-bin-path for its output directory.
   swift build --build-system swiftbuild \
     --package-path "$MLX_TTS_HELPER_ROOT" \
     -c "$BUILD_CONFIG" \
     --product "$MLX_TTS_HELPER_PRODUCT" \
     --build-path "$(helper_build_path_for_arch "$arch")" \
-    --arch "$arch"
+    --arch "$arch" \
+    "$@"
 }
 
 sparkle_framework_for_arch() {
@@ -930,7 +934,7 @@ fi
 echo "📦 Copying SwiftPM resource bundles"
 SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
 if [[ "$SKIP_MLX_TTS" != "1" ]]; then
-  SWIFTPM_BUILD_PRODUCTS+=("$(helper_build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
+  SWIFTPM_BUILD_PRODUCTS+=("$(build_mlx_tts_helper "$PRIMARY_ARCH" --show-bin-path)")
 fi
 # Main app and helper dependencies share the signed Resources directory.
 # MLX loads its compiled Metal library from its resource bundle there.

@@ -289,7 +289,7 @@ function runSourceProvenanceStampHarness(corruptKey?: string) {
 
 function getMLXTTSHelperBuildBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("build_mlx_tts_helper() {");
+  const start = script.indexOf("helper_build_path_for_arch() {");
   const end = script.indexOf("sparkle_framework_for_arch()", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
@@ -541,7 +541,7 @@ function runSwiftPMResourceBundleHarness(
   const helperBuildRoot = path.join(root, "helper build");
   const appRoot = path.join(root, "OpenClaw.app");
   const buildProducts = path.join(buildRoot, "arm64", "debug");
-  const helperBuildProducts = path.join(helperBuildRoot, "arm64", "debug");
+  const helperBuildProducts = path.join(helperBuildRoot, "arm64", "out", "Products", "Debug");
 
   mkdirSync(path.join(appRoot, "Contents", "Resources"), { recursive: true });
   for (const bundle of swiftPMResourceBundles) {
@@ -577,6 +577,10 @@ function runSwiftPMResourceBundleHarness(
     }
     helper_build_path_for_arch() {
       echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
+    }
+    build_mlx_tts_helper() {
+      [[ "$#" -eq 2 && "$1" == "$PRIMARY_ARCH" && "$2" == "--show-bin-path" ]] || return 1
+      printf '%s\\n' ${JSON.stringify(helperBuildProducts)}
     }
     ${getSwiftPMResourceBundleBlock()}
   `);
@@ -1068,11 +1072,15 @@ describe("package-mac-app plist stamping", () => {
   );
 
   it.each(["arm64", "x86_64"])(
-    "uses SwiftBuild for the MLX helper on %s even when Xcode's Metal shim is broken",
+    "builds and locates the MLX helper with SwiftBuild on %s without a legacy output alias",
     (arch) => {
       const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
       const metalPath = path.join(tempRoot, "metal");
       const invocationPath = path.join(tempRoot, "swift-args");
+      const helperBuildRoot = path.join(tempRoot, "build");
+      const helperBuildProducts = path.join(helperBuildRoot, arch, "out", "Products", "Release");
+      mkdirSync(helperBuildProducts, { recursive: true });
+      writeFileSync(path.join(helperBuildProducts, "openclaw-mlx-tts"), arch);
       writeFileSync(metalPath, "#!/bin/sh\nexit 1\n");
       chmodSync(metalPath, 0o755);
 
@@ -1086,17 +1094,27 @@ describe("package-mac-app plist stamping", () => {
           *) return 1 ;;
         esac
       }
-      swift() { printf '%s\\n' "$@" > ${JSON.stringify(invocationPath)}; }
+      swift() {
+        printf '%s\\n' "$@" >> ${JSON.stringify(invocationPath)}
+        printf '\\n' >> ${JSON.stringify(invocationPath)}
+        for argument in "$@"; do
+          if [[ "$argument" == "--show-bin-path" ]]; then
+            printf '%s\\n' ${JSON.stringify(helperBuildProducts)}
+          fi
+        done
+      }
       MLX_TTS_HELPER_ROOT=${JSON.stringify(path.join(tempRoot, "helper"))}
+      MLX_TTS_HELPER_BUILD_ROOT=${JSON.stringify(helperBuildRoot)}
       MLX_TTS_HELPER_PRODUCT=openclaw-mlx-tts
       BUILD_CONFIG=release
-      helper_build_path_for_arch() { printf '%s\\n' ${JSON.stringify(path.join(tempRoot, "build"))}/"$1"; }
       ${getMLXTTSHelperBuildBlock()}
       build_mlx_tts_helper ${arch}
+      cat "$(helper_bin_for_arch ${arch})"
     `);
 
       expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(invocationPath, "utf8").trim().split("\n")).toEqual([
+      expect(result.stdout).toBe(arch);
+      const buildArgs = [
         "build",
         "--build-system",
         "swiftbuild",
@@ -1107,10 +1125,15 @@ describe("package-mac-app plist stamping", () => {
         "--product",
         "openclaw-mlx-tts",
         "--build-path",
-        path.join(tempRoot, "build", arch),
+        path.join(helperBuildRoot, arch),
         "--arch",
         arch,
-      ]);
+      ];
+      const invocations = readFileSync(invocationPath, "utf8")
+        .trim()
+        .split("\n\n")
+        .map((call) => call.split("\n"));
+      expect(invocations).toEqual([buildArgs, [...buildArgs, "--show-bin-path"]]);
     },
   );
 
