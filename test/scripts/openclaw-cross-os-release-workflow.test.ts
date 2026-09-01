@@ -24,6 +24,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   if?: string;
+  needs?: string | string[];
   outputs?: Record<string, unknown>;
   steps?: WorkflowStep[];
   with?: Record<string, unknown>;
@@ -142,7 +143,7 @@ describe("cross-OS release checks workflow", () => {
     });
     expect(baseline.run).toContain('"$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"*');
     expect(baseline.run).toContain("npm view openclaw versions --json");
-    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
+    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mjs");
     expect(baseline.run).toContain('--target-context-ref "$INPUT_TARGET_CONTEXT_REF"');
     expect(baseline.run).toContain('--previous-version "$INPUT_PREVIOUS_VERSION"');
     expect(baseline.run).toContain('BASELINE_VERSION="$(npm view openclaw@latest version)"');
@@ -154,6 +155,29 @@ describe("cross-OS release checks workflow", () => {
       'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";',
     );
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
+  });
+
+  it("passes a frozen-line predecessor from target resolution to installer update smoke", () => {
+    const release = readWorkflow(RELEASE_CHECKS_PATH);
+    const target = job(release, "resolve_target");
+    const baseline = step(target, "Resolve frozen installer update baseline");
+    const installSmoke = job(release, "install_smoke_release_checks");
+
+    expect(target.outputs?.installer_smoke_update_baseline).toBe(
+      "${{ steps.frozen_installer_smoke_baseline.outputs.value }}",
+    );
+    expect(baseline.if).toContain("steps.inputs.outputs.install_smoke_scheduled == 'true'");
+    expect(baseline.if).toContain("startsWith(inputs.target_context_ref, 'extended-stable/')");
+    expect(baseline.env).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+      TARGET_SHA: "${{ steps.ref.outputs.sha }}",
+    });
+    expect(baseline.run).toContain("node workflow/scripts/lib/release-upgrade-baseline.mjs");
+    expect(baseline.run).toContain('echo "value=${baseline#openclaw@}"');
+    expect(installSmoke.with?.update_baseline_version).toBe(
+      "${{ needs.resolve_target.outputs.installer_smoke_update_baseline || 'latest' }}",
+    );
   });
 
   it("installs trusted workflow dependencies for artifact resolution and upgrade metadata", () => {

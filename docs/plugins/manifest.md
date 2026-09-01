@@ -1299,6 +1299,7 @@ Provider fields:
 | ------------ | ----------------- | ----------------------------------------------------------------------------------------------- |
 | `cerebras`   | `false \| object` | Explicit mapping to the public Cerebras `/public/v1/models` catalog. Never enabled implicitly.  |
 | `chutes`     | `false \| object` | Explicit mapping to the public Chutes `/v1/models` catalog. Never enabled implicitly.           |
+| `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
 | `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
@@ -1335,9 +1336,16 @@ For authoritative native source mappings, use:
 
 The publisher fetches a fixed public endpoint without credentials only when its
 source is declared, and publishes native prices only in explicitly mapped owner
-namespaces. Cerebras and Chutes use the same shape with their respective source
+namespaces. Cerebras, Chutes, and DeepInfra use the same shape with their respective source
 and provider IDs. Lightweight plugin-owned `pricing-api.ts` artifacts share
 payload parsing with runtime discovery without importing provider runtimes.
+
+DeepInfra's top-level array uses `model_name` identity. Its numeric discount and
+cached-input ratio apply to native cents-per-token prices. Pricing prose,
+nonempty tables, scheduled expiry, and undocumented generic cache-write rates
+are validated but omitted as unsupported schedules. Priority/flex and explicit
+cache-retention multipliers do not change standard costs. Its agent projection
+continues to own runtime metadata; the pricing feed does not discover chat models.
 
 An opted-in native source owns the complete provider schedule, including missing
 prices: generic sources cannot fill its gaps. A successful feed with no price for

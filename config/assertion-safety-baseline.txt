@@ -601,7 +601,7 @@ extensions/line/src/bot-message-context.ts	1
 extensions/line/src/card-command.ts	3
 extensions/line/src/flex-templates/basic-cards.ts	19
 extensions/line/src/flex-templates/common.ts	2
-extensions/line/src/flex-templates/media-control-cards.ts	35
+extensions/line/src/flex-templates/media-control-cards.ts	19
 extensions/line/src/flex-templates/schedule-cards.ts	28
 extensions/line/src/gateway.ts	1
 extensions/line/src/group-keys.ts	1
@@ -1070,7 +1070,7 @@ extensions/qa-lab/src/suite-runtime-agent-process.ts	7
 extensions/qa-lab/src/suite-runtime-agent-session.ts	5
 extensions/qa-lab/src/suite-runtime-agent-tools.ts	1
 extensions/qa-lab/src/suite-runtime-gateway.ts	2
-extensions/qa-lab/src/suite-summary.ts	5
+extensions/qa-lab/src/suite-summary.ts	4
 extensions/qa-lab/src/suite-support.ts	1
 extensions/qa-lab/src/test-file-scenario-script-evidence.ts	2
 extensions/qa-lab/src/test-file-scenario-vitest-report.ts	1
@@ -1125,7 +1125,7 @@ extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/approval-native-gates.ts	1
 extensions/slack/src/approval-native.ts	2
-extensions/slack/src/blocks-fallback.ts	2
+extensions/slack/src/blocks-fallback.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
@@ -1706,7 +1706,7 @@ src/agents/cli-runner/execute.ts	3
 src/agents/cli-runner/prepare.ts	5
 src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-namespaces.ts	5
-src/agents/code-mode-runtime.ts	4
+src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode-worker.ts	2
 src/agents/code-mode.ts	2
@@ -1796,7 +1796,7 @@ src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream.ts	9
 src/agents/embedded-agent-runner/run/attempt-subscription-cleanup.ts	2
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
-src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	7
+src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	6
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-transcript-helpers.ts	1
@@ -1962,7 +1962,6 @@ src/agents/session-tool-result-guard.ts	24
 src/agents/session-transcript-repair.ts	14
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
-src/agents/sessions/agent-session-inspection.ts	2
 src/agents/sessions/agent-session-models.ts	2
 src/agents/sessions/agent-session-tree.ts	2
 src/agents/sessions/agent-session-utils.ts	1
@@ -3733,7 +3732,6 @@ src/system-agent/setup-inference-activate-persist.ts	1
 src/system-agent/setup-inference-detection.ts	3
 src/system-agent/setup-inference-persist.ts	3
 src/system-agent/setup-inference-plan-helpers.ts	1
-src/system-agent/setup-inference-plan.ts	2
 src/system-agent/system-agent.ts	2
 src/system-agent/verified-inference.ts	1
 src/talk/agent-consult-tool.ts	2
@@ -4060,7 +4058,7 @@ ui/src/pages/chat/realtime-talk.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	11
+ui/src/pages/chat/stream-reconciliation.ts	9
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1
 ui/src/pages/config/config-sections.ts	1
@@ -4093,7 +4091,6 @@ ui/src/pages/labs/labs-registry.ts	6
 ui/src/pages/logs/log-lines.ts	1
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	3
-ui/src/pages/model-providers/default-models-view.ts	1
 ui/src/pages/model-providers/view.ts	3
 ui/src/pages/model-setup/provider-picker.ts	3
 ui/src/pages/model-setup/view.ts	2

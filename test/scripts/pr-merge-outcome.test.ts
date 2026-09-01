@@ -132,6 +132,22 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     calls: [] as string[][],
     mutations: 0,
     mergeBody: null as string | null,
+    issueComments: [
+      {
+        id: 1,
+        body: `<!-- clawsweeper-review-version item=123 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
+
+<!-- clawsweeper-review item=123 -->`,
+        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+      },
+    ],
+    issueCommentsAfterFirst: null as null | Array<{
+      id: number;
+      body: string;
+      user: { id: number; login: string; type: string };
+    }>,
+    issueCommentReads: 0,
+    issueCommentsErrorAt: 0,
     comments: [] as { body: string; html_url: string }[],
     posts: 0,
     invalid: false,
@@ -252,7 +268,11 @@ else if(args[0]==="pr"&&args[1]==="view") {
     out(url);
   } else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
-    out([s.comments]);
+    s.issueCommentReads++;
+    if(s.issueCommentReads===s.issueCommentsErrorAt) fail("comment API unavailable");
+    if(s.issueCommentReads>1&&s.issueCommentsAfterFirst) s.issueComments=s.issueCommentsAfterFirst;
+    save();
+    out([[...s.issueComments,...s.comments]]);
   }
 } else if(args.some(x=>x.includes("/commits/"))) {
   if(s.audit) fail("audit unavailable");
@@ -666,11 +686,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it("reconciles a merged receipt without waiting for terminal mergeability", () => {
     const f = fixture();
     const unknown = { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } };
-    f.save({ ...f.state(), observations: [{}, {}, unknown, unknown] });
+    f.save({ ...f.state(), observations: [{}, {}, {}, unknown, unknown] });
     const run = f.run();
     expect(run.status, run.output).toBe(0);
     expect(f.record().phase).toBe("complete");
-    expect(f.state().reads).toBe(4);
+    expect(f.state().reads).toBe(5);
     expect(f.state().settlementSleeps).toEqual([]);
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);
@@ -1457,6 +1477,99 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(() => f.record()).toThrow();
     },
   );
+  it("blocks ack-only ClawSweeper evidence before intent", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      issueComments: [
+        {
+          id: 1,
+          body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
+          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+        },
+      ],
+    });
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(1);
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+  it.each([
+    {
+      name: "removed",
+      comments: [
+        {
+          id: 2,
+          body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
+          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+        },
+      ],
+    },
+    {
+      name: "expired",
+      comments: [
+        {
+          id: 2,
+          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${new Date(Date.now() - 13 * 60 * 60_000).toISOString()} sha=${"a".repeat(40)} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
+
+<!-- clawsweeper-review item=123 -->`,
+          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+        },
+      ],
+    },
+  ])("revalidates $name review evidence immediately before intent", ({ comments }) => {
+    const f = fixture();
+    f.save({ ...f.state(), issueCommentsAfterFirst: comments });
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(1);
+    expect(f.state().issueCommentReads).toBe(2);
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
+  it("fails closed when the final review comment read is unavailable", () => {
+    const f = fixture();
+    f.save({ ...f.state(), issueCommentsErrorAt: 2 });
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("unable to read current issue comments");
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
+  it("retains evidence from a newer completion observed at final admission", () => {
+    const f = fixture();
+    const reviewedAt = new Date(Date.now() + 1_000).toISOString();
+    f.save({
+      ...f.state(),
+      issueCommentsAfterFirst: [
+        ...f.state().issueComments,
+        {
+          id: 2,
+          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${f.head} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
+
+<!-- clawsweeper-review item=123 -->`,
+          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+        },
+      ],
+    });
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.record().clawsweeperReview).toMatchObject({
+      commentId: 2,
+      reviewedAt,
+      reviewedSha: f.head,
+      sourceRevision: "c".repeat(64),
+    });
+  });
   it("does not delete an advanced remote branch and reports cleanup pending", () => {
     const f = fixture();
     f.save({ ...f.state(), cleanup: "advanced" });

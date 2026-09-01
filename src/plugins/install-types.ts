@@ -100,6 +100,7 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  beforePersistentApply?: () => void;
 };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {

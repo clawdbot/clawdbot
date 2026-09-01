@@ -213,7 +213,9 @@ jobs:
         run: bash scripts/ci-hydrate-testbox-env.sh
 
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
+        # Temporary local-listener fix: https://github.com/useblacksmith/run-testbox/pull/15
+        # Return to useblacksmith/run-testbox after the fix lands upstream.
+        uses: steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4
         if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

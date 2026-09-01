@@ -2348,6 +2348,31 @@ describe("scripts/changed-lanes", () => {
     },
   );
 
+  it.each<[string, string[], boolean]>([
+    ["standalone test", ["test/scripts/swift-build-cache-metadata.test.ts"], false],
+    ["production owner", ["scripts/swift-build-cache-metadata.py"], true],
+    [
+      "test with a native dependency",
+      ["test/scripts/swift-build-cache-metadata.test.ts", "scripts/lib/swift-toolchain.sh"],
+      true,
+    ],
+  ])("routes Swift cache metadata checks for %s", (_label, paths, macosCi) => {
+    const plan = createChangedCheckPlan(detectChangedLanes(paths), {
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
+
+    expect(
+      plan.commands.filter((command) => command.name === "Swift build cache metadata tests"),
+    ).toEqual([
+      expect.objectContaining({
+        args: ["test:serial", "test/scripts/swift-build-cache-metadata.test.ts"],
+      }),
+    ]);
+    expect(plan.commands.some((command) => command.args[0] === "test:macos:ci")).toBe(macosCi);
+  });
+
   it("routes appcast changes to appcast owner tests", () => {
     const result = detectChangedLanes(["appcast.xml"]);
     const plan = createChangedCheckPlan(result);

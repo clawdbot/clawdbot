@@ -71,7 +71,8 @@ function labelDropdownMenu(dropdown: HTMLElement) {
 const dropdownLabelObservers = new WeakMap<HTMLElement, MutationObserver>();
 
 function startDropdownLabelSync(event: Event) {
-  const dropdown = event.target;
+  // Document listeners otherwise see the containing component's shadow host.
+  const dropdown = event.composedPath()[0];
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }
@@ -96,7 +97,7 @@ function startDropdownLabelSync(event: Event) {
 }
 
 function disableClosingDropdownMenu(event: Event) {
-  const dropdown = event.target;
+  const dropdown = event.composedPath()[0];
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }
@@ -115,7 +116,7 @@ function disableClosingDropdownMenu(event: Event) {
 }
 
 function stopDropdownLabelSync(event: Event) {
-  const dropdown = event.target;
+  const dropdown = event.composedPath()[0];
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }

@@ -246,6 +246,7 @@ export async function recoverEmbeddedRunAttempt(input: {
 
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
+    sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
     defaultProvider: DEFAULT_PROVIDER,

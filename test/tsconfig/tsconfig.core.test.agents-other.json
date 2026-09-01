@@ -11,6 +11,8 @@
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
+    "../../src/agents/command/**/*.test.ts",
+    "../../src/agents/command/**/*.test.tsx",
     "../../src/agents/*.test.ts",
     "../../src/agents/*.test.tsx",
     "../../src/agents/tools/**/*.test.ts",

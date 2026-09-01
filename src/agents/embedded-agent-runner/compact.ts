@@ -52,6 +52,7 @@ import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -249,10 +250,16 @@ export async function compactEmbeddedAgentSessionDirect(
   ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
-  const runSessionTarget = await resolveAgentRunSessionTarget({
-    ...paramsBase,
-    missingSessionKey: "resolve-existing",
-  });
+  const memoryTranscript = readCompactionAccountingRecorder(
+    paramsBase.contextEngineRuntimeContext,
+  )?.memoryTranscript;
+  memoryTranscript?.assertActive();
+  const runSessionTarget =
+    memoryTranscript?.sessionTarget ??
+    (await resolveAgentRunSessionTarget({
+      ...paramsBase,
+      missingSessionKey: "resolve-existing",
+    }));
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
     agentId: runSessionTarget.agentId,

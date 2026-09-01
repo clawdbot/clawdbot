@@ -1,8 +1,10 @@
-// Doctor-owned staged relocation of legacy shared auth rows into shared SQLite state.
+/** Doctor-owned staged relocation of legacy shared auth rows into shared SQLite state. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
@@ -36,6 +38,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  recordLegacyMigrationRun,
+  recordLegacyMigrationSource,
+} from "./state-migrations.receipts.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -54,6 +60,14 @@ type SharedAuthMigrationDatabase = Pick<
 >;
 
 type MigrationStage = "copied" | "ownership-flipped" | "completed";
+
+type MigrationSnapshot = {
+  env: NodeJS.ProcessEnv;
+  sourcePath: string;
+  sourceSize: number | null;
+  sourceRows: AuthRows;
+  now: number;
+};
 
 function sourceMigrationKey(sourcePath: string, sourceTable: string): string {
   return `shared-auth-store:${createHash("sha256")
@@ -91,43 +105,20 @@ function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string
 
 function readTargetRows(database: DatabaseSync): AuthRows {
   const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
+  const cells = executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("config_machine_state")
+      .select(["state_key", "value_json", "updated_at_ms"])
+      .where("state_key", "in", ["authProfiles.store", "authProfiles.state"]),
+  ).rows;
+  const store = cells.find((cell) => cell.state_key === "authProfiles.store");
+  const state = cells.find((cell) => cell.state_key === "authProfiles.state");
+  // Preserve historical row shapes: persisted receipt digests include these field names.
   return {
-    // Shared auth payloads live in config_machine_state; project the KV cell
-    // back to the historical row shape so digest/row-match verification and
-    // persisted receipts stay byte-compatible.
-    store:
-      projectStoreRow(
-        executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("config_machine_state")
-            .select(["value_json", "updated_at_ms"])
-            .where("state_key", "=", "authProfiles.store"),
-        ),
-      ) ?? null,
-    state:
-      projectStateRow(
-        executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("config_machine_state")
-            .select(["value_json", "updated_at_ms"])
-            .where("state_key", "=", "authProfiles.state"),
-        ),
-      ) ?? null,
+    store: store ? { store_json: store.value_json, updated_at: store.updated_at_ms } : null,
+    state: state ? { state_json: state.value_json, updated_at: state.updated_at_ms } : null,
   };
-}
-
-function projectStoreRow(
-  row: { value_json: string; updated_at_ms: number } | undefined,
-): StoreRow | null {
-  return row ? { store_json: row.value_json, updated_at: row.updated_at_ms } : null;
-}
-
-function projectStateRow(
-  row: { value_json: string; updated_at_ms: number } | undefined,
-): StateRow | null {
-  return row ? { state_json: row.value_json, updated_at: row.updated_at_ms } : null;
 }
 
 function rowDigest(row: StoreRow | StateRow | null): string {
@@ -136,6 +127,39 @@ function rowDigest(row: StoreRow | StateRow | null): string {
 
 function rowsMatch<T extends StoreRow | StateRow>(left: T, right: T): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function storeIsContained(sourceRow: StoreRow, targetRow: StoreRow): boolean {
+  try {
+    const source: unknown = JSON.parse(sourceRow.store_json);
+    const target: unknown = JSON.parse(targetRow.store_json);
+    if (
+      !isRecord(source) ||
+      !isRecord(target) ||
+      typeof source.version !== "number" ||
+      !Number.isFinite(source.version) ||
+      source.version <= 0 ||
+      !isRecord(source.profiles) ||
+      !isRecord(target.profiles)
+    ) {
+      return false;
+    }
+    const targetProfiles = target.profiles;
+    // Compare raw records, not runtime coercion: dropping malformed entries or unknown
+    // fields would falsely certify that the only remaining copy can be deleted.
+    return (
+      isDeepStrictEqual({ ...source, profiles: targetProfiles }, target) &&
+      Object.values(targetProfiles).every(isRecord) &&
+      Object.entries(source.profiles).every(
+        ([id, credential]) =>
+          isRecord(credential) &&
+          Object.hasOwn(targetProfiles, id) &&
+          isDeepStrictEqual(credential, targetProfiles[id]),
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 function assertRowsMatch(expected: AuthRows, actual: AuthRows, label: string): void {
@@ -148,98 +172,95 @@ function assertRowsMatch(expected: AuthRows, actual: AuthRows, label: string): v
   }
 }
 
-function migrationRunId(rows: AuthRows): string {
-  return `shared-auth-store:${createHash("sha256")
-    .update(rowDigest(rows.store))
-    .update(rowDigest(rows.state))
-    .digest("hex")
-    .slice(0, 24)}`;
-}
-
-function recordMigrationLedger(params: {
-  database: DatabaseSync;
-  sourcePath: string;
-  sourceSize: number | null;
-  rows: AuthRows;
-  stage: MigrationStage;
-  now: number;
-}): void {
+function recordMigrationLedger(
+  params: Omit<MigrationSnapshot, "env"> & {
+    database: DatabaseSync;
+    stage: MigrationStage;
+  },
+): void {
   const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(params.database);
-  const runId = migrationRunId(params.rows);
-  const removedSource = params.stage === "completed" ? 1 : 0;
-  const runReport = JSON.stringify({
-    source: MIGRATION_KIND,
-    target: "auth_profile_stores,auth_profile_state",
-    stage: params.stage,
-    importedRecordCount: Number(params.rows.store !== null) + Number(params.rows.state !== null),
-  });
-  executeSqliteQuerySync(
-    params.database,
-    db
-      .insertInto("migration_runs")
-      .values({
-        id: runId,
-        started_at: params.now,
-        finished_at: params.stage === "completed" ? params.now : null,
-        status: params.stage,
-        report_json: runReport,
-      })
-      .onConflict((conflict) =>
-        conflict.column("id").doUpdateSet({
-          finished_at: params.stage === "completed" ? params.now : null,
-          status: params.stage,
-          report_json: runReport,
-        }),
-      ),
-  );
-  for (const entry of [
+  const entries = [
     {
       sourceTable: "auth_profile_store",
       targetTable: "auth_profile_stores",
-      row: params.rows.store,
+      row: params.sourceRows.store,
     },
     {
       sourceTable: "auth_profile_state",
       targetTable: "auth_profile_state",
-      row: params.rows.state,
+      row: params.sourceRows.state,
     },
-  ] as const) {
-    const reportJson = JSON.stringify({
-      source: entry.sourceTable,
-      target: entry.targetTable,
-      stage: params.stage,
-      sourceSha256: rowDigest(entry.row),
-      importedRecordCount: entry.row ? 1 : 0,
+  ].map((entry) => {
+    const sourceKey = sourceMigrationKey(params.sourcePath, entry.sourceTable);
+    // A crash after source cleanup leaves only the receipt as source evidence.
+    // Never replace that evidence with a digest of the richer destination.
+    const pending = entry.row
+      ? undefined
+      : executeSqliteQueryTakeFirstSync(
+          params.database,
+          db
+            .selectFrom("migration_sources")
+            .select(["source_sha256", "source_record_count", "source_size_bytes"])
+            .where("source_key", "=", sourceKey)
+            .where("removed_source", "=", 0),
+        );
+    return Object.assign(entry, {
+      sourceKey,
+      sourceSha256: pending?.source_sha256 ?? rowDigest(entry.row),
+      sourceRecordCount: pending?.source_record_count ?? Number(entry.row !== null),
+      sourceSizeBytes: pending?.source_size_bytes ?? params.sourceSize,
     });
+  });
+  const runHash = createHash("sha256");
+  for (const entry of entries) {
+    runHash.update(entry.sourceSha256);
+  }
+  const runId = `shared-auth-store:${runHash.digest("hex").slice(0, 24)}`;
+  recordLegacyMigrationRun(params.database, {
+    runId,
+    startedAt: params.now,
+    finishedAt: params.stage === "completed" ? params.now : null,
+    status: params.stage,
+    reportJson: JSON.stringify({
+      source: MIGRATION_KIND,
+      target: "auth_profile_stores,auth_profile_state",
+      stage: params.stage,
+      importedRecordCount: entries.reduce((count, entry) => count + entry.sourceRecordCount, 0),
+    }),
+    upsert: true,
+  });
+  for (const entry of entries) {
+    recordLegacyMigrationSource(params.database, {
+      sourceKey: entry.sourceKey,
+      migrationKind: MIGRATION_KIND,
+      sourcePath: params.sourcePath,
+      targetTable: entry.targetTable,
+      sourceSha256: entry.sourceSha256,
+      sourceSizeBytes: entry.sourceSizeBytes,
+      sourceRecordCount: entry.sourceRecordCount,
+      runId,
+      status: params.stage,
+      importedAt: params.now,
+      reportJson: JSON.stringify({
+        source: entry.sourceTable,
+        target: entry.targetTable,
+        stage: params.stage,
+        sourceSha256: entry.sourceSha256,
+        importedRecordCount: entry.sourceRecordCount,
+      }),
+      upsert: true,
+    });
+  }
+  if (params.stage === "completed") {
     executeSqliteQuerySync(
       params.database,
       db
-        .insertInto("migration_sources")
-        .values({
-          source_key: sourceMigrationKey(params.sourcePath, entry.sourceTable),
-          migration_kind: MIGRATION_KIND,
-          source_path: params.sourcePath,
-          target_table: entry.targetTable,
-          source_sha256: rowDigest(entry.row),
-          source_size_bytes: params.sourceSize,
-          source_record_count: entry.row ? 1 : 0,
-          last_run_id: runId,
-          status: params.stage,
-          imported_at: params.now,
-          removed_source: removedSource,
-          report_json: reportJson,
-        })
-        .onConflict((conflict) =>
-          conflict.column("source_key").doUpdateSet({
-            source_sha256: rowDigest(entry.row),
-            source_size_bytes: params.sourceSize,
-            source_record_count: entry.row ? 1 : 0,
-            last_run_id: runId,
-            status: params.stage,
-            imported_at: params.now,
-            removed_source: removedSource,
-            report_json: reportJson,
-          }),
+        .updateTable("migration_sources")
+        .set({ removed_source: 1 })
+        .where(
+          "source_key",
+          "in",
+          entries.map((entry) => entry.sourceKey),
         ),
     );
   }
@@ -299,13 +320,7 @@ function rewriteAuthJsonMigrationReceipts(
   }
 }
 
-function copyRowsToState(params: {
-  env: NodeJS.ProcessEnv;
-  sourcePath: string;
-  sourceSize: number | null;
-  sourceRows: AuthRows;
-  now: number;
-}): AuthRows {
+function copyRowsToState(params: MigrationSnapshot): AuthRows {
   return runOpenClawStateWriteTransaction(
     ({ db: database, path: targetDatabasePath }) => {
       const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
@@ -313,16 +328,21 @@ function copyRowsToState(params: {
       if (
         params.sourceRows.store &&
         target.store &&
-        !rowsMatch(params.sourceRows.store, target.store)
+        !rowsMatch(params.sourceRows.store, target.store) &&
+        !storeIsContained(params.sourceRows.store, target.store)
       ) {
-        throw new Error("shared auth credential rows conflict with the relocation target");
+        throw new Error(
+          "shared auth credential rows conflict with the relocation target. Back up both auth databases, reconcile differing or missing profiles, then rerun openclaw doctor --fix.",
+        );
       }
       if (
         params.sourceRows.state &&
         target.state &&
         !rowsMatch(params.sourceRows.state, target.state)
       ) {
-        throw new Error("shared auth state rows conflict with the relocation target");
+        throw new Error(
+          "shared auth state rows conflict with the relocation target. Back up both auth databases, reconcile the runtime state, then rerun openclaw doctor --fix.",
+        );
       }
       if (params.sourceRows.store && !target.store) {
         executeSqliteQuerySync(
@@ -345,16 +365,16 @@ function copyRowsToState(params: {
         );
       }
       const canonicalRows = readTargetRows(database);
-      assertRowsMatch(params.sourceRows, canonicalRows, "copy");
+      assertRowsMatch(
+        {
+          store: target.store ?? params.sourceRows.store,
+          state: target.state ?? params.sourceRows.state,
+        },
+        canonicalRows,
+        "copy",
+      );
       rewriteAuthJsonMigrationReceipts(database, params.sourcePath, targetDatabasePath);
-      recordMigrationLedger({
-        database,
-        sourcePath: params.sourcePath,
-        sourceSize: params.sourceSize,
-        rows: canonicalRows,
-        stage: "copied",
-        now: params.now,
-      });
+      recordMigrationLedger({ ...params, database, stage: "copied" });
       return canonicalRows;
     },
     { env: params.env },
@@ -362,40 +382,43 @@ function copyRowsToState(params: {
   );
 }
 
-function flipOwnership(params: {
-  env: NodeJS.ProcessEnv;
-  sourcePath: string;
-  sourceSize: number | null;
-  rows: AuthRows;
-  now: number;
-}): boolean {
-  const flipped = resolveSharedAuthStoreOwnership(params.env).location !== "state-db";
+function advanceMigration(
+  params: MigrationSnapshot & {
+    rows: AuthRows;
+    stage: "ownership-flipped" | "completed";
+  },
+): boolean {
+  const flipping = params.stage === "ownership-flipped";
+  const flipped = flipping && resolveSharedAuthStoreOwnership(params.env).location !== "state-db";
   runOpenClawStateWriteTransaction(
     ({ db: database }) => {
-      assertRowsMatch(params.rows, readTargetRows(database), "ownership");
-      const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
-      executeSqliteQuerySync(
-        database,
-        db
-          .insertInto("config_machine_state")
-          .values({
-            state_key: SHARED_AUTH_STORE_STATE_KEY,
-            value_json: JSON.stringify({ location: "state-db" }),
-            updated_at_ms: params.now,
-          })
-          .onConflict((conflict) =>
-            conflict.column("state_key").doUpdateSet({
-              value_json: JSON.stringify({ location: "state-db" }),
-              updated_at_ms: params.now,
-            }),
-          ),
-      );
-      recordMigrationLedger({ ...params, database, stage: "ownership-flipped" });
+      assertRowsMatch(params.rows, readTargetRows(database), params.stage);
+      if (flipping) {
+        const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
+        const ownership = {
+          value_json: JSON.stringify({ location: "state-db" }),
+          updated_at_ms: params.now,
+        };
+        executeSqliteQuerySync(
+          database,
+          db
+            .insertInto("config_machine_state")
+            .values({ state_key: SHARED_AUTH_STORE_STATE_KEY, ...ownership })
+            .onConflict((conflict) => conflict.column("state_key").doUpdateSet(ownership)),
+        );
+      }
+      recordMigrationLedger({ ...params, database });
     },
     { env: params.env },
-    { operationLabel: "state-migration.shared-auth-ownership" },
+    {
+      operationLabel: flipping
+        ? "state-migration.shared-auth-ownership"
+        : "state-migration.shared-auth-finalize",
+    },
   );
-  noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, params.env);
+  if (flipping) {
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, params.env);
+  }
   return flipped;
 }
 
@@ -435,23 +458,6 @@ function cleanupSourceRows(params: { env: NodeJS.ProcessEnv; sourcePath: string 
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(params.sourcePath, "clean", error);
   }
-}
-
-function finalizeMigration(params: {
-  env: NodeJS.ProcessEnv;
-  sourcePath: string;
-  sourceSize: number | null;
-  rows: AuthRows;
-  now: number;
-}): void {
-  runOpenClawStateWriteTransaction(
-    ({ db: database }) => {
-      assertRowsMatch(params.rows, readTargetRows(database), "cleanup");
-      recordMigrationLedger({ ...params, database, stage: "completed" });
-    },
-    { env: params.env },
-    { operationLabel: "state-migration.shared-auth-finalize" },
-  );
 }
 
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
@@ -495,29 +501,18 @@ export async function migrateSharedAuthStore(params: {
     run: async (env) => {
       const now = params.now?.() ?? Date.now();
       const source = readSourceSnapshot({ env, sourcePath: params.detected.sourcePath });
-      const rows = copyRowsToState({
+      const snapshot = {
         env,
         sourcePath: params.detected.sourcePath,
         sourceSize: source.size,
         sourceRows: source.rows,
         now,
-      });
-      const ownershipFlipped = flipOwnership({
-        env,
-        sourcePath: params.detected.sourcePath,
-        sourceSize: source.size,
-        rows,
-        now,
-      });
+      };
+      const rows = copyRowsToState(snapshot);
+      const ownershipFlipped = advanceMigration({ ...snapshot, rows, stage: "ownership-flipped" });
       const sourceCleaned = cleanupSourceRows({ env, sourcePath: params.detected.sourcePath });
       const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
-      finalizeMigration({
-        env,
-        sourcePath: params.detected.sourcePath,
-        sourceSize: source.size,
-        rows,
-        now,
-      });
+      advanceMigration({ ...snapshot, rows, stage: "completed" });
       return {
         changes: [
           ...(ownershipFlipped && relocatedRows

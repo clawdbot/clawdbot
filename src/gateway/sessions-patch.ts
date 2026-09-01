@@ -8,7 +8,15 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  resolveAgentHarnessOwnerPluginIds,
+} from "../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -123,6 +131,8 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   /** Canonical root prepared by the trusted create path; never accepted from public patches. */
   preparedSessionRoot?: string;
+  /** Trusted catalog runtime must own selection checks before the new row is persisted. */
+  preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
@@ -177,6 +187,7 @@ export async function projectSessionsPatchEntry(params: {
       entry,
     });
     return (
+      params.preparedAgentRuntime ??
       acpMeta?.backend ??
       resolveEffectiveAgentRuntime({
         cfg,
@@ -468,22 +479,11 @@ export async function projectSessionsPatchEntry(params: {
       : undefined;
     delete next.modelFallback;
     const raw = patch.model;
+    let selection:
+      | { provider: string; model: string; profile?: string; isDefault: boolean }
+      | undefined;
     if (raw === null) {
-      applyModelOverrideWithAuthProfileCompatibility({
-        cfg,
-        agentDir: resolveAgentDir(cfg, sessionAgentId),
-        entry: next,
-        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-        selection: {
-          provider: resolvedDefault.provider,
-          model: resolvedDefault.model,
-          isDefault: true,
-        },
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
-      });
-      delete next.liveModelSwitchPending;
+      selection = { ...resolvedDefault, isDefault: true };
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
@@ -511,22 +511,49 @@ export async function projectSessionsPatchEntry(params: {
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
+      selection = resolved;
+    }
+    if (selection) {
+      // Catalog membership does not guarantee an activatable harness. Reject before
+      // committing the session so sticky defaults cannot retain an unusable selection.
+      const harnessSelection = {
+        provider: selection.provider,
+        modelId: selection.model,
+        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        agentId: sessionAgentId,
+      };
+      if (
+        !readAcpSessionMetaForEntry({
+          sessionKey: storeKey,
+          agentId: sessionAgentId,
+          entry: next,
+        }) &&
+        requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
+        resolveAgentHarnessOwnerPluginIds({
+          ...harnessSelection,
+          config: cfg,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+        }).length === 0
+      ) {
+        return invalid(
+          `Model ${selection.provider}/${selection.model} requires agent harness "${harnessSelection.runtime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
+        );
+      }
       applyModelOverrideWithAuthProfileCompatibility({
         cfg,
         agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-        selection: {
-          provider: resolved.provider,
-          model: resolved.model,
-          isDefault: resolved.isDefault,
-        },
-        profileOverride: resolved.profile,
+        selection,
+        profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
-        markLiveSwitchPending: true,
+        markLiveSwitchPending: raw !== null,
       });
+      if (raw === null) {
+        delete next.liveModelSwitchPending;
+      }
     }
     if (agentModelFallback) {
       next.modelFallback = agentModelFallback;

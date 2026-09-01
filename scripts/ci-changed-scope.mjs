@@ -113,7 +113,7 @@ const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 class ControlUiGeneratedArtifactsMixedError extends Error {}
 class NativeGeneratedArtifactsMixedError extends Error {}
 const CHROMIUM_UI_TEST_SCOPE_RE =
-  /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:shared|ui-e2e)\.config\.ts$|scripts\/ensure-playwright-chromium\.mts$|package\.json$|\.github\/workflows\/ci\.yml$)/;
+  /^(ui\/|extensions\/browser\/chrome-extension\/|test\/vitest\/vitest\.(?:(?:shared|ui-e2e|ui-browser)\.config\.ts|ui-paths\.mjs)$|scripts\/ensure-playwright-chromium\.mts$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-locales))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 // Android base resources are co-owned: source PRs edit their English content,
@@ -744,19 +744,20 @@ function isDirectRun() {
 export function parseArgs(argv) {
   const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--base") {
-      args.base = requireOptionArgument(argv, i, "--base");
+    const arg = argv[i];
+    if (arg === "--base" || arg === "--head") {
+      args[arg === "--base" ? "base" : "head"] = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
-    if (argv[i] === "--head") {
-      args.head = requireOptionArgument(argv, i, "--head");
-      i += 1;
-      continue;
-    }
-    if (argv[i] === "--merge-head-first-parent") {
+    if (arg === "--merge-head-first-parent") {
       args.mergeHeadFirstParent = true;
+      continue;
     }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  if (!args.base) {
+    throw new Error("--base is required");
   }
   return args;
 }

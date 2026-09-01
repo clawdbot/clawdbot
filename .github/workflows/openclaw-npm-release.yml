@@ -514,11 +514,18 @@ jobs:
         id: dependency_evidence
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          node --import tsx scripts/generate-dependency-release-evidence.mts \
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] || [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
+            echo "Trusted dependency release tooling must match the unmodified workflow SHA." >&2
+            exit 1
+          fi
+          node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/generate-dependency-release-evidence.mts" \
+            --root "$GITHUB_WORKSPACE" \
             --release-ref "$RELEASE_REF" \
             --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
             --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
@@ -1217,6 +1224,7 @@ jobs:
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}

@@ -25,8 +25,8 @@ function sanitizeTimingLabel(value: unknown): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function hashIncludePatterns(includePatterns: readonly string[]): string {
-  return createHash("sha1").update(JSON.stringify(includePatterns)).digest("hex").slice(0, 12);
+function hashIncludePatterns(patterns: readonly string[]): string {
+  return createHash("sha1").update(JSON.stringify(patterns.toSorted())).digest("hex").slice(0, 12);
 }
 
 export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {

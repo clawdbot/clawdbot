@@ -18,6 +18,12 @@ on:
         required: false
         default: false
         type: boolean
+      release_scope:
+        description: Release qualification scope; npm-beta defers native apps for a validated exact beta target.
+        required: false
+        default: full
+        type: choice
+        options: [full, npm-beta]
       release_gate:
         description: Run an exact-SHA maintainer release-gate fallback when PR CI is capacity-stalled.
         required: false
@@ -94,6 +100,7 @@ jobs:
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
+      release_scope: ${{ steps.manifest.outputs.release_scope }}
       run_node: ${{ steps.manifest.outputs.run_node }}
       # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
       run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
@@ -1032,6 +1039,11 @@ jobs:
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          OPENCLAW_CI_RELEASE_SCOPE: ${{ inputs.release_scope || 'full' }}
+          OPENCLAW_CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          OPENCLAW_CI_TARGET_REF: ${{ inputs.target_ref }}
+          OPENCLAW_CI_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          OPENCLAW_CI_HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
@@ -1142,7 +1154,8 @@ jobs:
                 ];
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
-          const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts ?? {};
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          const packageScripts = packageJson.scripts ?? {};
           const hasPackageScript = (name) => typeof packageScripts[name] === "string";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const changedPaths = (() => {
@@ -1158,6 +1171,30 @@ jobs:
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
+          const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
+          const npmBetaQualification = releaseScope === "npm-beta";
+          if (releaseScope !== "full" && !npmBetaQualification) {
+            throw new Error("release_scope must be full or npm-beta");
+          }
+          if (npmBetaQualification) {
+            const betaVersion = String(packageJson.version ?? "").match(
+              /^([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)-beta\.[1-9][0-9]*$/u,
+            );
+            const betaContext = betaVersion && (
+              (process.env.OPENCLAW_CI_TARGET_CONTEXT_TARGET === "true" &&
+                process.env.OPENCLAW_CI_TARGET_CONTEXT_REF === `release/${betaVersion[1]}`) ||
+              (historicalTargetApproved &&
+                process.env.OPENCLAW_CI_HISTORICAL_TARGET_TAG === `v${packageJson.version}`)
+            );
+            if (
+              eventName !== "workflow_dispatch" || !isCanonicalRepository || releaseGate ||
+              process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER ||
+              !/^[0-9a-f]{40}$/u.test(process.env.OPENCLAW_CI_TARGET_REF ?? "") ||
+              process.env.OPENCLAW_CI_TARGET_REF !== checkoutRevision || !betaContext
+            ) {
+              throw new Error("release_scope npm-beta requires an exact beta target with validated matching release context and no PR release gate or pull_request_number");
+            }
+          }
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
@@ -1180,13 +1217,15 @@ jobs:
           const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
           const runIosBuild =
             parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+            !npmBetaQualification &&
             !docsOnly &&
             isCanonicalRepository &&
             (!frozenTarget ||
               supportsCurrentIosCi ||
               (releaseCandidateTarget && supportsIosBuild));
           const runAndroid =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
+            parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmBetaQualification &&
+            !docsOnly && isCanonicalRepository;
           const runWindows =
             parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
             !docsOnly &&
@@ -1212,6 +1251,7 @@ jobs:
             hasPackageScript("apple:i18n:check");
           const runNativeI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+            !npmBetaQualification &&
             !docsOnly &&
             (!frozenTarget || supportsNativeI18n);
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
@@ -1371,6 +1411,12 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
+          const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
+          const knownToolingConfigs = new Set([
+            goToolingConfig,
+            "test/vitest/vitest.tooling-isolated.config.ts",
+            "test/vitest/vitest.tooling-docker.config.ts",
+          ]);
           // The same capped matrix owns compact and plugin work; admit its longest rows first.
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
@@ -1393,11 +1439,15 @@ jobs:
                 targets: shard.targets,
                 requires_go: (shard.groups ?? [shard]).some((plan) => {
                   const patterns = plan.targets ?? plan.includePatterns;
-                  // Explicit stripes own their prerequisites; historical whole-config
-                  // plans retain the original tooling setup when selection is unknown.
-                  return patterns
-                    ? patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern))
-                    : (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
+                  if (patterns) {
+                    return patterns.some((pattern) => matchesGlob("test/scripts/docs-i18n.test.ts", pattern));
+                  }
+                  if (plan.configs?.length && plan.configs.every((config) => knownToolingConfigs.has(config))) {
+                    return plan.configs.includes(goToolingConfig);
+                  }
+                  // Unknown historical configs retain their original Go setup;
+                  // current isolated and Docker catalogs exclude the Go owner.
+                  return (plan.shard_name ?? plan.shardName).startsWith("core-tooling");
                 }),
                 requires_ripgrep:
                   shard.targets?.includes("src/agents/sessions/tools/index.test.ts") ||
@@ -1428,6 +1478,7 @@ jobs:
             (!frozenTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
 
           const manifest = {
+            release_scope: releaseScope,
             docs_only: docsOnly,
             docs_changed: docsChanged,
             run_node: runNode,
@@ -1515,8 +1566,9 @@ jobs:
                 : [],
             ),
             run_macos_swift:
-              runMacos && (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
-            run_openclawkit_tests: runMacos && supportsOpenClawKitTests,
+              runMacos && !npmBetaQualification &&
+              (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+            run_openclawkit_tests: runMacos && !npmBetaQualification && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
             use_compatible_android_ci: useCompatibleAndroidCi,
@@ -1554,6 +1606,12 @@ jobs:
               `${key}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
               "utf8",
             );
+          }
+          console.log(`CI release scope: ${releaseScope}`);
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
+              (npmBetaQualification ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n" : ""));
           }
           EOF
 
@@ -4604,7 +4662,7 @@ jobs:
     needs: [preflight]
     # Full manual/release validation always captures. PRs and their exact-head
     # release-gate substitutes use the same conservative screenshot-risk scope.
-    if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 90
     env:
@@ -4745,7 +4803,7 @@ jobs:
       contents: read
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
-    if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

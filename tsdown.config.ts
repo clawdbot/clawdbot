@@ -21,7 +21,6 @@ import {
 } from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
-  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
@@ -320,7 +319,11 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
+  // Arrow's relative module augmentations must stay beside their package modules.
+  return (
+    shouldNeverBundleDependency(id) ||
+    ["zod", "apache-arrow"].some((name) => id === name || id.startsWith(`${name}/`))
+  );
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
@@ -692,7 +695,11 @@ function buildUnifiedDeclarationPartitions(
     }
     return {
       name,
-      sources: partition.map(([, source]) => normalizeDeclarationEntrySource(source)),
+      // The compiler's TypeScript-only policy leaves JavaScript runtime assets
+      // without declarations; they remain in the unified runtime entry graph.
+      sources: partition
+        .filter(([, source]) => /\.[cm]?tsx?$/u.test(source))
+        .map(([, source]) => normalizeDeclarationEntrySource(source)),
     };
   });
 }
@@ -783,9 +790,7 @@ const configs = [
             name,
             entry: unifiedDistEntries,
             deps: unifiedDeps,
-            ...(TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => group === name)
-              ? { hooks: { "build:done": createDeclarationInputCapture(name) } }
-              : {}),
+            hooks: { "build:done": createDeclarationInputCapture(name) },
           },
           { emitDtsOnly: true, entry: sources },
         ),

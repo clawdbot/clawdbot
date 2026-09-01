@@ -44,6 +44,9 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(result.code !== 0 || result.signal !== null, result.stderr).toBe(true);
       expect(result.signal === crashSignal || result.code === exitCode, result.stderr).toBe(true);
       expect(result.stderr).not.toMatch(/\[test\] passed /u);
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+        `[test] FAILED (exit ${exitCode})`,
+      ]);
       expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(`[test] FAILED (exit ${exitCode})`);
       if (report) {
         const index = json(path.join(result.reportSet!, "index.json"));

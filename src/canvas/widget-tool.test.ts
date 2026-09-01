@@ -743,12 +743,18 @@ describe("show_widget", () => {
     const result = await pinWidget("<p>ready</p>", true);
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:pinned" }, "release-status"),
+    ).toMatchObject({
       html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
       revision: 1,
     });
-    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.title).toBe(pinnedTitle);
-    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.presentation).toBe("frameless");
+    expect(store.getSnapshot({ sessionKey: "agent:main:pinned" }).widgets[0]?.title).toBe(
+      pinnedTitle,
+    );
+    expect(store.getSnapshot({ sessionKey: "agent:main:pinned" }).widgets[0]?.presentation).toBe(
+      "frameless",
+    );
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
@@ -764,11 +770,15 @@ describe("show_widget", () => {
         content: { kind: "plugin", pluginKind: "workboard:card" },
       }),
     ).rejects.toThrow(/same content kind.*remove/i);
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")?.revision).toBe(1);
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:pinned" }, "release-status")?.revision,
+    ).toBe(1);
 
     const refreshed = await pinWidget("<p>refreshed</p>");
 
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:pinned" }, "release-status"),
+    ).toMatchObject({
       html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
       revision: 2,
     });
@@ -826,7 +836,7 @@ describe("show_widget", () => {
       path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
       "utf8",
     );
-    const pinned = store.readWidgetHtml("agent:main:weather", "weather");
+    const pinned = store.readWidgetHtml({ sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
@@ -958,7 +968,7 @@ describe("show_widget", () => {
       }),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
-    expect(store.getSnapshot(sessionKey).widgets).toHaveLength(2);
+    expect(store.getSnapshot({ sessionKey }).widgets).toHaveLength(2);
 
     const composed = await executeWidget({
       stateDir,
@@ -977,7 +987,7 @@ describe("show_widget", () => {
       callGateway,
     });
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-    expect(store.readWidgetHtml(sessionKey, composed.boardWidgetName ?? "")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
       revision: 2,
     });
   });

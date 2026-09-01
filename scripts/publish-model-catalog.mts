@@ -16,6 +16,7 @@ import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coe
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCerebrasPricingCatalog } from "../extensions/cerebras/pricing-api.js";
 import { parseChutesPricingCatalog } from "../extensions/chutes/pricing-api.js";
+import { parseDeepInfraPricingCatalog } from "../extensions/deepinfra/pricing-api.js";
 import { parseVenicePricingCatalog } from "../extensions/venice/pricing-api.js";
 import type {
   RemoteModelCatalogBundle,
@@ -55,6 +56,7 @@ const defaultRootDir = resolveRepoRoot(import.meta.url);
 const NATIVE_CATALOG_PARSERS = {
   cerebras: parseCerebrasPricingCatalog,
   chutes: parseChutesPricingCatalog,
+  deepinfra: parseDeepInfraPricingCatalog,
   venice: parseVenicePricingCatalog,
 } satisfies Record<
   Exclude<Extract<PricingSource, { authoritative: true }>["id"], "openCode">,
@@ -381,19 +383,29 @@ async function readJsonResponse(response: Response, source: string) {
   } catch {
     throw new Error(`${source} response is malformed JSON`);
   }
-  if (!isRecord(payload)) {
-    throw new Error(`${source} response is not a JSON object`);
-  }
   return payload;
 }
 
 function parsePricingCatalog(
   source: PricingSource,
-  body: Record<string, unknown>,
+  body: unknown,
   policies: PricingPolicies,
 ): LoadedPricingSource {
   const catalog: PricingCatalog = new Map();
   const aliases: string[][] = [];
+  if (source.authoritative && source.id !== "openCode") {
+    const prices = NATIVE_CATALOG_PARSERS[source.id](body);
+    if (!prices) {
+      throw new Error(`${source.label} pricing response is malformed`);
+    }
+    for (const [id, pricing] of prices) {
+      catalog.set(`${source.id}/${id}`, pricing);
+    }
+    return { ...source, catalog, aliases };
+  }
+  if (!isRecord(body)) {
+    throw new Error(`${source.label} response is not a JSON object`);
+  }
   if (source.id === "openCode") {
     for (const [providerId] of policies) {
       const policy = sourcePolicy(policies, providerId, source);
@@ -408,25 +420,15 @@ function parsePricingCatalog(
       const rows = Object.entries(provider.models).map(([id, model]) =>
         isRecord(model) && model.id === id ? model : undefined,
       );
-      const prices = normalizeModelPricingCatalog(
-        rows,
-        normalizeUpstreamModelPricing,
-        (model) => model.cost,
-      );
+      const prices = normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing, {
+        readPricing: (model) => model.cost,
+      });
       if (!prices) {
         throw new Error(`${source.label} pricing malformed for provider ${upstreamId}`);
       }
       for (const [id, pricing] of prices) {
         catalog.set(`${upstreamId}/${id}`, pricing);
       }
-    }
-  } else if (source.authoritative) {
-    const prices = NATIVE_CATALOG_PARSERS[source.id](body);
-    if (!prices) {
-      throw new Error(`${source.label} pricing response is malformed`);
-    }
-    for (const [id, pricing] of prices) {
-      catalog.set(`${source.id}/${id}`, pricing);
     }
   } else if (source.id === "openRouter") {
     for (const row of Array.isArray(body.data) ? body.data : []) {
