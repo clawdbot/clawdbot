@@ -21,6 +21,65 @@ export const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 export const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
 export const UNRELATED_PLUGIN_ID = "worker-catalog-unrelated";
 export const UNRELATED_PLUGIN_WORKER_MARKER_ENV = "OPENCLAW_WORKER_UNRELATED_PLUGIN_MARKER";
+export const MEDIA_ONLY_PROVIDER_ID = "worker-catalog-media-only";
+export const MEDIA_ONLY_PLUGIN_ID = "worker-catalog-media-only-plugin";
+export const DUPLICATE_ALIAS_PROVIDER_ID = "worker-catalog-duplicate-alias-target";
+export const DUPLICATE_ALIAS_PLUGIN_ID = "worker-catalog-duplicate-alias-plugin";
+
+export function writeMediaOnlyFixturePlugin(root: string): string {
+  const pluginDir = path.join(root, "media-only-plugin");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const pluginFile = path.join(pluginDir, "index.cjs");
+  fs.writeFileSync(
+    pluginFile,
+    `module.exports = {
+  id: ${JSON.stringify(MEDIA_ONLY_PLUGIN_ID)},
+  register(api) {
+    api.registerProvider({
+      id: ${JSON.stringify(MEDIA_ONLY_PROVIDER_ID)},
+      label: "Worker media-only fixture",
+      auth: [],
+    });
+  },
+};
+`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: MEDIA_ONLY_PLUGIN_ID,
+      providers: [MEDIA_ONLY_PROVIDER_ID],
+      contracts: { imageGenerationProviders: [MEDIA_ONLY_PROVIDER_ID] },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+    "utf8",
+  );
+  return pluginFile;
+}
+
+export function writeDuplicateAliasFixturePlugin(root: string): string {
+  const pluginDir = path.join(root, "duplicate-alias-plugin");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const pluginFile = path.join(pluginDir, "index.cjs");
+  fs.writeFileSync(
+    pluginFile,
+    `module.exports = { id: ${JSON.stringify(DUPLICATE_ALIAS_PLUGIN_ID)}, register() {} };\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: DUPLICATE_ALIAS_PLUGIN_ID,
+      modelCatalog: {
+        aliases: { [PROVIDER_ALIAS_ID]: { provider: DUPLICATE_ALIAS_PROVIDER_ID } },
+      },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+    "utf8",
+  );
+  return pluginFile;
+}
 
 export function writeUnrelatedFixturePlugin(root: string): string {
   const pluginDir = path.join(root, "unrelated-plugin");

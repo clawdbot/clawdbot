@@ -157,18 +157,20 @@ export function resolveModelCatalogPluginScope(
     if (reasons.length > 0) {
       keptReasons.set(record.id, reasons);
     }
-    for (const providerId of record.providers ?? []) {
+    for (const providerId of Object.keys(record.modelCatalog?.providers ?? {})) {
       expectedProviderIds.add(normalizeProviderId(providerId));
     }
-    for (const providerId of Object.keys(record.modelCatalog?.providers ?? {})) {
+    for (const providerId of Object.keys(record.modelCatalog?.discovery ?? {})) {
       expectedProviderIds.add(normalizeProviderId(providerId));
     }
     for (const [aliasId, target] of Object.entries(record.modelCatalog?.aliases ?? {})) {
       const alias = normalizeProviderId(aliasId);
       const canonical = normalizeProviderId(target.provider);
-      if (alias && canonical) {
+      // Match createPreparedModelCatalogProviderNormalizer exactly: duplicate aliases retain
+      // the first nonempty target in manifest order. Coverage must canonicalize through the
+      // same owner as the catalog or it can reject a correct worker result.
+      if (alias && canonical && !catalogProviderAliases.has(alias)) {
         catalogProviderAliases.set(alias, canonical);
-        expectedProviderIds.add(canonical);
       }
     }
   }
