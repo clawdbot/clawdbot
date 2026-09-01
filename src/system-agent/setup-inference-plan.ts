@@ -52,6 +52,57 @@ import {
 } from "./setup-inference-plan-helpers.js";
 import { runProviderManualSecretMethod } from "./setup-inference-plan-provider-auth.js";
 
+function buildPreparedProviderTestPlan(params: {
+  cfg: OpenClawConfig;
+  sourceCfg: OpenClawConfig;
+  preparedConfig: OpenClawConfig;
+  profiles: ProviderAuthResult["profiles"];
+  selectedProfileId?: string;
+  modelRef: string;
+  pluginId?: string;
+  routeAgentId: string;
+  agentDir: string;
+}): SetupInferenceTestPlan {
+  const ref = parseRef(params.modelRef);
+  const projection = {
+    baseConfig: params.cfg,
+    preparedConfig: params.preparedConfig,
+    modelRef: params.modelRef,
+    providerId: ref.provider,
+    pluginId: params.pluginId,
+    agentId: params.routeAgentId,
+  };
+  const prepared = params.selectedProfileId
+    ? prepareManualAuthForActivation({
+        ...projection,
+        profiles: params.profiles,
+        selectedProfileId: params.selectedProfileId,
+      })
+    : {
+        config: projectManualInferenceConfig(projection),
+        profiles: [],
+        selectedProfileId: undefined,
+      };
+  return {
+    runner: "embedded",
+    ...ref,
+    modelRef: params.modelRef,
+    agentDir: params.agentDir,
+    config: prepared.config,
+    agentId: "openclaw",
+    routeAgentId: params.routeAgentId,
+    ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
+    persistModelRef: params.modelRef,
+    manualAuth: {
+      profiles: prepared.profiles,
+      runtimeConfigBase: params.cfg,
+      sourceConfigBase: params.sourceCfg,
+      configPatch: createMergePatch(params.cfg, prepared.config),
+      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    },
+  };
+}
+
 async function prepareSetupProviderAuthChoice(
   params: Parameters<typeof buildTestPlan>[0],
   choice: ProviderAuthChoiceMetadata,
@@ -191,47 +242,17 @@ export async function buildTestPlan(params: {
           error: `${choice.choiceLabel} did not return credentials for its detected model.`,
         };
       }
-      const prepared = matchingProfile
-        ? prepareManualAuthForActivation({
-            baseConfig: enableResult.config,
-            preparedConfig,
-            profiles: result.profiles,
-            selectedProfileId: matchingProfile.profileId,
-            modelRef,
-            providerId: ref.provider,
-            pluginId: choice.pluginId,
-            agentId: routeAgentId,
-          })
-        : {
-            config: projectManualInferenceConfig({
-              baseConfig: enableResult.config,
-              preparedConfig,
-              modelRef,
-              providerId: ref.provider,
-              pluginId: choice.pluginId,
-              agentId: routeAgentId,
-            }),
-            profiles: [] as ProviderAuthResult["profiles"],
-            selectedProfileId: undefined,
-          };
-      return {
-        runner: "embedded",
-        ...ref,
+      return buildPreparedProviderTestPlan({
+        cfg: enableResult.config,
+        sourceCfg: sourceEnableResult.config,
+        preparedConfig,
+        profiles: result.profiles,
+        selectedProfileId: matchingProfile?.profileId,
         modelRef,
+        pluginId: choice.pluginId,
         agentDir: params.agentDir,
-        config: prepared.config,
-        agentId: "openclaw",
         routeAgentId,
-        ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
-        persistModelRef: modelRef,
-        manualAuth: {
-          profiles: prepared.profiles,
-          runtimeConfigBase: enableResult.config,
-          sourceConfigBase: sourceEnableResult.config,
-          configPatch: createMergePatch(enableResult.config, prepared.config),
-          pluginId: choice.pluginId,
-        },
-      };
+      });
     } catch (error) {
       return {
         error: `${choice.choiceLabel} could not prepare app-guided setup: ${formatErrorMessage(error)}`,
@@ -409,6 +430,39 @@ export async function buildTestPlan(params: {
         return { error: "Enter an API key or token first." };
       }
       const authChoice = params.authChoice?.trim();
+      if (interactive && authChoice === "custom-api-key") {
+        if (params.isRemoteProviderAuth) {
+          return { error: "For a custom provider, run openclaw onboard on the Gateway host." };
+        }
+        if (!params.prompter) {
+          return { error: "Custom provider setup requires an interactive CLI session." };
+        }
+        const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
+        throwIfSetupInferenceCancelled(params);
+        const prepared = await waitForProviderAuth(
+          promptCustomApiConfig({
+            config: cfg,
+            runtime: params.runtime,
+            prompter: params.prompter,
+            target: {
+              agentId: routeAgentId,
+              agentDir: params.agentDir,
+              workspaceDir: params.pluginWorkspaceDir,
+            },
+            // Endpoint verification prepares config; only the real completion may select it.
+            setAsPrimary: false,
+          }),
+          params.signal,
+        );
+        throwIfSetupInferenceCancelled(params);
+        return buildPreparedProviderTestPlan({
+          ...params,
+          preparedConfig: prepared.config,
+          profiles: [],
+          modelRef: `${prepared.providerId}/${prepared.modelId}`,
+          routeAgentId,
+        });
+      }
       const choice = authChoice
         ? (params.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
             authChoice,
@@ -589,49 +643,17 @@ export async function buildTestPlan(params: {
           error: `${resolved.provider.label} did not return credentials for its starter model.`,
         };
       }
-      const preparedAuth = matchingProfile
-        ? prepareManualAuthForActivation({
-            baseConfig: enableResult.config,
-            preparedConfig,
-            profiles: result.profiles,
-            selectedProfileId: matchingProfile.profileId,
-            modelRef,
-            providerId: ref.provider,
-            ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-            agentId: routeAgentId,
-          })
-        : {
-            config: projectManualInferenceConfig({
-              baseConfig: enableResult.config,
-              preparedConfig,
-              modelRef,
-              providerId: ref.provider,
-              ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-              agentId: routeAgentId,
-            }),
-            profiles: [] as ProviderAuthResult["profiles"],
-            selectedProfileId: undefined,
-          };
-      return {
-        runner: "embedded",
-        ...ref,
+      return buildPreparedProviderTestPlan({
+        cfg: enableResult.config,
+        sourceCfg: sourceEnableResult.config,
+        preparedConfig,
+        profiles: result.profiles,
+        selectedProfileId: matchingProfile?.profileId,
         modelRef,
+        pluginId: resolved.provider.pluginId,
         agentDir: params.agentDir,
-        config: preparedAuth.config,
-        agentId: "openclaw",
         routeAgentId,
-        ...(preparedAuth.selectedProfileId
-          ? { authProfileId: preparedAuth.selectedProfileId }
-          : {}),
-        persistModelRef: modelRef,
-        manualAuth: {
-          profiles: preparedAuth.profiles,
-          runtimeConfigBase: enableResult.config,
-          sourceConfigBase: sourceEnableResult.config,
-          configPatch: createMergePatch(enableResult.config, preparedAuth.config),
-          ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-        },
-      };
+      });
     }
     default:
       return { error: `Unknown inference choice "${kind}".` };
