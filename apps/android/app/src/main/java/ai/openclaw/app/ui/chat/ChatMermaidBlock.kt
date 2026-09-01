@@ -165,7 +165,12 @@ internal fun ChatMermaidBlock(source: String) {
           else ->
             Column(modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 48.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
               Text(
-                text = if (state is MermaidBlockState.Loading) nativeString("Rendering diagram…") else nativeString("Diagram unavailable. Check the syntax or simplify the diagram. You can still read or copy its source."),
+                text =
+                  when {
+                    state is MermaidBlockState.Loading -> nativeString("Rendering diagram…")
+                    (state as? MermaidBlockState.Unavailable)?.retryable == true -> nativeString("Diagram temporarily unavailable. Open Diagram options and choose Retry diagram. You can still read or copy its source.")
+                    else -> nativeString("Diagram unavailable. Check the syntax or simplify the diagram. You can still read or copy its source.")
+                  },
                 style = ClawTheme.type.caption,
                 color = colors.textMuted,
               )

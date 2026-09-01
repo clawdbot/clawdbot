@@ -88,6 +88,8 @@ private fun MermaidSvgView(
       modifier = Modifier.fillMaxSize(),
       factory = { context ->
         WebView(context).apply {
+          // WRAP_CONTENT forces WebView's CSS viewport height to zero, even with exact measured bounds.
+          layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
           setBackgroundColor(background.toArgb())
           settings.apply {
             javaScriptEnabled = false
