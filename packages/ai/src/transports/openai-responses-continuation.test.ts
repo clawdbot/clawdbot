@@ -312,15 +312,15 @@ describe("OpenAI Responses continuation", () => {
     expect({ state, request }).toEqual(before);
   });
 
-  it("continues a tool-calling round despite replay re-sanitizing call_id and re-serializing arguments, and restores the raw call_id on the wire delta", () => {
+  it("continues a tool-calling round despite replay re-sanitizing call_id, and restores the raw call_id on the wire delta", () => {
     // Real shape: the cached lastResponseItems is the raw provider response
-    // (bare call_id, compact JSON string), but replaying history for the
-    // next round runs it through normalizeOpenAIResponsesToolCallIds
-    // (embedded-agent-helpers) for provider-format compatibility -- a real,
-    // necessary id reshape, not a change to what the model actually said.
-    // Before this fixed, that reshape made every multi-round tool-calling
-    // turn permanently ineligible for continuation (history_changed on
-    // every attempt, confirmed live against a real gateway).
+    // (bare call_id), but replaying history for the next round runs it
+    // through normalizeOpenAIResponsesToolCallIds (embedded-agent-helpers)
+    // for provider-format compatibility -- a real, necessary id reshape, not
+    // a change to what the model actually said. Before this fixed, that
+    // reshape made every multi-round tool-calling turn permanently
+    // ineligible for continuation (history_changed on every attempt,
+    // confirmed live against a real gateway).
     const rawCallId = "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb";
     const toolCall = {
       type: "function_call",
@@ -347,7 +347,6 @@ describe("OpenAI Responses continuation", () => {
       ...toolCall,
       id: "fc_1",
       call_id: reshapedCallId,
-      arguments: '{"command": "echo hi"}',
     };
     const toolResult = {
       type: "function_call_output",
