@@ -116,7 +116,7 @@ describe("check-changelog-attributions", () => {
   it("does not treat ledger authors and reporters as thanked handles", () => {
     expect(
       findForbiddenChangelogThanks(
-        "- [#123](https://example.test/123) Fix a thing (fixes #456, reported by @clawsweeper) (@steipete) (thanks @external-contributor).",
+        "- [#123](https://example.test/123) Fix a thing (fixes #456 via @clawsweeper) (@steipete cc/@alice) (thanks @external-contributor).",
       ),
     ).toStrictEqual([]);
   });

@@ -3,13 +3,16 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   extractCurrentPackageChangelog,
   preparePackageChangelog,
   resolvePackageChangelogVersions,
   restorePackageChangelog,
 } from "../../scripts/package-changelog.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function changelog(strings: TemplateStringsArray, ...values: string[]) {
   return `${String.raw({ raw: strings }, ...values)
@@ -242,7 +245,7 @@ ${record}
   });
 
   it("pins prepared accounting ledgers to the commit that contains the full record", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-package-ledger-"));
+    const root = tempDirs.make("openclaw-package-ledger-");
     const source = `# Changelog\n\n## 2026.5.28\n\n${oversizedAccountingLedger}\n`;
     try {
       writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.28"}\n', "utf8");
@@ -270,7 +273,7 @@ ${record}
   });
 
   it("uses explicit source provenance when packaging a gitless archive", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-package-ledger-archive-"));
+    const root = tempDirs.make("openclaw-package-ledger-archive-");
     const sourceCommit = "b".repeat(40);
     const source = `# Changelog\n\n## 2026.5.28\n\n${oversizedAccountingLedger}\n`;
     try {
