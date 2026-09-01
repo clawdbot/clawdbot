@@ -55,7 +55,10 @@ describe("prepareTailscaleConfigMigration", () => {
 
     expect(result.config).toBe(cfg);
     expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("cannot prove that OpenClaw owns");
+    const warning = result.warnings.join("\n");
+    expect(warning).toContain("cannot prove that OpenClaw owns");
+    expect(warning).toContain("confirm it is a stale route");
+    expect(warning).toContain("leave managed Tailscale ingress off");
   });
 
   it.each([
