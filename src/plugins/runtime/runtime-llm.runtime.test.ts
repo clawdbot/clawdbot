@@ -127,6 +127,8 @@ function primeCompletionMocks() {
   );
   hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
+    responseModel: "gpt-5.5-2026-08-01",
+    stopReason: "stop",
     usage: {
       input: 11,
       output: 7,
@@ -664,6 +666,10 @@ describe("runtime.llm.complete", () => {
       temperature: 0.2,
       maxTokens: 64,
       reasoning: "ultra",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+      },
       purpose: "test-purpose",
     });
 
@@ -688,11 +694,17 @@ describe("runtime.llm.complete", () => {
       maxTokens: 64,
       temperature: 0.2,
       reasoning: "ultra",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+      },
     });
     expectFields(requireRecord(result, "completion result"), {
       text: "done",
       provider: "openai",
       model: "gpt-5.5",
+      responseModel: "gpt-5.5-2026-08-01",
+      stopReason: "stop",
     });
     expectFields(requireRecord(result.usage, "completion usage"), {
       inputTokens: 11,
@@ -730,6 +742,32 @@ describe("runtime.llm.complete", () => {
     expect(requireRecord(completionArg.options, "completion options")).not.toHaveProperty(
       "reasoning",
     );
+  });
+
+  it("requires the selected direct credential to use the requested auth mode", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { caller: { kind: "host", id: "runtime-test" }, allowComplete: true },
+    });
+
+    await expect(
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+        requiredAuthMode: "oauth",
+      }),
+    ).rejects.toThrow("selected a credential with the wrong authentication mode");
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      ...createPreparedModel(),
+      auth: { apiKey: "oauth-token", source: "test", mode: "oauth" },
+    });
+    await expect(
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+        requiredAuthMode: "oauth",
+      }),
+    ).resolves.toMatchObject({ text: "done" });
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
@@ -871,6 +909,10 @@ describe("runtime.llm.complete", () => {
       profileId: "openai:work",
       agentDir: "/tmp/main",
     });
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      ...createPreparedModel("gpt-5.4"),
+      auth: { apiKey: "oauth-token", source: "test", mode: "oauth" },
+    });
     const llm = createRuntimeLlm({
       getConfig: () => ({
         ...cfg,
@@ -893,12 +935,14 @@ describe("runtime.llm.complete", () => {
         llm.complete({
           model: "openai/gpt-5.4@openai:work",
           messages: [{ role: "user", content: "Ping" }],
+          requiredAuthMode: "oauth",
         }),
       ),
     ).resolves.toMatchObject({ text: "done" });
     expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
       agentId: "main",
       modelRef: "openai/gpt-5.4@openai:work",
+      bindAuthOwner: true,
     });
   });
 

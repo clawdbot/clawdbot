@@ -10,6 +10,7 @@ import {
   composeOutbound,
   confirmDelivery,
   createAnthropicGuard,
+  createHostOpenAiGuard,
   createMonotonicUlidFactory,
   createOpenAiGuard,
   effectiveGuardPolicyVersion,
@@ -32,6 +33,7 @@ import {
   type ReefPeerIdentity,
 } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
+import { getReefRuntime } from "./runtime.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
 import {
@@ -511,6 +513,33 @@ export function createConfiguredGuard(
 ): GuardAdapter {
   if (!config.guard) {
     throw new Error("Reef guard is not configured");
+  }
+  if (config.guard.authMode === "oauth") {
+    const guard = config.guard;
+    return createHostOpenAiGuard({
+      pinnedModel: guard.pinnedModel,
+      timeoutMs: guard.timeoutMs,
+      rules: guard.rules,
+      complete: async ({ systemPrompt, input, maxTokens, responseFormat, signal }) => {
+        const result = await getReefRuntime().llm.complete({
+          model: `openai/${guard.pinnedModel}@${guard.authProfileId}`,
+          systemPrompt,
+          messages: [{ role: "user", content: input }],
+          maxTokens,
+          responseFormat,
+          requiredAuthMode: "oauth",
+          signal,
+          purpose: "reef.guard",
+        });
+        return {
+          text: result.text,
+          provider: result.provider,
+          model: result.model,
+          responseModel: result.responseModel,
+          stopReason: result.stopReason,
+        };
+      },
+    });
   }
   const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);
   if (!guardCredential) {

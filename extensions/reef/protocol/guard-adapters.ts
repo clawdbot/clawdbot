@@ -21,6 +21,25 @@ interface AdapterOptions {
   rules?: GuardRules;
 }
 
+interface HostOpenAiGuardOptions {
+  pinnedModel: string;
+  timeoutMs?: number;
+  rules?: GuardRules;
+  complete: (request: {
+    systemPrompt: string;
+    input: string;
+    maxTokens: number;
+    responseFormat: Record<string, unknown>;
+    signal: AbortSignal;
+  }) => Promise<{
+    text: string;
+    provider: string;
+    model: string;
+    responseModel?: string;
+    stopReason?: string;
+  }>;
+}
+
 const verdictSchema = {
   type: "object",
   additionalProperties: false,
@@ -90,6 +109,41 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         throw new Error("guard must return one OpenAI output object");
       }
       return attachProviderModel(parseStrictJson(outputTexts[0]!, true), envelope.model);
+    },
+  };
+  return admitGuardAdapter(raw, options.timeoutMs);
+}
+
+export function createHostOpenAiGuard(options: HostOpenAiGuardOptions): GuardAdapter {
+  assertPinnedModel(options.pinnedModel);
+  assertGuardRules(options.rules);
+  const raw: RawGuardAdapter = {
+    providerId: "openai",
+    pinnedModel: options.pinnedModel,
+    async classifyRaw(request, signal) {
+      const result = await options.complete({
+        systemPrompt: instructionFor(request, options.rules),
+        input: JSON.stringify(request),
+        maxTokens: 512,
+        responseFormat: {
+          type: "json_schema",
+          json_schema: {
+            name: "reef_guard_verdict",
+            strict: true,
+            schema: verdictSchema,
+          },
+        },
+        signal,
+      });
+      if (
+        result.provider !== "openai" ||
+        result.model !== options.pinnedModel ||
+        result.responseModel !== options.pinnedModel ||
+        result.stopReason !== "stop"
+      ) {
+        throw new Error("invalid host OpenAI guard response");
+      }
+      return attachProviderModel(parseStrictJson(result.text, true), result.responseModel);
     },
   };
   return admitGuardAdapter(raw, options.timeoutMs);

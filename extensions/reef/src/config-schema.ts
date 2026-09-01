@@ -17,6 +17,38 @@ const RelayUrlSchema = z
   )
   .url();
 
+const GuardCommonSchema = {
+  pinnedModel: z.string().min(1),
+  policyVersion: z.string().min(1),
+  timeoutMs: z.number().int().min(100).max(120_000),
+  rules: z
+    .object({
+      outbound: GuardRuleTextSchema.optional(),
+      inbound: GuardRuleTextSchema.optional(),
+    })
+    .strict()
+    .optional(),
+} as const;
+
+const GuardSchema = z.union([
+  z
+    .object({
+      provider: z.literal("openai"),
+      authMode: z.literal("oauth"),
+      authProfileId: z.string().regex(/^openai:[^\s:][^\s]*$/),
+      ...GuardCommonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.enum(["anthropic", "openai"]),
+      authMode: z.literal("api-key").optional(),
+      apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
+      ...GuardCommonSchema,
+    })
+    .strict(),
+]);
+
 export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -24,23 +56,7 @@ export const ReefChannelConfigSchema = z
     relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),
-    guard: z
-      .object({
-        provider: z.enum(["anthropic", "openai"]),
-        pinnedModel: z.string().min(1),
-        apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-        policyVersion: z.string().min(1),
-        timeoutMs: z.number().int().min(100).max(120_000),
-        rules: z
-          .object({
-            outbound: GuardRuleTextSchema.optional(),
-            inbound: GuardRuleTextSchema.optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    guard: GuardSchema.optional(),
     stateDir: z.string().min(1).optional(),
     requestPolicy: z.enum(["code-only", "friends-of-friends", "open"]).default("code-only"),
     // Upgrade-only snapshot. Runtime trust is SQLite-backed; doctor imports valid rows.

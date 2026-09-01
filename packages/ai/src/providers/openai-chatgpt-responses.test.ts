@@ -448,6 +448,44 @@ describe("streamOpenAICodexResponses transport", () => {
     );
   });
 
+  it("sends strict structured output without adding tools", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamSimpleOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      responseFormat: {
+        type: "json_schema",
+        json_schema: {
+          name: "reef_guard_verdict",
+          strict: true,
+          schema: { type: "object", additionalProperties: false },
+        },
+      },
+      transport: "sse",
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "reef_guard_verdict",
+          strict: true,
+          schema: { type: "object", additionalProperties: false },
+        },
+      },
+    });
+    expect(capturedPayload).not.toHaveProperty("tools");
+    expect(capturedPayload).not.toHaveProperty("tool_choice");
+  });
+
   it("does not fall back to SSE when websocket transport is explicit", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("fetch should not run");

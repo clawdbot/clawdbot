@@ -88,7 +88,7 @@ describe("Reef setup wizard identity binding", () => {
       "REEF_GUARD_OPENAI_KEY",
       "reef-v1",
     ];
-    const selectAnswers = ["code-only", "openai"];
+    const selectAnswers = ["code-only", "openai", "api-key"];
     const prompter = {
       note: vi.fn(async () => undefined),
       text: vi.fn(async () => textAnswers.shift() ?? ""),
@@ -101,6 +101,50 @@ describe("Reef setup wizard identity binding", () => {
       handle: "molty",
       relayUrl: "https://reefwire.ai",
     });
+  });
+
+  it("configures host-authorized OpenAI OAuth without persisting a token reference", async () => {
+    const runtime = installRuntime();
+    await generateAndStoreKeys(runtime);
+    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
+      handle: "molty",
+      key_epoch: 1,
+    });
+    const textAnswers = [
+      "https://reefwire.ai",
+      "owner@example.com",
+      "setup-session",
+      "molty",
+      "gpt-5.6-terra",
+      "openai:work",
+      "reef-v1",
+    ];
+    const selectAnswers = ["code-only", "openai", "oauth"];
+    const prompter = {
+      note: vi.fn(async () => undefined),
+      text: vi.fn(async () => textAnswers.shift() ?? ""),
+      select: vi.fn(async () => selectAnswers.shift()),
+    };
+
+    const result = await reefSetupWizard.configureInteractive({
+      cfg: {},
+      prompter: prompter as never,
+    });
+
+    expect(result.cfg.channels?.reef?.guard).toEqual({
+      provider: "openai",
+      authMode: "oauth",
+      authProfileId: "openai:work",
+      pinnedModel: "gpt-5.6-terra",
+      policyVersion: "reef-v1",
+      timeoutMs: 30_000,
+    });
+    expect(result.cfg.plugins?.entries?.reef?.llm).toEqual({
+      allowModelOverride: true,
+      allowedModels: ["openai/gpt-5.6-terra"],
+      allowedCompletionModels: ["openai/gpt-5.6-terra"],
+    });
+    expect(JSON.stringify(result.cfg)).not.toContain("apiKeyEnv");
   });
 
   it("releases a reservation after a definitively rejected handle claim", async () => {
@@ -190,7 +234,7 @@ describe("Reef setup wizard identity binding", () => {
       "REEF_GUARD_OPENAI_KEY",
       "reef-v1",
     ];
-    const selectAnswers = ["code-only", "openai"];
+    const selectAnswers = ["code-only", "openai", "api-key"];
     const prompter = {
       note: vi.fn(async () => undefined),
       text: vi.fn(async () => textAnswers.shift() ?? ""),

@@ -216,29 +216,92 @@ export const reefSetupWizard = {
         { value: "openai" as const, label: "OpenAI" },
       ],
     });
+    const authMode =
+      provider === "openai"
+        ? await prompter.select({
+            message: "OpenAI guard authentication",
+            options: [
+              {
+                value: "oauth" as const,
+                label: "Existing OpenClaw OAuth profile",
+                hint: "Uses host-managed OAuth without exposing tokens to Reef",
+              },
+              { value: "api-key" as const, label: "API key environment variable" },
+            ],
+          })
+        : ("api-key" as const);
     const pinnedModel = await prompter.text({ message: "Pinned guard model snapshot" });
-    const apiKeyEnv = await prompter.text({
-      message: "Guard API key environment variable name",
-      initialValue: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
-    });
+    const authProfileId =
+      authMode === "oauth"
+        ? await prompter.text({
+            message: "OpenAI OAuth auth profile id",
+            initialValue: "openai:default",
+          })
+        : undefined;
+    const apiKeyEnv =
+      authMode === "api-key"
+        ? await prompter.text({
+            message: "Guard API key environment variable name",
+            initialValue: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
+          })
+        : undefined;
     const policyVersion = await prompter.text({
       message: "Guard policy version",
       initialValue: "reef-v1",
     });
+    const guard =
+      authMode === "oauth"
+        ? {
+            provider: "openai" as const,
+            authMode,
+            authProfileId,
+            pinnedModel,
+            policyVersion,
+            timeoutMs: 30_000,
+          }
+        : { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 };
     const reef: ReefChannelConfig = ReefChannelConfigSchema.parse({
       relayUrl,
       handle,
       email,
       requestPolicy: effectiveRequestPolicy,
-      guard: { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 },
+      guard,
     });
     await prompter.note(
       fingerprint(keys.signing.publicKey, keys.encryption.publicKey),
       "Reef safety fingerprint — share out of band",
     );
+    const nextConfig = { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig;
     return {
-      cfg: { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig,
+      cfg:
+        authMode === "oauth" ? authorizeReefOAuthGuardModel(nextConfig, pinnedModel) : nextConfig,
       accountId: "default",
     };
   },
 };
+
+function authorizeReefOAuthGuardModel(cfg: OpenClawConfig, pinnedModel: string): OpenClawConfig {
+  const modelRef = `openai/${pinnedModel}`;
+  const entry = cfg.plugins?.entries?.reef ?? {};
+  const llm = entry.llm ?? {};
+  const addModel = (values: string[] | undefined): string[] =>
+    values?.includes(modelRef) ? values : [...(values ?? []), modelRef];
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        reef: {
+          ...entry,
+          llm: {
+            ...llm,
+            allowModelOverride: true,
+            allowedModels: addModel(llm.allowedModels),
+            allowedCompletionModels: addModel(llm.allowedCompletionModels),
+          },
+        },
+      },
+    },
+  };
+}
