@@ -43,7 +43,7 @@ const { laneRuntimeMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../embedded-agent.js", () => laneRuntimeMock);
+vi.mock("../../embedded-agent-runner/runs.js", () => laneRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),

@@ -15,7 +15,7 @@ import {
 } from "../../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import { isEmbeddedAgentRunActive } from "../../embedded-agent.js";
+import { isEmbeddedAgentRunActive } from "../../embedded-agent-runner/runs.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   getLatestSubagentRunByChildSessionKey,

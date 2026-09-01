@@ -38,11 +38,11 @@ vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 
 const { laneRuntimeMock } = vi.hoisted(() => ({
   laneRuntimeMock: {
-    getCommandLaneActiveTaskIds: vi.fn((_lane: string): number[] => []),
+    isEmbeddedAgentRunActive: vi.fn((_sessionId: string): boolean => false),
   },
 }));
 
-vi.mock("../../../process/command-queue.js", () => laneRuntimeMock);
+vi.mock("../../embedded-agent-runner/runs.js", () => laneRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),
@@ -178,7 +178,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     deliverSpy.mockClear();
     transitionBatchSpy.mockClear();
     completeBatchSpy.mockClear();
-    laneRuntimeMock.getCommandLaneActiveTaskIds.mockReset().mockReturnValue([]);
+    laneRuntimeMock.isEmbeddedAgentRunActive.mockReset().mockReturnValue(false);
     sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
     registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset().mockReturnValue(false);
     registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
