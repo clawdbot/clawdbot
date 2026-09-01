@@ -6,6 +6,7 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
@@ -108,17 +109,9 @@ export function resolveLegacyWorkspaceSourcePaths(
 }
 
 function pathOrClaimExists(filePath: string): boolean {
-  for (const candidate of [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]) {
-    try {
-      fs.lstatSync(candidate);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return true;
-      }
-    }
-  }
-  return false;
+  return (
+    pathMayExistSync(filePath) || pathMayExistSync(`${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`)
+  );
 }
 
 function siblingPathIsOwnedMarker(filePath: string): boolean {

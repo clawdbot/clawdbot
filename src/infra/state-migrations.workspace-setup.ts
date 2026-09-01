@@ -18,10 +18,10 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
+import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
-  legacyMigrationPathMayExist as pathMayExist,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
 } from "./state-migrations.source-snapshot.js";
@@ -284,7 +284,7 @@ function addLegacyWorkspaceSources(params: {
   }
   for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
     if (
-      !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
+      !pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) &&
       !siblingAttestationNeedsDoctor(sourcePath)
     ) {
       continue;
