@@ -1,6 +1,7 @@
 // Configures SQLite WAL and related pragmas for local stores.
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -498,7 +499,7 @@ function enableWalJournalMode(
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
 ): boolean {
-  const deadline = Date.now() + retryTimeoutMs;
+  const deadline = performance.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
@@ -519,7 +520,7 @@ function enableWalJournalMode(
           `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
         );
       } catch (error) {
-        const remainingMs = deadline - Date.now();
+        const remainingMs = Math.max(0, deadline - performance.now());
         if (!isSqliteLockError(error) || remainingMs <= 0) {
           throw error;
         }
