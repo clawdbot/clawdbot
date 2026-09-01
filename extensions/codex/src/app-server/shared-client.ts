@@ -1364,11 +1364,19 @@ export function retainSharedCodexAppServerClientByInstanceId(
   if (!normalizedClientId) {
     return undefined;
   }
-  for (const entry of getSharedCodexAppServerClientState().clients.values()) {
-    const client = entry.client;
-    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+  const state = getSharedCodexAppServerClientState();
+  for (const client of state.liveClients) {
+    const entry = state.entriesByClient.get(client);
+    if (
+      client.getInstanceId() !== normalizedClientId ||
+      entry?.client !== client ||
+      entry.closeError
+    ) {
       continue;
     }
+    // Graceful retirement removes the process from generic acquisition while
+    // existing leases drain. Its persisted thread bindings still need the
+    // exact physical owner until the final lease closes that process.
     return { client, release: retainSharedClientEntry(entry) };
   }
   return undefined;

@@ -4,6 +4,8 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import {
   combineChannelAdmissionEvidence,
@@ -11,11 +13,54 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { consumeChannelRunAdmission, prepareChannelRunAdmission } from "./channel-run-admission.js";
 
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
 describe("channel run admission", () => {
+  it("keeps host authority active when its optional Gateway context is unavailable", async () => {
+    const current: { value?: GatewayRequestContext } = {};
+    const prepared = prepareChannelRunAdmission({
+      cfg: {},
+      runId: "run-without-gateway-context",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "channel/auto-reply",
+      onAdmitted: (context) => bindGatewayContextResolver(context, () => current.value),
+    });
+    const admittedRunContext = await prepared.admit("plugin-harness", "channel-harness");
+    const host = createAgentHarnessHostCapabilities({
+      attempt: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-without-gateway-context",
+        cwd: "/attempt/worktree",
+        workspaceDir: "/workspace",
+        currentChannelId: "chat-1",
+        messageChannel: "whatsapp",
+        admittedRunContext,
+      },
+      pluginId: "codex",
+    });
+
+    try {
+      expect(() => host.capabilities.preparedEnvironment?.()).not.toThrow();
+      current.value = {} as GatewayRequestContext;
+      expect(() => host.capabilities.assertActive()).not.toThrow();
+      await host.runWithScope(async () => {
+        expect(getGatewayToolCallerIdentity()?.gatewayContextResolver?.()).toBeUndefined();
+      });
+    } finally {
+      host.close();
+      prepared.close();
+      resetAgentRunRegistryForTest();
+    }
+  });
+
   it("projects a hardened channel handoff as boundary-verified assurance", () => {
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     try {
