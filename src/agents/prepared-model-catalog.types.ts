@@ -17,6 +17,8 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   metadataSnapshot: PluginMetadataSnapshot;
   /** Registry owned by this prepared generation; omitted from read-only builds. */
   pluginRegistry?: PluginRegistry;
+  /** Reports whether this exact lifecycle generation is still published. */
+  isCurrent?: () => boolean;
   modelCatalog: ModelCatalogSnapshot;
 }>;
 
@@ -30,5 +32,6 @@ export type ResolvedPublishedModelCatalogOwner = Readonly<{
   authStore: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
+  isCurrent?: () => boolean;
   modelCatalog: ModelCatalogSnapshot;
 }>;

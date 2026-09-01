@@ -64,6 +64,7 @@ export function resolvePublishedModelCatalogOwner(
     authStore,
     metadataSnapshot: snapshot.metadataSnapshot,
     pluginRegistry: snapshot.pluginRegistry,
+    isCurrent: snapshot.isCurrent,
     modelCatalog: snapshot.modelCatalog,
   });
 }

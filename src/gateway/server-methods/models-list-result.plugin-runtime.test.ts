@@ -176,7 +176,24 @@ describe("models.list plugin metadata handoff", () => {
     );
   });
 
-  it("uses the prepared generation registry in the normal models.list handler", async () => {
+  it.each([
+    {
+      name: "uses the prepared generation registry in the normal models.list handler",
+      supersedeDuringDiscovery: false,
+      expectedAvailable: true,
+    },
+    {
+      name: "fails closed when harness discovery supersedes the prepared generation",
+      supersedeDuringDiscovery: true,
+      expectedAvailable: false,
+    },
+  ])("$name", async ({ supersedeDuringDiscovery, expectedAvailable }) => {
+    const actualHarnessCatalog = await vi.importActual<
+      typeof import("./models-list-harness-catalog.js")
+    >("./models-list-harness-catalog.js");
+    mocks.prepareHarnessCatalog.mockImplementationOnce(
+      actualHarnessCatalog.prepareModelsListHarnessCatalog,
+    );
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -207,17 +224,31 @@ describe("models.list plugin metadata handoff", () => {
           entries: [entry],
           routeVariants: [entry],
         };
+        let generationCurrent = true;
+        const loadPreparedCatalog = vi.fn(async () => {
+          if (supersedeDuringDiscovery) {
+            generationCurrent = false;
+          }
+          return [entry];
+        });
         const harness: AgentHarnessV2 = {
           id: runtimeId,
           label: "Prepared native harness",
           authBootstrap: "harness",
           supports: () => ({ supported: true }),
           runAttempt: vi.fn(),
+          loadModelCatalog: loadPreparedCatalog,
           readModelCatalogReadiness: () => ({ accountType: "chatgpt" }),
         };
         const preparedRegistry = createEmptyPluginRegistry();
         preparedRegistry.agentHarnesses.push({ pluginId: runtimeId, source: "test", harness });
+        const loadActiveCatalog = vi.fn(async () => [entry]);
         const unrelatedActiveRegistry = createEmptyPluginRegistry();
+        unrelatedActiveRegistry.agentHarnesses.push({
+          pluginId: runtimeId,
+          source: "test",
+          harness: { ...harness, loadModelCatalog: loadActiveCatalog },
+        });
         const previousRegistry = captureActivePluginRegistrySnapshot();
         setActivePluginRegistry(unrelatedActiveRegistry);
         try {
@@ -233,6 +264,7 @@ describe("models.list plugin metadata handoff", () => {
             metadataSnapshot: preparedMetadataSnapshot(),
             authMaterializations: [],
             pluginRegistry: preparedRegistry,
+            isCurrent: () => generationCurrent,
           };
           const loadGatewayModelCatalogSnapshot = vi.fn(async () => preparedSnapshot);
           registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
@@ -264,6 +296,8 @@ describe("models.list plugin metadata handoff", () => {
           });
 
           expect(preparedRegistry).not.toBe(unrelatedActiveRegistry);
+          expect(loadPreparedCatalog).toHaveBeenCalledOnce();
+          expect(loadActiveCatalog).not.toHaveBeenCalled();
           expect(respond).toHaveBeenCalledWith(
             true,
             expect.objectContaining({
@@ -271,7 +305,7 @@ describe("models.list plugin metadata handoff", () => {
                 expect.objectContaining({
                   provider: "custom",
                   id: "native-model",
-                  available: true,
+                  available: expectedAvailable,
                 }),
               ],
             }),

@@ -166,6 +166,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   pluginRegistry?: PluginRegistry;
+  isCurrent?: () => boolean;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -183,6 +184,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     preferredProfileId: params.preferredProfileId,
     lockedProfileId: params.lockedProfileId,
     pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent,
   });
   const projectionCatalog =
     params.snapshot.routeVariants.length > 0
@@ -521,6 +523,7 @@ export async function prepareModelsListResult(
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
   const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
   const preparedPluginRegistry = preparedProjectionOwner?.pluginRegistry;
+  const preparedOwnerIsCurrent = ownerSnapshot?.isCurrent ?? (() => true);
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -532,6 +535,9 @@ export async function prepareModelsListResult(
     snapshot,
     view,
     metadataSnapshot,
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent: () =>
+      params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent(),
     allowHarnessDiscovery: params.preloadedOnly !== true && !preparedOnly,
     onError: (error) =>
       params.context.logGateway.debug(
@@ -548,7 +554,8 @@ export async function prepareModelsListResult(
       agentDir: ownerSnapshot?.agentDir ?? resolveAgentDir(cfg, agentId),
       workspaceDir,
       pluginRegistry: preparedPluginRegistry,
-      isCurrent: () => params.context.getRuntimeConfig() === initialConfig,
+      isCurrent: () =>
+        params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent(),
     });
   const evaluateNative: typeof nativeEvaluator = (entry, host) => {
     const native = nativeEvaluator(entry, host);
@@ -558,7 +565,8 @@ export async function prepareModelsListResult(
   };
   // Config turnover still invalidates prepared host facts. Native readiness is read live,
   // so account publication/revocation never repeats host preparation or discovery.
-  const isCurrent = () => params.context.getRuntimeConfig() === initialConfig;
+  const isCurrent = () =>
+    params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent();
   const { routeVariants, providerOutcomes } = snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   const outcomeProjection = publicProviderOutcomes?.length
@@ -607,6 +615,7 @@ export async function prepareModelsListResult(
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
       pluginRegistry: preparedPluginRegistry,
+      isCurrent,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();

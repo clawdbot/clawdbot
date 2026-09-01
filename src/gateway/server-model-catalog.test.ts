@@ -196,6 +196,7 @@ describe("gateway prepared model catalog", () => {
     expect(projected).not.toHaveProperty("authStore");
     expect(projected).not.toHaveProperty("metadataSnapshot");
     expect(projected).not.toHaveProperty("pluginRegistry");
+    expect(projected).not.toHaveProperty("isCurrent");
 
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
@@ -209,7 +210,8 @@ describe("gateway prepared model catalog", () => {
   it("keeps the prepared generation registry behind the private snapshot", async () => {
     const config = ownerConfig();
     const pluginRegistry = createEmptyPluginRegistry();
-    const candidate = { ...ownerSnapshot(config), pluginRegistry };
+    const isCurrent = () => true;
+    const candidate = { ...ownerSnapshot(config), pluginRegistry, isCurrent };
     const loadPublishedPreparedModelCatalogOwnerSnapshot = async () => candidate;
 
     await expect(
@@ -217,13 +219,19 @@ describe("gateway prepared model catalog", () => {
         getConfig: () => config,
         loadPublishedPreparedModelCatalogOwnerSnapshot,
       }),
-    ).resolves.toMatchObject({ pluginRegistry });
+    ).resolves.toMatchObject({ pluginRegistry, isCurrent });
     await expect(
       loadGatewayModelCatalogSnapshot({
         getConfig: () => config,
         loadPublishedPreparedModelCatalogOwnerSnapshot,
       }),
     ).resolves.not.toHaveProperty("pluginRegistry");
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.not.toHaveProperty("isCurrent");
   });
 
   it("projects whether the published owner already contains a full catalog", async () => {

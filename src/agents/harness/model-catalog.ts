@@ -113,6 +113,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultModel?: string;
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry | null;
+  isCurrent?: () => boolean;
   onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
   const rawDefaultModel = params.defaultModel?.trim();
@@ -158,7 +159,10 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
-    if (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry) {
+    if (
+      params.isCurrent?.() === false ||
+      (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
+    ) {
       return params.snapshot;
     }
     if (listedRows.length === 0) {

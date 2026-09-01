@@ -38,6 +38,7 @@ import type { GatewayRequestContext } from "./types.js";
 type PreparedAgentFacts = {
   agentId: string;
   owner: PreparedModelRuntimeSnapshot;
+  isCurrent: () => boolean;
   authStore: AuthProfileStore;
   authModes: PreparedAgentCredentialModes;
   authStoreRevision: string;
@@ -147,9 +148,18 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
     if (fullModelCatalog && !fullCatalogAuth) {
       throw new Error("prepared full model catalog omitted its auth generation");
     }
+    const isCurrent = () => {
+      const currentOwner = deps.getPreparedOwner({ agentId, config: deps.getConfig() });
+      return (
+        currentOwner === owner ||
+        (owner.pluginRegistry !== undefined &&
+          currentOwner?.pluginRegistry === owner.pluginRegistry)
+      );
+    };
     return {
       agentId,
       owner,
+      isCurrent,
       authStore: fullCatalogAuth?.authStore ??
         deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
           version: 1,
@@ -254,6 +264,7 @@ async function defaultBuildProjection(params: {
       params.facts.owner,
     ),
     pluginRegistry: params.facts.owner.pluginRegistry,
+    isCurrent: params.facts.isCurrent,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });

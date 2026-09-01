@@ -1,4 +1,5 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import type {
   PublishedModelCatalogOwnerCandidate,
   ResolvedPublishedModelCatalogOwner,
@@ -43,6 +44,28 @@ type LoadPreparedGatewayModelCatalogParams = LoadGatewayModelCatalogParams & {
   authScope?: PreparedModelRuntimeAuthScope;
   refreshAuth?: boolean;
 };
+
+function resolvePreparedRegistryCurrentCheck(
+  params: LoadGatewayModelCatalogParams | undefined,
+  owner: ResolvedPublishedModelCatalogOwner,
+): (() => boolean) | undefined {
+  if (owner.isCurrent) {
+    return owner.isCurrent;
+  }
+  if (params?.loadPublishedPreparedModelCatalogOwnerSnapshot) {
+    return undefined;
+  }
+  const getConfig = params?.getConfig ?? getRuntimeConfig;
+  return () => {
+    const current = getPublishedPreparedModelCatalogOwnerSnapshot({
+      agentId: owner.agentId,
+      agentDir: owner.agentDir,
+      config: getConfig(),
+      workspaceDir: owner.workspaceDir,
+    });
+    return current?.pluginRegistry === owner.pluginRegistry;
+  };
+}
 
 async function resolveLoader(
   params?: LoadGatewayModelCatalogParams,
@@ -150,6 +173,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       metadataSnapshot: owner.metadataSnapshot,
       authMaterializations: owner.authMaterializations,
       pluginRegistry: owner.pluginRegistry,
+      isCurrent: resolvePreparedRegistryCurrentCheck(params, owner),
     };
   }
 }
@@ -163,6 +187,7 @@ export async function loadGatewayModelCatalogSnapshot(
     metadataSnapshot: _metadataSnapshot,
     authMaterializations: _authMaterializations,
     pluginRegistry: _pluginRegistry,
+    isCurrent: _isCurrent,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
   return snapshot;
@@ -201,8 +226,6 @@ export async function readPreparedGatewayModelCatalog(
 export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
-  const { getPublishedPreparedModelCatalogOwnerSnapshot } =
-    await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
   const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
@@ -221,5 +244,6 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     metadataSnapshot: owner.metadataSnapshot,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
     pluginRegistry: owner.pluginRegistry,
+    isCurrent: resolvePreparedRegistryCurrentCheck(params, owner),
   };
 }
