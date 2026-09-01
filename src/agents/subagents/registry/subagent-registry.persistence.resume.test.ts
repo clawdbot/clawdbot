@@ -274,9 +274,8 @@ describe("subagent registry persistence resume", () => {
   });
 
   it("finalizes dispatch-only delete cleanup through restore activation", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    const stateDir = tempStateDir;
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    await withRegistryState(stateDir, async () => {
       const now = Date.now();
       const dispatchedAt = now;
       const run: SubagentRunRecord = {
@@ -343,8 +342,12 @@ describe("subagent registry persistence resume", () => {
         expect(announceSpy, "replayed announcement delivered").toHaveBeenCalledOnce();
         expect(readPersistedRun(run.runId), "delivered row awaits real settlement").toMatchObject({
           delivery: { status: "delivered" },
-          requesterSettleWake: { retireAfterSettle: true },
+          requesterSettleWake: { status: "pending" },
         });
+        expect(
+          loadSubagentRegistryFromSqlite().get(run.runId)?.requesterSettleWake?.retireAfterSettle,
+          "archive-retained delete does not retire on settle",
+        ).toBeUndefined();
         expect(announceSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             childSessionKey: run.childSessionKey,
@@ -359,15 +362,16 @@ describe("subagent registry persistence resume", () => {
         expect(settlement.run).toHaveBeenCalledOnce();
         expect(
           loadSubagentRegistryFromSqlite().has(run.runId),
-          "settlement retired delivered row",
-        ).toBe(false);
+          "settlement keeps the archive-retained delete row",
+        ).toBe(true);
         await settleSubagentRegistryPersistenceWork();
 
+        announceSpy.mockClear();
         mod.resetSubagentRegistryForTests({ persist: false });
         mod.initSubagentRegistry();
         activateRegistry();
         await settleSubagentRegistryPersistenceWork();
-        expect(announceSpy, "retired completion is not replayed again").toHaveBeenCalledOnce();
+        expect(announceSpy, "delivered completion is not replayed again").not.toHaveBeenCalled();
       } finally {
         await settlement.release();
       }
