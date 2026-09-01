@@ -8,9 +8,11 @@ import {
   listSkillProposals,
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
+  readSkillProposalRecord,
   readSkillProposalRollback,
 } from "../skills/workshop/store.js";
 import {
@@ -26,7 +28,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { migrateLegacySkillWorkshopProposals } from "./doctor-skill-workshop-sqlite.js";
+import {
+  inspectLegacySkillWorkshopMigration,
+  migrateLegacySkillWorkshopProposals,
+} from "./doctor-skill-workshop-sqlite.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -44,6 +49,162 @@ afterEach(async () => {
 });
 
 describe("doctor Skill Workshop SQLite migration", () => {
+  it("moves an applied legacy skill into the Workshop directory and converges", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-relocation-workspace-"),
+    );
+    const proposalId = "relocate-workshop-20260901-1234567890";
+    const legacySkillDir = path.join(workspaceDir, "skills", "relocate-workshop");
+    const legacySkillFile = path.join(legacySkillDir, "SKILL.md");
+    const skillContent =
+      "---\nname: relocate-workshop\ndescription: Relocated procedure\n---\n\n# Relocated\n";
+    const now = "2026-09-01T00:00:00.000Z";
+    const record: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: proposalId,
+      kind: "create",
+      status: "applied",
+      title: "Create Relocated Workshop",
+      description: "Relocated procedure",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(skillContent),
+      target: {
+        skillName: "relocate-workshop",
+        skillKey: "relocate-workshop",
+        skillDir: legacySkillDir,
+        skillFile: legacySkillFile,
+        source: "openclaw-workspace",
+      },
+      scan: {
+        state: "clean",
+        scannedAt: now,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      },
+      appliedAt: now,
+    };
+    await fs.mkdir(legacySkillDir, { recursive: true });
+    await fs.writeFile(legacySkillFile, skillContent, "utf8");
+    importLegacySkillProposal({
+      record,
+      ownerAgentId: "main",
+      store: { env: testState.env },
+    });
+
+    await expect(inspectLegacySkillWorkshopMigration(testState.env)).resolves.toEqual({
+      externalProposalCount: 1,
+      legacyBackupRootCount: 0,
+    });
+    await expect(fs.access(legacySkillFile)).resolves.toBeUndefined();
+
+    const first = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+    expect(first.changes.join("\n")).toContain(
+      "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 0 stale",
+    );
+    const workshopSkillFile = path.join(
+      resolveWorkshopSkillsDir(testState.env),
+      "relocate-workshop",
+      "SKILL.md",
+    );
+    await expect(fs.readFile(workshopSkillFile, "utf8")).resolves.toBe(skillContent);
+    await expect(fs.access(legacySkillDir)).rejects.toThrow();
+    await expect(
+      readSkillProposalRecord(proposalId, { env: testState.env }),
+    ).resolves.toMatchObject({
+      target: {
+        skillDir: path.dirname(workshopSkillFile),
+        skillFile: workshopSkillFile,
+        source: "openclaw-workshop",
+      },
+    });
+
+    await expect(
+      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+  });
+
+  it("stales an outside pending update once and converges", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-stale-update-workspace-"),
+    );
+    const proposalId = "stale-workshop-20260901-1234567890";
+    const skillDir = path.join(workspaceDir, "skills", "stale-workshop");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const skillContent =
+      "---\nname: stale-workshop\ndescription: Stale procedure\n---\n\n# Stale\n";
+    const now = "2026-09-01T00:00:00.000Z";
+    const record: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: proposalId,
+      kind: "update",
+      status: "pending",
+      title: "Update Stale Workshop",
+      description: "Stale procedure",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(skillContent),
+      target: {
+        skillName: "stale-workshop",
+        skillKey: "stale-workshop",
+        skillDir,
+        skillFile,
+        source: "openclaw-workspace",
+        currentContentHash: hashSkillProposalContent(skillContent),
+      },
+      scan: {
+        state: "clean",
+        scannedAt: now,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      },
+    };
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, skillContent, "utf8");
+    importLegacySkillProposal({
+      record,
+      ownerAgentId: "main",
+      store: { env: testState.env },
+    });
+
+    await expect(inspectLegacySkillWorkshopMigration(testState.env)).resolves.toEqual({
+      externalProposalCount: 1,
+      legacyBackupRootCount: 0,
+    });
+    const first = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+    expect(first.changes.join("\n")).toContain("marked 1 stale");
+    await expect(
+      readSkillProposalRecord(proposalId, { env: testState.env }),
+    ).resolves.toMatchObject({
+      status: "stale",
+      statusReason: "Skill Workshop no longer edits skills outside its own directory.",
+    });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(skillContent);
+    await expect(inspectLegacySkillWorkshopMigration(testState.env)).resolves.toEqual({
+      externalProposalCount: 0,
+      legacyBackupRootCount: 0,
+    });
+    await expect(
+      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+  });
+
   it("preserves shipped v1 proposals through migration, revision, and apply", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workshop-shipped-upgrade-");
     const proposalId = "shipped-workshop-20260729-1234567890";
@@ -135,11 +296,11 @@ describe("doctor Skill Workshop SQLite migration", () => {
     ).resolves.toMatchObject({
       record: { id: proposalId, status: "applied" },
     });
-    await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toContain(
+    await expect(fs.readFile(revised.record.target.skillFile, "utf8")).resolves.toContain(
       "Revised after upgrade.",
     );
     await expect(
-      fs.readFile(path.join(record.target.skillDir, "references", "proof.md"), "utf8"),
+      fs.readFile(path.join(revised.record.target.skillDir, "references", "proof.md"), "utf8"),
     ).resolves.toBe(supportContent);
   });
 
@@ -225,12 +386,12 @@ describe("doctor Skill Workshop SQLite migration", () => {
     ).resolves.toMatchObject({ detected: 1, migrated: 1, warnings: [] });
     await expect(readSkillProposalRollback(proposalId)).resolves.toMatchObject(rollback);
 
-    await expect(listSkillProposals({ agentId: "main", workspaceDir })).resolves.toMatchObject({
+    await expect(listSkillProposals({ agentId: "main" })).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposalId, status: "pending" })],
     });
-    await expect(fs.access(targetSupportFile)).rejects.toThrow();
+    await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
 
-    await reviseSkillProposal({
+    const revised = await reviseSkillProposal({
       workspaceDir,
       agentId: "main",
       proposalId,
@@ -239,7 +400,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     await expect(
       applySkillProposal({ workspaceDir, agentId: "main", proposalId }),
     ).resolves.toMatchObject({ record: { id: proposalId, status: "applied" } });
-    await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toContain(
+    await expect(fs.readFile(revised.record.target.skillFile, "utf8")).resolves.toContain(
       "Revised after recovery.",
     );
     await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
@@ -336,16 +497,15 @@ describe("doctor Skill Workshop SQLite migration", () => {
     });
     expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
 
-    const listed = await listSkillProposals({ agentId: "main", workspaceDir: currentWorkspace });
-    expect(listed.proposals).toEqual([
-      expect.objectContaining({ id: proposalId, workspaceMismatch: true }),
-    ]);
-    await expect(
-      inspectSkillProposal(proposalId, { agentId: "main", workspaceDir: currentWorkspace }),
-    ).resolves.toMatchObject({
+    const listed = await listSkillProposals({ agentId: "main" });
+    expect(listed.proposals).toEqual([expect.objectContaining({ id: proposalId })]);
+    await expect(inspectSkillProposal(proposalId, { agentId: "main" })).resolves.toMatchObject({
       record: {
         originRunIds: ["legacy-run", "revision-run"],
         originRunMutationCounts: { "legacy-run": 1, "revision-run": 2 },
+        target: {
+          skillDir: path.join(resolveWorkshopSkillsDir(testState.env), "legacy-workshop"),
+        },
       },
     });
     await expect(readSkillProposalRollback(proposalId)).resolves.toMatchObject(rollback);
@@ -535,7 +695,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       fs.access(path.join(recoveryRoot, recoveryDir, "proposal.json")),
     ).resolves.toBeUndefined();
 
-    importLegacySkillProposal({ record, ownerAgentId: "main", workspaceDir });
+    importLegacySkillProposal({ record, ownerAgentId: "main" });
     await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
     await fs.writeFile(path.join(proposalDir, "references", "leftover.md"), "leftover\n", "utf8");
     await expect(
@@ -548,7 +708,16 @@ describe("doctor Skill Workshop SQLite migration", () => {
           },
         },
       }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 1, migrated: 0 });
+    ).resolves.toMatchObject({
+      changes: [
+        expect.stringContaining(
+          "Relocated 0 Skill Workshop skills, retargeted 1 proposal, marked 0 stale",
+        ),
+      ],
+      warnings: [],
+      detected: 1,
+      migrated: 0,
+    });
     await expect(
       fs.access(path.join(proposalDir, "references", "leftover.md")),
     ).resolves.toBeUndefined();

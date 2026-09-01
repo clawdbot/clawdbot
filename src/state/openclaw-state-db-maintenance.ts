@@ -14,6 +14,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -55,6 +56,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   12: STATE_V6_ADDITIVE_TABLES,
   13: LAZY_ADDITIVE_STATE_TABLES,
   14: LAZY_ADDITIVE_STATE_TABLES,
+  15: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -317,3 +319,52 @@ export function migrateConversationBindingTargets(
   }
   return true;
 }
+
+/** Remove row provenance after the Workshop directory becomes the ownership boundary. */
+export function migrateSkillWorkshopDirectoryOwnership(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 16) {
+    return false;
+  }
+  const proposalColumns = ["workspace_dir", "claim_released_time"].filter((column) =>
+    tableHasColumn(db, "skill_workshop_proposals", column),
+  );
+  const reviewHasWorkspace = tableHasColumn(
+    db,
+    "skill_workshop_collection_reviews",
+    "workspace_dir",
+  );
+  if (proposalColumns.length === 0 && !reviewHasWorkspace) {
+    return false;
+  }
+  db.exec("DROP INDEX IF EXISTS idx_skill_workshop_collection_reviews_workspace_time;");
+  for (const column of proposalColumns) {
+    db.exec(`ALTER TABLE skill_workshop_proposals DROP COLUMN ${column};`);
+  }
+  if (reviewHasWorkspace) {
+    db.exec("ALTER TABLE skill_workshop_collection_reviews DROP COLUMN workspace_dir;");
+  }
+  return true;
+}
+
+/** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
+export const versionedStateMigrations: ReadonlyArray<{
+  migrate: (db: DatabaseSync, previousVersion: number) => boolean;
+  applied: string;
+}> = [
+  { migrate: migrateJsonCanonicalWideRowsV13, applied: "Consolidated shared state tables (v13)" },
+  {
+    migrate: migrateCronCreatorNamespaces,
+    applied: "Qualified historical cron creator attribution as unknown (v14)",
+  },
+  {
+    migrate: migrateConversationBindingTargets,
+    applied: "Removed redundant conversation binding target projections (v15)",
+  },
+  {
+    migrate: migrateSkillWorkshopDirectoryOwnership,
+    applied: "Moved Skill Workshop ownership to its global directory (v16)",
+  },
+];

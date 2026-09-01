@@ -84,7 +84,6 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   proposal_id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL,
   owner_agent_id TEXT,
-  workspace_dir TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
   created_at TEXT NOT NULL,
@@ -98,22 +97,17 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT,
-  claim_released_time INTEGER
+  status_reason TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
   review_id TEXT NOT NULL PRIMARY KEY,
-  workspace_dir TEXT NOT NULL,
   backup_id TEXT NOT NULL,
   create_time INTEGER NOT NULL,
   kept_names_json TEXT NOT NULL,
   written_names_json TEXT NOT NULL,
   dropped_json TEXT NOT NULL
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
-  ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
   proposal_id TEXT NOT NULL PRIMARY KEY,

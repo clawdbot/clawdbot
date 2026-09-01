@@ -32,4 +32,22 @@ describe("Skill Workshop autonomy config migration", () => {
     expect(result.raw).toEqual({ skills: { workshop: { autonomous: {} } } });
     expect(result.changes).toEqual([]);
   });
+
+  it("drops the retired symlink write option", () => {
+    const result = migrate({
+      skills: {
+        workshop: {
+          allowSymlinkTargetWrites: true,
+          autonomous: { mode: "auto" },
+        },
+      },
+    });
+
+    expect(result.raw).toEqual({
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    });
+    expect(result.changes).toEqual([
+      "Removed retired skills.workshop.allowSymlinkTargetWrites; Skill Workshop writes only inside its own directory.",
+    ]);
+  });
 });
