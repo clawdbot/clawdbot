@@ -99,6 +99,7 @@ type AttemptWorkspaceParams = Pick<
   | "execOverrides"
   | "permissionMode"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "sessionId"
   | "sessionKey"
   | "sessionRoot"
@@ -125,7 +126,8 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     : await resolveSandboxContext({
         config: params.config,
         // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-        agentId: sandboxSessionKey === sessionKey ? sessionAgentId : undefined,
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
         execOverrides: params.execOverrides,
         sessionKey: sandboxSessionKey,
         skillsSnapshot: params.skillsSnapshot,

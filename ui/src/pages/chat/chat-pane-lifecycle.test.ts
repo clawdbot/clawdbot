@@ -1,9 +1,8 @@
-/* @vitest-environment jsdom */
-/* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
-
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 import type {
   SessionSuggestion,
   SessionSuggestionsListResult,
@@ -12,8 +11,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
@@ -24,7 +23,7 @@ import {
   openChatRewindConfirmation,
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
-import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
@@ -114,16 +113,17 @@ describe("chat pane first-turn attachment lifecycle", () => {
       },
       agentSelection: { state: { selectedId: "main" } },
       agents: { state: { agentsList: null } },
-      initialUserMessage: createInitialUserMessageHandoff(),
+      chatSubmissions: createChatSubmissions(),
       chatAttachmentHandoff: createChatAttachmentHandoff(),
       sessions: {},
     } as unknown as ApplicationContext;
-    prepareInitialUserMessageHandoff(
-      context.initialUserMessage,
-      targetSessionKey,
-      { attachments: [], createdAt: 1, text: "keep the first prompt visible" },
-      client,
-      { runId: "initial-run" },
+    context.chatSubmissions.retain(
+      buildInitialChatSubmission(
+        targetSessionKey,
+        { createdAt: 1, text: "keep the first prompt visible" },
+        client,
+        "initial-run",
+      ),
     );
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = new Map();

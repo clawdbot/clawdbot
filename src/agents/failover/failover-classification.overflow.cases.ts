@@ -114,6 +114,9 @@ export const overflowCases = [
       "patterns-context-cohere",
       { message: "total tokens exceeds the model's maximum limit of 4096" },
     ],
+    ["patterns-context-llamacpp-exceeded", { message: "Context size has been exceeded." }],
+    ["patterns-context-llamacpp-exceeded-400", { message: "400 Context size has been exceeded." }],
+    ["patterns-context-llamacpp-exceeded-500", { message: "500 Context size has been exceeded." }],
     [
       "patterns-context-llamacpp-available",
       {
@@ -131,11 +134,6 @@ export const overflowCases = [
         message:
           "prompt (8500 tokens) exceeds the available context size (8192 tokens), try increasing it",
       },
-    ],
-    ["patterns-context-llamacpp-size-exceeded", { message: "Context size has been exceeded." }],
-    [
-      "patterns-context-llamacpp-size-exceeded-400",
-      { message: "400 Context size has been exceeded." },
     ],
     [
       "patterns-context-ds4",

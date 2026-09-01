@@ -4,7 +4,10 @@ import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
-import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import {
+  materializeLegacyDefaultAgentRoles,
+  resolveLegacyFirstAgentWorkspacePin,
+} from "./legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type MigrationResult = {
@@ -18,7 +21,7 @@ type MigrationResult = {
 /** Converts a valid legacy roster without applying ownership or runtime migrations. */
 export function parseLegacyAgentRoster(
   value: unknown,
-): { entries: Record<string, unknown>; order: string[] } | undefined {
+): { entries: Record<string, Record<string, unknown>>; order: string[] } | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -44,7 +47,12 @@ export function parseLegacyAgentRoster(
 
 export function migratePersistedImplicitMainRoster(
   raw: unknown,
-  options: { materializeWorkspace?: boolean } = {},
+  options: {
+    materializeWorkspace?: boolean;
+    materializeRoles?: boolean;
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+  } = {},
 ): MigrationResult {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { config: raw, changed: false, diagnostics: [] };
@@ -61,14 +69,14 @@ export function migratePersistedImplicitMainRoster(
       ? (root.agents as Record<string, unknown>)
       : {};
   let convertedLegacyList = false;
-  let legacyRosterOrder: string[] | undefined;
+  let legacyRoster: ReturnType<typeof parseLegacyAgentRoster>;
   let rosterProperty = readAgentRosterProperty({ ...root, agents });
   if (rosterProperty?.kind === "list") {
     const roster = parseLegacyAgentRoster(rosterProperty.value);
     if (!roster) {
       return { config: raw, changed: false, diagnostics: [] };
     }
-    legacyRosterOrder = roster.order;
+    legacyRoster = roster;
     const { list: _list, ...rest } = agents;
     agents = { ...rest, entries: roster.entries };
     convertedLegacyList = true;
@@ -100,7 +108,7 @@ export function migratePersistedImplicitMainRoster(
   }
   const roster = entries as Record<string, unknown>;
   const validIds =
-    legacyRosterOrder ??
+    legacyRoster?.order ??
     Object.entries(roster).flatMap(([id, entry]) =>
       entry && typeof entry === "object" && !Array.isArray(entry) ? [id] : [],
     );
@@ -126,7 +134,24 @@ export function migratePersistedImplicitMainRoster(
   let insertedPaths: string[][] = [];
   const diagnostics = convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [];
   let changed = convertedLegacyList;
-  if (legacyDefaultAgentId) {
+  if (legacyRoster && !legacyDefaultAgentId) {
+    const firstId = legacyRoster.order[0]!;
+    const entry = legacyRoster.entries[firstId]!;
+    const workspace = resolveLegacyFirstAgentWorkspacePin(
+      agents,
+      legacyRoster.order.map((id) => legacyRoster.entries[id]!),
+      options,
+    );
+    if (workspace !== undefined) {
+      nextRoot = {
+        ...nextRoot,
+        agents: { ...agents, entries: { ...roster, [firstId]: { ...entry, workspace } } },
+      };
+      insertedPaths.push(["agents", "entries", firstId, "workspace"]);
+      diagnostics.push("Preserved the first legacy agent's existing workspace.");
+    }
+  }
+  if (legacyDefaultAgentId && options.materializeRoles !== false) {
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
       legacyDefaultAgentId,

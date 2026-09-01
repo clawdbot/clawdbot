@@ -12,10 +12,13 @@ registerSessionPlacementEnglish();
 export function renderChatPanePlacement(props: {
   session: GatewaySessionRow | undefined;
   placementMoving?: boolean;
+  placementRestarting?: boolean;
   placementMoveDisabledReason?: string;
   placementReclaimDisabledReason?: string;
+  placementRestartDisabledReason?: string;
   onPlacementMove?: () => void;
   onPlacementReclaim?: () => void;
+  onPlacementRestart?: () => void;
 }): TemplateResult | typeof nothing {
   const placement = props.session?.placement;
   const placementState = placement?.state;
@@ -33,6 +36,7 @@ export function renderChatPanePlacement(props: {
   const hasFacts = Boolean(providerId || profileId || environmentId);
   const runner = placement?.state === "active" ? placement.runner : undefined;
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
+  const restartable = placement?.state === "failed" && placement.recoveryAction === "restart";
   const moveTarget =
     placementMove?.target.kind === "gateway"
       ? t("sessionsView.moveSessionGatewayTarget")
@@ -45,17 +49,20 @@ export function renderChatPanePlacement(props: {
     ? t("sessionsView.moveSessionFailed")
     : placementMove && moveTarget
       ? t("sessionsView.movingSession", { target: moveTarget })
-      : props.placementMoving
-        ? t("sessionsView.movingSessionGeneric")
-        : deviceOffline
-          ? t("sessionsView.deviceOffline")
-          : runner?.kind === "device"
-            ? t("sessionsView.runsOnDevice")
-            : providerId && profileId
-              ? `${providerId} · ${profileId}`
-              : t("newSession.runsOn", { place: t("newSession.cloud") });
+      : props.placementRestarting
+        ? t("sessionsView.restartingSession")
+        : props.placementMoving
+          ? t("sessionsView.movingSessionGeneric")
+          : deviceOffline
+            ? t("sessionsView.deviceOffline")
+            : runner?.kind === "device"
+              ? t("sessionsView.runsOnDevice")
+              : providerId && profileId
+                ? `${providerId} · ${profileId}`
+                : t("newSession.runsOn", { place: t("newSession.cloud") });
   const moveDisabledReason = props.placementMoveDisabledReason;
   const reclaimDisabledReason = props.placementReclaimDisabledReason;
+  const restartDisabledReason = props.placementRestartDisabledReason;
   const age = formatRelativeTimestamp(placement?.stateChangedAtMs, {
     fallback: "",
   });
@@ -97,36 +104,55 @@ export function renderChatPanePlacement(props: {
                 : nothing}
             </dl>`
           : nothing}
-        <wa-dropdown-item
-          class="session-menu__item chat-pane__placement-move ${deviceOffline
-            ? "session-menu__item--destructive"
-            : ""}"
-          variant=${deviceOffline ? "danger" : nothing}
-          ?disabled=${Boolean(moveDisabledReason)}
-          title=${moveDisabledReason ?? nothing}
-          @click=${() => !moveDisabledReason && props.onPlacementMove?.()}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.monitor}</span>
-          <span class="session-menu__text"
-            >${deviceOffline
-              ? t("sessionsView.continueOnGatewayMenu")
-              : t("sessionsView.moveSession")}</span
-          >
-        </wa-dropdown-item>
-        <wa-dropdown-item
-          class="session-menu__item session-menu__item--destructive chat-pane__placement-reclaim"
-          variant="danger"
-          ?disabled=${Boolean(reclaimDisabledReason)}
-          title=${reclaimDisabledReason ?? nothing}
-          @click=${() => !reclaimDisabledReason && props.onPlacementReclaim?.()}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
-          <span class="session-menu__text"
-            >${runner?.kind === "device"
-              ? t("sessionsView.stopDeviceWorker")
-              : t("sessionsView.stopCloudWorker")}</span
-          >
-        </wa-dropdown-item>
+        ${placementState === "active"
+          ? html`<wa-dropdown-item
+              class="session-menu__item chat-pane__placement-move ${deviceOffline
+                ? "session-menu__item--destructive"
+                : ""}"
+              variant=${deviceOffline ? "danger" : nothing}
+              ?disabled=${Boolean(moveDisabledReason)}
+              title=${moveDisabledReason ?? nothing}
+              @click=${() => !moveDisabledReason && props.onPlacementMove?.()}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                >${icons.monitor}</span
+              >
+              <span class="session-menu__text"
+                >${deviceOffline
+                  ? t("sessionsView.continueOnGatewayMenu")
+                  : t("sessionsView.moveSession")}</span
+              >
+            </wa-dropdown-item>`
+          : nothing}
+        ${restartable
+          ? html`<wa-dropdown-item
+              class="session-menu__item chat-pane__placement-restart"
+              ?disabled=${Boolean(restartDisabledReason)}
+              title=${restartDisabledReason ?? nothing}
+              @click=${() => !restartDisabledReason && props.onPlacementRestart?.()}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                >${icons.monitor}</span
+              >
+              <span class="session-menu__text">${t("sessionsView.restartSession")}</span>
+            </wa-dropdown-item>`
+          : nothing}
+        ${restartable
+          ? nothing
+          : html`<wa-dropdown-item
+              class="session-menu__item session-menu__item--destructive chat-pane__placement-reclaim"
+              variant="danger"
+              ?disabled=${Boolean(reclaimDisabledReason)}
+              title=${reclaimDisabledReason ?? nothing}
+              @click=${() => !reclaimDisabledReason && props.onPlacementReclaim?.()}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
+              <span class="session-menu__text"
+                >${runner?.kind === "device"
+                  ? t("sessionsView.stopDeviceWorker")
+                  : t("sessionsView.stopCloudWorker")}</span
+              >
+            </wa-dropdown-item>`}
       </wa-dropdown>
       ${deviceOffline
         ? html`<div class="chat-pane__placement-note" role="status">

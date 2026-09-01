@@ -7,9 +7,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
-import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
-import { renderLazyElementState } from "../components/lazy-view-error.ts";
+import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -26,6 +25,7 @@ import {
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
   LazyCustomElementRequestController,
+  LOGIN_GATE_ELEMENT,
   type OptionalCustomElement,
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
@@ -84,6 +84,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
   private focusDashboardAbort: AbortController | null = null;
+  private readonly loginGateLoader = new LazyCustomElementRequestController(this);
   private readonly lazyCustomElements = new LazyCustomElementRequestController(this, () =>
     this.closeDocument(this.context?.basePath ?? ""),
   );
@@ -168,6 +169,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.focusDashboardAbort?.abort();
     this.focusDashboardAbort = null;
     this.lazyCustomElements.abandon();
+    this.loginGateLoader.abandon();
     this.runtime?.stop();
     this.runtime = undefined;
     this.loginGatewaySource = null;
@@ -554,6 +556,24 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const shellOwnsRecovery =
       gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
     const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
+    if (showLoginGate && !isOptionalElementDefined(LOGIN_GATE_ELEMENT)) {
+      const loadState = this.loginGateLoader.visibleState;
+      // Normal admission needs no login renderer. Keep failures visible and retryable
+      // if this optional chunk cannot load after a connection failure.
+      if (!loadState) {
+        this.loginGateLoader.preload(LOGIN_GATE_ELEMENT, { reportError: true });
+      }
+      return html`<openclaw-tooltip-provider>
+        ${loadState?.status === "error"
+          ? renderLazyViewError({
+              error: loadState.error,
+              stale: loadState.stale,
+              onRetry: () => this.loginGateLoader.retry(),
+            })
+          : renderConnectingSplash()}
+        ${gatewayUrlConfirmation}
+      </openclaw-tooltip-provider>`;
+    }
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>

@@ -8,6 +8,12 @@ import { resolveConfigDir } from "../../utils.js";
 import type { Skill } from "./skill-contract.js";
 import { tryRealpath } from "./symlink-targets.js";
 
+/** Workspace sync excludes repository internals and installed dependencies at every depth. */
+export function shouldSyncSkillPath(filePath: string): boolean {
+  const name = path.basename(filePath);
+  return name !== ".git" && name !== "node_modules";
+}
+
 /** Resolve the effective user home used by skill discovery. */
 export function resolveSkillsUserHomeDir(): string | undefined {
   return resolveOsHomeDir(process.env, os.homedir);

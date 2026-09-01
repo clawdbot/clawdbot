@@ -1,4 +1,5 @@
 // Covers Doctor-only import of the retired exec approvals JSON file.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
@@ -165,41 +166,147 @@ describe("legacy exec approvals migration", () => {
     expect(receipt(env)).toMatchObject({ removed_source: 1 });
   });
 
+  function legacyWithInvalidEntry(entry: unknown, agentKey = "private-marker-agent"): string {
+    return JSON.stringify({
+      version: 1,
+      socket: { path: "/private-marker/socket", token: "private-marker-token" },
+      agents: {
+        first: { allowlist: ["/usr/bin/true"] },
+        [agentKey]: { allowlist: ["/usr/bin/true", entry] },
+        third: { security: "deny" },
+      },
+    });
+  }
+
   it.each([
-    { name: "invalid JSON", raw: "{malformed-secret-marker" },
-    ...[
-      { lastUsedAt: "now", lastUsedCommand: null },
-      { lastUsedAt: null, lastUsedCommand: 42 },
-      { lastUsedAt: null, argPattern: null },
-      { lastUsedCommand: null, lastResolvedPath: null },
-    ].map((metadata) => ({
-      name: JSON.stringify(metadata),
-      raw: JSON.stringify({
-        version: 1,
-        agents: { main: { allowlist: [{ pattern: "secret-marker", ...metadata }] } },
+    {
+      name: "metadata in the second agent's second entry",
+      raw: legacyWithInvalidEntry({
+        pattern: "/private-marker/pattern",
+        id: "private-marker-id",
+        commandText: "private-marker-command",
+        lastUsedAt: "private-marker-time",
+        lastUsedCommand: null,
       }),
+      problem: "agents entry #2.allowlist[1].lastUsedAt: expected a finite number",
+    },
+    ...[
+      { metadata: { lastUsedAt: null, lastUsedCommand: 42 }, field: "lastUsedCommand" },
+      { metadata: { lastUsedAt: null, argPattern: null }, field: "argPattern" },
+      { metadata: { lastUsedCommand: null, lastResolvedPath: null }, field: "lastResolvedPath" },
+    ].map(({ metadata, field }) => ({
+      name: `invalid ${field} alongside historical null usage`,
+      raw: legacyWithInvalidEntry({ pattern: "private-marker-pattern", ...metadata }),
+      problem: `agents entry #2.allowlist[1].${field}: expected a string`,
     })),
     {
-      name: "null policy",
+      name: "null policy alongside historical null usage",
       raw: JSON.stringify({
         version: 1,
         defaults: { security: null },
-        agents: { main: { allowlist: [{ pattern: "secret-marker", lastUsedAt: null }] } },
+        agents: { main: { allowlist: [{ pattern: "private-marker", lastUsedAt: null }] } },
       }),
+      problem: "defaults.security: expected a supported value",
     },
-  ])("preserves malformed $name and records a non-removal receipt", async ({ raw }) => {
-    const { env, stateDir, sourcePath } = useStateDir();
-    await fsp.writeFile(sourcePath, raw, "utf8");
+    {
+      name: "hostile long keys, values, and multiple failures",
+      raw: legacyWithInvalidEntry(
+        {
+          pattern: "/private-marker/pattern",
+          lastUsedAt: { ["private-marker-value".repeat(1_000)]: "private-marker" },
+          lastUsedCommand: 42,
+        },
+        "private-marker-\n\u001b[31m".repeat(1_000),
+      ),
+      problem: "agents entry #2.allowlist[1].lastUsedAt: expected a finite number",
+    },
+    {
+      name: "numeric-like agent key enumeration",
+      raw: '{"version":1,"agents":{"20":{},"3":{"security":"private-marker"}}}',
+      problem: "agents entry #1.security: expected a supported value",
+    },
+    {
+      name: "policy",
+      raw: JSON.stringify({ version: 1, defaults: { security: "private-marker" } }),
+      problem: "defaults.security: expected a supported value",
+    },
+    {
+      name: "socket token",
+      raw: JSON.stringify({ version: 1, socket: { token: { "private-marker": true } } }),
+      problem: "socket.token: expected a string",
+    },
+    {
+      name: "whole entry shape",
+      raw: legacyWithInvalidEntry(42),
+      problem:
+        "agents entry #2.allowlist[1]: expected a non-empty string or an object with a non-empty pattern",
+    },
+    {
+      name: "blank string entry",
+      raw: legacyWithInvalidEntry("  "),
+      problem: "agents entry #2.allowlist[1]: expected a non-empty string",
+    },
+    {
+      name: "blank object pattern without a union wrapper",
+      raw: legacyWithInvalidEntry({ pattern: "  " }),
+      problem: "agents entry #2.allowlist[1].pattern: expected a non-empty string",
+    },
+    {
+      name: "JSON syntax",
+      raw: "{malformed-private-marker",
+      problem: "invalid JSON syntax",
+    },
+    {
+      name: "UTF-8 encoding",
+      raw: Buffer.concat([Buffer.from("private-marker"), Buffer.from([0xff])]),
+      problem: "invalid UTF-8 encoding",
+    },
+  ])(
+    "diagnoses $name while preserving bytes and a non-removal receipt",
+    async ({ raw, problem }) => {
+      const { env, stateDir, sourcePath } = useStateDir();
+      const original = Buffer.from(raw);
+      await fsp.writeFile(sourcePath, original);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
 
-    const result = await migrate({ env, stateDir });
+      const result = await migrate({ env, stateDir });
 
-    expect(result.changes).toEqual([]);
-    expect(result.warnings[0]).toContain("Preserved malformed legacy exec approvals");
-    expect(JSON.stringify(result)).not.toContain("secret-marker");
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
-    expect(receipt(env)).toMatchObject({ removed_source: 0, source_record_count: 0 });
-    expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
-  });
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        `Preserved malformed legacy exec approvals for operator recovery. First problem: ${problem}. Repair exec-approvals.json locally, then rerun \`openclaw doctor --fix\` with the same OPENCLAW_STATE_DIR.`,
+      ]);
+      expect(result.warnings[0]?.length).toBeLessThan(400);
+      expect(JSON.stringify(result)).not.toContain("private-marker");
+      expect(fs.readFileSync(sourcePath)).toEqual(original);
+      expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+      const sourceReceipt = receipt(env);
+      expect(sourceReceipt).toMatchObject({
+        removed_source: 0,
+        source_record_count: 0,
+        status: "completed",
+        source_size_bytes: original.length,
+      });
+      const report = {
+        source: "legacy-exec-approvals-json",
+        target: "exec_approvals_config",
+        decision: "malformed-legacy-preserved",
+        sourceSha256: createHash("sha256").update(original).digest("hex"),
+        sourceValid: false,
+        importedRecordCount: 0,
+        preservedSqliteRecordCount: 0,
+        removesSource: false,
+      };
+      expect(JSON.parse(sourceReceipt?.report_json ?? "null")).toEqual(report);
+      expect(JSON.parse(runReceipt(env)?.report_json ?? "null")).toEqual(report);
+      expect(JSON.stringify([sourceReceipt, runReceipt(env)])).not.toContain("private-marker");
+      expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
+      expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+      expect(await migrate({ env, stateDir })).toEqual(result);
+      expect(fs.readFileSync(sourcePath)).toEqual(original);
+      expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+    },
+  );
 
   it("removes a byte-identical source when canonical state already exists", async () => {
     const { env, stateDir, sourcePath } = useStateDir();

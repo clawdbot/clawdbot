@@ -8,6 +8,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
@@ -76,15 +77,19 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
-import { reportPreMutationUpdateFailure } from "./update-command-result.js";
-import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveManagedServicePackageUpdatePlan,
   resolvePackageRuntimePreflight,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
-import type { UpdateCommandRecoveryState } from "./update-command-service.js";
+import {
+  createAggregateErrorWithCause,
+  type UpdateCommandRecoveryState,
+} from "./update-command-service.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
@@ -101,55 +106,61 @@ function readDevUpdateTargetOrExit(): { ok: true; target?: DevUpdateTarget } | {
   return parsed.status === "valid" ? { ok: true, target: parsed.target } : { ok: true };
 }
 
-async function withUpdateInProgressEnv<T>(
-  invocationCwd: string | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
-  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  const scopedKeys = Object.keys(env).filter(
-    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
-  );
-  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
-  // Package replacement can remove cwd. All phase owners, including native
-  // service guards, must share the invocation's already-resolved path selectors.
-  for (const key of scopedKeys) {
-    process.env[key] = env[key];
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previousValues) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
-  const recoveryState: UpdateCommandRecoveryState = {};
   const invocationCwd = tryResolveInvocationCwd();
-  return await withUpdateInProgressEnv(invocationCwd, async () => {
-    try {
-      await updateCommandInternal(opts, recoveryState, invocationCwd);
-    } finally {
+  const recoveryState: UpdateCommandRecoveryState = {
+    triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
+  };
+  // Refused invocations must not create diagnostic artifacts or start an agent.
+  const prepared = await withUpdateInProgressEnv(invocationCwd, () => prepareUpdateCommand(opts));
+  if (!prepared) {
+    return;
+  }
+  recoveryState.triageTarget.root = prepared.discoveredRoot;
+  await withUpdateFailureTriage(opts, recoveryState.triageTarget, async () => {
+    await withUpdateInProgressEnv(invocationCwd, async () => {
+      let failure: { error: unknown } | undefined;
+      try {
+        await updateCommandInternal(opts, recoveryState, invocationCwd, prepared);
+      } catch (error) {
+        failure = { error };
+      }
       try {
         await recoveryState.windowsTaskAutoStartRecovery?.restore();
+      } catch (error) {
+        if (failure?.error instanceof UpdateCommandFailure) {
+          // A rejected restore promise can be observed again during unwinding.
+          // Keep the reported failure and never turn cleanup into safe-exit 80.
+          failure = {
+            error: new UpdateCommandFailure(
+              { ...failure.error.result, status: "error" },
+              1,
+              `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(error)}`,
+              { cause: error },
+            ),
+          };
+        } else {
+          failure = {
+            error: failure
+              ? createAggregateErrorWithCause(
+                  [failure.error, error],
+                  `Update failed (${formatErrorMessage(failure.error)}) and Windows autostart recovery failed (${formatErrorMessage(error)})`,
+                  failure.error,
+                )
+              : error,
+          };
+        }
       } finally {
         recoveryState.windowsTaskAutoStartRecovery?.complete();
       }
-    }
+      if (failure) {
+        throw failure.error;
+      }
+    });
   });
 }
 
-async function updateCommandInternal(
-  opts: UpdateCommandOptions,
-  recoveryState: UpdateCommandRecoveryState,
-  invocationCwd: string | undefined,
-): Promise<void> {
+async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   const startedAt = Date.now();
   suppressDeprecations();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
@@ -158,7 +169,7 @@ async function updateCommandInternal(
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
-    return;
+    return undefined;
   }
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
@@ -166,21 +177,19 @@ async function updateCommandInternal(
       `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
     );
     defaultRuntime.exit(1);
-    return;
+    return undefined;
   }
   let devTarget: DevUpdateTarget | undefined;
   if (requestedChannel === "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {
-      return;
+      return undefined;
     }
     devTarget = resolvedDevTarget.target;
   }
 
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
-    defaultRuntime.error(formatExternalSupervisorUpdateRequired());
-    defaultRuntime.exit(1);
-    return;
+    throw new Error(formatExternalSupervisorUpdateRequired());
   }
   if (opts.dryRun !== true) {
     await assertOpenClawStateWriteAllowedAtPath({
@@ -192,11 +201,9 @@ async function updateCommandInternal(
   const discoveredRoot = await resolveUpdateRoot();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
-    defaultRuntime.error(
+    throw new Error(
       `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
     );
-    defaultRuntime.exit(1);
-    return;
   }
   if (opts.dryRun !== true) {
     try {
@@ -205,10 +212,37 @@ async function updateCommandInternal(
       await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
       throw err;
     }
-
-    // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
-    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   }
+  return {
+    startedAt,
+    postCoreUpdateResume,
+    postCoreUpdateChannel,
+    timeoutMs,
+    shouldRestart,
+    requestedChannel,
+    devTarget,
+    controlPlaneUpdateSentinelMeta,
+    discoveredRoot,
+  };
+}
+
+async function updateCommandInternal(
+  opts: UpdateCommandOptions,
+  recoveryState: UpdateCommandRecoveryState,
+  invocationCwd: string | undefined,
+  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
+): Promise<void> {
+  const {
+    startedAt,
+    postCoreUpdateResume,
+    postCoreUpdateChannel,
+    timeoutMs,
+    shouldRestart,
+    requestedChannel,
+    controlPlaneUpdateSentinelMeta,
+    discoveredRoot,
+  } = prepared;
+  let { devTarget } = prepared;
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   let root = discoveredRoot;
@@ -227,15 +261,19 @@ async function updateCommandInternal(
     defaultRuntime.log(theme.muted("Checking for updates..."));
   }
   const installKind = await resolveUpdateInstallKind(root);
-
-  if (requestedChannel === "extended-stable" && installKind === "git") {
-    await reportPreMutationUpdateFailure({
+  let updateInstallKind = installKind;
+  const refuseUpdate = (reason: string, message?: string) =>
+    reportPreMutationUpdateFailure({
       root,
-      installKind,
-      reason: "unsupported_git_channel",
+      installKind: updateInstallKind,
+      reason,
+      message,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
+
+  if (requestedChannel === "extended-stable" && installKind === "git") {
+    await refuseUpdate("unsupported_git_channel");
     return;
   }
 
@@ -255,8 +293,10 @@ async function updateCommandInternal(
 
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
-    defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
-    defaultRuntime.exit(1);
+    await refuseUpdate(
+      "invalid-config",
+      ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
+    );
     return;
   }
 
@@ -270,13 +310,7 @@ async function updateCommandInternal(
           installKind,
         }).channel);
   if (channel === "extended-stable" && installKind === "git") {
-    await reportPreMutationUpdateFailure({
-      root,
-      installKind,
-      reason: "unsupported_git_channel",
-      opts,
-      controlPlaneUpdateSentinelMeta,
-    });
+    await refuseUpdate("unsupported_git_channel");
     return;
   }
   // An effective dev channel (stored or explicit) selects the git flow — the
@@ -289,7 +323,7 @@ async function updateCommandInternal(
     (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
-  const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+  updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
   if (channel === "dev" && requestedChannel !== "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {
@@ -300,18 +334,12 @@ async function updateCommandInternal(
 
   const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
   if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
-    await reportPreMutationUpdateFailure({
-      root,
-      installKind: updateInstallKind,
-      reason: unsupportedMainTag
-        ? "unsupported-package-target"
-        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-      message: unsupportedMainTag
+    await refuseUpdate(
+      unsupportedMainTag ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      unsupportedMainTag
         ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
         : undefined,
-      opts,
-      controlPlaneUpdateSentinelMeta,
-    });
+    );
     return;
   }
   let tag = explicitTag ?? channelToNpmTag(channel);
@@ -376,6 +404,8 @@ async function updateCommandInternal(
   }
 
   if (updateInstallKind !== "git") {
+    recoveryState.triageTarget.root = root;
+    recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
     packageInstallEnv = await createGlobalInstallEnv();
     packageInstallCwd = invocationCwd;
     if (updateInstallKind === "package") {
@@ -396,20 +426,13 @@ async function updateCommandInternal(
       });
       const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
       if (npmLifecycleGate.error) {
-        await reportPreMutationUpdateFailure({
-          root,
-          installKind: updateInstallKind,
-          reason: "npm lifecycle policy preflight",
-          message: npmLifecycleGate.error,
-          opts,
-          controlPlaneUpdateSentinelMeta,
-        });
+        await refuseUpdate("npm lifecycle policy preflight", npmLifecycleGate.error);
         return;
       }
     }
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
-    currentVersion = switchToPackage ? null : await readPackageVersion(root);
+    currentVersion = await readPackageVersion(root);
     if (channel === "extended-stable") {
       const extendedStable = await resolveExtendedStablePackage({
         installKind: updateInstallKind,
@@ -417,13 +440,7 @@ async function updateCommandInternal(
         packageName: installedPackageName,
       });
       if (extendedStable.status === "failed") {
-        await reportPreMutationUpdateFailure({
-          root,
-          installKind: updateInstallKind,
-          reason: extendedStable.reason,
-          opts,
-          controlPlaneUpdateSentinelMeta,
-        });
+        await refuseUpdate(extendedStable.reason);
         return;
       }
       targetVersion = extendedStable.version;
@@ -487,10 +504,10 @@ async function updateCommandInternal(
         env: packageInstallEnv,
       });
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
-        defaultRuntime.error(
+        await refuseUpdate(
+          "target-metadata-preflight",
           `Update refused: could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
         );
-        defaultRuntime.exit(1);
         return;
       }
       packageTargetSchemaVersions = targetMetadata.schemaVersions;
@@ -513,8 +530,10 @@ async function updateCommandInternal(
 
   const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
   if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
-    defaultRuntime.error(formatSchemaRefusalLines(packageSchemaPreflight).join("\n"));
-    defaultRuntime.exit(1);
+    await refuseUpdate(
+      "database-schema-preflight",
+      formatSchemaRefusalLines(packageSchemaPreflight).join("\n"),
+    );
     return;
   }
 
@@ -592,12 +611,12 @@ async function updateCommandInternal(
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
-      defaultRuntime.error(runtimePreflight.error);
-      defaultRuntime.exit(1);
+      await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
       return;
     }
     const runtimeSelection = runtimePreflight.value;
     packageUpdateNodeRunner = runtimeSelection.nodeRunner;
+    recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
     if (runtimeSelection.replacedNodeRunner && !opts.json) {
       defaultRuntime.log(
         theme.warn(
@@ -614,6 +633,9 @@ async function updateCommandInternal(
 
   // Preload execution and recovery before the package swap can remove these chunks.
   const { executeMutableUpdate, finishUpdate } = await import("./update-execution.runtime.js");
+
+  // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
+  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
 
   // Startup migrations belong to the freshly installed Doctor. Admit shared-state
   // mutation only after every pre-install refusal has passed.
@@ -643,7 +665,6 @@ async function updateCommandInternal(
     stop,
     channel,
     tag,
-    showProgress,
     opts,
     shouldRestart,
     devTarget,
@@ -661,6 +682,9 @@ async function updateCommandInternal(
     return;
   }
   const { result, preManagedServiceStop, ownedManagedUpdateContext } = execution;
+  recoveryState.triageTarget.root = result.root ?? root;
+  recoveryState.triageTarget.failureResult = result;
+  recoveryState.triageTarget.env = ownedManagedUpdateContext?.env ?? recoveryState.triageTarget.env;
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   const finalizationPluginInstallRecords =
     ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords;

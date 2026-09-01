@@ -1,4 +1,5 @@
 // Mattermost plugin module implements client behavior.
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
@@ -694,10 +695,7 @@ export async function uploadMattermostFile(
 ): Promise<MattermostFileInfo> {
   const form = new FormData();
   const fileName = normalizeOptionalString(params.fileName) ?? "upload";
-  const bytes = Uint8Array.from(params.buffer);
-  const blob = params.contentType
-    ? new Blob([bytes], { type: params.contentType })
-    : new Blob([bytes]);
+  const blob = new Blob([bufferToBlobPart(params.buffer)], { type: params.contentType });
   form.append("files", blob, fileName);
   form.append("channel_id", params.channelId);
 

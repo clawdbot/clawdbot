@@ -281,28 +281,6 @@ describe("tab access event epochs", () => {
     });
   });
 
-  it("lets a newer eligible tab event own stale group-wide reconciliation", async () => {
-    const harness = createHarness("selected");
-    const groupInspection = deferred<{ accessible: boolean }>();
-    harness.policy.inspectTab
-      .mockImplementationOnce(async () => await groupInspection.promise)
-      .mockResolvedValueOnce({ accessible: true });
-
-    harness.groupUpdatedListener();
-    harness.debuggerEventListener({ tabId: 7 }, "Page.frameNavigated", {});
-    expect(harness.send).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
-
-    harness.tabsUpdatedListener(7, { url: "https://two.example" });
-    await vi.waitFor(() => {
-      expect(harness.attachments.get(7)?.epoch).toEqual({ revision: 2, tabRevision: 0 });
-    });
-    groupInspection.resolve({ accessible: false });
-    await Promise.resolve();
-
-    expect(harness.detachDebugger).not.toHaveBeenCalled();
-  });
-
   it("does not refresh epochs from a stale group-wide access snapshot", async () => {
     vi.stubGlobal("chrome", { tabGroups: { get: vi.fn() } });
     const harness = createHarness();

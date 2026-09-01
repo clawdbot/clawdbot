@@ -83,12 +83,19 @@ tool-capable model with at least 16K of measured effective context already
 loaded in a reachable LM Studio or Ollama server. Detection runs on the
 Gateway host, including when the macOS app connects to a Linux Gateway. The best
 option is tested with a real completion and only saved
-after it answers; when a test fails the app automatically tries the next option
-and shows why the previous one failed. If several options are found you can
+after it answers. If setup fails, the app shows the reason so you can retry or
+choose another connection. If several options are found you can
 switch between them before continuing. Automatic local discovery never pulls
 or downloads a model. Ollama checks `/api/ps` for loaded models; an eligible
 model that is only installed on disk requires explicit setup through
 **Choose connection** → **Local only**. See [Ollama](/providers/ollama).
+
+When a connection needs a runtime plugin, the app and dashboard show the
+staged package's source and capabilities, with integrity when available before installing or
+enabling it. Review the details, then explicitly confirm acceptance to continue.
+Declining, cancelling, or an interactive setup error stops that attempt without selecting another
+inference route. You can retry or choose a different connection. Installation
+progress and the final live model check stay in the same setup flow.
 
 To use a Claude subscription when the Gateway host has no Claude CLI login, run
 `claude setup-token` on any machine with Claude Code installed, then paste the

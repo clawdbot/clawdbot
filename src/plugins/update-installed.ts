@@ -106,6 +106,7 @@ export async function updateNpmInstalledPlugins(params: {
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -432,7 +433,6 @@ export async function updateNpmInstalledPlugins(params: {
             pluginId,
             record,
             currentVersion,
-            effectiveSpec,
             recordSpec,
             resolution: metadataResult.metadata,
             updateChannel,
@@ -475,6 +475,7 @@ export async function updateNpmInstalledPlugins(params: {
       packagePluginIds: params.packagePluginIds?.[pluginId],
       expectedIntegrity,
       onCapabilityConsent: consentCallbacks.onCapabilityConsent,
+      beforePersistentEffect: params.beforePersistentEffect,
     });
     const runAttempt = () =>
       runPluginUpdateAttempt(

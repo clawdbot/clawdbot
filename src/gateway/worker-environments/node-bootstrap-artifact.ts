@@ -7,7 +7,12 @@ import { isDeepStrictEqual } from "node:util";
 import { valid } from "semver";
 import * as tar from "tar";
 import { collectPackageDistImportErrors } from "../../../scripts/lib/package-dist-imports.mjs";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "../../../scripts/lib/package-lifecycle-marker.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -29,7 +34,6 @@ import {
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 
-const INSTALL_GUARD_PATH = "dist/openclaw-install-guard";
 const BOOTSTRAP_LAUNCHER_FILES = ["openclaw.mjs", "node-version.mjs"];
 const BOOTSTRAP_COPY_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
@@ -210,12 +214,19 @@ async function prepareNodeBootstrapArtifact(
     // detects staging changes without reopening and hashing the entire directory.
     const entry = {
       path: `package/${relative}`,
-      mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode & ~process.umask(),
       size: Buffer.byteLength(contents),
       sha256: createHash("sha256").update(contents).digest("hex"),
     };
     await fs.writeFile(target, contents, { mode });
-    staged.set(relative, entry);
+    // Reading process.umask() temporarily clears the process-wide mask and races
+    // parallel file creation. Record the mode the filesystem actually applied.
+    staged.set(relative, {
+      ...entry,
+      mode:
+        process.platform === "win32"
+          ? WORKER_BUNDLE_ARTIFACT_MODE
+          : (await fs.stat(target)).mode & 0o777,
+    });
   };
   const writeFile = async (relative: string, contents: string) => {
     reserveFile(relative, Buffer.byteLength(contents));
@@ -293,7 +304,7 @@ async function prepareNodeBootstrapArtifact(
   await copyFiles(
     packageRoot,
     [...BOOTSTRAP_LAUNCHER_FILES, ...files, ...scripts].filter(
-      (relative) => relative !== INSTALL_GUARD_PATH,
+      (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
     ),
   );
   // Keep real install guards/pruning, but source-only prepare/prepack commands must not run on a node.
@@ -382,7 +393,7 @@ async function prepareNodeBootstrapArtifact(
   await writeFile("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
   const inventory = [...staged.keys()].filter((entry) => entry.startsWith("dist/")).toSorted();
   await writeFile(PACKAGE_DIST_INVENTORY_RELATIVE_PATH, `${JSON.stringify(inventory)}\n`);
-  await writeFile(INSTALL_GUARD_PATH, "OpenClaw package preinstall has not completed.\n");
+  await writeFile(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, "pending\n");
   assertBuiltImportClosure(stagingRoot, [...staged.keys()], packageJson.name);
   if (
     (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
@@ -466,7 +477,8 @@ export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
           throw error;
         }
       })();
-      const artifact = await prepared;
+      // Cancellation releases this consumer; process shutdown still drains the shared producer.
+      const artifact = await racePromiseWithAbortSignal(prepared, signal);
       signal?.throwIfAborted();
       if (closed) {
         throw new Error("Node bootstrap artifact provider is closed");

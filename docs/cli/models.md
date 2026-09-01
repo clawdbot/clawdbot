@@ -28,7 +28,11 @@ openclaw models set-image <model-or-alias>
 openclaw models scan
 ```
 
-`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`, `set-image`, `scan`, `refresh`, and `aliases` reject `--agent` outright because they are global and never agent-scoped. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
+`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent. Without it, model inspection uses `agents.defaults.systemAgent.agentId` when configured, otherwise the sole configured agent. Auth mutations require `--agent <id>` when multiple agents are configured.
+
+For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory when `--agent` is omitted. A matching configured `agentDir` retains that agent's ownership during credential refresh. An explicit `--agent <id>` takes precedence over the environment override.
+
+`fallbacks`/`image-fallbacks` manage global defaults. `set`, `set-image`, `scan`, `refresh`, and `aliases` also operate globally and reject `--agent`.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
@@ -150,6 +154,8 @@ openclaw models fallbacks clear
 Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list|add|remove|clear` manages the parallel `agents.defaults.imageModel.fallbacks` list with the same subcommand shape.
 
 ## Auth profiles
+
+Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 
 ```bash
 openclaw models auth add

@@ -36,17 +36,14 @@ import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import { deriveSessionTitle } from "./session-utils-core.js";
+import { deriveSessionTitle, getSingleRowChildSessionCandidates } from "./session-utils-core.js";
 import { listSessionsFromStoreAsync } from "./session-utils-list.js";
 import {
   getSessionDefaults,
   projectSessionPatchResult,
   resolveGatewayModelSupportsImages,
 } from "./session-utils-model.js";
-import {
-  buildSessionListRowMetadataContext,
-  buildSingleRowStoreChildSessionsByKey,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
 import {
   resolveGatewaySessionStoreTarget,
@@ -3339,7 +3336,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("single-row child candidates reuse stable entry identities across sparse stores", () => {
+  test("short-list child candidates reuse stable full-store entry identities", () => {
     const parentKey = "agent:main:main";
     let spawnedByReads = 0;
     const parent = { sessionId: "parent", updatedAt: 1 } as SessionEntry;
@@ -3353,17 +3350,13 @@ describe("gateway session utils", () => {
     } as SessionEntry;
     const storePath = "/tmp/openclaw-single-row-child-cache";
 
-    const first = buildSingleRowStoreChildSessionsByKey({
+    const first = getSingleRowChildSessionCandidates({
       store: { [parentKey]: parent, "agent:main:child": child },
       storePath,
-      key: parentKey,
-      now: Date.now(),
     });
-    const second = buildSingleRowStoreChildSessionsByKey({
+    const second = getSingleRowChildSessionCandidates({
       store: { [parentKey]: parent, "agent:main:child": child },
       storePath,
-      key: parentKey,
-      now: Date.now(),
     });
 
     expect(first.get(parentKey)).toEqual(["agent:main:child"]);

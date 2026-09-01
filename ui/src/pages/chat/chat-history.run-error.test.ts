@@ -3,7 +3,8 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { reconcileChatRunFromSessionRow, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
@@ -39,7 +40,7 @@ it.each([
       const diagnostic = state.chatRunError;
       await loadChatHistory(state);
       expect(state.chatRunError).toEqual(diagnostic);
-      expect(getChatSessionProjection(state, state.chatMessages).runs["next-run"]).toBeUndefined();
+      expect(getChatSessionProjection(state).runs["next-run"]).toBeUndefined();
     } finally {
       reconcileChatRunLifecycle(state, { clearRunStatus: true });
     }
@@ -123,7 +124,7 @@ it.each(["history-only", "startup-only", "final-only", "delta-then-final"] as co
       expect(state.chatMessages).toEqual(history.messages);
       expect(state.chatRunId).toBeNull();
       expect(state.lastError).toBeNull();
-      expect(getChatSessionProjection(state, state.chatMessages).runs["run-first"]).toMatchObject({
+      expect(getChatSessionProjection(state).runs["run-first"]).toMatchObject({
         status: "error",
         errorMessage: error,
       });
@@ -241,12 +242,10 @@ it.each(["failed", "timeout"] as const)(
       await loadChatHistory(state);
 
       expect(state.chatRunError?.summary).toContain(row.lastRunError);
-      expect(getChatSessionProjection(state, state.chatMessages).runs["current-run"]).toMatchObject(
-        {
-          status: status === "timeout" ? "timeout" : "error",
-          errorMessage: row.lastRunError,
-        },
-      );
+      expect(getChatSessionProjection(state).runs["current-run"]).toMatchObject({
+        status: status === "timeout" ? "timeout" : "error",
+        errorMessage: row.lastRunError,
+      });
     } finally {
       reconcileChatRunLifecycle(state, { clearRunStatus: true });
     }

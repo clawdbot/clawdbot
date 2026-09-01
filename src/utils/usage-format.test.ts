@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -430,7 +431,143 @@ describe("usage-format", () => {
       cacheRead: 3,
       cacheWrite: 4,
     });
+    expect(
+      resolveModelCostConfig({
+        provider: "anthropic",
+        model: "missing-model",
+        config,
+        allowPluginNormalization: false,
+      }),
+    ).toBeUndefined();
     expect(manifestSpy).not.toHaveBeenCalled();
+  });
+
+  const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
+  const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
+  const laterTiers = [{ ...laterRates, range: [0, Infinity] as [number, number] }];
+  it.each([
+    { name: "full", cost: firstRates, expected: firstRates },
+    { name: "partial", cost: { output: 0 }, expected: { ...laterRates, output: 0 } },
+    {
+      name: "zero",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    { name: "empty", cost: {}, expected: { ...laterRates, tieredPricing: laterTiers } },
+    { name: "omitted", cost: undefined, expected: { ...laterRates, tieredPricing: laterTiers } },
+    { name: "empty tiers", cost: { tieredPricing: [] }, expected: laterRates },
+    {
+      name: "authored tiers",
+      cost: { tieredPricing: [{ ...firstRates, range: [0] }] },
+      expected: {
+        ...laterRates,
+        tieredPricing: [{ ...firstRates, range: [0, Infinity] }],
+      },
+    },
+  ])("merges duplicate model rows with first-authored $name cost", ({ cost, expected }) => {
+    const config = {
+      models: {
+        providers: {
+          venice: {
+            models: [
+              { id: "priced-fixture", cost },
+              { id: "priced-fixture", cost: { ...laterRates, tieredPricing: laterTiers } },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+    ).toEqual(expected);
+  });
+
+  it("refreshes duplicate model prices and fingerprints after ordered source mutations", () => {
+    type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
+    const first: SourceModel = { id: "priced-fixture", cost: { ...firstRates } };
+    const later: SourceModel = { id: "priced-fixture", cost: { ...laterRates } };
+    const models = [first, later];
+    const config = {
+      models: { providers: { venice: { models } } },
+    } as unknown as OpenClawConfig;
+    let previousFingerprint: string | undefined;
+    const check = (label: string, expected: ModelCostConfig | undefined) => {
+      expect
+        .soft(
+          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+          label,
+        )
+        .toEqual(expected);
+      const fingerprint = resolveModelCostConfigFingerprint(config, agentDir);
+      expect.soft(fingerprint, label).not.toBe(previousFingerprint);
+      previousFingerprint = fingerprint;
+      // Fingerprinting refreshes the full index; it must agree with direct lookups.
+      expect
+        .soft(
+          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+          label,
+        )
+        .toEqual(expected);
+    };
+    check("initial duplicates", firstRates);
+    first.cost!.input = 9;
+    check("mutated first cost", { ...firstRates, input: 9 });
+    delete first.cost;
+    check("removed first cost", laterRates);
+    first.cost = { output: 0 };
+    check("restored partial cost", { ...laterRates, output: 0 });
+    const inserted = { id: "priced-fixture", cost: { ...firstRates, input: 3 } };
+    models.unshift(inserted);
+    check("inserted duplicate", inserted.cost);
+    models.reverse();
+    check("reordered duplicates", laterRates);
+    models[0] = { id: "priced-fixture", cost: { ...firstRates, input: 4 } };
+    check("replaced same-id row", { ...firstRates, input: 4 });
+    models.shift();
+    check("removed duplicate", { ...inserted.cost, output: 0 });
+    models.splice(0);
+    check("removed all rows", undefined);
+  });
+
+  it.each(["canonical first", "canonical last", "aliases only"])(
+    "selects the canonical provider price owner with %s",
+    (order) => {
+      const canonical = { models: [{ id: "priced-fixture", cost: firstRates }] };
+      const alias = { models: [{ id: "priced-fixture", cost: laterRates }] };
+      const providers =
+        order === "canonical first"
+          ? { venice: canonical, " VENICE ": alias }
+          : order === "canonical last"
+            ? { " VENICE ": alias, venice: canonical }
+            : { " Venice ": alias, " VENICE ": canonical };
+      const config = { models: { providers } } as unknown as OpenClawConfig;
+      expect(
+        resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+      ).toEqual(firstRates);
+    },
+  );
+
+  it("preserves explicit models.json precedence while merging its duplicate rows and provider keys", async () => {
+    const config = {
+      models: { providers: { venice: { models: [{ id: "priced-fixture", cost: laterRates }] } } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          venice: {
+            models: [
+              { id: "priced-fixture", cost: { output: 0 } },
+              { id: "priced-fixture", cost: firstRates },
+            ],
+          },
+          " VENICE ": { models: [{ id: "priced-fixture", cost: laterRates }] },
+        },
+      }),
+    );
+    expect(
+      resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+    ).toEqual({ ...firstRates, output: 0 });
   });
 
   it("observes in-place config pricing changes after a cached lookup", () => {

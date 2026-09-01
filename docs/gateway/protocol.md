@@ -62,6 +62,11 @@ request never establishes trace context for later frames. Use a separate
 the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
+Authenticated operator requests share a bounded queue for starting RPC handlers.
+When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
+before the method runs; retry within the request's budget. Started requests
+complete concurrently, so responses can arrive out of order.
+
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level
 authorization failures use top-level `code: "FORBIDDEN"` with structured
@@ -577,7 +582,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Channels and login helpers">
     - `channels.status` returns built-in + bundled channel/plugin status summaries.
-    - `channels.start` (`operator.admin`) starts one channel account runtime without re-authenticating. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, started }`, with `started` true only when the resulting runtime snapshot reports `running: true`. This is not a provider-connectivity check; see [Per-account recovery](/cli/channels#per-account-recovery-non-destructive).
+    - `channels.start` (`operator.admin`) starts one channel account runtime without re-authenticating. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, started, outcome }`, with `started` true only when the resulting runtime snapshot reports `running: true`. `outcome` carries the account lifecycle decision: `{ status: "handed-off" }`, `{ status: "retry", reason }`, or `{ status: "skipped", reason }`. The RPC is a manual override of automatic-start suppression; no `manual` parameter is accepted. This is not a provider-connectivity check; see [Per-account recovery](/cli/channels#per-account-recovery-non-destructive) for reasons and recovery guidance.
     - `channels.stop` (`operator.admin`) stops one channel account runtime without clearing auth state. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, stopped }`, with `stopped` true when the resulting runtime snapshot does not report `running: true`. Unlike `channels.logout`, it retains the account's credentials.
     - `channels.logout` logs out a specific channel/account where the channel supports it.
     - `web.login.start` starts a QR/web login flow for the current QR-capable web channel provider.
@@ -627,7 +632,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call. Clients that negotiate `gateway-control-v1` keep WebRTC media direct but move the provider control channel and tool lifecycle to the Gateway.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
-    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get `runId`, `agentId`, and canonical `agentSessionKey` and wait for normal chat lifecycle events before submitting the provider-specific tool result. Use the returned target for `chat.abort` and `chat.history`; keep the original key for voice-session requests. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
     - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
@@ -697,6 +702,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Pass `sessionKey`, optional `agentId` when session selection is agent-scoped, and a transcript `messageId` previously surfaced through `chat.history`; the gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
     - `chat.toolTitles` returns short purpose titles for tool calls rendered in the Control UI (batched, max 24 items with bounded inputs). The feature is opt-in via `gateway.controlUi.toolTitles` (default off); disabled gateways answer `{ titles: {}, disabled: true }` with no model call so clients stop asking. When enabled, titles use standard utility-model routing: an explicitly configured `utilityModel` (an operator decision that, like all utility tasks, may send bounded task content to the chosen provider), else the session provider's declared small-model default so no new egress destination appears implicitly; an empty `utilityModel` disables them entirely. Titles never fall back to the primary model. Results cache in the per-agent state database keyed by tool name + input, so repeated views never re-bill the same calls.
     - `chat.send` accepts one-turn `fastMode: "auto"` to use fast mode for model calls started before the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds (`DEFAULT_FAST_MODE_AUTO_ON_SECONDS`) and can be configured per model with `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds`. A `chat.send` caller can pass one-turn `fastAutoOnSeconds` to override the cutoff for that request. Pass `queueMode` (`steer`, `followup`, `collect`, or `interrupt`) to override the stored queue mode for this request only; explicit Control UI steer actions use `queueMode: "steer"`. Interrupt mode captures and aborts the session's current admitted turn, waits for that exact owner to settle, then starts the new turn; an idle session starts normally. A steer send targets the selected session's current state: the Gateway atomically injects the message into that session's direct active run, or starts a new turn when the session is idle. Activity in descendant subagent sessions never makes the selected session busy for this decision. `expectedLeafEntryId` is an independent transcript-branch compare-and-swap for non-steer interactive sends: pass the displayed branch leaf (or deliberate `null` for an authoritative empty transcript) and the send rejects with `details.reason: "active-leaf-changed"` if another client switched transcript branches first; steer sends ignore it.
+
+    - `chat.send`, `sessions.send`, and initial-turn `sessions.create` acknowledgments report admission separately from transcript persistence. Optional `messageSeq` is the one-based position from an actual committed user-turn receipt; it is absent while the input exists only in pending custody. `status: "started"` and `runStarted: true` alone do not establish a transcript row. Reconcile provisional input by its submission identity against accepted custody or canonical transcript identity, never a predicted position or matching content.
 
     - `sessions.create.fastMode` accepts `true`, `false`, or `"auto"` and persists that speed override before the initial turn starts.
 
@@ -817,6 +824,17 @@ count.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set
   `replace=true` and use `deltaText` as the replacement text.
+  Failed runs (`state: "error"`) may include `errorDetail` alongside the coarse
+  `errorKind` and human-readable `errorMessage`. This closed object has seven
+  optional fields: `provider`, `model`, `failoverReason`,
+  `providerRuntimeFailureKind`, `providerErrorType`, `httpStatus`, and
+  `providerErrorMessagePreview`. Strings are capped at 300 characters; `httpStatus`
+  is an integer from 100 through 599. Details come from the failed attempt's
+  sanitized provider observation, not from reparsing the user-facing message.
+  The preview is credential-redacted and may be shorter than the protocol cap.
+  Raw bodies, raw previews, and diagnostic hashes are never included in
+  `errorDetail`. Runs without provider observations omit it; successful and
+  canceled events do not carry it. This is an additive protocol-v4 field.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an

@@ -407,8 +407,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     }
     const { id, depth } = popped;
     const n = byId.get(id);
-    // Every id pushed onto the stack came from `children.filter(c => byId.has(c))`,
-    // so byId.get(id) is always defined here. Dead defensive guard.
+    // Child admission below only pushes ids present in this map.
     /* c8 ignore next 3 */
     if (!n) {
       continue;
@@ -428,13 +427,10 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
       depth,
     });
 
-    const children = (n.childIds ?? []).filter((c) => byId.has(c));
+    const children = n.childIds ?? [];
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
-      // `children` is a string[] from an array filter over RawAXNode.childIds,
-      // so `child` is always a defined string here. Dead defensive guard.
-      /* c8 ignore next 3 */
-      if (child) {
+      if (child && byId.has(child)) {
         stack.push({ id: child, depth: depth + 1 });
       }
     }
@@ -550,8 +546,10 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     if (!current) {
       break;
     }
-    expectDefined(tree[current.index], "CDP traversal node index").depth = current.depth;
-    for (const child of (tree[current.index]?.children ?? []).toReversed()) {
+    const node = expectDefined(tree[current.index], "CDP traversal node index");
+    node.depth = current.depth;
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = expectDefined(node.children[i], "CDP traversal child index");
       stack.push({ index: child, depth: current.depth + 1 });
     }
   }
@@ -733,11 +731,12 @@ async function resolveLinkUrls(
   sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
+  const linkRefs = Object.values(refs).filter(
+    (ref): ref is CdpRoleRef & { backendDOMNodeId: number } =>
+      ref.role === "link" && Boolean(ref.backendDOMNodeId),
+  );
   await Promise.all(
-    Object.values(refs).map(async (ref) => {
-      if (ref.role !== "link" || !ref.backendDOMNodeId) {
-        return;
-      }
+    linkRefs.map(async (ref) => {
       const resolved = (await send(
         "DOM.resolveNode",
         { backendNodeId: ref.backendDOMNodeId },
@@ -771,11 +770,12 @@ async function resolveIframeFrameIds(
   sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
+  const iframeNodes = tree.filter(
+    (node): node is RoleTreeNode & { backendDOMNodeId: number } =>
+      node.role.toLowerCase() === "iframe" && Boolean(node.backendDOMNodeId),
+  );
   await Promise.all(
-    tree.map(async (node) => {
-      if (node.role.toLowerCase() !== "iframe" || !node.backendDOMNodeId) {
-        return;
-      }
+    iframeNodes.map(async (node) => {
       const described = (await send(
         "DOM.describeNode",
         { backendNodeId: node.backendDOMNodeId, depth: 1 },

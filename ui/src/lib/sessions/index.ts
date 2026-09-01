@@ -502,7 +502,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         roster.scheduleEvent();
         return;
       }
-      void (async () => {
+      const hydrate = async () => {
         if (connection.isCurrent(scope)) {
           const sessionKey = gateway.snapshot.sessionKey?.trim();
           const agentScope = sessionKey
@@ -520,7 +520,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             await roster.refreshManagedLists();
           }
         }
-      })();
+      };
+      void hydrate().catch(() => undefined);
     }
   });
 

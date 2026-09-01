@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -39,7 +42,7 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-async function putRawRecord(record: unknown): Promise<void> {
+async function putRawRecord(record: unknown, metadata?: unknown): Promise<void> {
   const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result));
@@ -53,11 +56,13 @@ async function putRawRecord(record: unknown): Promise<void> {
   );
   const completed = transactionDone(transaction);
   transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put(record);
-  transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).put({
-    savedAt: Date.now(),
-    sessionKey: (record as { sessionKey: string }).sessionKey,
-    weight: 0,
-  });
+  transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).put(
+    metadata ?? {
+      savedAt: Date.now(),
+      sessionKey: (record as { sessionKey: string }).sessionKey,
+      weight: 0,
+    },
+  );
   await completed;
   database.close();
 }
@@ -233,7 +238,7 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
   });
 
-  it("does not write a snapshot back after pure hydration", async () => {
+  it("suppresses unchanged writes only for the latest hydration", async () => {
     let now = 1;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const sessionKey = "agent:main:hydrate-only";
@@ -246,8 +251,9 @@ describe("persistent chat session snapshots", () => {
     const memoryCache: ChatMessageCache = new Map();
     const reader = new SessionSnapshotStore(memoryCache);
     observeChatCache(memoryCache, reader);
+    const previousHydration = await reader.read(sessionKey);
     const hydrated = await reader.read(sessionKey);
-    if (!hydrated) {
+    if (!previousHydration || !hydrated) {
       throw new Error("expected hydrated snapshot");
     }
     cacheChatSessionSnapshot(
@@ -259,6 +265,48 @@ describe("persistent chat session snapshots", () => {
     await reader.flush();
 
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
+    reader.write(sessionKey, previousHydration);
+    await reader.flush();
+    expect((await readRawRecord(sessionKey))?.savedAt).toBe(2);
+  });
+
+  it("releases hydrated snapshots after the message cache evicts them", async () => {
+    const sessionKey = "agent:main:evicted-hydration";
+    const memoryCache: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memoryCache);
+    observeChatCache(memoryCache, store);
+    store.write(sessionKey, snapshot("persisted"));
+    await store.flush();
+
+    const evicted = await (async () => {
+      const hydrated = await store.read(sessionKey);
+      if (!hydrated) {
+        throw new Error("expected hydrated snapshot");
+      }
+      cacheChatSessionSnapshot(
+        memoryCache,
+        { assistantAgentId: "main", agentsList: null, hello: null },
+        { sessionKey },
+        hydrated,
+      );
+      return new WeakRef(hydrated);
+    })();
+    for (let index = 0; index < MAX_CACHED_CHAT_SESSIONS; index += 1) {
+      cacheChatSessionSnapshot(
+        memoryCache,
+        { assistantAgentId: "main", agentsList: null, hello: null },
+        { sessionKey: `agent:main:newer-${index}` },
+        snapshot(index),
+      );
+    }
+    await store.flush();
+    expect(memoryCache.has(sessionKey)).toBe(false);
+    // Weak references keep their target alive for the current job. Move to the
+    // next turn before the V8 heap census forces a complete collection.
+    await setImmediate();
+    queryObjects(SessionSnapshotStore);
+    expect(evicted.deref()).toBeUndefined();
+    expect(store.readSavedAt("agent:main:newer-0")).not.toBeNull();
   });
 
   it("evicts the oldest sessions by count and total serialized weight", async () => {
@@ -285,7 +333,7 @@ describe("persistent chat session snapshots", () => {
     expect(await weightReader.read("agent:main:weight-2")).not.toBeNull();
   });
 
-  it("resets the whole database when the savedAt seed finds a malformed record", async () => {
+  it("seeds timestamps without hydrating unrelated snapshots", async () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:valid", snapshot("valid"));
     await writer.flush();
@@ -295,6 +343,28 @@ describe("persistent chat session snapshots", () => {
       savedAt: Date.now(),
       snapshot: { messages: "not-an-array" },
     });
+
+    const reader = new SessionSnapshotStore();
+    await reader.loadSavedAtIndex();
+    expect(reader.readSavedAt("agent:main:valid")).not.toBeNull();
+    expect(reader.readSavedAt("agent:main:corrupt")).not.toBeNull();
+    expect(await reader.read("agent:main:corrupt")).toBeNull();
+    expect(await reader.read("agent:main:valid")).toBeNull();
+  });
+
+  it("resets the whole database when the savedAt seed finds malformed metadata", async () => {
+    const writer = new SessionSnapshotStore();
+    writer.write("agent:main:valid", snapshot("valid"));
+    await writer.flush();
+    await putRawRecord(
+      {
+        sessionKey: "agent:main:corrupt",
+        sessionId: "session-1",
+        savedAt: Date.now(),
+        snapshot: snapshot("corrupt metadata"),
+      },
+      { sessionKey: "agent:main:corrupt", savedAt: "invalid", weight: 0 },
+    );
 
     const reader = new SessionSnapshotStore();
     await reader.loadSavedAtIndex();

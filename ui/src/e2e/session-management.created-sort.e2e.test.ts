@@ -8,7 +8,6 @@ import {
   controlUiSessionUrl,
   installMockGateway,
   sessionsListResponse,
-  uiProofArtifactDir,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -37,7 +36,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -55,7 +54,7 @@ suite.define(() => {
       await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(10);
       const retainedSessionKey = olderRows[5]!.key;
       await rows.nth(5).evaluate((row) => Reflect.set(row, "__retainedSessionRow", true));
-      await captureUiProof(page, "sidebar-created-sort-before-refresh.png");
+      await captureUiProof(suite, page, "sidebar-created-sort-before-refresh.png");
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
       await gateway.setMethodResponse(
@@ -84,7 +83,7 @@ suite.define(() => {
           .locator(`.sidebar-recent-session[data-session-key="${retainedSessionKey}"]`)
           .evaluate((row) => Reflect.get(row, "__retainedSessionRow")),
       ).toBe(true);
-      await captureUiProof(page, "sidebar-created-sort-after-refresh.png");
+      await captureUiProof(suite, page, "sidebar-created-sort-after-refresh.png");
 
       expect(await rows.count()).toBe(11);
       expect(
@@ -96,7 +95,7 @@ suite.define(() => {
       await context.close();
       if (proofVideo) {
         await proofVideo.saveAs(
-          path.join(uiProofArtifactDir, "sidebar-created-sort-external-session.webm"),
+          path.join(suite.artifactDir, "sidebar-created-sort-external-session.webm"),
         );
       }
     }

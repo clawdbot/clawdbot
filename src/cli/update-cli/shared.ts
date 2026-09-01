@@ -61,6 +61,16 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
+export class UpdatePreMutationError extends Error {
+  constructor(
+    readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UpdatePreMutationError";
+  }
+}
+
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
@@ -341,7 +351,8 @@ export async function ensureGitCheckout(params: {
   if (!(await isGitCheckout(params.dir))) {
     const empty = await isEmptyDir(params.dir);
     if (!empty) {
-      throw new Error(
+      throw new UpdatePreMutationError(
+        "invalid-git-directory",
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
@@ -355,7 +366,10 @@ export async function ensureGitCheckout(params: {
   }
 
   if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+    throw new UpdatePreMutationError(
+      "invalid-git-directory",
+      `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
+    );
   }
 
   return { checkoutDir: await fs.realpath(params.dir), step: null };
@@ -375,9 +389,12 @@ export async function resolveGlobalManager(params: {
       params.root,
       params.timeoutMs,
     );
-    if (detected) {
-      return detected;
+    if (!detected) {
+      throw new Error(
+        "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+      );
     }
+    return detected;
   }
 
   const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);

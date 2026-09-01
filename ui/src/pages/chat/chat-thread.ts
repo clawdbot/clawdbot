@@ -45,16 +45,14 @@ type RenderChatItem = ReturnType<typeof buildChatItems>[number];
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
-const expandedBooleanMapVersions = new WeakMap<ReadonlyMap<string, boolean>, number>();
-const expandedAssistantMessagesBySession = new Map<
-  string,
-  Map<string, AssistantMessageExpansionState>
->();
+const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
+// This memo only skips repeated work. Keeping its transcript strongly would
+// retain message payloads after the owning pane and message cache release them.
 const lastToolCardItemsBySession = new Map<
   string,
-  { items: readonly (ChatItem | MessageGroup)[]; isFilteredProjection: boolean }
+  { items: WeakRef<readonly RenderChatItem[]>; isFilteredProjection: boolean }
 >();
 
 export function resetChatThreadState(paneId?: string): void {
@@ -66,7 +64,6 @@ export function resetChatThreadState(paneId?: string): void {
   resetWorkingProgress();
   expandedToolCardsBySession.clear();
   expandedUserMessagesBySession.clear();
-  expandedAssistantMessagesBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
   lastToolCardItemsBySession.clear();
@@ -356,21 +353,21 @@ export function buildCachedChatItems(
   return items;
 }
 
-export function getExpansionStateVersion(values: ReadonlyMap<string, boolean>): number {
-  return expandedBooleanMapVersions.get(values) ?? 0;
+export function getExpansionStateVersion(values: ReadonlyMap<string, unknown>): number {
+  return expansionMapVersions.get(values) ?? 0;
 }
 
-export function setExpansionState(values: Map<string, boolean>, key: string, value: boolean): void {
+export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
   if (values.has(key) && values.get(key) === value) {
     return;
   }
   values.set(key, value);
-  expandedBooleanMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
 }
 
-function deleteExpansionState(values: Map<string, boolean>, key: string): void {
+export function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
   if (values.delete(key)) {
-    expandedBooleanMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
   }
 }
 
@@ -391,51 +388,20 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-export function collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
-  return items.flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.flatMap((entry) =>
-          extractToolCardsCached(entry.message, entry.key).map(({ args, name }) => ({
-            args,
-            name,
-          })),
-        )
-      : [],
-  );
+export function* collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
+  for (const item of items) {
+    if (item.kind === "group") {
+      for (const entry of item.messages) {
+        yield* extractToolCardsCached(entry.message);
+      }
+    }
+  }
 }
 
 export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }
   | { status: "loaded"; markdown: string; revision: number };
-
-export function getExpandedAssistantMessages(
-  sessionKey: string,
-): Map<string, AssistantMessageExpansionState> {
-  for (const [cachedKey, state] of expandedAssistantMessagesBySession) {
-    if (areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
-      if (cachedKey !== sessionKey) {
-        expandedAssistantMessagesBySession.delete(cachedKey);
-        setSessionCacheValue(expandedAssistantMessagesBySession, sessionKey, state);
-      }
-      return state;
-    }
-  }
-  return getOrCreateSessionCacheValue(
-    expandedAssistantMessagesBySession,
-    sessionKey,
-    () => new Map(),
-  );
-}
-
-export function assistantMessageExpansionSignature(
-  values: ReadonlyMap<string, AssistantMessageExpansionState>,
-): string {
-  return Array.from(values)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value.revision}`)
-    .join("\u0000");
-}
 
 function getInitializedToolCards(sessionKey: string): Set<string> {
   return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
@@ -452,7 +418,7 @@ export function syncToolCardExpansionState(
   const previousProjection = getSessionCacheValue(lastToolCardItemsBySession, sessionKey);
   const previousAutoExpand = getSessionCacheValue(lastAutoExpandPrefBySession, sessionKey) ?? false;
   if (
-    previousProjection?.items === items &&
+    previousProjection?.items.deref() === items &&
     previousProjection.isFilteredProjection === isFilteredProjection &&
     previousAutoExpand === autoExpandToolCalls
   ) {
@@ -464,7 +430,7 @@ export function syncToolCardExpansionState(
       continue;
     }
     for (const entry of item.messages) {
-      const cards = extractToolCardsCached(entry.message, entry.key);
+      const cards = extractToolCardsCached(entry.message);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
         const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
         currentToolCardIds.add(disclosureId);
@@ -501,6 +467,9 @@ export function syncToolCardExpansionState(
       }
     }
   }
-  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, { items, isFilteredProjection });
+  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, {
+    items: new WeakRef(items),
+    isFilteredProjection,
+  });
   setSessionCacheValue(lastAutoExpandPrefBySession, sessionKey, autoExpandToolCalls);
 }

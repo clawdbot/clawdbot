@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -143,10 +143,7 @@ function readDiscoveryRows(body: unknown): Record<string, unknown>[] {
   if (!Array.isArray(bodyRecord?.data)) {
     throw new Error("model list must contain data[]");
   }
-  return bodyRecord.data.flatMap((entry) => {
-    const row = asOptionalRecord(entry);
-    return row ? [row] : [];
-  });
+  return bodyRecord.data.filter(isRecord);
 }
 
 function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
@@ -219,11 +216,12 @@ async function discoverOpenAICompatibleModelRows(params: {
           { path: "/v1/models", url: `${inferenceBaseUrl}/models` },
         ]
       : [{ path: "/v1/models", url: `${inferenceBaseUrl}/models` }];
-  let modelsPath = modelCandidates[0]?.path ?? "/v1/models";
-  let modelsResult: DiscoveryResponse | undefined;
-  for (const [index, candidate] of modelCandidates.entries()) {
-    modelsPath = candidate.path;
-    modelsResult = await fetchSelfHostedDiscoveryJson({
+  let modelList:
+    | { kind: "success"; models: Record<string, unknown>[] }
+    | Exclude<OpenAICompatibleModelDiscoveryResult, { kind: "success" }>
+    | undefined;
+  for (const candidate of modelCandidates) {
+    const result = await fetchSelfHostedDiscoveryJson({
       url: candidate.url,
       origin,
       apiKey: params.apiKey,
@@ -234,30 +232,33 @@ async function discoverOpenAICompatibleModelRows(params: {
       readBody: true,
       label: params.label,
     });
+    if (result.kind === "unreachable") {
+      return result;
+    }
+    if (result.kind === "invalid-response") {
+      modelList = { ...result, path: candidate.path };
+    } else if (!result.ok) {
+      modelList = { kind: "http-error", path: candidate.path, status: result.status };
+    } else {
+      try {
+        modelList = { kind: "success", models: readDiscoveryRows(result.body) };
+      } catch (error) {
+        modelList = { kind: "invalid-response", path: candidate.path, error };
+      }
+    }
+    // A root endpoint may serve a web app instead of a model list. Try the
+    // inference endpoint, while keeping auth and service failures terminal.
     if (
-      modelsResult.kind !== "response" ||
-      modelsResult.status !== 404 ||
-      index === modelCandidates.length - 1
+      modelList.kind === "success" ||
+      (modelList.kind === "http-error" && modelList.status !== 404)
     ) {
       break;
     }
   }
-  if (!modelsResult || modelsResult.kind === "unreachable") {
-    return modelsResult ?? { kind: "unreachable", error: new Error("missing model response") };
+  if (!modelList || modelList.kind !== "success") {
+    return modelList ?? { kind: "unreachable", error: new Error("missing model response") };
   }
-  if (modelsResult.kind === "invalid-response") {
-    return { ...modelsResult, path: modelsPath };
-  }
-  if (!modelsResult.ok) {
-    return { kind: "http-error", path: modelsPath, status: modelsResult.status };
-  }
-
-  let models: Record<string, unknown>[];
-  try {
-    models = readDiscoveryRows(modelsResult.body);
-  } catch (error) {
-    return { kind: "invalid-response", path: modelsPath, error };
-  }
+  const { models } = modelList;
   const rows: OpenAICompatibleModelDiscoveryRow[] = models.map((model) => ({ model }));
   if (params.discoverRuntimeContext !== false) {
     const routerMode =

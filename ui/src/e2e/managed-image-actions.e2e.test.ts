@@ -1,6 +1,7 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -9,7 +10,12 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const controlUiBasePath = "/rosita";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "managed-image-actions");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDir = createControlUiE2eArtifactDir("managed-image-actions");
+  }
+});
 
 suite.define(() => {
   it("previews, downloads, and opens a ticketed generated image", async () => {
@@ -84,7 +90,6 @@ suite.define(() => {
         .toBe(1280);
       expect(requestedVariants).toEqual(["thumbnail"]);
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(proofDir, "ticketed-generated-image-subpath.png"),

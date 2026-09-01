@@ -875,6 +875,7 @@ describe("normalizeClaudeBackendConfig", () => {
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 
+    expect(backend.autoSelectAuthProfile).toBe(false);
     expect(backend.config.env).toBeUndefined();
     expect(backend.config.liveSession).toBe("claude-stdio");
     expect(backend.config.output).toBe("jsonl");

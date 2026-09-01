@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -142,8 +142,10 @@ suite.define(() => {
   it("sets and clears session colors through desktop and compact menus", async () => {
     const key = "agent:main:color-proof";
     const now = Date.now();
-    const proofDir = "/tmp/session-color-web-proof";
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    const proofDir = capture
+      ? createControlUiE2eArtifactDir("session-color-web-proof", "/tmp/session-color-web-proof")
+      : "";
     const context = await suite.browser.newContext({
       locale: "en-US",
       colorScheme: "dark",
@@ -207,7 +209,6 @@ suite.define(() => {
     });
     const shot = async (name: string) => {
       if (capture) {
-        await mkdir(proofDir, { recursive: true });
         await page.screenshot({
           path: path.join(proofDir, name),
           animations: "disabled",

@@ -21,6 +21,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
+  tryResolveInvocationCwd,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
 } from "./shared.js";
@@ -28,6 +29,7 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 import {
   createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
+  persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
@@ -40,7 +42,9 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure } from "./update-command-result.js";
+import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -105,9 +109,8 @@ type UpdateFinalizeResult = {
 };
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  const invocationCwd = tryResolveInvocationCwd();
   suppressDeprecations();
-  const finalizationStartedAt = performance.now();
-  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
@@ -124,9 +127,30 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   assertConfigWriteAllowedInCurrentMode();
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
+    recoverOrphanedSidecars: false,
   });
 
   const root = await resolveUpdateRoot();
+  const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
+  await withUpdateFailureTriage(opts, target, () =>
+    withUpdateInProgressEnv(invocationCwd, () =>
+      updateFinalizeCommandInternal(opts, root, timeoutMs, requestedChannel),
+    ),
+  );
+}
+
+async function updateFinalizeCommandInternal(
+  opts: UpdateFinalizeOptions,
+  root: string,
+  timeoutMs: number | undefined,
+  requestedChannel: UpdateChannel | null,
+): Promise<void> {
+  const finalizationStartedAt = performance.now();
+  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
+  // Refused invocations cannot write diagnostics or recover state sidecars.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   let configSnapshot = await runTimedFinalizePhase({
     finalizationStartedAt,
     phaseTimings,
@@ -233,13 +257,8 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             configSnapshot,
             configChanged: restoredConfig.changed,
             restoredAuthoredChannels: restoredConfig.authoredChannels,
-            opts: {
-              json: opts.json,
-              timeout: opts.timeout,
-              yes: opts.yes,
-              acceptCapabilities: opts.acceptCapabilities,
-              restart: false,
-            },
+            json: opts.json,
+            acceptCapabilities: opts.acceptCapabilities,
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
             pluginInstallRecords,
           }),
@@ -275,6 +294,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
+  await persistValidatedDowngradeConfig(configSnapshot);
 
   if (opts.deferCompletionCache) {
     phaseTimings.push({
@@ -323,6 +343,14 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     defaultRuntime.log(theme.muted("Update finalization completed."));
   }
   if (result.status === "error") {
-    defaultRuntime.exit(1);
+    throw new UpdateCommandFailure({
+      status: "error",
+      mode: "unknown",
+      root,
+      reason: "post-update-plugins",
+      postUpdate: { plugins: pluginUpdate },
+      steps: [],
+      durationMs: Math.round(performance.now() - finalizationStartedAt),
+    });
   }
 }

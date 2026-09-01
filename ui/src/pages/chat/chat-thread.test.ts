@@ -1,6 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 // Control UI tests cover build chat items behavior.
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
@@ -8,6 +10,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import * as threadItems from "./chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -24,7 +27,7 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
-import { resolveChatProjectionRunId } from "./tool-stream.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -1938,17 +1941,14 @@ describe("buildCachedChatItems working spark", () => {
 describe("buildCachedChatItems", () => {
   it("does not inspect ordinary transcript messages for tool previews", () => {
     const messages = [userMessage("hello", 1_000), assistantMessage("reply", 1_001)];
-    const previewExtraction = vi.spyOn(toolCards, "extractToolCardsCached");
+    const previewExtraction = vi.spyOn(threadItems, "extractChatMessagePreview");
+    try {
+      buildCachedChatItems(createProps({ paneId: "ordinary-transcript", messages }));
 
-    buildCachedChatItems(createProps({ paneId: "ordinary-transcript", messages }));
-
-    expect(
-      previewExtraction.mock.calls.filter(
-        ([message, prefix]) =>
-          messages.includes(message as (typeof messages)[number]) && prefix === "preview",
-      ),
-    ).toEqual([]);
-    previewExtraction.mockRestore();
+      expect(previewExtraction).not.toHaveBeenCalled();
+    } finally {
+      previewExtraction.mockRestore();
+    }
   });
 
   it("sender provenance separates namespaces without splitting profile renames", () => {
@@ -2228,7 +2228,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "coalesced");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-shell",
@@ -2269,7 +2269,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "native-reversed");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-native",
@@ -2307,9 +2307,7 @@ describe("buildCachedChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `native-same-name-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards).toHaveLength(2);
     expect(cards.find((card) => card.callId === "call-a")).toMatchObject({
       args: { path: "a.ts" },
@@ -2345,7 +2343,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "bundled-reversed");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
@@ -2374,7 +2372,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     const entries = groupAt(groups, 0).messages;
-    const cards = entries.flatMap((entry) => extractToolCards(entry.message, entry.key));
+    const cards = entries.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
@@ -2395,9 +2393,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(2);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `interleaved-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards).toHaveLength(2);
     expect(cards[0]).toMatchObject({ callId: "call-a", outputText: "contents of a" });
     expect(cards[1]).toMatchObject({ callId: "call-b", outputText: "contents of b" });
@@ -2414,7 +2410,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "repeated-snapshot");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-x",
@@ -2450,7 +2446,7 @@ describe("buildCachedChatItems", () => {
       );
     const cardsFor = (messages: unknown[], toolMessages: unknown[] = []) =>
       messageGroups({ messages, toolMessages }).flatMap((group) =>
-        group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+        group.messages.flatMap((entry) => extractToolCards(entry.message)),
       );
 
     it.each([
@@ -2509,7 +2505,7 @@ describe("buildCachedChatItems", () => {
         });
         const visible = groups.flatMap((group) =>
           group.messages.flatMap((entry) => {
-            const cards = extractToolCards(entry.message, entry.key);
+            const cards = extractToolCards(entry.message);
             return cards.length ? cards : [requireRecord(entry.message).content];
           }),
         );
@@ -2566,7 +2562,7 @@ describe("buildCachedChatItems", () => {
           toolMessages: [live],
         });
         const cards = groups.flatMap((group) =>
-          group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+          group.messages.flatMap((entry) => extractToolCards(entry.message)),
         );
         expect(cards).toHaveLength(2);
         expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
@@ -2642,7 +2638,7 @@ describe("buildCachedChatItems", () => {
         toolMessages: [snapshot("a"), snapshot("b")],
       });
       const entries = groups.flatMap((group) => group.messages);
-      const cards = entries.flatMap((entry) => extractToolCards(entry.message, entry.key));
+      const cards = entries.flatMap((entry) => extractToolCards(entry.message));
       expect(cards).toHaveLength(2);
       expect(cards.find((card) => card.callId === "a")).toMatchObject({
         args: { command: "first" },
@@ -2852,9 +2848,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(17);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `many-open-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards).toHaveLength(17);
     expect(cards.find((card) => card.callId === "call-0")).toMatchObject({
       outputText: "first contents",
@@ -2878,9 +2872,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(2);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `bundled-results-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
       ["call-a", "contents of a"],
       ["call-b", "contents of b"],
@@ -2905,7 +2897,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "canonical-parallel");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(2);
     expect(cards[0]).toMatchObject({
       callId: "call-a",
@@ -2942,7 +2934,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "canonical-provider");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
       ["call-a", "contents of a"],
       ["call-b", "contents of b"],
@@ -3017,7 +3009,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "provider-coalesced");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "provider-call",
@@ -3677,8 +3669,8 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    const cards = groups.flatMap((group, index) =>
-      group.messages.flatMap((entry) => extractToolCards(entry.message, `restored-${index}`)),
+    const cards = groups.flatMap((group) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message)),
     );
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ callId: "call-read", name: "read" });
@@ -4513,6 +4505,34 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
+  it("releases a closed pane's messages while retaining its disclosure choices", async () => {
+    resetChatThreadState();
+    class TranscriptMessage {
+      role = "assistant";
+      content = [{ type: "toolcall", id: "released-call", name: "read" }];
+    }
+    const paneId = "released-pane";
+    const sessionKey = "released-session";
+    const populatePane = () => {
+      const items = buildCachedChatItems(
+        createProps({ paneId, sessionKey, messages: [new TranscriptMessage()] }),
+      );
+      syncToolCardExpansionState(sessionKey, items, true);
+    };
+    try {
+      populatePane();
+      expect(queryObjects(TranscriptMessage)).toBe(1);
+
+      resetChatThreadState(paneId);
+      await setImmediate();
+
+      expect(queryObjects(TranscriptMessage)).toBe(0);
+      expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
+    } finally {
+      resetChatThreadState();
+    }
+  });
+
   it("skips the tool-card walk when the item array identity is unchanged", () => {
     resetChatThreadState();
     const group: MessageGroup = {

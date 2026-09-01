@@ -16,6 +16,7 @@ import {
 } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
+import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   normalizeProviderConfigWithPlugin: vi.fn<
@@ -240,11 +241,19 @@ beforeAll(async () => {
       agentDir: "/tmp/openclaw-models-config-env-vars-test",
       env: {},
       existingRaw: "",
-      existingParsed: null,
+      existingParsed: {
+        providers: {
+          retained: createImplicitOpenAiProvider({ auth: "oauth" }),
+          "empty-existing": createImplicitOpenAiProvider({ apiKey: "" }),
+        },
+      },
     },
     {
       resolveImplicitProviders: async () => ({
         openai: createImplicitOpenAiProvider(),
+        oauth: createImplicitOpenAiProvider({ auth: "oauth" }),
+        role: createImplicitOpenAiProvider({ auth: "aws-sdk" }),
+        empty: createImplicitOpenAiProvider({ apiKey: "" }),
         "auth-only": createImplicitOpenAiProvider({
           baseUrl: "https://auth.example/v1",
           api: "openai-responses",
@@ -469,10 +478,37 @@ describe("models-config", () => {
     },
   );
 
-  it("does not write unauthenticated model providers that would invalidate models.json", async () => {
+  it.each(["openai", "oauth", "role", "retained"])(
+    "publishes %s catalog rows without requiring an inline API key",
+    (provider) => {
+      expect(unauthenticatedProviderParsed.providers?.[provider]).toMatchObject({
+        models: [{ id: "gpt-5.5" }],
+      });
+      expect(unauthenticatedProviderParsed.providers?.[provider]).not.toHaveProperty("apiKey");
+    },
+  );
+
+  it.each(["empty", "empty-existing"])("rejects an explicitly empty key in %s", (provider) => {
+    expect(unauthenticatedProviderParsed.providers?.[provider]).toBeUndefined();
+  });
+
+  it("leaves keyless catalog authentication to the registry auth owner", () => {
     expect(unauthenticatedProviderWritePlan.action).toBe("write");
-    expect(unauthenticatedProviderParsed.providers?.openai).toBeUndefined();
     expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
+    if (unauthenticatedProviderWritePlan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const auth = AuthStorage.inMemory();
+    const registry = ModelRegistry.create(auth, "/tmp/openclaw-keyless-catalog/models.json", {
+      includePluginCatalogs: false,
+      modelsJsonContents: unauthenticatedProviderWritePlan.contents,
+    });
+    const model = registry.find("openai", "gpt-5.5");
+    expect(registry.getError()).toBeUndefined();
+    expect(model).toBeDefined();
+    expect(registry.getAvailable()).not.toContain(model);
+    auth.setRuntimeApiKey("openai", "synthetic-runtime-key");
+    expect(registry.getAvailable()).toContain(model);
   });
 
   it("treats empty replace-mode provider sets as authoritative", async () => {

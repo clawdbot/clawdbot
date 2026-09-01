@@ -16,66 +16,71 @@
 
 :root[data-theme="crt"] {
   /*
-   * Accent — bright phosphor green on neutral tube black; white-cast body text.
-   * Phosphor (green-on-green glass) stays the tinted sibling; CRT is the
-   * neutral white/green console.
+   * Accent — monochrome white phosphor on tube black, amber as the cursor
+   * accent. Phosphor owns the green tube; CRT is the white one (the third
+   * classic phosphor, amber, stays in --accent-2).
    *
    * WCAG 2.1 AA audit (bg = #090a09, relative luminance ≈ 0.0030):
-   *   --accent #3aff7d  contrast ≈ 14.9:1 AAA ✓
-   *   --primary-foreground #052b12 on #3aff7d button: 11.6:1 ✓
+   *   --accent #e8e8e8  contrast ≈ 16.2:1 AAA ✓
+   *   --primary-foreground / --accent-foreground #111111 on #e8e8e8: 15.5:1 ✓
    *   --destructive-foreground (base #fafafa) on #d0342d button: 4.7:1 AA ✓
-   *   body text --text #c2cac3: 11.8:1 ✓
-   *   worst text pairing --muted on --bg-muted: 6.5:1 ✓
+   *   body text --text #c6c6c6: 11.6:1 ✓
+   *   worst text pairing --muted on --bg-muted: 6.3:1 ✓
    */
-  --ring: #3aff7d;
-  --accent: #3aff7d;
-  --accent-hover: #71ffa5;
-  --accent-muted: #3aff7d;
-  --accent-subtle: rgba(58, 255, 125, 0.12);
-  --accent-glow: rgba(58, 255, 125, 0.2);
-  --primary: #3aff7d;
-  --primary-hover: #71ffa5;
-  --primary-foreground: #052b12;
+  --ring: #e8e8e8;
+  --accent: #e8e8e8;
+  --accent-hover: #ffffff;
+  --accent-muted: #e8e8e8;
+  --accent-subtle: rgba(232, 232, 232, 0.1);
+  --accent-glow: rgba(232, 232, 232, 0.16);
+  --primary: #e8e8e8;
+  --primary-hover: #ffffff;
+  --primary-foreground: #111111;
+  /* Base :root inherits #fafafa ink for accent fills, which vanishes on the
+     white accent (1.17:1) — e.g. the selected default-accent swatch check.
+     First built-in theme to override; light mode keeps base white ink over
+     its near-black accent. */
+  --accent-foreground: #111111;
 
   --destructive: #d0342d;
   --destructive-hover: #b92d27;
 
-  --focus: rgba(58, 255, 125, 0.18);
+  --focus: rgba(232, 232, 232, 0.18);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   --bg: #090a09;
-  --bg-accent: #0d0f0d;
-  --bg-elevated: #111412;
-  --bg-hover: #171b18;
-  --bg-muted: #151915;
+  --bg-accent: #0e0e0e;
+  --bg-elevated: #131313;
+  --bg-hover: #191919;
+  --bg-muted: #171717;
 
-  --card: #0d0f0d;
-  --card-foreground: #e9eee9;
-  --card-highlight: rgba(220, 245, 225, 0.04);
-  --popover: #111412;
-  --popover-foreground: #e9eee9;
+  --card: #0e0e0e;
+  --card-foreground: #ececec;
+  --card-highlight: rgba(235, 235, 235, 0.04);
+  --popover: #131313;
+  --popover-foreground: #ececec;
 
   --panel: #090a09;
-  --panel-strong: #111412;
-  --panel-hover: #171b18;
+  --panel-strong: #131313;
+  --panel-hover: #191919;
   --chrome: rgba(9, 10, 9, 0.96);
   --chrome-strong: rgba(9, 10, 9, 0.98);
 
-  --text: #c2cac3;
-  --text-strong: #e9eee9;
-  --chat-text: #c2cac3;
-  --muted: #90a094;
-  --muted-strong: #a3b2a7;
-  --muted-foreground: #90a094;
+  --text: #c6c6c6;
+  --text-strong: #ececec;
+  --chat-text: #c6c6c6;
+  --muted: #999999;
+  --muted-strong: #ababab;
+  --muted-foreground: #999999;
 
-  --border: #202521;
-  --border-strong: #303833;
-  --border-hover: #45524a;
-  --input: #202521;
+  --border: #232323;
+  --border-strong: #343434;
+  --border-hover: #4a4a4a;
+  --input: #232323;
 
-  --secondary: #0d0f0d;
-  --secondary-foreground: #e9eee9;
+  --secondary: #0e0e0e;
+  --secondary-foreground: #ececec;
   --accent-2: #ffcf5c;
   --accent-2-muted: rgba(255, 207, 92, 0.7);
   --accent-2-subtle: rgba(255, 207, 92, 0.12);
@@ -85,7 +90,7 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.65);
   --overlay-shadow: var(--shadow-md);
 
-  --grid-line: rgba(220, 245, 225, 0.04);
+  --grid-line: rgba(235, 235, 235, 0.04);
 
   /* One face for the whole console, prose included — same opt-in character
      decision as Phosphor; the mono choice is why this theme is not a default. */
@@ -97,35 +102,35 @@
 
 :root[data-theme="crt-light"] {
   /*
-   * Accent — deep console green on neutral paper.
+   * Accent — printed ink on neutral paper: the monochrome console in daylight.
    *
    * WCAG 2.1 AA audit (bg = #f5f5f4, relative luminance ≈ 0.911):
-   *   --accent #0a612b  contrast ≈ 6.9:1 AA ✓
-   *   --primary-foreground #ffffff on #0a612b button: 7.6:1 ✓
-   *   body text --text #343a34: 10.7:1 ✓
-   *   worst text pairing --muted on --bg-muted: 5.1:1 ✓
+   *   --accent #1f1f1f  contrast ≈ 15.1:1 AAA ✓
+   *   --primary-foreground #ffffff on #1f1f1f button: 16.5:1 ✓
+   *   body text --text #373737: 10.4:1 ✓
+   *   worst text pairing --muted on --bg-muted: 5.3:1 ✓
    */
-  --ring: #0a612b;
-  --accent: #0a612b;
-  --accent-hover: #084d22;
-  --accent-muted: #0a612b;
-  --accent-subtle: rgba(10, 97, 43, 0.1);
-  --accent-glow: rgba(10, 97, 43, 0.14);
-  --primary: #0a612b;
+  --ring: #1f1f1f;
+  --accent: #1f1f1f;
+  --accent-hover: #000000;
+  --accent-muted: #1f1f1f;
+  --accent-subtle: rgba(31, 31, 31, 0.07);
+  --accent-glow: rgba(31, 31, 31, 0.12);
+  --primary: #1f1f1f;
   --primary-foreground: #ffffff;
 
   --bg: #f5f5f4;
-  --bg-accent: #ececea;
+  --bg-accent: #ededed;
   --bg-elevated: #ffffff;
-  --bg-hover: #e3e4e1;
-  --bg-muted: #e9eae8;
-  --bg-content: #efefee;
+  --bg-hover: #e4e4e4;
+  --bg-muted: #eaeaea;
+  --bg-content: #f0f0f0;
 
   --card: #ffffff;
-  --card-foreground: #191e19;
-  --card-highlight: rgba(20, 40, 25, 0.02);
+  --card-foreground: #1b1b1b;
+  --card-highlight: rgba(20, 20, 20, 0.02);
   --popover: #ffffff;
-  --popover-foreground: #191e19;
+  --popover-foreground: #1b1b1b;
   --session-hovercard-surface: var(--card);
   --session-hovercard-progress-surface: color-mix(
     in srgb,
@@ -134,35 +139,35 @@
   );
 
   --panel: #f5f5f4;
-  --panel-strong: #ececea;
-  --panel-hover: #dddedb;
+  --panel-strong: #ededed;
+  --panel-hover: #dedede;
   --chrome: rgba(245, 245, 244, 0.96);
   --chrome-strong: rgba(245, 245, 244, 0.98);
 
-  --text: #343a34;
-  --text-strong: #191e19;
-  --chat-text: #343a34;
-  --muted: #5b655c;
-  --muted-strong: #49544a;
-  --muted-foreground: #5b655c;
+  --text: #373737;
+  --text-strong: #1b1b1b;
+  --chat-text: #373737;
+  --muted: #5f5f5f;
+  --muted-strong: #4d4d4d;
+  --muted-foreground: #5f5f5f;
 
-  --border: #dcdedb;
-  --border-strong: #c0c5bf;
-  --border-hover: #97a399;
-  --input: #dcdedb;
+  --border: #dddddd;
+  --border-strong: #c2c2c2;
+  --border-hover: #9c9c9c;
+  --input: #dddddd;
 
-  --secondary: #ececea;
-  --secondary-foreground: #343a34;
+  --secondary: #ededed;
+  --secondary-foreground: #373737;
   --accent-2: #7a5d10;
   --accent-2-muted: rgba(122, 93, 16, 0.75);
   --accent-2-subtle: rgba(122, 93, 16, 0.08);
 
-  --shadow-sm: 0 1px 2px rgba(15, 25, 18, 0.05);
-  --shadow-md: 0 4px 12px rgba(15, 25, 18, 0.07);
-  --shadow-lg: 0 12px 28px rgba(15, 25, 18, 0.09);
+  --shadow-sm: 0 1px 2px rgba(20, 20, 20, 0.05);
+  --shadow-md: 0 4px 12px rgba(20, 20, 20, 0.07);
+  --shadow-lg: 0 12px 28px rgba(20, 20, 20, 0.09);
   --overlay-shadow: var(--shadow-md);
 
-  --grid-line: rgba(20, 40, 25, 0.04);
+  --grid-line: rgba(20, 20, 20, 0.04);
 
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;

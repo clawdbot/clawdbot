@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -14,7 +14,12 @@ import {
 const suite = createChatFlowE2eSuite();
 const selected = "agent:main:card-selected";
 const watched = "agent:main:card-viewing";
-const proofDirectory = path.resolve(".artifacts/control-ui-e2e/presence-namespaces");
+let proofDirectory: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDirectory = createControlUiE2eArtifactDir("presence-namespaces");
+  }
+});
 const recentLabel = "Review the complete cross-platform launch readiness checklist before release";
 const updatedRecentLabel = `${recentLabel} with every regional owner`;
 const focusUpdatedRecentLabel = `${updatedRecentLabel} and final approval`;
@@ -104,7 +109,6 @@ async function capturePeopleCard(page: Page, filename: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofDirectory, { recursive: true });
   await page.screenshot({
     path: path.join(proofDirectory, filename),
     fullPage: true,
@@ -390,7 +394,6 @@ suite.define(() => {
         });
         await profileButton.waitFor({ state: "visible" });
         if (captureUiProofEnabled) {
-          await mkdir(proofDirectory, { recursive: true });
           await page.screenshot({
             path: path.join(proofDirectory, "initial.png"),
             animations: "disabled",

@@ -19,6 +19,17 @@ export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UP
 export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 
+// Only a completed, verified recovery can ask the parent to restart. Signals and
+// unexpected exits never authorize activation; notification consumption is irrelevant.
+export const MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE = 80;
+
+export function resolveManagedServiceUpdateFailureExitCode(result: UpdateRunResult): number {
+  return process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+    result.recovery?.serviceRestartSafe === true
+    ? MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE
+    : 1;
+}
+
 const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
   CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
   CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
@@ -26,7 +37,7 @@ const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
 
 export type ControlPlaneUpdateSentinelMetaFile = {
   version: 1;
-  meta: UpdateRestartSentinelMeta;
+  meta: UpdateRestartSentinelMeta & { triageContextPath?: string };
 };
 
 /** Convert an update result into the restart-health-pending sentinel result. */
@@ -58,7 +69,7 @@ export function isPendingControlPlaneUpdateRestartSentinel(
   );
 }
 
-function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
+function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta"] | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -66,6 +77,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   const threadId = readNonBlankString(value.threadId);
   const handoffId = readNonBlankString(value.handoffId);
   const root = readNonBlankString(value.root);
+  const triageContextPath = readNonBlankString(value.triageContextPath);
   const channel = isRecord(value.deliveryContext)
     ? readNonBlankString(value.deliveryContext.channel)
     : undefined;
@@ -85,6 +97,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
       : undefined;
   return {
     ...(root ? { root } : {}),
+    ...(triageContextPath ? { triageContextPath } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(threadId ? { threadId } : {}),
@@ -98,7 +111,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
 /** Read update sentinel routing metadata from the configured handoff file. */
 export async function readControlPlaneUpdateSentinelMeta(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<UpdateRestartSentinelMeta | null> {
+): Promise<ControlPlaneUpdateSentinelMetaFile["meta"] | null> {
   const filePath = env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]?.trim();
   if (!filePath) {
     return null;

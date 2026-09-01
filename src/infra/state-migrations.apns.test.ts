@@ -335,6 +335,23 @@ describe("legacy APNs Doctor migration", () => {
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
+  it("rejects an empty unexpected field without exposing its later sibling", async () => {
+    const stateDir = useStateDir();
+    const sourcePath = await writeLegacyState(stateDir, {
+      node: directRegistration({ nodeId: "node", "": 1, later: 2 }),
+    });
+    const result = await migrate(stateDir);
+    expect(result.warnings).toEqual([
+      "Failed reading legacy APNs state: Error: legacy APNs registration has an unexpected field",
+    ]);
+    expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["apns-registrations.json"]);
+    await expect(loadApnsRegistration("node", stateDir)).resolves.toBeNull();
+    const receipt = openOpenClawStateDatabase()
+      .db.prepare("SELECT source_key FROM migration_sources WHERE migration_kind = ?")
+      .get("legacy-apns-registrations-json");
+    expect(receipt).toBeUndefined();
+  });
+
   it("sanitizes malformed JSON warnings", async () => {
     const stateDir = useStateDir();
     const sourcePath = path.join(stateDir, "push", "apns-registrations.json");

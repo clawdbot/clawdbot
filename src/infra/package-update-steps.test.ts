@@ -722,70 +722,85 @@ describe("runGlobalPackageUpdateSteps", () => {
     }
   });
 
-  it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-staged-cleanup-" }, async (base) => {
-      const prefix = path.join(base, "prefix");
-      const globalRoot = path.join(prefix, "lib", "node_modules");
-      const packageRoot = path.join(globalRoot, "openclaw");
-      await writePackageRoot(packageRoot, "1.0.0");
+  it.each(["delayed", "manual"] as const)(
+    "keeps a successful staged swap with %s cleanup after a Windows native module error",
+    async (cleanupMode) => {
+      await withTestDir({ prefix: "openclaw-package-update-staged-cleanup-" }, async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
 
-      const realRm = fs.rm;
-      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-        const targetPath = String(target);
-        if (
-          targetPath.includes(`${path.sep}.openclaw-`) &&
-          !targetPath.includes(".openclaw-update-stage-") &&
-          !targetPath.includes(".openclaw-shim-backup-")
-        ) {
-          throw Object.assign(new Error("EPERM: operation not permitted, unlink native.node"), {
-            code: "EPERM",
-          });
-        }
-        return realRm(target, options);
-      });
-
-      try {
-        const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
-          packageRoot,
-          runCommand: createRootRunner(globalRoot),
-          runStep: async ({ name, argv, cwd }) => {
-            const prefixIndex = argv.indexOf("--prefix");
-            const stagePrefix = argv[prefixIndex + 1];
-            if (!stagePrefix) {
-              throw new Error("missing staged prefix");
-            }
-            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
-            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: cwd ?? process.cwd(),
-              durationMs: 1,
-              exitCode: 0,
-            };
-          },
-          timeoutMs: 1000,
+        const realRm = fs.rm;
+        const realRename = fs.rename;
+        const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (
+            cleanupMode === "manual" &&
+            path.basename(String(args[1])).startsWith(".openclaw-package-backup-")
+          ) {
+            throw Object.assign(new Error("backup retirement failed"), { code: "EACCES" });
+          }
+          return await realRename(...args);
+        });
+        const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          const targetPath = String(target);
+          if (path.basename(targetPath).startsWith(".openclaw.package-backup-")) {
+            throw Object.assign(new Error("EPERM: operation not permitted, unlink native.node"), {
+              code: "EPERM",
+            });
+          }
+          return realRm(target, options);
         });
 
-        expect(result.failedStep).toBeNull();
-        expect(result.afterVersion).toBe("2.0.0");
-        const swapStep = result.steps.find((step) => step.name === "global install swap");
-        expect(swapStep?.stdoutTail).toContain("preserved old package");
-        const delayedCleanupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
-          entry.startsWith(".openclaw-"),
-        );
-        expect(delayedCleanupDirs).toHaveLength(1);
-        await expect(
-          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ).resolves.toContain('"version":"2.0.0"');
-      } finally {
-        rmSpy.mockRestore();
-      }
-    });
-  });
+        try {
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }) => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+              await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.afterVersion).toBe("2.0.0");
+          const swapStep = result.steps.find((step) => step.name === "global install swap");
+          expect(swapStep?.stdoutTail).toContain("preserved old package");
+          expect(swapStep?.stdoutTail).toContain(
+            cleanupMode === "manual" ? "remove it manually" : "delayed cleanup",
+          );
+          const delayedCleanupDirs = (await fs.readdir(globalRoot)).filter((entry) =>
+            entry.startsWith(
+              cleanupMode === "manual" ? ".openclaw.package-backup-" : ".openclaw-package-backup-",
+            ),
+          );
+          expect(delayedCleanupDirs).toHaveLength(1);
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"2.0.0"');
+        } finally {
+          rmSpy.mockRestore();
+          renameSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("does not run post-verify work when staged npm verification fails", async () => {
     await withTestDir({ prefix: "openclaw-package-update-verify-" }, async (base) => {
@@ -831,6 +846,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.steps.at(-1)?.stderrTail).toContain(
         "expected installed version 2.0.0, found 1.5.0",
       );
+      // Staged tree never reached live swap — do not exempt the future-config guard.
       expect(result.verifiedPackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("1.0.0");
       expect(postVerifyStep).not.toHaveBeenCalled();
@@ -840,76 +856,176 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "restores the existing bin shim when staged shim replacement fails",
-    async () => {
-      await withTestDir({ prefix: "openclaw-package-update-shim-rollback-" }, async (base) => {
-        const prefix = path.join(base, "prefix");
-        const globalRoot = path.join(prefix, "lib", "node_modules");
-        const packageRoot = path.join(globalRoot, "openclaw");
-        const targetShim = path.join(prefix, "bin", "openclaw");
-        await writePackageRoot(packageRoot, "1.0.0");
-        await fs.mkdir(path.dirname(targetShim), { recursive: true });
+  it
+    .runIf(process.platform !== "win32")
+    .each([
+      "regular copy",
+      "symlink copy",
+      "backup copy",
+      "shim restore",
+      "mode restore",
+      "package restore",
+    ] as const)("preserves staged swap rollback safety after %s failure", async (failure) => {
+    await withTestDir({ prefix: "openclaw-package-update-shim-rollback-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const targetShim = path.join(prefix, "bin", "openclaw");
+      const oldLink = "../lib/node_modules/openclaw/dist/legacy.js";
+      const newLink = "../lib/node_modules/openclaw/dist/index.js";
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.mkdir(path.dirname(targetShim), { recursive: true });
+      if (failure === "symlink copy") {
+        await fs.writeFile(path.join(packageRoot, "dist", "legacy.js"), "old shim\n");
+        await fs.symlink(oldLink, targetShim);
+      } else {
         await fs.writeFile(targetShim, "old shim\n", "utf8");
+      }
 
-        let stagedShimForFailure: string | undefined;
-        const realCopyFile = fs.copyFile.bind(fs);
-        const copyFileSpy = vi
-          .spyOn(fs, "copyFile")
-          .mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
-            const [source] = args;
-            if (stagedShimForFailure && String(source) === stagedShimForFailure) {
-              throw createFsError("EACCES", "staged shim copy failed");
-            }
-            return await realCopyFile(...args);
-          });
-
-        let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
-        try {
-          result = await runGlobalPackageUpdateSteps({
-            installTarget: createNpmTarget(globalRoot),
-            installSpec: "openclaw@2.0.0",
-            packageName: "openclaw",
-            packageRoot,
-            runCommand: createRootRunner(globalRoot),
-            runStep: async ({ name, argv, cwd }) => {
-              const prefixIndex = argv.indexOf("--prefix");
-              const stagePrefix = argv[prefixIndex + 1];
-              if (!stagePrefix) {
-                throw new Error("missing staged prefix");
-              }
-              await writePackageRoot(
-                path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-                "2.0.0",
-              );
-              const stagedShim = path.join(stagePrefix, "bin", "openclaw");
-              stagedShimForFailure = stagedShim;
-              await fs.mkdir(path.dirname(stagedShim), { recursive: true });
-              await fs.writeFile(stagedShim, "new shim\n", "utf8");
-              return {
-                name,
-                command: argv.join(" "),
-                cwd: cwd ?? process.cwd(),
-                durationMs: 1,
-                exitCode: 0,
-              };
-            },
-            timeoutMs: 1000,
-          });
-        } finally {
-          copyFileSpy.mockRestore();
+      await fs.chmod(targetShim, 0o755);
+      let stagedShimForFailure: string | undefined;
+      const realCopyFile = fs.copyFile.bind(fs);
+      const realSymlink = fs.symlink.bind(fs);
+      const realRename = fs.rename.bind(fs);
+      const realChmod = fs.chmod.bind(fs);
+      const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (...args) => {
+        if (failure === "mode restore" && String(args[0]) === targetShim) {
+          throw createFsError("EACCES", "shim mode restoration failed");
         }
+        return await realChmod(...args);
+      });
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        const source = String(args[0]);
+        const destination = String(args[1]);
+        if (
+          (failure === "backup copy" && source === targetShim) ||
+          (failure !== "backup copy" && source === stagedShimForFailure) ||
+          (failure === "shim restore" &&
+            destination === targetShim &&
+            path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-"))
+        ) {
+          throw createFsError("EACCES", `${failure} failed`);
+        }
+        return await realCopyFile(...args);
+      });
+      const symlinkSpy = vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
+        if (failure === "symlink copy" && args[0] === newLink && String(args[1]) === targetShim) {
+          throw createFsError("EACCES", "staged symlink creation failed");
+        }
+        return await realSymlink(...args);
+      });
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        if (
+          failure === "package restore" &&
+          String(args[1]) === packageRoot &&
+          path.basename(String(args[0])).startsWith(".openclaw.package-backup-")
+        ) {
+          throw createFsError("EACCES", "package restoration failed");
+        }
+        return await realRename(...args);
+      });
 
-        expect(result.failedStep?.name).toBe("global install swap");
-        expect(result.verifiedPackageRoot).toBe(packageRoot);
+      let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
+      try {
+        result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            const stagedShim = path.join(stagePrefix, "bin", "openclaw");
+            stagedShimForFailure = stagedShim;
+            await fs.mkdir(path.dirname(stagedShim), { recursive: true });
+            if (failure === "symlink copy") {
+              await fs.symlink(newLink, stagedShim);
+            } else {
+              await fs.writeFile(stagedShim, "new shim\n", "utf8");
+            }
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+      } finally {
+        copyFileSpy.mockRestore();
+        symlinkSpy.mockRestore();
+        renameSpy.mockRestore();
+        chmodSpy.mockRestore();
+      }
+
+      expect(result.failedStep?.name).toBe("global install swap");
+      if (failure === "package restore") {
+        expect(result.afterVersion).toBeNull();
+        await expectPathMissing(packageRoot);
+      } else {
         expect(result.afterVersion).toBe("1.0.0");
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
         ).resolves.toContain('"version":"1.0.0"');
+      }
+      if (failure === "shim restore" || failure === "mode restore") {
+        if (failure === "shim restore") {
+          await expectPathMissing(targetShim);
+        }
+        const backups = (await fs.readdir(globalRoot)).filter((entry) =>
+          entry.startsWith(".openclaw.shim-backup-"),
+        );
+        expect(backups).toHaveLength(1);
+        await expect(
+          fs.readFile(path.join(globalRoot, backups[0] ?? "", "openclaw"), "utf8"),
+        ).resolves.toBe("old shim\n");
+      } else {
         await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
-      });
-    },
-  );
+        if (failure === "symlink copy") {
+          expect(await fs.readlink(targetShim)).toBe(oldLink);
+        }
+        expect((await fs.stat(targetShim)).mode & 0o777).toBe(0o755);
+      }
+      if (
+        failure === "shim restore" ||
+        failure === "mode restore" ||
+        failure === "package restore"
+      ) {
+        expect(result.recovery?.serviceRestartSafe).toBe(false);
+        const backups = (await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."));
+        expect(backups.length).toBeGreaterThan(0);
+        const retry = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => ({
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: "retry install failed before activation",
+          }),
+          timeoutMs: 1000,
+        });
+        expect(retry.failedStep).not.toBeNull();
+        expect(await fs.readdir(globalRoot)).toEqual(expect.arrayContaining(backups));
+      } else {
+        expect(result.recovery?.serviceRestartSafe).not.toBe(false);
+      }
+    });
+  });
 
   it("cleans the staged npm prefix when the install command throws", async () => {
     await withTestDir({ prefix: "openclaw-package-update-cleanup-" }, async (base) => {
@@ -933,7 +1049,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           },
           timeoutMs: 1000,
         }),
-      ).rejects.toThrow("install crashed");
+      ).resolves.toMatchObject({
+        recovery: { serviceRestartSafe: true },
+        failedStep: { stderrTail: "install crashed", exitCode: 1 },
+      });
 
       if (stagePrefix === undefined) {
         throw new Error("expected staged install prefix");

@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { getChatHistoryLoadState, loadChatHistory } from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {

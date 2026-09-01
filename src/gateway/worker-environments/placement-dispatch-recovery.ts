@@ -234,7 +234,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
   // durable active ownership and retry teardown already fenced by a previous failure.
   const reconcileActive = async (environmentId?: string): Promise<void> => {
-    await environments.reconcileOnce();
+    await environments.reconcileOnce(environmentId);
     const cleanupOrphans = orphanCleanupPending && environmentId === undefined;
     const pendingResultOwners = await recoverPendingWorkspaceResults(
       deps,
@@ -245,7 +245,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       orphanCleanupPending = false;
     }
     const journalOwners = blockingWorkspaceJournalSessions(placements);
-    const moveOwners = (await deps.recoverPlacementMoves?.()) ?? new Set<string>();
+    const moveOwners = (await deps.recoverPlacementMoves?.(environmentId)) ?? new Set<string>();
     for (const placement of placements.listForReconcile()) {
       if (
         journalOwners.has(placement.sessionId) ||

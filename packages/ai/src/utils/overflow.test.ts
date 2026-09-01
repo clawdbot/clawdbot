@@ -58,6 +58,15 @@ describe("configured context size overflow", () => {
 
 describe("provider overflow messages", () => {
   it.each([
+    { type: "provider_refusal", overflow: false },
+    { type: "provider_fallback", overflow: true },
+  ])("preserves $type when the error text mentions overflow", ({ type, overflow }) => {
+    const message = errorMessage("prompt is too long: 1200 tokens > 1000 maximum");
+    message.diagnostics = [{ type, timestamp: 1 }];
+    expect(isContextOverflow(message, 1000)).toBe(overflow);
+  });
+
+  it.each([
     "Error: 400 Input length (265330) exceeds model's maximum context length (262144).",
     "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131,040 tokens.",
     "Input length 131393 exceeds maximum allowed input length of 131040 token",
@@ -67,12 +76,22 @@ describe("provider overflow messages", () => {
     "code 1261: Prompt exceeds max length",
     "Context size has been exceeded.",
     "400 Context size has been exceeded.",
+    "500 Context size has been exceeded.",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
 });
 
 describe("scoped overflow messages", () => {
+  it.each([
+    "Context size has been exceeded.",
+    "400 Context size has been exceeded.",
+    "500 Context size has been exceeded.",
+  ])("recognizes llama.cpp wording through the provider fallback: %s", (message) => {
+    expect(matchesContextOverflowMessage(message, "provider-fallback")).toBe(true);
+    expect(matchesContextOverflowMessage(message, "failover-explicit")).toBe(false);
+  });
+
   it("recognizes the provider input-length wording in the strict failover scope", () => {
     expect(
       matchesContextOverflowMessage(
@@ -87,14 +106,6 @@ describe("scoped overflow messages", () => {
     (message) => {
       expect(matchesContextOverflowMessage(message, "assistant-error")).toBe(true);
       expect(matchesContextOverflowMessage(message, "failover-explicit")).toBe(false);
-    },
-  );
-
-  it.each(["Context size has been exceeded.", "400 Context size has been exceeded."])(
-    "recognizes llama.cpp context-size-exceeded in assistant and provider-fallback scopes: %s",
-    (message) => {
-      expect(matchesContextOverflowMessage(message, "assistant-error")).toBe(true);
-      expect(matchesContextOverflowMessage(message, "provider-fallback")).toBe(true);
     },
   );
 });

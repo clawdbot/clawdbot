@@ -1,11 +1,12 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
-import { describeFailoverError } from "../failover-error.js";
+import { getFailoverErrorCode } from "../failover/error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
@@ -18,7 +19,7 @@ import type { AgentAttemptResult } from "./runtime-loaders.js";
 const log = createSubsystemLogger("agents/agent-command");
 
 const formatLifecycleError = (error: unknown): string =>
-  renderFailoverCodeUserCopy(describeFailoverError(error).code) ?? formatErrorMessage(error);
+  formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
 
 function resolveTerminalLogLevel(
   outcome: AgentRunTerminalOutcome,
@@ -94,6 +95,9 @@ export function createAgentCommandLifecycle(params: {
         ...(timeoutPhase ? { timeoutPhase } : {}),
         ...(providerStarted !== undefined ? { providerStarted } : {}),
         ...(error ? { error: formatErrorMessage(error) } : {}),
+        ...(error && params.state.lifecycleErrorObservation
+          ? { errorObservation: params.state.lifecycleErrorObservation }
+          : {}),
         ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         ...(terminalDelivery ? { terminalDelivery } : {}),
         ...(terminalReceipt ? { terminalReceipt } : {}),
@@ -120,6 +124,9 @@ export function createAgentCommandLifecycle(params: {
           startedAt: params.startedAt,
           endedAt: Date.now(),
           error: formatLifecycleError(error),
+          ...(params.state.lifecycleErrorObservation
+            ? { errorObservation: params.state.lifecycleErrorObservation }
+            : {}),
           ...extraData,
         },
       });

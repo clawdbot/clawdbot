@@ -68,6 +68,13 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+<Warning>
+The default `openclaw-agent.sqlite` database also contains session history and
+other durable agent state. Do not delete it or its `-wal`, `-shm`, or `-journal`
+sidecars to reset memory. Use `memory index --force` to rebuild the index; see
+[Safe index recovery](/concepts/memory-builtin#safe-index-recovery).
+</Warning>
+
 ## `memory search`
 
 ```bash

@@ -427,6 +427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
+        // AppKit will not tear down onboarding while its sheet remains attached.
+        // Retire it before terminateLater starts the asynchronous cleanup loop.
+        OnboardingController.shared.close()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()

@@ -6,8 +6,8 @@ import { formatWebUiIconErrorText } from "../../components/error-presentation.ts
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -181,7 +181,7 @@ function renderPlacementStartupError(
   // History can own the bubble before startup observes its receipt. Keep the
   // banner action reachable when transcript deduplication hides the row.
   const hasInlineTurn =
-    status.initialTurn && !chatMessagesContainQueuedSend(messages, status.initialTurn, true);
+    status.initialTurn && !findChatSubmissionMessage(messages, status.initialTurn.sendRunId, true);
   const retry =
     status.retryable && onRetry && !hasInlineTurn
       ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>

@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -84,9 +84,11 @@ suite.define(() => {
 
     expect(rowKeys[0]).toMatch(/^agent-run:/u);
     expect(rowKeys).toEqual([rowKeys[0], rowKeys[0], rowKeys[0]]);
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
+      : undefined;
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.locator(".chat-thread-inner").screenshot({
         path: path.join(artifactDir, "restart-recovery-run-frame.png"),
       });
@@ -249,9 +251,11 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const transcript = page.locator(".chat-thread-inner");
       await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         const firstNarration = transcript.getByText(
           "I’ll create the launch card and check the existing style first.",
           { exact: true },
@@ -445,9 +449,11 @@ suite.define(() => {
     });
     expect(overlappingRows).toEqual([]);
 
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
+      : undefined;
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "cross-session-run-isolation.png"),
         fullPage: true,

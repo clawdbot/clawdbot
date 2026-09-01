@@ -18,12 +18,16 @@ afterEach(() => {
 });
 
 describe("OpenClaw state lease", () => {
-  it("releases ownership when a CLI exits from inside the leased operation", async () => {
-    await withOpenClawTestState({ label: "core-state-lease-process-exit" }, async (state) => {
-      const leaseModuleUrl = pathToFileURL(path.resolve("src/state/openclaw-state-lease.ts")).href;
-      const childScript = await state.writeText(
-        "lease-process-exit-child.mts",
-        `
+  it.each([undefined, "worker"] as const)(
+    "releases ownership when a CLI exits with %s renewal",
+    async (heartbeat) => {
+      await withOpenClawTestState({ label: "core-state-lease-process-exit" }, async (state) => {
+        const leaseModuleUrl = pathToFileURL(
+          path.resolve("src/state/openclaw-state-lease.ts"),
+        ).href;
+        const childScript = await state.writeText(
+          "lease-process-exit-child.mts",
+          `
           import { withOpenClawStateLease } from ${JSON.stringify(leaseModuleUrl)};
           const stateDir = process.argv[2];
           await withOpenClawStateLease({
@@ -32,44 +36,46 @@ describe("OpenClaw state lease", () => {
             database: { scope: "shared", options: { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } },
             leaseMs: 300_000,
             waitMs: 0,
+            heartbeat: ${JSON.stringify(heartbeat)},
           }, async () => process.exit(23));
         `,
-      );
+        );
 
-      const exitCode = await new Promise<number | null>((resolve, reject) => {
-        const child = spawn(process.execPath, ["--import", "tsx", childScript, state.stateDir], {
-          stdio: ["ignore", "pipe", "pipe"],
+        const exitCode = await new Promise<number | null>((resolve, reject) => {
+          const child = spawn(process.execPath, ["--import", "tsx", childScript, state.stateDir], {
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          let output = "";
+          child.stdout.on("data", (chunk) => (output += chunk));
+          child.stderr.on("data", (chunk) => (output += chunk));
+          child.on("error", reject);
+          child.on("close", (code) => {
+            if (code !== 23) {
+              reject(new Error(`lease child exited ${code}: ${output}`));
+              return;
+            }
+            resolve(code);
+          });
         });
-        let output = "";
-        child.stdout.on("data", (chunk) => (output += chunk));
-        child.stderr.on("data", (chunk) => (output += chunk));
-        child.on("error", reject);
-        child.on("close", (code) => {
-          if (code !== 23) {
-            reject(new Error(`lease child exited ${code}: ${output}`));
-            return;
-          }
-          resolve(code);
-        });
+        expect(exitCode).toBe(23);
+
+        let reacquired = false;
+        await withOpenClawStateLease(
+          {
+            scope: "core:test",
+            key: "process-exit",
+            database: { scope: "shared", options: { env: state.env } },
+            leaseMs: 1_000,
+            waitMs: 0,
+          },
+          async () => {
+            reacquired = true;
+          },
+        );
+        expect(reacquired).toBe(true);
       });
-      expect(exitCode).toBe(23);
-
-      let reacquired = false;
-      await withOpenClawStateLease(
-        {
-          scope: "core:test",
-          key: "process-exit",
-          database: { scope: "shared", options: { env: state.env } },
-          leaseMs: 1_000,
-          waitMs: 0,
-        },
-        async () => {
-          reacquired = true;
-        },
-      );
-      expect(reacquired).toBe(true);
-    });
-  });
+    },
+  );
 
   it("keeps state database exit-cleanup diagnostics off stdout for machine-readable output", async () => {
     await withOpenClawTestState({ label: "core-state-lease-exit-stdout" }, async (state) => {

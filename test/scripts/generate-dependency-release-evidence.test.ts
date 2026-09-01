@@ -222,21 +222,32 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "retains gate artifacts and publishes their directory when the gate fails",
+    "uses trusted report tooling for a separate target and retains blocking evidence",
     async () => {
       const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-failure-test-"));
       try {
         const binDir = path.join(dir, "bin");
         const outputDir = path.join(dir, "evidence");
+        const sourceDir = path.join(dir, "candidate");
+        const marker = path.join(dir, "candidate-tooling-executed");
         const githubOutput = path.join(dir, "github-output");
         await mkdir(binDir);
+        await mkdir(sourceDir);
+        await writeJson(sourceDir, "package.json", { version: "2026.5.13" });
+        await writeFile(
+          path.join(binDir, "git"),
+          '#!/usr/bin/env node\nconsole.log("a".repeat(40));\n',
+          { mode: 0o755 },
+        );
         await writeFile(
           path.join(binDir, "pnpm"),
           [
             "#!/usr/bin/env node",
             'const { writeFileSync } = require("node:fs");',
             "const args = process.argv.slice(2);",
-            'if (args[0] !== "deps:vuln:gate") throw new Error("Unexpected report command");',
+            'const toolingRoot = args[0] === "--dir" ? args[1] : process.cwd();',
+            'if (toolingRoot === process.env.RELEASE_TEST_SOURCE_ROOT) { writeFileSync(process.env.RELEASE_TEST_MARKER, "candidate"); throw new Error("Candidate tooling executed"); }',
+            'if (args[2] !== "deps:vuln:gate" || args[args.indexOf("--root") + 1] !== process.env.RELEASE_TEST_SOURCE_ROOT) throw new Error("Wrong report or target");',
             'writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));',
             'writeFileSync(args[args.indexOf("--markdown") + 1], "# Blocking advisory evidence\\n");',
             "process.exitCode = 1;",
@@ -246,6 +257,8 @@ describe("generate-dependency-release-evidence", () => {
 
         const result = runCli(
           [
+            "--root",
+            sourceDir,
             "--output-dir",
             outputDir,
             "--release-ref",
@@ -259,11 +272,17 @@ describe("generate-dependency-release-evidence", () => {
             "--github-step-summary",
             "",
           ],
-          { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+          {
+            ...process.env,
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            RELEASE_TEST_SOURCE_ROOT: sourceDir,
+            RELEASE_TEST_MARKER: marker,
+          },
         );
 
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain("Command failed: pnpm deps:vuln:gate");
+        expect(result.stderr).toContain("Command failed: pnpm --dir");
+        await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         await expect(readFile(githubOutput, "utf8")).resolves.toBe(`dir=${outputDir}\n`);
         await expect(
           readFile(path.join(outputDir, "dependency-vulnerability-gate.json"), "utf8"),

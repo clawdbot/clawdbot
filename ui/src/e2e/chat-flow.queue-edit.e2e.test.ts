@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -160,7 +161,10 @@ suite.define(() => {
   });
 
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.queue-edit", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir

@@ -42,97 +42,24 @@ import {
 } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
-import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  diffPluginRegistryRecords,
+  isContainedPluginPath,
+  resolvePluginRegistryContent,
+} from "./plugin-registry-comparison.js";
+import type {
+  PluginRegistrySnapshotDiagnostic,
+  PluginRegistrySnapshotSource,
+} from "./plugin-registry-snapshot.types.js";
 import { resolvePluginSourceRoots } from "./roots.js";
-
-function resolvePluginRegistryContent(
-  index: InstalledPluginIndex,
-  comparePackageJsonPath: boolean,
-  excludedPlugins?: ReadonlyMap<string, string>,
-): unknown {
-  const {
-    generatedAtMs: _generatedAtMs,
-    refreshReason: _refreshReason,
-    warning: _warning,
-    ...content
-  } = index;
-  const excludedRoots = [...(excludedPlugins?.values() ?? [])].map((root) => path.resolve(root));
-  const exclusionPathCache = new Map<string, string>();
-  return {
-    ...content,
-    diagnostics: excludedPlugins
-      ? content.diagnostics.filter(
-          (diagnostic) =>
-            !(
-              (diagnostic.pluginId && excludedPlugins.has(diagnostic.pluginId)) ||
-              (diagnostic.source &&
-                excludedRoots.some((root) =>
-                  isContainedPluginPath(root, diagnostic.source!, exclusionPathCache),
-                ))
-            ),
-        )
-      : content.diagnostics,
-    installRecords: excludedPlugins
-      ? Object.fromEntries(
-          Object.entries(content.installRecords).filter(
-            ([pluginId]) => !excludedPlugins.has(pluginId),
-          ),
-        )
-      : content.installRecords,
-    plugins: content.plugins
-      .filter((plugin) => !excludedPlugins?.has(plugin.pluginId))
-      .map((plugin) => {
-        const {
-          doctorContractFile: _doctorContractFile,
-          manifestFile: _manifestFile,
-          packageBuild,
-          packageJson,
-          ...record
-        } = plugin;
-        // Compare the durable package-build contract. The store intentionally drops
-        // build-only metadata that runtime selection does not consume.
-        const stableRecord = Object.assign(
-          record,
-          packageBuild === undefined
-            ? {}
-            : {
-                packageBuild:
-                  packageBuild.bundledDist === undefined
-                    ? {}
-                    : { bundledDist: packageBuild.bundledDist },
-              },
-        );
-        if (!packageJson) {
-          return stableRecord;
-        }
-        if (!comparePackageJsonPath) {
-          return stableRecord;
-        }
-        const {
-          fileSignature: _fileSignature,
-          path: packageJsonPath,
-          ...stablePackageJson
-        } = packageJson;
-        return Object.assign(stableRecord, {
-          packageJson: Object.assign(stablePackageJson, { path: packageJsonPath }),
-        });
-      }),
-  };
-}
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
-export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
-type PluginRegistrySnapshotDiagnosticCode =
-  | "persisted-registry-missing"
-  | "persisted-registry-stale-policy"
-  | "persisted-registry-stale-source";
-
-export type PluginRegistrySnapshotDiagnostic = {
-  level: "info" | "warn";
-  code: PluginRegistrySnapshotDiagnosticCode;
-  message: string;
-};
+export type {
+  PluginRegistrySnapshotDiagnostic,
+  PluginRegistrySnapshotSource,
+} from "./plugin-registry-snapshot.types.js";
 
 type PluginRegistrySnapshotResult = {
   snapshot: PluginRegistrySnapshot;
@@ -235,32 +162,6 @@ function fileContentMatches(
     return true;
   }
   return safeHashFile({ filePath, diagnostics: [], required: false }) === hash;
-}
-
-function isContainedPluginPath(
-  rootPath: string,
-  targetPath: string,
-  cache: Map<string, string>,
-): boolean {
-  // Project unresolved suffixes from the nearest real ancestor so missing disabled
-  // artifacts stay inspectable without accepting symlink or path-alias escapes.
-  const resolveProjectedPath = (inputPath: string): string | null => {
-    const target = path.resolve(inputPath);
-    for (let cursor = target; ; cursor = path.dirname(cursor)) {
-      try {
-        fs.lstatSync(cursor);
-        const realCursor = safeRealpathSync(cursor, cache);
-        return realCursor ? path.resolve(realCursor, path.relative(cursor, target)) : null;
-      } catch {
-        if (cursor === path.dirname(cursor)) {
-          return null;
-        }
-      }
-    }
-  };
-  const root = resolveProjectedPath(rootPath);
-  const target = resolveProjectedPath(targetPath);
-  return Boolean(root && target && isPathInside(root, target));
 }
 
 function hasStaleDoctorContractFile(
@@ -424,6 +325,9 @@ function requiresDerivedRegistryValidation(
   hasStalePluginFiles: () => boolean,
 ): boolean {
   return (
+    // Capture file freshness before any other reason starts derived discovery.
+    // Otherwise that discovery can cache the old bytes and hide a concurrent replacement.
+    hasStalePluginFiles() ||
     hasInstalledPluginIndexWorkspaceScopeMismatch(index, params.workspaceDir) ||
     params.candidates !== undefined ||
     params.discovery !== undefined ||
@@ -438,7 +342,6 @@ function requiresDerivedRegistryValidation(
       Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||
     hasMismatchedPersistedBundledRoot(index, env) ||
-    hasStalePluginFiles() ||
     hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env) ||
     hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(params, index, env)
   );
@@ -606,11 +509,18 @@ export function loadPluginRegistrySnapshotWithMetadata(
       ...(packageMetadataMatches ? { manifestRegistry: derived.manifestRegistry } : {}),
     };
   } else if (persistedIndex && diagnostics.length === 0) {
+    const differences = diffPluginRegistryRecords(
+      persistedIndex,
+      derived.index,
+      comparePackageJsonPath,
+      excludedMissingDisabledPlugins,
+    );
     diagnostics.push({
       level: "warn",
       code: "persisted-registry-stale-source",
       message:
         "Persisted plugin registry no longer matches current plugin discovery or metadata; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+      ...(differences.length > 0 ? { differences } : {}),
     });
   }
 
@@ -644,36 +554,44 @@ export function isPluginEnabled(params: GetPluginRecordParams): boolean {
 export async function inspectPluginRegistry(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ) {
-  const inspectionParams = resolveControlPlaneRegistryParams(params);
-  const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
-  // Inspection and runtime selection share one verdict so runtime cannot reject "fresh".
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    ...inspectionParams,
-    allowCurrent: false,
-  });
-  if (!persisted) {
+  return withPluginCache(createPluginCache(), () => {
+    const inspectionParams = resolveControlPlaneRegistryParams(params);
+    const persisted = readPersistedInstalledPluginIndexSync(inspectionParams);
+    // Explicit inspection crosses the management boundary, so it must not reuse the
+    // plugin-file facts that produced the persisted snapshot it is verifying.
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      ...inspectionParams,
+      allowCurrent: false,
+    });
+    if (!persisted) {
+      return {
+        state: "missing" as const,
+        refreshReasons: ["missing"],
+        differences: [],
+        persisted: null,
+        current: result.snapshot,
+      };
+    }
+    const fresh = result.source === "persisted";
+    const differences = result.diagnostics.flatMap((diagnostic) => diagnostic.differences ?? []);
+    const refreshReasons = fresh
+      ? []
+      : [...diffInstalledPluginIndexInvalidationReasons(persisted, result.snapshot)];
+    if (!fresh && refreshReasons.length === 0) {
+      refreshReasons.push(
+        result.diagnostics.some(
+          (diagnostic) => diagnostic.code === "persisted-registry-stale-policy",
+        )
+          ? "policy-changed"
+          : "source-changed",
+      );
+    }
     return {
-      state: "missing" as const,
-      refreshReasons: ["missing"],
-      persisted: null,
+      state: fresh ? ("fresh" as const) : ("stale" as const),
+      refreshReasons,
+      differences,
+      persisted,
       current: result.snapshot,
     };
-  }
-  const fresh = result.source === "persisted";
-  const refreshReasons = fresh
-    ? []
-    : [...diffInstalledPluginIndexInvalidationReasons(persisted, result.snapshot)];
-  if (!fresh && refreshReasons.length === 0) {
-    refreshReasons.push(
-      result.diagnostics.some((diagnostic) => diagnostic.code === "persisted-registry-stale-policy")
-        ? "policy-changed"
-        : "source-changed",
-    );
-  }
-  return {
-    state: fresh ? ("fresh" as const) : ("stale" as const),
-    refreshReasons,
-    persisted,
-    current: result.snapshot,
-  };
+  });
 }

@@ -108,6 +108,11 @@ Sessions keep their addresses when execution moves between the Gateway, a paired
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+An accepted result keeps target admission separate from announcement delivery.
+`targetDisposition` is `queued` for a new turn or `steered` for an active turn;
+`delivery.status` describes only the later announcement as `pending` or `skipped`.
+Neither field is a target-completion receipt.
+
 A waited send that finishes without visible assistant text returns `status: "no_reply"`. That is a terminal, intentional non-outcome: no announcement remains pending. Continue without waiting, or send a new message if a response is required.
 
 Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.

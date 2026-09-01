@@ -1769,6 +1769,32 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
+  it("skips memory flush when a persisted sandbox requirement caps workspace access", async () => {
+    const sessionKey = "agent:main:guest";
+    const storePath = path.join(rootDir, "agents", "main", "sessions", "sessions.json");
+    const sessionEntry = createFlushSessionEntry({ sandbox: "required" });
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      cfg: {
+        session: { store: storePath },
+        agents: {
+          defaults: {
+            sandbox: { mode: "off", workspaceAccess: "rw" },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionKey, workspaceDir: rootDir }),
+      sessionKey,
+      storePath,
+    });
+
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("continues when preflight compaction reports the session is already under target", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(

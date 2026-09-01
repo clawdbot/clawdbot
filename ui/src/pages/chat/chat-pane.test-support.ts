@@ -20,8 +20,8 @@ import type {
 } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
@@ -154,8 +154,10 @@ export type TestChatPane = HTMLElement & {
   ) => Promise<void>;
   headerPlacementMovingKey: string | null;
   headerPlacementReclaimingKey: string | null;
+  headerPlacementRestartingKey: string | null;
   moveHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
+  restartHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
@@ -227,7 +229,7 @@ export function createInitializationContext(): ApplicationContext {
       subscribe: () => () => {},
     },
     navigate: () => undefined,
-    initialUserMessage: createInitialUserMessageHandoff(),
+    chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     sessions: { state: { modelOverrides: {} } },
   } as unknown as ApplicationContext;
@@ -314,7 +316,7 @@ export function createSessionContext(
         terminalEnabled: false,
       },
     },
-    initialUserMessage: createInitialUserMessageHandoff(),
+    chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: { pause: vi.fn() },

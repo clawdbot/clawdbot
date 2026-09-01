@@ -1,7 +1,6 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
@@ -36,7 +35,12 @@ import {
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
 import { createBoundedReadTextPage } from "./read-page.js";
 import {
   createReadToolDetails,
@@ -47,6 +51,7 @@ import {
   getTextOutput,
   invalidArgText,
   replaceTabs,
+  reuseTextComponent,
   shortenPath,
   str,
   trimTrailingEmptyLines,
@@ -242,7 +247,7 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveToCwd(filePath, cwd);
+  return resolveLocalPathToCwd(filePath, cwd);
 }
 
 async function resolveReadToolInputPath(
@@ -618,31 +623,25 @@ export function createReadToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const classification = !context.expanded
         ? getCompactReadClassification(args, context.cwd)
         : undefined;
-      text.setText(
-        classification
-          ? formatCompactReadCall(classification, args, theme)
-          : formatReadCall(args, theme),
-      );
-      return text;
+      const content = classification
+        ? formatCompactReadCall(classification, args, theme)
+        : formatReadCall(args, theme);
+      return reuseTextComponent(context.lastComponent, content);
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(
-        formatReadResult(
-          context.args,
-          result,
-          optionsLocal,
-          theme,
-          context.showImages,
-          context.cwd,
-          context.isError,
-        ),
+      const content = formatReadResult(
+        context.args,
+        result,
+        optionsLocal,
+        theme,
+        context.showImages,
+        context.cwd,
+        context.isError,
       );
-      return text;
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

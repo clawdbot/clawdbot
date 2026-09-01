@@ -6,6 +6,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
@@ -20,6 +21,7 @@ import {
   getErrorMessage,
   isFailoverError,
   isTimeoutError,
+  readDirectErrorCode,
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
@@ -172,32 +174,6 @@ function readDirectStatusCode(err: unknown): number | undefined {
 
 function getStatusCode(err: unknown): number | undefined {
   return findErrorProperty(err, readDirectStatusCode);
-}
-
-function readDirectErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const directCode = (err as { code?: unknown }).code;
-  if (typeof directCode === "string") {
-    const trimmed = directCode.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
-  if (typeof detailCode === "string") {
-    const trimmed = detailCode.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  const status = (err as { status?: unknown }).status;
-  if (typeof status !== "string" || /^\d+$/.test(status)) {
-    return undefined;
-  }
-  const trimmed = status.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function getErrorCode(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectErrorCode);
 }
 
 function isStableProviderErrorType(value: string): boolean {
@@ -397,7 +373,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
   const message = getErrorMessage(err);
   return {
     status: getStatusCode(err),
-    code: getErrorCode(err),
+    code: findErrorProperty(err, readDirectErrorCode),
     errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
@@ -663,7 +639,7 @@ export function coerceToFailoverError(
   if (isFailoverError(err)) {
     if (context?.authMode && !err.authMode) {
       const message = typeof err.message === "string" ? err.message : String(err);
-      return new FailoverError(message, {
+      const enriched = new FailoverError(message, {
         reason: err.reason,
         provider: err.provider,
         model: err.model,
@@ -681,6 +657,8 @@ export function coerceToFailoverError(
         attempts: err.attempts,
         soonestCooldownExpiry: err.soonestCooldownExpiry,
       });
+      copyErrorDiagnostic(err, enriched);
+      return enriched;
     }
     return err;
   }

@@ -5,6 +5,11 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import {
+  getInstallationTarget,
+  installationTargetEnv,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
@@ -133,6 +138,10 @@ export async function executePreparedCliRun(
   }
   const backend = context.preparedBackend.backend;
   const executionTarget = context.executionTarget;
+  const localProcessEnv = installationTargetEnv(getInstallationTarget());
+  if (localProcessEnv && executionTarget.kind === "node") {
+    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  }
   const nodePlacement = executionTarget.kind === "node" ? executionTarget.placement : null;
   const usePluginOwnedExecution = executionTarget.kind === "plugin";
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
@@ -450,12 +459,13 @@ export async function executePreparedCliRun(
           }),
         );
       }
-      Object.assign(env, mcpCaptureAttempt.env);
+      Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
 
       let executionCommand = backend.command;
+      let executionArgv0: string | undefined;
       let executionLeadingArgv: readonly string[] = [];
       context.runtimeOwnerFingerprint = undefined;
       context.runtimeArtifactFingerprint = undefined;
@@ -499,6 +509,7 @@ export async function executePreparedCliRun(
           });
         }
         executionCommand = executableIdentity.invocation.command;
+        executionArgv0 = executableIdentity.invocation.argv0;
         executionLeadingArgv = executableIdentity.invocation.leadingArgv;
         context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
           provider: params.provider,
@@ -567,6 +578,7 @@ export async function executePreparedCliRun(
         cliSessionIdToUse,
         resolvedSessionId,
         executionCommand,
+        executionArgv0,
         executionLeadingArgv,
         executionArgs: args,
         env,

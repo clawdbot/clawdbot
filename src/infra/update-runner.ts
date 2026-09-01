@@ -52,6 +52,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       mode: "unknown",
       root: gitRoot,
       reason: "not-openclaw-root",
+      recovery: { serviceRestartSafe: true },
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -71,6 +72,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       status: "error",
       mode: "unknown",
       reason: "not-openclaw-root",
+      recovery: { serviceRestartSafe: true },
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -96,6 +98,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     mode: "unknown",
     root: pkgRoot,
     reason: "not-git-install",
+    recovery: { serviceRestartSafe: true },
     before: { version: beforeVersion },
     steps: [],
     durationMs: Date.now() - startedAt,

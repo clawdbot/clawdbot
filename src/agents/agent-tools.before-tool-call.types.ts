@@ -3,6 +3,7 @@
  * Kept separate from the facade so implementation modules do not import back
  * through the barrel that re-exports them.
  */
+import type { ToolLoopWarning } from "@openclaw/agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { DiagnosticToolTerminalReason } from "../infra/diagnostic-events.js";
@@ -119,4 +120,5 @@ export type HookOutcome =
       ownerDecision?: true;
       approvalResolution?: PluginApprovalResolution;
       deferredApproval?: DeferredPluginToolApproval;
+      loopWarning?: ToolLoopWarning;
     };

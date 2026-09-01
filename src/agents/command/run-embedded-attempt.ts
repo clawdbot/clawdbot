@@ -254,6 +254,7 @@ export async function runEmbeddedAgentAttempt(params: {
   });
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId,
+    agentId: sessionAgentId,
     sessionId,
     sessionKey,
     sessionFile: attemptSessionFile,

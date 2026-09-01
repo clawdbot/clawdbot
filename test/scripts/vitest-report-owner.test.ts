@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createVitestReportFixture, type ReportFixtureMode } from "./vitest-report-fixture.js";
 
@@ -22,6 +23,42 @@ const expected = [
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   const run = (mode: ReportFixtureMode) => createVitestReportFixture(dirs.make("oc-report-"))(mode);
+
+  it.each([
+    ["serial", "projects", false, "SIGABRT", 134],
+    ["parallel", "projects", false, "SIGABRT", 134],
+    ["serial", undefined, false, "SIGABRT", 134],
+    ["parallel", undefined, false, "SIGABRT", 134],
+    ["serial", "projects", true, "SIGABRT", 134],
+    ["parallel", "projects", true, "SIGABRT", 134],
+    ["parallel", "projects", true, "SIGKILL", 137],
+  ] as const)(
+    "preserves shard crashes: %s entry=%s report=%s signal=%s",
+    { timeout: 60000 },
+    async (mode, entry, report, crashSignal, exitCode) => {
+      const result = await createVitestReportFixture(dirs.make("oc-report-crash-"))(mode, {
+        entry,
+        report,
+        crashSignal,
+      });
+      expect(result.code !== 0 || result.signal !== null, result.stderr).toBe(true);
+      expect(result.signal === crashSignal || result.code === exitCode, result.stderr).toBe(true);
+      expect(result.stderr).not.toMatch(/\[test\] passed /u);
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+        `[test] FAILED (exit ${exitCode})`,
+      ]);
+      expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(`[test] FAILED (exit ${exitCode})`);
+      if (report) {
+        const index = json(path.join(result.reportSet!, "index.json"));
+        expect(index.complete).toBe(false);
+        expect(index.entries[0].attempts[0].outcome).toMatchObject({
+          code: exitCode,
+          signal: crashSignal,
+        });
+        expect(fs.existsSync(result.output)).toBe(false);
+      }
+    },
+  );
 
   it.each([
     "serial",
@@ -128,9 +165,8 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(fs.readFileSync(path.join(capture.root, "ready"), "utf8")).toBe(
           String(events[0].pid),
         );
-        expect(() => process.kill(events[0].pid, 0)).toThrow(
-          expect.objectContaining({ code: "ESRCH" }),
-        );
+        // The joined group may leave an unreaped Linux zombie, but no live worker.
+        expect(isPidDefinitelyDead(events[0].pid)).toBe(true);
       } else if (mode === "fail-fast" || mode === "batch-fail-fast") {
         const report = json(first.json);
         expect(inventory(report)).toEqual([

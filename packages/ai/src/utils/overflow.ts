@@ -1,4 +1,5 @@
 // Overflow helpers classify provider overflow errors and retryable responses.
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
@@ -27,7 +28,6 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  * - OpenRouter: "This endpoint's maximum context length is X tokens. However, you requested about Y tokens"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
  * - llama.cpp: "the request exceeds the available context size, try increasing it"
- *   or "Context size has been exceeded."
  * - LM Studio: "tokens to keep from the initial prompt is greater than the context length"
  * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
  * - MiniMax: "invalid params, context window exceeds limit"
@@ -56,8 +56,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i, // OpenRouter/Poolside
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
-  /exceeds the available context size/i, // llama.cpp server
-  /context size has been exceeded/i, // llama.cpp server
+  /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
@@ -106,8 +105,7 @@ const PROVIDER_FALLBACK_OVERFLOW_PATTERNS = [
   /\binput exceeds the maximum number of tokens\b/i, // Google Vertex / Gemini
   /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
   /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i, // Cohere
-  /\b(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size\b/i, // llama.cpp
-  /context size has been exceeded/i, // llama.cpp
+  /\b(?:(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size|context size has been exceeded)\b/i, // llama.cpp
   /\binput (?:is )?too long for (?:the )?model\b/i,
 ];
 
@@ -186,7 +184,7 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
  * - OpenRouter (all backends): "maximum context length is X tokens"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
- * - llama.cpp: "exceeds the available context size" or "Context size has been exceeded."
+ * - llama.cpp: "exceeds the available context size"
  * - LM Studio: "greater than the context length"
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
  * - z.ai: "tokens in request more than max tokens allowed" or "Prompt exceeds max length"
@@ -217,6 +215,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * @returns true if the message indicates a context overflow
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+  // A refusal explanation can mention overflow without authorizing compact-and-retry.
+  if (isProviderRefusalAssistantError(message)) {
+    return false;
+  }
   // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
     // Hoist so the regex closures keep the narrowing without assertions.

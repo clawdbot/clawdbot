@@ -6,7 +6,7 @@ import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { createAssistantMessage } from "./event-projector-assistant-message.js";
 import { isJsonObject, type CodexThreadItem } from "./protocol.js";
-import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { CodexSettledTurnContext } from "./settled-turn-context.js";
 import {
   fingerprintCodexMirrorSourceMessage,
   readCodexMirrorSourceFingerprint,
@@ -32,10 +32,10 @@ export async function runCodexSettledTurnFinalization(
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   const { attempt, settledAttempt } = operation;
   const finalizationContext = settledAttempt.settledTurnFinalizationContext;
-  if (finalizationContext?.source !== "openclaw-transcript") {
+  if (!(finalizationContext instanceof CodexSettledTurnContext)) {
     throw new Error("Codex settled-turn finalization context is unavailable");
   }
-  const historyItems = projectSettledCodexMessages(finalizationContext.messages);
+  const historyItems = finalizationContext.data;
   const bounded = await runBoundedCodexAppServerTurn({
     config: attempt.config,
     model: { mode: "required", id: attempt.modelId },

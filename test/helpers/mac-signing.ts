@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { MacScriptFixture } from "../scripts/mac-script-fixture.test-support.js";
 import { machoFixture } from "./mac-native.js";
 
 const nativeMetadataReply = `
@@ -135,7 +135,7 @@ type SigningEvent = {
 };
 type FileEvent = { args: string[]; magics: string[] };
 
-export function makeSigningFixture(root: string, appName = "Odd ' app.app") {
+export function makeSigningFixture(mac: MacScriptFixture, root: string, appName = "Odd ' app.app") {
   const app = path.join(root, appName);
   const worker = path.join(app, "Contents/Resources/node-worker/arm64");
   const bin = path.join(root, "bin");
@@ -342,7 +342,7 @@ with tempfile.TemporaryDirectory(prefix='oc-sign-swap-', dir='/tmp') as control:
       writeFileSync(options, JSON.stringify(config));
       const command = config.swapStage === "before-sign" ? "/usr/bin/python3" : "/bin/bash";
       const args = ["scripts/codesign-mac-app.sh", target];
-      return spawnSync(command, config.swapStage === "before-sign" ? [driver, ...args] : args, {
+      return mac.run(command, config.swapStage === "before-sign" ? [driver, ...args] : args, {
         encoding: "utf8",
         env: {
           HOME: root,
@@ -357,7 +357,7 @@ with tempfile.TemporaryDirectory(prefix='oc-sign-swap-', dir='/tmp') as control:
     },
     scan(config: Record<string, unknown> = {}) {
       writeFileSync(options, JSON.stringify(config));
-      return spawnSync(
+      return mac.run(
         "/usr/bin/python3",
         [boundary, "scan", "scripts/lib/mac-native-inventory.py", app],
         {

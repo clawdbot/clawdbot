@@ -2637,13 +2637,14 @@ describe("sessions_spawn tool", () => {
     expect(runContext.agentSessionKey).toBe(runSessionKey);
   });
 
-  it("passes completionOwnerKey through to spawnSubagentDirect separately from agentSessionKey", async () => {
+  it("passes completion ownership and active thinking separately from agentSessionKey", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:telegram:default:direct:456",
       completionOwnerKey: "agent:main:main",
       agentChannel: "telegram",
       agentAccountId: "default",
       agentTo: "telegram:direct:456",
+      requesterThinkingLevel: "ultra",
     });
 
     await tool.execute("call-completion-owner", { task: "background work" });
@@ -2651,6 +2652,7 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:telegram:default:direct:456");
     expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
+    expect(spawnContext.requesterThinkingLevel).toBe("ultra");
   });
 
   it("forwards completionOwnerKey to the ACP registration pipeline", async () => {

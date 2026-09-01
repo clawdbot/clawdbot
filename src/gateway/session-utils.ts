@@ -30,3 +30,4 @@ export { loadGatewaySessionLifecycleSnapshot } from "./session-utils-search.js";
 export { buildGatewaySessionInfo } from "./session-utils-search.js";
 export { filterAndSortSessionEntries } from "./session-utils-list.js";
 export { listSessionsFromStoreAsync } from "./session-utils-list.js";
+export { resolveSessionsListDefaultsAgentId } from "./session-utils-list.js";

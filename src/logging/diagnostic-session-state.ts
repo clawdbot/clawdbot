@@ -58,27 +58,36 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
   }
   lastSessionPruneAt = now;
 
-  for (const [key, state] of diagnosticSessionStates.entries()) {
+  let trackOldest = diagnosticSessionStates.size === SESSION_STATE_MAX_ENTRIES + 1;
+  let oldest: [string, SessionState] | undefined;
+  for (const entry of diagnosticSessionStates.entries()) {
+    const [key, state] = entry;
     const ageMs = now - state.lastActivity;
     const isIdle = state.state === "idle";
     if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
       diagnosticSessionStates.delete(key);
+      trackOldest = false;
+    } else if (trackOldest && (!oldest || state.lastActivity < oldest[1].lastActivity)) {
+      oldest = entry;
     }
   }
 
   if (diagnosticSessionStates.size <= SESSION_STATE_MAX_ENTRIES) {
     return;
   }
-  const excess = diagnosticSessionStates.size - SESSION_STATE_MAX_ENTRIES;
+  // Insertions normally exceed the cap by one; equal ages keep Map order.
+  if (oldest) {
+    diagnosticSessionStates.delete(oldest[0]);
+    return;
+  }
   const ordered = Array.from(diagnosticSessionStates.entries()).toSorted(
     (a, b) => a[1].lastActivity - b[1].lastActivity,
   );
-  for (let i = 0; i < excess; i += 1) {
-    const key = ordered[i]?.[0];
-    if (!key) {
+  for (const [key] of ordered) {
+    diagnosticSessionStates.delete(key);
+    if (diagnosticSessionStates.size <= SESSION_STATE_MAX_ENTRIES) {
       break;
     }
-    diagnosticSessionStates.delete(key);
   }
 }
 

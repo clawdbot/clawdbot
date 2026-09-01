@@ -28,6 +28,7 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -82,8 +83,7 @@ const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 const workspaceLogger = createSubsystemLogger("workspace");
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
-// Git availability is process-stable; cache the probe result, including failure, until restart.
-let gitAvailabilityPromise: Promise<boolean> | null = null;
+const gitInitializationInFlight = new Map<string, Promise<void>>();
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -858,47 +858,40 @@ export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean>
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
-async function hasGitRepo(dir: string): Promise<boolean> {
+// Git availability is process-stable; cache the probe result, including failure, until restart.
+const isGitAvailable = createLazyPromise(async () => {
   try {
-    await fs.stat(path.join(dir, ".git"));
-    return true;
+    const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
+    return result.code === 0;
   } catch {
     return false;
   }
-}
-
-async function isGitAvailable(): Promise<boolean> {
-  if (gitAvailabilityPromise) {
-    return gitAvailabilityPromise;
-  }
-
-  gitAvailabilityPromise = (async () => {
-    try {
-      const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
-      return result.code === 0;
-    } catch {
-      return false;
-    }
-  })();
-
-  return gitAvailabilityPromise;
-}
+});
 
 async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
   if (!isBrandNewWorkspace) {
     return;
   }
-  if (await hasGitRepo(dir)) {
-    return;
-  }
-  if (!(await isGitAvailable())) {
-    return;
-  }
-  try {
-    await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
-  } catch {
-    // Ignore git init failures; workspace creation should still succeed.
-  }
+  // Concurrent first turns can all observe missing Git metadata. Join only the
+  // current initialization; later calls must inspect the workspace again.
+  await getOrCreatePromise(
+    gitInitializationInFlight,
+    dir,
+    async () => {
+      if (await fs.stat(path.join(dir, ".git")).catch(() => undefined)) {
+        return;
+      }
+      if (!(await isGitAvailable())) {
+        return;
+      }
+      try {
+        await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
+      } catch {
+        // Ignore git init failures; workspace creation should still succeed.
+      }
+    },
+    { evictOnSettled: true },
+  );
 }
 
 export async function ensureAgentWorkspace(params?: {

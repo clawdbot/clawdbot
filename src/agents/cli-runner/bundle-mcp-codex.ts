@@ -8,6 +8,7 @@ import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundl
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { getOrCreateSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import type { PreparedNativeMcpPolicy } from "../agent-bundle-mcp-types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
 import {
   applyCodexSessionMcpToolDenials,
@@ -37,6 +38,7 @@ type CodexThreadConfigValue =
 type CodexThreadConfigObject = { [key: string]: CodexThreadConfigValue };
 
 type CodexUserMcpServersProjectionOptions = {
+  preparationOnly?: true;
   agentId?: string;
   agentDir?: string;
   allowLiteralOAuthProjection?: boolean;
@@ -191,6 +193,11 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   options?: CodexUserMcpServersProjectionOptions,
 ): Promise<{ mcp_servers: CodexThreadConfigObject } | undefined> {
   let allowedServers = selectCodexProjectableMcpServers(cfg, options);
+  if (options?.preparationOnly && Object.values(allowedServers).some(requiresMcpBearerProjection)) {
+    throw new Error(
+      "Native fork preparation cannot resolve MCP bearer credentials. Fork an original imported message instead.",
+    );
+  }
   if (options?.preparedNativeMcpPolicy) {
     allowedServers = applyPreparedNativeMcpPolicy(
       { mcpServers: allowedServers },
@@ -236,10 +243,16 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     toolOverrides: run.toolOverrides,
   });
   const policySessionKey = run.sandboxSessionKey ?? run.sessionKey;
+  const policyAgentId = resolveSessionAgentId({
+    config: run.config,
+    sessionKey: policySessionKey,
+    agentId: run.sandboxAgentId,
+    fallbackAgentId: agentId,
+  });
   const sandboxStatus = resolveSandboxRuntimeStatus({
     cfg: run.config,
     sessionKey: policySessionKey,
-    agentId,
+    agentId: policyAgentId,
   });
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: run.config,
@@ -248,7 +261,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
       run.sessionKey && run.sessionKey !== policySessionKey ? run.sessionKey : undefined,
     sessionId: run.sessionId,
     runId: run.runId,
-    agentId,
+    agentId: policyAgentId,
     agentDir: run.agentDir,
     agentAccountId: run.agentAccountId,
     messageProvider: run.messageProvider ?? run.messageChannel,

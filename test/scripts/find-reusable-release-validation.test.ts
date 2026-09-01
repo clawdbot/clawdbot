@@ -224,7 +224,9 @@ function normalizedEvidence(options: {
     : "refs/heads/main";
   const validationInputs: Record<string, string> | null =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
+  const npmBetaCoverage = validationInputs?.coveragePolicy === "npm-beta-v1";
   const npmTelegramRequired =
+    !npmBetaCoverage &&
     validationInputs !== null &&
     !validationInputs.telegramWaiver &&
     Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
@@ -244,7 +246,7 @@ function normalizedEvidence(options: {
     runReleaseSoak: String(soak),
     validationInputs,
     controls: {
-      performanceBlocking: true,
+      performanceBlocking: !npmBetaCoverage,
       performanceReportPublication: "artifact-only",
       stableSoakRequired: releaseProfile === "stable" || releaseProfile === "full",
     },
@@ -256,9 +258,9 @@ function normalizedEvidence(options: {
       releaseChecksIndependent: "203",
       releaseChecksCandidate: "207",
       productPerformance: {
-        blocking: true,
-        conclusion: "success",
-        runId: "204",
+        blocking: !npmBetaCoverage,
+        conclusion: npmBetaCoverage ? "" : "success",
+        runId: npmBetaCoverage ? "" : "204",
       },
     },
   };
@@ -347,8 +349,9 @@ function normalizedEvidence(options: {
       : []),
     ["productPerformance", "204", 3, 2, "OpenClaw Performance", "openclaw-performance.yml", ""],
   ] as const;
-  const children = roles.map(
-    ([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
+  const children = roles
+    .filter(([role]) => !npmBetaCoverage || role !== "productPerformance")
+    .map(([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
       Object.assign(
         {
           conclusion: "success",
@@ -370,7 +373,7 @@ function normalizedEvidence(options: {
         },
         role === "productPerformance" ? { reportPublication: "artifact-only" } : {},
       ),
-  );
+    );
   return {
     children,
     conclusions: {
@@ -430,6 +433,7 @@ exec cat "\${fixture}.json"
 const FAKE_VALIDATOR = `#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const runIndex = process.argv.indexOf("--validate-run");
 const repoIndex = process.argv.indexOf("--repo");
@@ -438,6 +442,7 @@ const trustedFullRefIndex = process.argv.indexOf("--trusted-workflow-full-ref");
 const trustedShaIndex = process.argv.indexOf("--trusted-workflow-sha");
 const verifierShaIndex = process.argv.indexOf("--verifier-source-sha");
 const verifierFileIndex = process.argv.indexOf("--verifier-source-file");
+const reuseRequestIndex = process.argv.indexOf("--reuse-request-json");
 if (
   runIndex < 0 ||
   repoIndex < 0 ||
@@ -446,6 +451,8 @@ if (
   trustedShaIndex < 0 ||
   verifierShaIndex < 0 ||
   verifierFileIndex < 0 ||
+  reuseRequestIndex < 0 ||
+  !isDeepStrictEqual(JSON.parse(process.argv[reuseRequestIndex + 1]), JSON.parse(process.env.FAKE_REUSE_REQUEST)) ||
   process.argv[repoIndex + 1] !== "openclaw/openclaw" ||
   process.argv[trustedRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_REF ||
   process.argv[trustedFullRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_FULL_REF ||
@@ -609,6 +616,12 @@ function runResolver(args: {
         FAKE_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
         FAKE_TRUSTED_WORKFLOW_SHA: trustedWorkflowSha,
         FAKE_VALIDATOR_FIXTURES: args.fixtures,
+        FAKE_REUSE_REQUEST: JSON.stringify({
+          targetSha: args.targetSha,
+          releaseProfile: args.releaseProfile ?? "full",
+          runReleaseSoak: args.runReleaseSoak ?? "true",
+          validationInputs: args.inputs === undefined ? DEFAULT_INPUTS : args.inputs,
+        }),
         FAKE_VERIFIER_SHA: verifierSha,
         GITHUB_OUTPUT: "",
         OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: args.validatorPath,
@@ -1273,6 +1286,36 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       expect(result.status).toBe(0);
       expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
       expect(result.stderr).toContain(expected);
+    },
+  );
+
+  it.each(["matching", "legacy-request", "legacy-receipt"])(
+    "requires identical npm beta coverage for reuse: %s",
+    (coverage) => {
+      const { clone, priorSha } = getSharedRepo();
+      const inputs = {
+        ...DEFAULT_INPUTS,
+        coveragePolicy: "npm-beta-v1",
+        skipPackageTelegramE2e: "true",
+        targetVersion: "2026.8.28-beta.1",
+      };
+      const record = normalizedEvidence({
+        releaseProfile: "beta",
+        soak: false,
+        targetSha: priorSha,
+        validationInputs: coverage === "legacy-receipt" ? DEFAULT_INPUTS : inputs,
+      });
+      const fixtures = setUpFixtures([{ record, runId: "111" }]);
+      const result = runResolver({
+        ...fixtures,
+        inputs: coverage === "legacy-request" ? DEFAULT_INPUTS : inputs,
+        releaseProfile: "beta",
+        repoDir: clone,
+        runReleaseSoak: "false",
+        targetSha: priorSha,
+      });
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout).reuse).toBe(coverage === "matching" ? "true" : "false");
     },
   );
 

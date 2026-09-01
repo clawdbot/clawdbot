@@ -24,11 +24,11 @@ const service = {
   stop: vi.fn(),
 };
 
-const runServiceStart = vi.fn();
-const runServiceRestart = vi.fn();
-const runServiceStop = vi.fn();
-const waitForGatewayHealthyListener = vi.fn();
-const waitForGatewayHealthyRestart = vi.fn();
+const runServiceStart = vi.fn(),
+  runServiceRestart = vi.fn(),
+  runServiceStop = vi.fn();
+const waitForGatewayHealthyListener = vi.fn(),
+  waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
@@ -136,10 +136,10 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("../../daemon/systemd.js", () => ({
   findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
   restartSystemdService: () => restartSystemdService(),
   stopSystemdService: () => stopSystemdService(),
 }));
-
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
@@ -165,7 +165,8 @@ vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({ resolveGatewaySe
 
 vi.mock("../../infra/ports-probe.js", () => ({ probePortUsage }));
 
-vi.mock("./restart-health.js", () => ({
+vi.mock("./restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart-health.js")>()),
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyListener,

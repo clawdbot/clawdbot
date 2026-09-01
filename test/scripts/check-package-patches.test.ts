@@ -53,13 +53,15 @@ afterEach(() => {
 });
 
 describe("check-package-patches", () => {
-  it.each([
-    ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
-    ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
-    ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
-    ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
-    ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
-  ])("allows approved pnpm patch %s", (specifier, patchPath) => {
+  it("allows approved pnpm patches together", () => {
+    const approvedPatches = [
+      ["@awesome.me/webawesome@3.12.0", "patches/@awesome.me__webawesome@3.12.0.patch"],
+      ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
+      ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
+      ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
+      ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
+      ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
+    ] as const;
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });
     writeFileSync(
@@ -67,7 +69,7 @@ describe("check-package-patches", () => {
       `packages:
   - .
 patchedDependencies:
-  "${specifier}": "${patchPath}"
+${approvedPatches.map(([specifier, patchPath]) => `  "${specifier}": "${patchPath}"`).join("\n")}
 `,
       "utf8",
     );
@@ -75,11 +77,13 @@ patchedDependencies:
       path.join(dir, "pnpm-lock.yaml"),
       `lockfileVersion: '9.0'
 patchedDependencies:
-  "${specifier}": a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
+${approvedPatches.map(([specifier]) => `  "${specifier}": a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2`).join("\n")}
 `,
       "utf8",
     );
-    writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
+    for (const [, patchPath] of approvedPatches) {
+      writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
+    }
     git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
 
     expect(collectPackagePatchViolations(dir)).toEqual([]);

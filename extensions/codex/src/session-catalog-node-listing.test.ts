@@ -10,6 +10,7 @@ import {
   registerCodexSessionCatalog,
   createCodexSessionCatalogNodeHostCommands,
   config,
+  idleThread,
   createControl,
   createEligibleControl,
   createRuntime,
@@ -46,6 +47,7 @@ describe("Codex supervision catalog", () => {
     const control = createControl({ listPage });
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark: vi.fn(async () => undefined),
         snapshot: vi.fn(
           async () => new Map<string, ReadonlySet<string>>([["home-main", new Set(["managed"])]]),
@@ -577,17 +579,9 @@ describe("Codex supervision catalog", () => {
     } as OpenClawConfig;
     const command = createCodexSessionCatalogNodeHostCommands(
       createEligibleControl({
-        listPage: vi.fn(async () => ({
-          sessions: [
-            {
-              threadId,
-              status: "idle",
-              source: "atlas",
-              cwd: "/node/catalog/cwd",
-              archived: false,
-            },
-          ],
-        })),
+        requireEligibleThread: vi.fn(async () =>
+          idleThread({ id: threadId, source: { custom: "atlas" }, cwd: "/node/catalog/cwd" }),
+        ),
       }),
       {
         getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),

@@ -339,6 +339,47 @@ describe("subscribeEmbeddedAgentSession", () => {
     ]);
   });
 
+  it("carries a generic commentary signature into preamble delivery", async () => {
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
+    const message = {
+      role: "assistant",
+      api: "anthropic-messages",
+      content: [
+        {
+          type: "text",
+          text: "Checking the workspace.",
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "generic-commentary-item",
+            phase: "commentary",
+          }),
+        },
+        { type: "toolCall", id: "call", name: "read", arguments: {} },
+      ],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: message },
+    });
+    emit({ type: "message_end", message });
+    await subscription.waitForPendingEvents();
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toContainEqual({
+      stream: "item",
+      data: {
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking the workspace.",
+        itemId: "generic-commentary-item",
+      },
+    });
+  });
+
   it("suppresses commentary-phase assistant messages before tool use", () => {
     const onBlockReply = vi.fn();
     const onPartialReply = vi.fn();

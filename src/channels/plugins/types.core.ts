@@ -213,6 +213,7 @@ export type ChannelAccountSnapshot = {
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  apiCredentialStatus?: "available" | "configured_unavailable" | "missing";
   identity?: string;
   credentialSource?: string;
   secretSource?: string;

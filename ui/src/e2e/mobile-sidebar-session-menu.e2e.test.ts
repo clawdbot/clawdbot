@@ -52,7 +52,7 @@ suite.define(() => {
 
       const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
       await menu.waitFor({ state: "visible" });
-      await captureUiProof(page, "mobile-sidebar-session-menu-after-root.png");
+      await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-root.png");
 
       expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
       await page.getByRole("menuitem", { name: "Move to group" }).click();
@@ -84,7 +84,7 @@ suite.define(() => {
       }
       expect(backBox.y).toBeGreaterThanOrEqual(menuBox.y);
       expect(backBox.y + backBox.height).toBeLessThanOrEqual(menuBox.y + menuBox.height);
-      await captureUiProof(page, "mobile-sidebar-session-menu-after-group-drilldown.png");
+      await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-group-drilldown.png");
     } finally {
       await context.close();
     }

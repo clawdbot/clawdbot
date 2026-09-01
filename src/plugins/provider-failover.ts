@@ -1,8 +1,8 @@
 import { FAILOVER_REASONS, type FailoverReason } from "../agents/failover/signal.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolveProviderHookPlugin,
-  resolveProviderPluginsForHooks,
+  resolveLoadedProviderRuntimePlugin,
+  resolveLoadedProviderPluginsForHooks,
 } from "./provider-hook-runtime.js";
 import type { ProviderFailoverErrorContext, ProviderPlugin } from "./types.js";
 
@@ -10,8 +10,8 @@ function isFailoverReason(value: unknown): value is FailoverReason {
   return typeof value === "string" && FAILOVER_REASONS.some((reason) => reason === value);
 }
 
-// Resolver code is linked eagerly; provider materialization remains inside the
-// existing scoped/cold lookup, after the classifier's consultation gate.
+// Error handling consumes prepared runtime. Cold discovery here can stall the
+// event loop while an unrelated provider is loaded just to describe a failure.
 export function classifyProviderFailoverSignalWithPlugin(params: {
   provider?: string;
   config?: OpenClawConfig;
@@ -41,20 +41,18 @@ function resolveProviderPluginsForScopedHook(params: {
   context: ProviderFailoverErrorContext;
 }): ProviderPlugin[] {
   if (!params.provider) {
-    return resolveProviderPluginsForHooks(params);
+    return resolveLoadedProviderPluginsForHooks(params) ?? [];
   }
-  const plugin = resolveProviderHookPlugin({ ...params, provider: params.provider });
+  const plugin = resolveLoadedProviderRuntimePlugin({ ...params, provider: params.provider });
   if (plugin) {
     return [plugin];
   }
   if (hasStructuredFailoverDescriptor(params.context)) {
     return [];
   }
-  // Custom provider ids may only name their canonical API in config, and the
-  // legacy message classifier only has the runtime id here. Preserve its old
-  // broad hook scan for descriptor-free messages, but do not let unrelated
-  // hooks override structured HTTP/auth signals.
-  return resolveProviderPluginsForHooks(params);
+  // Descriptor-free custom routes can consult other loaded hooks, but unrelated
+  // providers must not override structured HTTP/auth signals.
+  return resolveLoadedProviderPluginsForHooks(params) ?? [];
 }
 
 function hasStructuredFailoverDescriptor(context: ProviderFailoverErrorContext): boolean {

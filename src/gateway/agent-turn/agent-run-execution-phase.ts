@@ -1,4 +1,4 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
   attachAgentCommandAdmissionFacts,
@@ -23,7 +23,6 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -33,12 +32,14 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
+import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
@@ -309,6 +310,30 @@ export function startAgentRunExecution(params: {
       }
       // Awaited routing can retire this owner before final dispatch.
       params.assertContextCurrent?.();
+      const gatewayContext = params.context.resolveGatewayContext?.();
+      const skillLibraryAuthoring =
+        gatewayContext && params.resolvedSessionKey
+          ? prepareGatewaySkillAuthoring(
+              {
+                client: params.client,
+                context: gatewayContext,
+                sessionMutationCommitGuard: params.assertContextCurrent,
+              },
+              params.resolvedSessionKey,
+              !params.inputProvenance &&
+                !params.restoredCronContinuation &&
+                !params.isOneShotModelRun &&
+                !params.isRestartRecoveryResumeRun &&
+                !params.request.internalEvents &&
+                !params.request.internalRuntimeHandoffId &&
+                !params.request.internalExecutionIdentityRetry &&
+                !params.request.execApprovalFollowupExpectedSessionId &&
+                params.sessionEffects !== "internal" &&
+                !params.request.suppressPromptPersistence &&
+                !params.request.swarmCollector &&
+                params.request.lane !== "subagent",
+            )
+          : undefined;
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
       dispatchAdmittedAgentRun(
         withAgentRunDispatchExecutionIdentity(
@@ -319,6 +344,7 @@ export function startAgentRunExecution(params: {
             },
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
+              skillLibraryAuthoring,
               message,
               images: params.images,
               imageOrder: params.imageOrder,
@@ -401,6 +427,7 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
+                skillLibraryAuthoring?.bind(admittedRunContext);
                 bindGatewayContextResolver(
                   admittedRunContext,
                   params.context.resolveGatewayContext,
@@ -496,8 +523,8 @@ export function startAgentRunExecution(params: {
         await finishUndispatchedAbort();
         return;
       }
-      const renderedErr = formatErrorMessageWithCode(err);
-      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
+      const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
+      const renderedErr = error.message;
       const payload = {
         runId: params.runId,
         status: "error" as const,

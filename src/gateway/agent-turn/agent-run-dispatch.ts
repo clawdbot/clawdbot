@@ -24,7 +24,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { formatErrorMessageWithCode, readErrorName } from "../../infra/errors.js";
+import { readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
@@ -33,6 +33,7 @@ import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js"
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { errorShapeFromError } from "../error-shape.js";
 import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
@@ -355,7 +356,8 @@ export function dispatchAgentRunFromGateway(params: {
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatErrorMessageWithCode(err);
+      const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
+      const renderedErr = error.message;
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)
@@ -377,7 +379,6 @@ export function dispatchAgentRunFromGateway(params: {
           log: params.context.logGateway,
         });
       }
-      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       Object.defineProperty(error, "cause", { value: err });
       const payload = {
         runId: params.runId,

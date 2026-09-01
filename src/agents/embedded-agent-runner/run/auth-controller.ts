@@ -20,12 +20,9 @@ import {
   isFailoverErrorMessage,
   type FailoverReason,
 } from "../../embedded-agent-helpers.js";
-import {
-  describeFailoverError,
-  FailoverError,
-  resolveFailoverStatus,
-} from "../../failover-error.js";
+import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { getFailoverErrorCode } from "../../failover/error.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
   getApiKeyForModelCore,
@@ -502,7 +499,7 @@ export function createEmbeddedRunAuthController(params: {
         model: modelId,
         authMode,
         status: resolveFailoverStatus(reason),
-        code: failoverParams.error ? describeFailoverError(failoverParams.error).code : undefined,
+        code: failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined,
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });

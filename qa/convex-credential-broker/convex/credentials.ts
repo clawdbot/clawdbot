@@ -2,6 +2,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery } from "./_generated/server";
 
 const LEASE_EVENT_RETENTION_MS = 2 * 24 * 60 * 60 * 1_000;
@@ -82,14 +83,7 @@ type CredentialPayloadStorage = {
   payload: unknown;
 };
 
-type EventInsertCtx = {
-  db: {
-    insert: (
-      table: "lease_events" | "admin_events",
-      value: Record<string, unknown>,
-    ) => Promise<unknown>;
-  };
-};
+type EventInsertCtx = Pick<MutationCtx, "db">;
 
 function normalizeIntervalMs(params: {
   value: number | undefined;
@@ -147,28 +141,7 @@ function isChunkedCredentialPayloadMarker(
   );
 }
 
-async function readCredentialPayload(
-  ctx: {
-    db: {
-      query: (table: "credential_payload_chunks") => {
-        withIndex: (
-          indexName: "by_credential_index",
-          range: (q: {
-            eq: (
-              field: "credentialId",
-              value: Id<"credential_sets">,
-            ) => {
-              eq: (field: "index", value: number) => unknown;
-            };
-          }) => unknown,
-        ) => {
-          collect: () => Promise<CredentialPayloadChunkRecord[]>;
-        };
-      };
-    };
-  },
-  row: CredentialSetRecord,
-) {
+async function readCredentialPayload(ctx: Pick<QueryCtx, "db">, row: CredentialSetRecord) {
   if (!isChunkedCredentialPayloadMarker(row.payload)) {
     return row.payload;
   }

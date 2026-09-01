@@ -1,4 +1,4 @@
-import type { Page } from "playwright-core";
+import type { BrowserContext, Page } from "playwright-core";
 import { z } from "zod";
 import type { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
 
@@ -6,6 +6,18 @@ const METHODS = [
   "Target.attachedToTarget",
   "Target.detachedFromTarget",
   "Target.attachToTarget",
+  "Target.setAutoAttach",
+  "Page.enable",
+  "Page.getFrameTree",
+  "Page.setLifecycleEventsEnabled",
+  "Page.addScriptToEvaluateOnNewDocument",
+  "Page.createIsolatedWorld",
+  "Runtime.enable",
+  "Runtime.addBinding",
+  "Runtime.runIfWaitingForDebugger",
+  "Runtime.executionContextCreated",
+  "Network.enable",
+  "Log.enable",
   "Page.navigate",
   "Page.frameNavigated",
   "Page.frameDetached",
@@ -25,6 +37,7 @@ const METHODS = [
   "Network.loadingFailed",
 ] as const;
 const id = z.string().max(200).optional();
+const frameFields = z.object({ id, loaderId: id, url: z.string().optional() });
 const fields = z.object({
   sessionId: id,
   targetId: id,
@@ -33,8 +46,10 @@ const fields = z.object({
   frameId: id,
   loaderId: id,
   name: z.string().optional(),
-  frame: z.object({ id, loaderId: id }).optional(),
-  targetInfo: z.object({ targetId: id }).optional(),
+  frame: frameFields.optional(),
+  frameTree: z.object({ frame: frameFields }).optional(),
+  targetInfo: z.object({ targetId: id, url: z.string().optional() }).optional(),
+  context: z.object({ auxData: z.object({ frameId: id }).optional() }).optional(),
 });
 const envelope = z.object({
   id: z.number().int().optional(),
@@ -77,6 +92,9 @@ export function createBootstrapDiagnostic() {
   let remaining = 256;
   let dropped = 0;
   let active = false;
+  let inventoryUrl: string | undefined;
+  let contextBindingName: string | undefined;
+  let contextClient = 0;
   let nextClient = 0;
   let nextCommand = 0;
   let flushes = 0;
@@ -105,7 +123,7 @@ export function createBootstrapDiagnostic() {
     return next;
   };
   const observe = (client: number, outgoing: boolean, raw: string) => {
-    if (!active) {
+    if (!active && contextBindingName === undefined) {
       return;
     }
     // Reserve the final records for action outcome and teardown, even on event floods.
@@ -119,6 +137,19 @@ export function createBootstrapDiagnostic() {
         return;
       }
       const msg = parsed.data;
+      if (
+        !outgoing &&
+        msg.method === "Runtime.addBinding" &&
+        contextBindingName !== undefined &&
+        msg.params?.name === contextBindingName
+      ) {
+        contextClient = client;
+        contextBindingName = undefined;
+        append({ phase: "inventory.client", client });
+      }
+      if (!active) {
+        return;
+      }
       const key = `${client}:${msg.id}`;
       const command = outgoing ? pending.get(key) : undefined;
       if (outgoing) {
@@ -136,6 +167,7 @@ export function createBootstrapDiagnostic() {
       append({
         phase: !outgoing ? "cdp.command" : command ? "cdp.result" : "cdp.event",
         client,
+        retainedContext: client === contextClient,
         method,
         command: commandId,
         session: ordinal("session", msg.sessionId ?? data?.sessionId),
@@ -143,8 +175,21 @@ export function createBootstrapDiagnostic() {
         target: ordinal("target", data?.targetId ?? data?.targetInfo?.targetId),
         request: ordinal(method.startsWith("Fetch.") ? "fetch" : "network", data?.requestId),
         network: ordinal("network", data?.networkId),
-        frame: ordinal("frame", data?.frameId ?? data?.frame?.id),
-        loader: ordinal("loader", data?.loaderId ?? data?.frame?.loaderId),
+        frame: ordinal(
+          "frame",
+          data?.frameId ??
+            data?.frame?.id ??
+            data?.frameTree?.frame.id ??
+            data?.context?.auxData?.frameId,
+        ),
+        loader: ordinal(
+          "loader",
+          data?.loaderId ?? data?.frame?.loaderId ?? data?.frameTree?.frame.loaderId,
+        ),
+        matchesInventoryUrl:
+          inventoryUrl !== undefined &&
+          (data?.targetInfo?.url ?? data?.frame?.url ?? data?.frameTree?.frame.url) ===
+            inventoryUrl,
         load: data?.name === "load",
         domContentLoaded: data?.name === "DOMContentLoaded",
         error: msg.error !== undefined || Boolean(msg.result?.errorText),
@@ -156,7 +201,11 @@ export function createBootstrapDiagnostic() {
   const mark = (phase: Phase, value: boolean | number) => append({ phase, value });
   return {
     mark,
-    arm(selected: string, unrelated: string) {
+    identifyContextBinding(name: string) {
+      // Correlate the retained context through its existing command, without a new CDP request.
+      contextBindingName = name;
+    },
+    arm(selected: string, unrelated?: string) {
       active = true;
       append({
         phase: "armed",
@@ -192,6 +241,31 @@ export function createBootstrapDiagnostic() {
       };
       restores.push(() => {
         bridge.attachCdpClientSocket = original;
+      });
+    },
+    inventory(
+      context: BrowserContext,
+      bridge: Pick<ExtensionRelayBridge, "devtoolsTargetDescriptors" | "extensionConnected">,
+      expectedUrl: string,
+    ) {
+      inventoryUrl = expectedUrl;
+      const browser = context.browser();
+      const pages = context.pages();
+      const tabs = bridge.devtoolsTargetDescriptors();
+      append({
+        phase: "inventory.state",
+        contextClient,
+        extensionConnected: bridge.extensionConnected,
+        browserPresent: browser !== null,
+        browserConnected: browser?.isConnected() ?? false,
+        contextClosed: context.isClosed(),
+        pages: pages.length,
+        pageMatches: pages.filter((page) => page.url() === expectedUrl).length,
+        tabs: tabs.length,
+        tabMatches: tabs.filter((tab) => tab.url === expectedUrl).length,
+        unresolvedMatches: tabs.filter(
+          (tab) => tab.url === expectedUrl && tab.id === `tab-${tab.tabId}`,
+        ).length,
       });
     },
     watchPage(page: Page, expectedUrl: string) {

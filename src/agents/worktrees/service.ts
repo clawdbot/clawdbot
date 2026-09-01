@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createStagedInputPathMatcher,
@@ -28,7 +30,6 @@ import {
   insideGitCheckout,
   listGitWorktrees,
   worktreePathExists,
-  removeEmptyParents,
   requireGit,
   requireGitBuffer,
   runGit,
@@ -46,7 +47,6 @@ import {
 import {
   clearRegistryWorktreeProvisionedChunks,
   deleteRegistryWorktree,
-  findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
@@ -132,6 +132,7 @@ const log = createSubsystemLogger("agents/worktrees");
 type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  getConfig?: () => Pick<OpenClawConfig, "worktreeRoot">;
 };
 
 export type WorktreeCleanupLimits = {
@@ -167,15 +168,22 @@ function validateName(name: string): string {
   return name;
 }
 
+function findWorktreeByName(env: NodeJS.ProcessEnv, fingerprint: string, name: string) {
+  return listRegistryWorktrees(env).find(
+    (record) => record.repoFingerprint === fingerprint && record.name === name,
+  );
+}
+
 async function nameIsUnavailable(
   env: NodeJS.ProcessEnv,
   repoRoot: string,
+  fingerprint: string,
   root: string,
   name: string,
   owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
 ): Promise<boolean> {
   const worktreePath = path.join(root, name);
-  const registered = findRegistryWorktreeByPath(env, worktreePath);
+  const registered = findWorktreeByName(env, fingerprint, name);
   if (
     owner.ownerId &&
     registered &&
@@ -217,6 +225,7 @@ function appendNameOrdinal(name: string, ordinal: number): string {
 async function generateName(
   env: NodeJS.ProcessEnv,
   repoRoot: string,
+  fingerprint: string,
   root: string,
   owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
   suggestedName: string,
@@ -224,7 +233,7 @@ async function generateName(
   validateName(suggestedName);
   for (let ordinal = 1; ordinal <= 1_000; ordinal += 1) {
     const candidate = ordinal === 1 ? suggestedName : appendNameOrdinal(suggestedName, ordinal);
-    if (!(await nameIsUnavailable(env, repoRoot, root, candidate, owner))) {
+    if (!(await nameIsUnavailable(env, repoRoot, fingerprint, root, candidate, owner))) {
       return candidate;
     }
   }
@@ -287,9 +296,13 @@ async function canonicalPathKey(target: string): Promise<string> {
 async function shouldPreserveOrphanCandidate(
   target: string,
   managedPaths: ReadonlySet<string>,
+  customRoots: ReadonlySet<string>,
 ): Promise<boolean> {
   const targetKey = await canonicalPathKey(target);
-  if (managedPaths.has(targetKey)) {
+  if (
+    managedPaths.has(targetKey) ||
+    [...customRoots].some((root) => isPathInside(root, targetKey) || isPathInside(targetKey, root))
+  ) {
     return true;
   }
   // Any top-level .git entry marks uncertain user work; broken indirection only
@@ -727,14 +740,17 @@ async function prepareSnapshotIndex(
 export class ManagedWorktreeService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
+  private readonly getConfig: ServiceOptions["getConfig"];
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
     this.now = options.now ?? Date.now;
+    this.getConfig = options.getConfig;
   }
 
   private async worktreesRoot(): Promise<string> {
-    const root = path.join(resolveStateDir(this.env), "worktrees");
+    const root =
+      this.getConfig?.().worktreeRoot ?? path.join(resolveStateDir(this.env), "worktrees");
     await fs.mkdir(root, { recursive: true });
     // Git canonicalizes paths in `git worktree list`; minting below the real root keeps
     // lock-state and adoption comparisons aligned when the state path traverses symlinks.
@@ -835,37 +851,30 @@ export class ManagedWorktreeService {
   ): Promise<ManagedWorktreeRecord> {
     params.signal?.throwIfAborted();
     params.onProgress?.("checkout");
-    const root = path.join(await this.worktreesRoot(), repository.fingerprint);
-    const name = validateName(
-      params.name ??
-        (await generateName(
-          this.env,
-          repository.repoRoot,
-          root,
-          params,
-          params.suggestedName ?? inferredName,
-        )),
-    );
-    const worktreePath = path.join(root, name);
-    const existing = findRegistryWorktreeByPath(this.env, worktreePath);
+    const suppliedName = params.name === undefined ? undefined : validateName(params.name);
+    // Names belong to the repository across storage roots. Reuse and restore must
+    // keep their recorded paths even when the new allocation volume is unavailable.
+    const existing = suppliedName
+      ? findWorktreeByName(this.env, repository.fingerprint, suppliedName)
+      : undefined;
     // Name reuse only ever adopts the caller's own record. Without this guard a
     // caller-chosen name could bind a new owner to another session's or a
     // manual checkout and run inside it.
-    if (existing?.name === name && !existing.removedAt && !worktreeOwnerMatches(existing, params)) {
+    if (existing && !existing.removedAt && !worktreeOwnerMatches(existing, params)) {
       throw new Error(
-        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
+        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${suppliedName}`,
       );
     }
-    if (existing?.name === name && existing.removedAt === undefined) {
+    if (existing && existing.removedAt === undefined) {
       if (await worktreePathExists(existing.path)) {
         return await this.rebindLiveRepository(existing, params);
       }
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
     }
-    if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
+    if (existing && existing.removedAt !== undefined && existing.snapshotRef) {
       if (!worktreeOwnerMatches(existing, params)) {
         throw new Error(
-          `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
+          `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${suppliedName}`,
         );
       }
       return await this.restoreWithAllocation({
@@ -874,6 +883,18 @@ export class ManagedWorktreeService {
         commitGuard: params.commitGuard,
       });
     }
+    const root = path.join(await this.worktreesRoot(), repository.fingerprint);
+    const name =
+      suppliedName ??
+      (await generateName(
+        this.env,
+        repository.repoRoot,
+        repository.fingerprint,
+        root,
+        params,
+        params.suggestedName ?? inferredName,
+      ));
+    const worktreePath = path.join(root, name);
     const branch = `openclaw/${name}`;
     const branchExists = await runGit(repository.repoRoot, [
       "show-ref",
@@ -1240,7 +1261,9 @@ export class ManagedWorktreeService {
         throw commandError("git branch -D", branchDelete);
       }
       await requireGit(record.repoRoot, ["worktree", "prune"]);
-      await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
+      // Only prune the recorded checkout's empty parent; a changed allocation
+      // root is neither required for removal nor authority to walk other parents.
+      await fs.rmdir(path.dirname(record.path)).catch(() => undefined);
       params.commitGuard?.();
       const removedAt = this.now();
       // Persist the run-end outcome atomically with finalization: a post-finalize
@@ -1712,8 +1735,35 @@ export class ManagedWorktreeService {
         }
       }
     }
-    const worktreesRoot = await this.worktreesRoot();
+    // Only the default state-owned area grants orphan cleanup authority. A custom
+    // root can contain unrelated directories; its cleanup is registry-bound above.
+    const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
+    if (fingerprints.length === 0) {
+      return 0;
+    }
+    const defaultRoot = await canonicalPathKey(worktreesRoot);
+    const customRoots = new Set<string>();
+    // Retain roots from recorded paths after configuration changes. Canonical
+    // overlap protects nested roots and symlink aliases before recursive deletion.
+    for (const root of [
+      this.getConfig?.().worktreeRoot,
+      ...records.map((record) => path.dirname(path.dirname(record.path))),
+    ]) {
+      if (!root) {
+        continue;
+      }
+      try {
+        const canonical = await canonicalPathKey(root);
+        if (canonical !== defaultRoot) {
+          customRoots.add(canonical);
+        }
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+      }
+    }
     let deleted = 0;
     for (const fingerprint of fingerprints) {
       if (!fingerprint.isDirectory()) {
@@ -1722,7 +1772,7 @@ export class ManagedWorktreeService {
       const fingerprintPath = path.join(worktreesRoot, fingerprint.name);
       // A root entry can be a checkout, not a fingerprint container; descending
       // before applying the same preservation rule would expose its contents to deletion.
-      if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths)) {
+      if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths, customRoots)) {
         continue;
       }
       const names = await fs.readdir(fingerprintPath, { withFileTypes: true }).catch(() => []);
@@ -1731,7 +1781,7 @@ export class ManagedWorktreeService {
           continue;
         }
         const candidate = path.join(fingerprintPath, name.name);
-        if (await shouldPreserveOrphanCandidate(candidate, managedPaths)) {
+        if (await shouldPreserveOrphanCandidate(candidate, managedPaths, customRoots)) {
           continue;
         }
         await fs.rm(candidate, { recursive: true, force: true });
@@ -1743,7 +1793,7 @@ export class ManagedWorktreeService {
   }
 }
 
-export const managedWorktrees = new ManagedWorktreeService();
+export const managedWorktrees = new ManagedWorktreeService({ getConfig: getRuntimeConfig });
 
 export type {
   CreateManagedWorktreeParams,

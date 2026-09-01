@@ -3750,6 +3750,22 @@ describe("subagent registry seam flow", () => {
       label: "blocked wait announce",
     },
     {
+      name: "announces terminal failures whose diagnostics resemble transport errors",
+      runId: "run-diagnostic-transport-wait",
+      task: "report failed child",
+      wait: {
+        status: "error",
+        error: "child exited with code 1\nstderr: socket hang up",
+        livenessState: undefined,
+      },
+      expectedOutcome: {
+        status: "error",
+        error: "child exited with code 1\nstderr: socket hang up",
+      },
+      expectedReason: "subagent-error",
+      label: "diagnostic transport wait announce",
+    },
+    {
       name: "announces provider hard timeout wait snapshots as timeouts despite blocked metadata",
       runId: "run-blocked-hard-timeout-wait",
       task: "provider timeout wait",

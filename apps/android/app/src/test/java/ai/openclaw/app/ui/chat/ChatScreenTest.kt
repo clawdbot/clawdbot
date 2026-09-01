@@ -75,22 +75,26 @@ class ChatScreenTest {
   }
 
   @Test
-  fun composerTrailingActionPreservesTalkAndRunStopPrecedence() {
+  fun composerPrimaryActionKeepsRunStopSeparateFromLiveTalk() {
     assertEquals(
-      ChatComposerTrailingAction.StopTalk,
-      resolveChatComposerTrailingAction(talkActive = true, runActive = true, sendEnabled = true),
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = true, runActive = true, sendEnabled = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.Stop,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = true, sendEnabled = true),
+      ChatComposerPrimaryAction.None,
+      resolveChatComposerPrimaryAction(talkActive = true, runActive = false, sendEnabled = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.Send,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = true),
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, sendEnabled = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.StartTalk,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = false),
+      ChatComposerPrimaryAction.Send,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = false, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerPrimaryAction.StartTalk,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = false, sendEnabled = false),
     )
   }
 

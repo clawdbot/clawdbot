@@ -339,8 +339,37 @@ describe("resolveMessageChannelSelection", () => {
       resolve: () => {
         throw new Error("unresolved SecretRef");
       },
-      configured: () => false,
+      configured: (): boolean => false,
       expected: true,
+      inspectCalls: ["default"],
+      resolveCalls: 0,
+    },
+    {
+      name: "defaults omitted inspection enablement without calling runtime hooks",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: () => ({ configured: true }),
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      enabled: () => {
+        throw new Error("runtime enablement must not receive inspection metadata");
+      },
+      configured: (): boolean => true,
+      expected: true,
+      inspectCalls: ["default"],
+      resolveCalls: 0,
+    },
+    {
+      name: "keeps omitted inspection configuration unknown without calling runtime hooks",
+      accountResolution: "read_only" as const,
+      accountIds: ["default"],
+      inspect: () => ({ enabled: true }),
+      resolve: () => {
+        throw new Error("strict resolution must not run");
+      },
+      configured: (): boolean => true,
+      expected: false,
       inspectCalls: ["default"],
       resolveCalls: 0,
     },
@@ -426,7 +455,8 @@ describe("resolveMessageChannelSelection", () => {
       accountIds: scenario.accountIds,
       inspectAccount,
       resolveAccount,
-      isEnabled: (account) => (account as { enabled?: boolean }).enabled !== false,
+      isEnabled:
+        scenario.enabled ?? ((account) => (account as { enabled?: boolean }).enabled !== false),
       isConfigured,
     });
     mocks.listChannelPlugins.mockReturnValue([plugin]);
@@ -450,6 +480,9 @@ describe("resolveMessageChannelSelection", () => {
       scenario.inspectCalls,
     );
     expect(resolveAccount).toHaveBeenCalledTimes(scenario.resolveCalls);
+    if (scenario.accountResolution === "read_only" && scenario.inspect) {
+      expect(isConfigured).not.toHaveBeenCalled();
+    }
   });
 
   it("allows bootstrap while checking explicit and fallback channels", async () => {

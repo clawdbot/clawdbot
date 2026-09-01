@@ -10,7 +10,7 @@
   "dependencies": {
     "audio-decode": "2.2.3",
     "baileys": "7.0.0-rc14",
-    "typebox": "1.3.16"
+    "typebox": "1.3.17"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -72,6 +72,7 @@
       "pluginApi": ">=2026.8.1"
     },
     "build": {
+      "bundledDist": false,
       "openclawVersion": "2026.8.1"
     },
     "release": {

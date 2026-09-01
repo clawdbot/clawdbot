@@ -9,6 +9,9 @@ import {
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
 
+type CronDeliveryPreviewJob = Pick<CronJob, "delivery" | "payload" | "sessionTarget"> &
+  Partial<Pick<CronJob, "agentId" | "sessionKey">>;
+
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
     return "last";
@@ -39,10 +42,10 @@ function formatDeliveryDetail(params: {
 }
 
 /** Builds the user-visible cron delivery preview for one job without sending anything. */
-async function resolveCronDeliveryPreview(params: {
+export async function resolveCronDeliveryPreview(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
-  job: CronJob;
+  job: CronDeliveryPreviewJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
   if (plan.mode === "none" && !hasExplicitCronDeliveryTarget(plan)) {

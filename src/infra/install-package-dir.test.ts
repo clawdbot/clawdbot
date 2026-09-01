@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -179,37 +180,6 @@ describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
   });
-  const emptyNpmFailureCases = [
-    {
-      label: "exit code",
-      npmResult: {
-        stdout: "",
-        stderr: "",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      },
-      expectedDetail: "exit code 1",
-    },
-    {
-      label: "signal",
-      npmResult: {
-        stdout: "",
-        stderr: "",
-        code: null,
-        signal: "SIGKILL",
-        killed: true,
-        termination: "signal",
-      },
-      expectedDetail: "signal SIGKILL",
-    },
-  ] satisfies Array<{
-    label: string;
-    npmResult: SpawnResult;
-    expectedDetail: string;
-  }>;
-
   async function installWithNpmResult(npmResult: SpawnResult) {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
@@ -834,8 +804,8 @@ describe("installPackageDir", () => {
     }
   });
 
-  it.each(emptyNpmFailureCases)(
-    "includes $label when npm dependency install fails without output",
+  it.each(npmCommandFailureCases)(
+    "preserves $label when npm dependency install fails",
     async ({ npmResult, expectedDetail }) => {
       const result = await installWithNpmResult(npmResult);
 

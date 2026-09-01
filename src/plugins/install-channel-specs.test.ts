@@ -93,20 +93,64 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     });
   });
 
-  it("preserves beta behavior for a version-bound plugin", () => {
+  it.each([false, true])(
+    "targets the installed beta core (version-bound=%s)",
+    (versionBoundToCore) => {
+      expect(
+        resolveNpmInstallSpecsForUpdateChannel({
+          spec: "@openclaw/codex@latest",
+          updateChannel: "beta",
+          officialPackageName: "@openclaw/codex",
+          coreVersion: "2026.8.1-beta.3",
+          versionBoundToCore,
+        }),
+      ).toEqual({
+        installSpec: "@openclaw/codex@2026.8.1-beta.3",
+        recordSpec: "@openclaw/codex@latest",
+        fallbackSpec: "@openclaw/codex@latest",
+        fallbackLabel: "@openclaw/codex@2026.8.1-beta.3",
+      });
+    },
+  );
+
+  it.each([
+    { spec: "@openclaw/discord", channel: "stable" as const, target: "@openclaw/discord" },
+    { spec: "@openclaw/discord", channel: "dev" as const, target: "@openclaw/discord" },
+    { spec: "@openclaw/discord@next", channel: "beta" as const, target: "@openclaw/discord@next" },
+    { spec: "@openclaw/discord@beta", channel: "beta" as const, target: "@openclaw/discord@beta" },
+    {
+      spec: "@openclaw/discord@2026.7.1",
+      channel: "beta" as const,
+      target: "@openclaw/discord@2026.7.1",
+    },
+  ])("preserves $channel selection for $spec on a beta core", ({ spec, channel, target }) => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/codex@latest",
-        updateChannel: "beta",
-        officialPackageName: "@openclaw/codex",
+        spec,
+        updateChannel: channel,
+        officialPackageName: "@openclaw/discord",
         coreVersion: "2026.8.1-beta.3",
-        versionBoundToCore: true,
+      }),
+    ).toEqual({ installSpec: target, recordSpec: spec });
+  });
+
+  it.each([
+    { spec: "@acme/discord", coreVersion: "2026.8.1-beta.3" },
+    { spec: "@openclaw/discord", coreVersion: "2026.8.1" },
+    { spec: "@openclaw/discord", coreVersion: undefined },
+  ])("keeps moving beta selection for $spec with core $coreVersion", ({ spec, coreVersion }) => {
+    expect(
+      resolveNpmInstallSpecsForUpdateChannel({
+        spec,
+        updateChannel: "beta",
+        officialPackageName: "@openclaw/discord",
+        coreVersion,
       }),
     ).toEqual({
-      installSpec: "@openclaw/codex@beta",
-      recordSpec: "@openclaw/codex@latest",
-      fallbackSpec: "@openclaw/codex@latest",
-      fallbackLabel: "@openclaw/codex@beta",
+      installSpec: `${spec}@beta`,
+      recordSpec: spec,
+      fallbackSpec: spec,
+      fallbackLabel: `${spec}@beta`,
     });
   });
 });

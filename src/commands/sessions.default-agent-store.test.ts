@@ -164,6 +164,7 @@ describe("sessionsCommand default store agent selection", () => {
     expect(listSessionEntriesMock).toHaveBeenCalledWith({
       agentId: "voice",
       storePath: "/tmp/sessions-voice.json",
+      projection: "list",
     });
     expect(logs[0]).toContain("Session store: /tmp/sessions-voice.voice.sqlite");
   });
@@ -202,10 +203,12 @@ describe("sessionsCommand default store agent selection", () => {
     expect(listSessionEntriesMock).toHaveBeenNthCalledWith(1, {
       agentId: "main",
       storePath: "/tmp/sessions-main.json",
+      projection: "list",
     });
     expect(listSessionEntriesMock).toHaveBeenNthCalledWith(2, {
       agentId: "voice",
       storePath: "/tmp/sessions-voice.json",
+      projection: "list",
     });
     expect(logs[0]).toContain("Session stores: 2 (main, voice)");
     expect(logs[2]).toContain("Agent");

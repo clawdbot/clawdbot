@@ -1475,6 +1475,34 @@ describe("Tool Search", () => {
     );
   });
 
+  it("revalidates accepted snapshots after executor-side schema mutation", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_mutated_schema", "Return a mutable orchard schema");
+    const idSchema = { type: "string" };
+    target.outputSchema = {
+      type: "object",
+      properties: { id: idSchema },
+      required: ["id"],
+      additionalProperties: false,
+    } as never;
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: async (params) => {
+          const accepted = await params.acceptResultBeforeProjection(jsonResult({ id: "P-1" }));
+          idSchema.type = "number";
+          return accepted;
+        },
+      },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_mutated_schema")).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
+  });
+
   it("rejects policy blocks outside a declared success output schema", async () => {
     const execute = vi.fn(async () => jsonResult({ id: "should-not-run" }));
     initializeGlobalHookRunner(
@@ -1638,7 +1666,10 @@ describe("Tool Search", () => {
       callCount?: number;
     };
     expect(telemetry.catalogSize).toBe(2);
-    expect(telemetry.counterScope).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    // The lowercase-hex alphabet is a contract: a wider alphabet can emit
+    // credential-shaped scopes (e.g. hf_…) that tool-payload redaction rewrites,
+    // breaking byte-exact persistence of results embedding the telemetry.
+    expect(telemetry.counterScope).toMatch(/^[0-9a-f]{24}$/);
     expect(telemetry.searchCount).toBe(1);
     expect(telemetry.describeCount).toBe(1);
     expect(telemetry.callCount).toBe(1);
@@ -3635,7 +3666,7 @@ describe("Tool Search", () => {
     expect(abortCount).toBe(1);
   });
 
-  it("reuses an unchanged catalog within the same run", () => {
+  it("reuses an unchanged catalog only on the same ref", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_reuse_alpha", "Alpha tool");
     const beta = pluginTool("fake_reuse_beta", "Beta tool");
@@ -3675,7 +3706,7 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:tool-search-reuse",
       catalogRef: laterRef,
     });
-    expect(later.catalogReused).toBe(true);
+    expect(later.catalogReused).toBe(false);
     expect(laterRef.current).not.toBe(catalogAfterFirst);
     expect(laterRef.current?.entries).not.toBe(catalogAfterFirst.entries);
     expect(laterRef.current?.entries).toEqual(catalogAfterFirst.entries);
@@ -3702,7 +3733,7 @@ describe("Tool Search", () => {
   });
 
   it.each(["fresh", "same"] as const)(
-    "restores an unchanged catalog after run cleanup on a %s ref",
+    "registers a fresh catalog after run cleanup on a %s ref",
     async (refMode) => {
       const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
       const alpha = pluginTool("fake_xrun_alpha", "Alpha tool");
@@ -3743,49 +3774,49 @@ describe("Tool Search", () => {
       expect(firstRef.current).toBeUndefined();
       expect(firstRuntime.telemetry()).toMatchObject(firstCounters);
 
-      const restoredRef = refMode === "same" ? firstRef : createToolSearchCatalogRef();
+      const nextRef = refMode === "same" ? firstRef : createToolSearchCatalogRef();
       const second = applyToolSearchCatalog({
         tools: [codeTool, alpha, beta],
         config,
         sessionId,
         runId: "run-2",
-        catalogRef: restoredRef,
+        catalogRef: nextRef,
       });
       expect(second.catalogRegistered).toBe(true);
-      expect(second.catalogReused).toBe(true);
-      const restoredCatalog = expectDefined(restoredRef.current, "restored run catalog");
-      const restoredAlphaEntry = expectDefined(
-        restoredCatalog.entries.find((entry) => entry.name === alpha.name),
-        "restored alpha entry",
+      expect(second.catalogReused).toBe(false);
+      const nextCatalog = expectDefined(nextRef.current, "next run catalog");
+      const nextAlphaEntry = expectDefined(
+        nextCatalog.entries.find((entry) => entry.name === alpha.name),
+        "next run alpha entry",
       );
-      expect(restoredAlphaEntry).not.toBe(firstAlphaEntry);
-      expect(restoredAlphaEntry).toEqual(firstAlphaEntry);
-      expect(restoredAlphaEntry.tool).toBe(alpha);
-      expect(restoredCatalog.counterScope).not.toBe(firstCatalog.counterScope);
-      expect(restoredCatalog.searchCount).toBe(0);
-      const restoredRuntime = new ToolSearchRuntime(
-        { catalogRef: restoredRef },
+      expect(nextAlphaEntry).not.toBe(firstAlphaEntry);
+      expect(nextAlphaEntry).toEqual(firstAlphaEntry);
+      expect(nextAlphaEntry.tool).toBe(alpha);
+      expect(nextCatalog.counterScope).not.toBe(firstCatalog.counterScope);
+      expect(nextCatalog.searchCount).toBe(0);
+      const nextRuntime = new ToolSearchRuntime(
+        { catalogRef: nextRef },
         resolveToolSearchConfig(config),
       );
-      const restoredCounters = {
-        counterScope: restoredCatalog.counterScope,
+      const nextCounters = {
+        counterScope: nextCatalog.counterScope,
         searchCount: 0,
         describeCount: 0,
         callCount: 0,
       };
       for (const phase of ["active", "closed"] as const) {
         if (phase === "closed") {
-          clearToolSearchCatalog({ sessionId, catalogRef: restoredRef });
+          clearToolSearchCatalog({ sessionId, catalogRef: nextRef });
         }
-        expect(restoredRuntime.telemetry(), phase).toMatchObject(restoredCounters);
+        expect(nextRuntime.telemetry(), phase).toMatchObject(nextCounters);
         expect(firstRuntime.telemetry(), phase).toMatchObject(
-          refMode === "same" ? restoredCounters : firstCounters,
+          refMode === "same" ? nextCounters : firstCounters,
         );
       }
     },
   );
 
-  it("notifies catalog-ref lifecycle hooks across snapshot restore and disposal", () => {
+  it("notifies catalog-ref lifecycle hooks across registration and disposal", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_lifecycle_alpha", "Alpha tool");
     const config = { tools: { toolSearch: true } } as never;
@@ -3820,14 +3851,14 @@ describe("Tool Search", () => {
       runId: "run-lifecycle-2",
       catalogRef: secondRef,
     });
-    expect(second.catalogReused).toBe(true);
+    expect(second.catalogReused).toBe(false);
     expect(secondChange).toHaveBeenCalledOnce();
   });
 
-  it("applies Code Mode projection filtering to restored catalogs", async () => {
+  it("applies Code Mode projection filtering to a newly registered catalog", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     // The unprojected tool is the stronger match for the query; only projection
-    // filtering can keep it out of a one-result search on the restored catalog.
+    // filtering can keep it out of a one-result search on the next run's catalog.
     const shadowing = pluginTool("fake_projection_probe", "Projection probe projection probe");
     shadowing.execute = vi.fn(async () => jsonResult({ marker: "shadowing" }));
     const projected = pluginTool("fake_projection_secondary", "Projection probe secondary");
@@ -3853,11 +3884,11 @@ describe("Tool Search", () => {
       runId: "run-projection-2",
       catalogRef: secondRef,
     });
-    expect(second.catalogReused).toBe(true);
-    const restored = expectDefined(secondRef.current, "restored projection catalog");
+    expect(second.catalogReused).toBe(false);
+    const nextCatalog = expectDefined(secondRef.current, "next projection catalog");
     const projectedId = expectDefined(
-      restored.entries.find((entry) => entry.name === projected.name),
-      "restored projected entry",
+      nextCatalog.entries.find((entry) => entry.name === projected.name),
+      "next projected entry",
     ).id;
 
     const runtime = new ToolSearchRuntime(
@@ -3877,7 +3908,7 @@ describe("Tool Search", () => {
     expect(shadowing.execute).not.toHaveBeenCalled();
   });
 
-  it("does not reuse snapshots for prewrapped input tools across runs", async () => {
+  it("binds prewrapped input tools to their current run", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-prewrapped-tool";
@@ -3998,7 +4029,7 @@ describe("Tool Search", () => {
     ]);
   });
 
-  it("reuses fresh MCP wrappers while executing the current run wrapper", async () => {
+  it("registers fresh MCP wrappers and executes the current run wrapper", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-mcp-wrapper-reuse";
@@ -4082,7 +4113,7 @@ describe("Tool Search", () => {
       catalogRef: secondRef,
       toolHookContext: { sessionId, runId: "run-mcp-2" },
     });
-    expect(second.catalogReused).toBe(true);
+    expect(second.catalogReused).toBe(false);
 
     const runtime = new ToolSearchRuntime(
       { catalogRef: secondRef },
@@ -4151,7 +4182,7 @@ describe("Tool Search", () => {
     expect(second.catalogReused).toBe(false);
   });
 
-  it("degrades to a miss when a tool disappears from the current run", () => {
+  it("registers only tools present in the current run", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-tool-removed";
