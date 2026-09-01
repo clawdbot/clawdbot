@@ -45,7 +45,13 @@ function unavailableReason(
     (command) => !environment.invocableCommands?.includes(command),
   );
   if (unavailableCommand) {
-    return `${t("pluginsPage.enableAction")} ${unavailableCommand}: gateway.nodes.commands.allow.`;
+    // A missing command has two causes: the node never declared it, or the
+    // Gateway allowlist did not authorize it. Name the right one instead of
+    // always pointing at gateway.nodes.commands.allow.
+    const declared = environment.capabilities?.includes(unavailableCommand);
+    return declared
+      ? `${t("pluginsPage.enableAction")} ${unavailableCommand}: gateway.nodes.commands.allow.`
+      : t("newSession.nodeCommandNotDeclared", { command: unavailableCommand });
   }
   if (!requirement.consumesWorkerSlot) {
     return undefined;

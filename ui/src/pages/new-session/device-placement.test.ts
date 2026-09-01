@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { projectDevicePlacements } from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
@@ -25,6 +26,10 @@ function node(overrides: Partial<DraftEnvironment>): DraftEnvironment {
 }
 
 describe("device placement projection", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it.each([
     {
       name: "available host",
@@ -160,14 +165,14 @@ describe("device placement projection", () => {
       reason: /enable|approv/i,
     },
     {
-      name: "missing command authority fails closed even when worker slots are free",
+      name: "an undeclared command fails closed even when worker slots are free",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
       environment: { invocableCommands: ["camera.snap"] },
       selectable: false,
-      reason: /enable|approv/i,
+      reason: /declare|command/i,
     },
   ])("$name", ({ requirement, environment, selectable, reason }) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);

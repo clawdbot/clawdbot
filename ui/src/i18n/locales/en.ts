@@ -919,6 +919,8 @@ export const en: TranslationMap = {
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
+    nodeCommandNotDeclared:
+      "This device does not declare the required command ({command}). Declare it on the node or pick another device.",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",
