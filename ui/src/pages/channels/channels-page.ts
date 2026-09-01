@@ -87,9 +87,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   private readonly wizardHost = new ChannelWizardHost({
     getContext: () => this.context,
     requestUpdate: () => this.requestUpdate(),
-    clearSelection: () => {
-      this.selectedChannel = null;
-    },
+    clearSelection: () => (this.selectedChannel = null),
   });
 
   private schemaLoadStarted = false;
@@ -124,10 +122,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         const handleChange = () => {
           if (this.channelsSource === channels) {
             this.reconcilePairingFilter(channels.state.pairingSnapshot);
-            const gateway = this.context.gateway.snapshot;
-            if (gateway.phase === "connected" && gateway.client) {
-              this.pluginPresentation.ensure(gateway.client);
-            }
+            this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
             this.requestUpdate();
           }
         };

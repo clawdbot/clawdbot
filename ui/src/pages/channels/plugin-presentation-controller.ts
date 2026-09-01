@@ -34,7 +34,10 @@ export class ChannelPluginPresentationController {
     return this.iconUrls;
   }
 
-  ensure(client: GatewayBrowserClient) {
+  ensure(client: GatewayBrowserClient | null) {
+    if (!client) {
+      return;
+    }
     if (this.request?.client === client) {
       if (this.catalog) {
         this.pendingEnsureClient = client;
