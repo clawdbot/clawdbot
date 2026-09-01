@@ -29,6 +29,12 @@ const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
+// Cumulative disconnect cap: the watchdog may be rearmed for each scheduled
+// retry, but the total time since the initial disconnect cannot exceed this.
+// Prevents a gateway that keeps scheduling retries without reaching READY from
+// deferring the watchdog indefinitely. 5x the runtime-ready timeout (150s at
+// the default 30s) allows several backoff cycles while still catching stalls.
+const CUMULATIVE_DISCONNECT_CAP_MULTIPLIER = 5;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
@@ -285,7 +291,16 @@ function createGatewayStatusObserver(params: {
         clearDisconnectWatchdog();
         graceCount = preservedGraceCount;
         disconnectedAt = preservedDisconnectedAt ?? Date.now();
-        armWatchdog(params.runtimeReadyTimeoutMs + extraDelayMs);
+        // Cap the threshold so repeated retries cannot defer the watchdog
+        // indefinitely. The cumulative disconnect duration is capped at
+        // CUMULATIVE_DISCONNECT_CAP_MULTIPLIER × runtimeReadyTimeoutMs.
+        const cumulativeCap = params.runtimeReadyTimeoutMs * CUMULATIVE_DISCONNECT_CAP_MULTIPLIER;
+        const elapsedSinceDisconnect =
+          disconnectedAt !== undefined ? Date.now() - disconnectedAt : 0;
+        const remainingToCap = Math.max(0, cumulativeCap - elapsedSinceDisconnect);
+        const requestedThreshold = params.runtimeReadyTimeoutMs + extraDelayMs;
+        const cappedThreshold = Math.min(requestedThreshold, remainingToCap);
+        armWatchdog(cappedThreshold);
       }
       return;
     }

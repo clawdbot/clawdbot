@@ -905,4 +905,42 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("force-stops after the cumulative disconnect cap even when retries keep being scheduled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async (stopParams) => {
+        gateway.isConnected = false;
+        emitter.emit("debug", "Gateway websocket closed: 1006");
+        stopParams.registerForceStop?.((err: unknown) => {
+          throw err;
+        });
+
+        // Simulate Discord's backoff: 2s, 4s, 8s, 16s, 30s, 30s, 30s...
+        // The watchdog rearms on each schedule, but the cumulative cap
+        // (5 × 30s = 150s) should eventually force-stop regardless.
+        const delays = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000];
+        for (const delay of delays) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          emitter.emit("reconnect-scheduled", delay);
+          // Advance past the delay to simulate the reconnect failing and
+          // the next schedule being emitted
+          await vi.advanceTimersByTimeAsync(delay);
+        }
+      });
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+
+      // The watchdog should have force-stopped by now because the cumulative
+      // disconnect cap was reached despite continuous retry schedules.
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        /discord gateway stayed disconnected/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
