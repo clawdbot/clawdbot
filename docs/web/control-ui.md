@@ -968,6 +968,15 @@ pnpm ui:dev
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
 
+For a standalone preview with synthetic data, use:
+
+```bash
+pnpm dev:ui:mock -- --port 19321
+```
+
+The mock preview selects its own origin for Gateway resources, including
+avatars, so those requests stay on the preview server.
+
 ## Blank Control UI page
 
 If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup.

@@ -272,6 +272,15 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+Lint reports its final failure on stderr after child joins and artifact ownership
+have settled, including retained ownership when cleanup is uncertain. Standalone
+Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the
+whole pipeline and ends with one `[lint] FAILED (exit N)` instead. Shard progress
+distinguishes `passed` from `failed (exit N)`, and stdout remains available for
+machine-readable tool output. Successful runs have no failure trailer. Signals
+forwarded during child execution and shard timeouts fail the command; whole-host
+loss or `SIGKILL` of the reporting process can prevent a final line.
+
 Local plugin lint and package-boundary compilation consume native declarations in
 `packages/plugin-sdk/dist` and seven separate plugin API trees in
 `.artifacts/extension-package-boundary/plugins`. Each declaration and compile

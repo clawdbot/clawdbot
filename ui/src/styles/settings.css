@@ -706,6 +706,45 @@ textarea.settings-input {
   text-align: center;
 }
 
+.settings-loading-skeleton,
+.settings-loading-skeleton__rows {
+  width: 100%;
+}
+
+.settings-loading-skeleton__title,
+.settings-loading-skeleton__description,
+.settings-loading-skeleton__control {
+  display: block;
+}
+
+.settings-loading-skeleton__title {
+  width: min(42%, 220px);
+  height: 14px;
+}
+
+.settings-loading-skeleton__description {
+  width: min(72%, 420px);
+  height: 11px;
+}
+
+.settings-loading-skeleton__row:nth-child(3n + 2) .settings-loading-skeleton__title {
+  width: min(34%, 180px);
+}
+
+.settings-loading-skeleton__row:nth-child(3n) .settings-loading-skeleton__description {
+  width: min(58%, 340px);
+}
+
+.settings-loading-skeleton__control {
+  width: 72px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+.settings-loading-skeleton__control--wide {
+  width: 104px;
+}
+
 /* ── Key/value facts (About build info, agent facts) ── */
 
 .settings-kv {

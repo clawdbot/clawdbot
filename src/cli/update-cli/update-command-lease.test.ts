@@ -211,6 +211,7 @@ describe("update orchestration lifecycle ownership", () => {
         "post-attempt",
         "post-acquired",
         "validate",
+        "readiness",
       ]);
       if (lane === "current-process") {
         expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
@@ -329,6 +330,7 @@ describe("update orchestration lifecycle ownership", () => {
         "post-attempt",
         "post-acquired",
         "validate",
+        "readiness",
       ]);
     },
   );
@@ -340,7 +342,7 @@ describe("update orchestration lifecycle ownership", () => {
       mocks.plugins.mockResolvedValueOnce({ ...pluginResult, changed: false });
       await invoke(lane);
       expectSuccess(lane);
-      expect(await events()).toEqual(["pre-attempt", "pre-acquired"]);
+      expect(await events()).toEqual(["pre-attempt", "pre-acquired", "readiness"]);
     },
   );
 
@@ -419,8 +421,69 @@ describe("update orchestration lifecycle ownership", () => {
     expect(mocks.restart).toHaveBeenCalledOnce();
     expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate"]);
+    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
   });
+
+  it.each([
+    {
+      lane: "resume" as const,
+      failure: "finding" as const,
+      reason: "post-plugin-update-readiness-failed",
+    },
+    {
+      lane: "resume" as const,
+      failure: "execution" as const,
+      reason: "post-plugin-update-readiness-execution-failed",
+    },
+    {
+      lane: "current-process" as const,
+      failure: "finding" as const,
+      reason: "post-plugin-update-readiness-failed",
+    },
+    {
+      lane: "current-process" as const,
+      failure: "execution" as const,
+      reason: "post-plugin-update-readiness-execution-failed",
+    },
+    {
+      lane: "repair" as const,
+      failure: "finding" as const,
+      reason: "post-plugin-update-readiness-failed",
+    },
+    {
+      lane: "repair" as const,
+      failure: "execution" as const,
+      reason: "post-plugin-update-readiness-execution-failed",
+    },
+  ])(
+    "$lane leaves the Gateway stopped after a readiness $failure",
+    async ({ lane, failure, reason }) => {
+      await writeScenario(lane, {
+        readinessFailure: failure,
+        hostVersion: lane === "repair" ? undefined : "1.0.0",
+      });
+
+      await invoke(lane);
+
+      const output =
+        lane === "current-process"
+          ? mocks.print.mock.lastCall?.[0]
+          : vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
+      expect(output).toMatchObject({
+        status: "error",
+        postUpdate: { plugins: { reason } },
+      });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(lane === "resume" ? 0 : 1);
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(await events()).toEqual([
+        ...(lane === "current-process" ? [] : ["pre-attempt", "pre-acquired"]),
+        "post-attempt",
+        "post-acquired",
+        "validate",
+        "readiness",
+      ]);
+    },
+  );
 
   it.each([
     { lane: "resume", valid: true },
@@ -466,6 +529,7 @@ describe("update orchestration lifecycle ownership", () => {
         "post-attempt",
         "post-acquired",
         "validate",
+        ...(valid ? ["readiness"] : []),
       ]);
     },
   );

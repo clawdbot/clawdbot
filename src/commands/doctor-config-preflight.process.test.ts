@@ -205,6 +205,8 @@ describe("doctor invalid config process exit", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const approvalsPath = path.join(stateDir, "exec-approvals.json");
+    const knowledgePath = path.join(root, "knowledge");
+    const legacyIndexPath = path.join(root, "legacy-memory.sqlite");
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: root,
@@ -227,7 +229,22 @@ describe("doctor invalid config process exit", () => {
           list: [
             {
               id: "jup",
-              memorySearch: { enabled: true },
+              memorySearch: {
+                enabled: true,
+                provider: "auto",
+                sources: ["memory", "sessions"],
+                extraPaths: [knowledgePath],
+                experimental: { sessionMemory: true },
+                store: { path: legacyIndexPath, vector: { enabled: false } },
+                query: { maxResults: 8 },
+              },
+              memory: {
+                search: {
+                  enabled: false,
+                  experimental: { sessionMemory: false },
+                  query: { minScore: 0.25 },
+                },
+              },
               tools: { message: { allowCrossContextSend: true } },
             },
           ],
@@ -280,6 +297,20 @@ describe("doctor invalid config process exit", () => {
     expect(output).toContain("Exec approvals updated: removed 1 older generated approval");
     expect(output).toContain("Doctor complete.");
     expect(output).not.toContain("Building Control UI assets");
+    expect(output).toContain("Merged agents.entries.jup.memorySearch");
+
+    const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+    expect(repairedConfig.agents).not.toHaveProperty("list");
+    expect(repairedConfig.agents?.entries?.jup).not.toHaveProperty("memorySearch");
+    expect(repairedConfig.agents?.entries?.jup?.memory?.search).toEqual({
+      enabled: false,
+      provider: "openai",
+      sources: ["memory", "sessions"],
+      extraPaths: [knowledgePath],
+      experimental: { sessionMemory: false },
+      store: { vector: { enabled: false } },
+      query: { minScore: 0.25, maxResults: 8 },
+    });
 
     expect(fs.existsSync(approvalsPath)).toBe(false);
     const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
