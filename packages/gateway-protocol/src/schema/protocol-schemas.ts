@@ -17,7 +17,7 @@ import { SessionLifecycleProtocolSchemas } from "./protocol-schema-fragment-sess
 import { TransportProtocolSchemas } from "./protocol-schema-fragment-transport.js";
 
 /** Public schema registry keyed by stable protocol schema name. */
-// Named fragment types keep declaration emit below the compiler's serialization limit.
+// Named fragment types avoid expanding every schema during declaration emission.
 export const ProtocolSchemas: typeof BoardProtocolSchemas &
   typeof ProgressCardProtocolSchemas &
   typeof TransportProtocolSchemas &

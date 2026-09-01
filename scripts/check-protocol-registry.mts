@@ -39,20 +39,24 @@ check(
 );
 
 const composition = registrySource.match(
-  /export const ProtocolSchemas: ([\s\S]*?) = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
+  /export const ProtocolSchemas:\s*([\s\S]*?)\s*= composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
 );
-const declaredBindings = (composition?.[1] ?? "")
-  .split("&")
-  .map((type) => type.trim().replace(/^typeof\s+/u, ""));
 const composedBindings = (composition?.[2] ?? "")
   .split("\n")
   .map((line) => line.trim().replace(/,$/u, ""))
   .filter(Boolean);
+const annotatedBindings = (composition?.[1] ?? "")
+  .split("&")
+  .map((type) => /^typeof ([A-Za-z0-9_]+)$/u.exec(type.trim())?.[1]);
 const importedBindings = fragmentImports.map(({ binding }) => binding);
-check(Boolean(composition), `${registryPath} must explicitly compose an ordered fragment array`);
 check(
-  JSON.stringify(declaredBindings) === JSON.stringify(composedBindings),
-  `${registryPath} must declare the same named fragment types as its composition`,
+  Boolean(composition),
+  `${registryPath} must explicitly type and compose an ordered fragment array`,
+);
+check(
+  annotatedBindings.length === composedBindings.length &&
+    annotatedBindings.every((binding, index) => binding === composedBindings[index]),
+  `${registryPath} must annotate the composed fragments with their exact ordered typeof intersection`,
 );
 check(
   composedBindings.length === importedBindings.length &&
