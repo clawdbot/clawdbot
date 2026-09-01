@@ -204,9 +204,7 @@ describe("Codex command RPC helpers", () => {
         },
       });
       expect(acquiredOptions().authProfileId).toBeUndefined();
-      expect(acquiredOptions().authBindingFingerprint).toEqual(
-        type === "token" ? expect.stringMatching(/^[a-f0-9]{64}$/) : undefined,
-      );
+      expect(acquiredOptions().authBindingFingerprint).toMatch(/^[a-f0-9]{64}$/);
       expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
         authProfileId: "openai:ready",
         assertCurrent: expect.any(Function),

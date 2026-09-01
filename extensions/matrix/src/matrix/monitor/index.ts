@@ -469,6 +469,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           })
           .catch(() => []),
       directTracker,
+      groupPolicy,
+      roomsConfig,
+      needsRoomAliasesForConfig,
+      getRoomInfo,
       invalidateMemberDisplayName,
       logVerboseMessage,
       warnedEncryptedRooms,

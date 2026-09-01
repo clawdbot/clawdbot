@@ -25,12 +25,8 @@ All network discovery/advertising lives in the **Node Gateway**
 - **Direct WS transport**: a LAN/tailnet-facing Gateway WS endpoint (no SSH).
 - **SSH transport (fallback)**: remote control by forwarding
   `127.0.0.1:18789` over SSH.
-- **Legacy TCP bridge (removed)**: older node transport (see
-  [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for
-  discovery and no longer part of current builds.
 
-Protocol details: [Gateway protocol](/gateway/protocol),
-[Bridge protocol (legacy)](/gateway/bridge-protocol).
+Protocol details: [Gateway protocol](/gateway/protocol).
 
 ## Why direct and SSH both exist
 

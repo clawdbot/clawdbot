@@ -54,11 +54,13 @@ import {
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
@@ -256,17 +258,24 @@ export function resolveExecTarget(params: {
 }) {
   const sandboxRequired = params.sandboxRequired === true;
   if (sandboxRequired && !params.sandboxAvailable) {
-    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+    throw registerTrustedToolNoStartError(
+      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
+    );
   }
   if (sandboxRequired && params.elevatedRequested) {
-    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+    throw registerTrustedToolNoStartError(
+      new Error("Elevated execution is unavailable because this session requires a sandbox."),
+    );
   }
   // Session isolation outranks every agent, session, and request-scoped host preference.
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget = params.requestedTarget ?? null;
+  const requestedTarget =
+    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+      ),
     );
   }
   if (
@@ -288,10 +297,12 @@ export function resolveExecTarget(params: {
             : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-        `set tools.exec.host=${allowedConfig} to allow this override).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+          `set tools.exec.host=${allowedConfig} to allow this override).`,
+      ),
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
@@ -657,6 +668,8 @@ export async function runExecProcess({
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  /** Host-selected managed profile; never inferred from the requested environment. */
+  githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
@@ -916,21 +929,15 @@ export async function runExecProcess({
       env: shellRuntimeEnv,
     });
 
-    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
-    if (opts.usePty) {
-      return {
-        mode: "pty" as const,
-        ptyCommand: commandWithShellSnapshot,
-        childFallbackArgv: childArgv,
-        env: shellRuntimeEnv,
-        stdinMode: "pipe-open" as const,
-      };
-    }
+    const shellArgv = [shell, ...shellArgs, commandWithShellSnapshot];
+    const argv = opts.githubProfileDir
+      ? buildGitHubExecLaunchArgv(shellArgv, opts.githubProfileDir)
+      : shellArgv;
     return {
-      mode: "child" as const,
-      argv: childArgv,
+      mode: opts.usePty ? ("pty" as const) : ("child" as const),
+      argv,
       env: shellRuntimeEnv,
-      stdinMode: "pipe-closed" as const,
+      stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
     };
   };
 
@@ -988,7 +995,7 @@ export async function runExecProcess({
         managedRun = await spawn({
           ...spawnBase,
           mode: "pty",
-          ptyCommand: spawnSpec.ptyCommand,
+          argv: spawnSpec.argv,
         });
       } catch (err) {
         startupSignal?.throwIfAborted();
@@ -999,15 +1006,9 @@ export async function runExecProcess({
         opts.warnings.push(warning);
         usingPty = false;
         await assertPreSpawnAuthorized();
-        managedRun = await spawn({
-          ...spawnBase,
-          mode: "child",
-          argv: spawnSpec.childFallbackArgv,
-          stdinMode: "pipe-open",
-          onStdout: handleStdout,
-        });
       }
-    } else {
+    }
+    if (!managedRun) {
       managedRun = await spawn({
         ...spawnBase,
         mode: "child",

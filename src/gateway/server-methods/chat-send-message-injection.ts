@@ -14,10 +14,12 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
@@ -31,6 +33,7 @@ export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
   session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+  admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
   userTurnTranscriptRecorder: NonNullable<
@@ -66,7 +69,11 @@ export function createChatSendMessageInjectionStarter(params: {
         isInboundUserMessage: true,
         toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
           ctx,
-          sessionEntry: entry,
+          sessionEntry: {
+            spawnedBy: entry?.spawnedBy,
+            permissionMode: params.admittedSessionSettings?.permissionMode,
+            toolOverrides: params.admittedSessionSettings?.toolOverrides,
+          },
           senderIsOwner: authorization.senderIsOwner,
           disableTools: false,
         }),
@@ -133,6 +140,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   if (finalization.status === "rejected") {
     return false;
   }
+  recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });
   const channel = normalizeLowercaseStringOrEmpty(
     finalizedCtx.Surface ?? finalizedCtx.Provider ?? "unknown",
   );

@@ -191,35 +191,32 @@ async function writeTestBinding(
   await testCodexAppServerBindingStore.mutate(identity, { kind: "set", binding });
 }
 
-async function completeResumeControlRequest(
-  options: CodexControlRequestOptions | undefined,
-  response: ReturnType<typeof createThreadResumeResponse>,
-  client: CodexAppServerClient,
-  auth: { authProfileId?: string } = {},
-) {
-  await options?.beforeRequest?.(async <T>() => ({ thread: response.thread }) as T);
-  await options?.onResponse?.(response, client, { ...auth, assertCurrent: () => undefined });
-}
-
 function createResumeControlRequest(
   response:
     | ReturnType<typeof createThreadResumeResponse>
     | (() => Promise<ReturnType<typeof createThreadResumeResponse>>),
-  auth: { authProfileId?: string } = {},
+  options: { client?: CodexAppServerClient; authProfileId?: string } = {},
 ) {
-  const harness = createClientHarness();
-  resumeClients.push(harness.client);
-  ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-  vi.spyOn(harness.client, "request").mockResolvedValue({} as never);
+  const { client: suppliedClient, ...auth } = options;
+  const client = suppliedClient ?? createClientHarness().client;
+  if (!suppliedClient) {
+    resumeClients.push(client);
+    ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
+    vi.spyOn(client, "request").mockResolvedValue({} as never);
+  }
   return vi.fn(
     async (
       _pluginConfig: unknown,
       _method: string,
       _params: unknown,
-      options?: CodexControlRequestOptions,
+      requestOptions?: CodexControlRequestOptions,
     ) => {
       const value = typeof response === "function" ? await response() : response;
-      await completeResumeControlRequest(options, value, harness.client, auth);
+      await requestOptions?.beforeRequest?.(async <T>() => ({ thread: value.thread }) as T);
+      await requestOptions?.onResponse?.(value, client, {
+        ...auth,
+        assertCurrent: () => undefined,
+      });
       return value;
     },
   );
@@ -928,17 +925,7 @@ describe("codex command", () => {
     const harness = createClientHarness();
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
     const response = createThreadResumeResponse({ threadId: "thread-owned-resume" });
-    const codexControlRequest = vi.fn(
-      async (
-        _pluginConfig: unknown,
-        _method: string,
-        _params: unknown,
-        options?: CodexControlRequestOptions,
-      ) => {
-        await completeResumeControlRequest(options, response, harness.client);
-        return response;
-      },
-    );
+    const codexControlRequest = createResumeControlRequest(response, { client: harness.client });
 
     try {
       const result = await runCommand("resume thread-owned-resume", { codexControlRequest });
@@ -985,17 +972,7 @@ describe("codex command", () => {
       cwd: "/repo",
     });
     const response = createThreadResumeResponse({ threadId: "thread-overflow" });
-    const codexControlRequest = vi.fn(
-      async (
-        _pluginConfig: unknown,
-        _method: string,
-        _params: unknown,
-        options?: CodexControlRequestOptions,
-      ) => {
-        await completeResumeControlRequest(options, response, harness.client);
-        return response;
-      },
-    );
+    const codexControlRequest = createResumeControlRequest(response, { client: harness.client });
 
     try {
       const result = await runCommand("resume thread-overflow", { codexControlRequest });
@@ -1061,17 +1038,9 @@ describe("codex command", () => {
             : undefined,
         );
       const response = createThreadResumeResponse({ threadId: "thread-manual-migration" });
-      const codexControlRequest = vi.fn(
-        async (
-          _pluginConfig: unknown,
-          _method: string,
-          _params: unknown,
-          options?: CodexControlRequestOptions,
-        ) => {
-          await completeResumeControlRequest(options, response, replacement.client);
-          return response;
-        },
-      );
+      const codexControlRequest = createResumeControlRequest(response, {
+        client: replacement.client,
+      });
 
       try {
         const result = await runCommand("resume thread-manual-migration", { codexControlRequest });
@@ -1135,17 +1104,7 @@ describe("codex command", () => {
       "priority",
     );
     const response = createThreadResumeResponse({ threadId: "thread-known-resume" });
-    const codexControlRequest = vi.fn(
-      async (
-        _pluginConfig: unknown,
-        _method: string,
-        _params: unknown,
-        options?: CodexControlRequestOptions,
-      ) => {
-        await completeResumeControlRequest(options, response, harness.client);
-        return response;
-      },
-    );
+    const codexControlRequest = createResumeControlRequest(response, { client: harness.client });
 
     try {
       await expect(
@@ -1234,20 +1193,15 @@ describe("codex command", () => {
           true,
         ),
       );
-      const codexControlRequest = vi.fn(
-        async (
-          _pluginConfig: unknown,
-          _method: string,
-          _params: unknown,
-          options?: CodexControlRequestOptions,
-        ) => {
+      const codexControlRequest = createResumeControlRequest(
+        async () => {
           await harness.client.request("thread/resume", {
             threadId: "thread-active-resume",
             excludeTurns: true,
           });
-          await completeResumeControlRequest(options, response, harness.client);
           return response;
         },
+        { client: harness.client },
       );
 
       try {
@@ -6499,7 +6453,7 @@ describe("codex command", () => {
       senderIsOwner: true,
       gatewayClientScopes: ["operator.write"],
       initialPermissionMode: "full",
-      expectedText: "Codex permissions set to default.",
+      expectedText: "Codex permissions set to guarded.",
       expectedPermissionMode: "guarded",
     },
   ] as const)("$name", async (testCase) => {
@@ -6518,6 +6472,7 @@ describe("codex command", () => {
       },
     });
 
+    const before = getSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
     await expect(
       handleCodexCommand(
         createContext(`permissions ${testCase.mode}`, undefined, {
@@ -6529,18 +6484,12 @@ describe("codex command", () => {
         { deps: createDeps() },
       ),
     ).resolves.toEqual({ text: testCase.expectedText });
-    expect(
-      getSessionEntry({
-        sessionKey,
-        storePath,
-        readConsistency: "latest",
-      }),
-    ).toMatchObject({
-      ...(testCase.expectedPermissionMode
-        ? { permissionMode: testCase.expectedPermissionMode }
-        : {}),
-      sessionRoot: tempDir,
-    });
+    const after = getSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+    expect(after?.permissionMode).toBe(testCase.expectedPermissionMode);
+    expect(after?.sessionRoot).toBe(tempDir);
+    if (!testCase.expectedPermissionMode) {
+      expect(after).toEqual(before);
+    }
   });
 
   it("rejects model and binding replacement commands for a locked supervised session", async () => {

@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
+import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import { getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import {
-  isLegacyCodexProviderId,
   legacyCodexProviderIdentityKey,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
@@ -13,6 +13,7 @@ import {
   hasOwnDefinedProperty,
   scanKnownModelRefs,
 } from "./legacy-config-migrations.runtime.models.refs.js";
+import { visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 
 export const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
@@ -154,17 +155,10 @@ function getMergeableLegacyOpenAIModels(params: {
 
 function collectLegacyModelPolicyWildcardPaths(raw: unknown): Map<string, string[]> {
   const pathsByProvider = new Map<string, string[]>();
-  const agents = getRecord(getRecord(raw)?.agents);
-  const scopes: Array<{ value: unknown; path: string }> = [
-    { value: getRecord(agents?.defaults)?.modelPolicy, path: "agents.defaults.modelPolicy" },
-  ];
-  const list = Array.isArray(agents?.list) ? agents.list : [];
-  for (const [index, agent] of list.entries()) {
-    scopes.push({
-      value: getRecord(agent)?.modelPolicy,
-      path: `agents.list.${index}.modelPolicy`,
-    });
-  }
+  const scopes: Array<{ value: unknown; path: string }> = [];
+  visitAgentConfigScopes(getRecord(raw) ?? {}, (agent, path) => {
+    scopes.push({ value: agent.modelPolicy, path: `${path}.modelPolicy` });
+  });
   for (const scope of scopes) {
     const allow = getRecord(scope.value)?.allow;
     if (!Array.isArray(allow)) {

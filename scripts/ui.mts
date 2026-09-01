@@ -460,7 +460,7 @@ export function runUiCli(argv: string[] = process.argv.slice(2)): void {
       runSpawnCallSync(
         resolveSpawnCall(
           process.execPath,
-          ["--import", "tsx", path.join(repoRoot, "scripts", validator)],
+          ["--import", new URL("./tsx.mjs", import.meta.url).href, path.join(here, validator)],
           buildEnv,
           { cwd: repoRoot },
         ),

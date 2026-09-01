@@ -46,7 +46,7 @@ describe("resolveGogServeInvocation on Windows", () => {
           "/d",
           "/s",
           "/c",
-          '""C:\\Program Files\\gog\\gog.cmd" gmail watch serve --account me@example.com"',
+          '""C:\\Program Files\\gog\\gog.cmd" "gmail" "watch" "serve" "--account" "me@example.com""',
         ],
         windowsHide: true,
         windowsVerbatimArguments: true,
@@ -54,7 +54,7 @@ describe("resolveGogServeInvocation on Windows", () => {
     });
   });
 
-  it("escapes caret arguments for gog .cmd wrappers", async () => {
+  it("quotes caret arguments for gog .cmd wrappers", async () => {
     const { resolveGogServeInvocation } = await importGmailWithExecutable("gog.cmd");
 
     await withMockedWindowsPlatform(async () => {
@@ -70,7 +70,7 @@ describe("resolveGogServeInvocation on Windows", () => {
         "/d",
         "/s",
         "/c",
-        "gog.cmd gmail watch serve --label release/^^1",
+        '""gog.cmd" "gmail" "watch" "serve" "--label" "release/^1""',
       ]);
       expect(invocation.windowsVerbatimArguments).toBe(true);
     });

@@ -3,9 +3,9 @@ import {
   prepareHostChannelContextAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   recordChannelIngressResolution,
-  registerChannelAdmissionEvidenceOwner,
   type ChannelAdmissionEvidence,
 } from "../../src/channels/message-access/admission-evidence.js";
+import { registerChannelIngressHostOwner } from "../../src/channels/message-access/ingress-host-owner.js";
 import type { ResolvedChannelMessageIngress } from "../../src/channels/message-access/runtime-types.js";
 
 /** Build test evidence through the same host-owned binding path used by channel resolvers. */
@@ -42,7 +42,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
     epoch,
     isLive: () => true,
   };
-  const dispose = registerChannelAdmissionEvidenceOwner(owner);
+  const dispose = registerChannelIngressHostOwner(owner);
   try {
     recordChannelIngressResolution({
       result,

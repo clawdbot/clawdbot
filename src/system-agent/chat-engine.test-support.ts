@@ -401,7 +401,7 @@ export function fakeOverviewLoader(
 }
 
 export { expectDefined } from "@openclaw/normalization-core";
-export { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
+export { hashSystemAgentOperation } from "./operator-approval.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";

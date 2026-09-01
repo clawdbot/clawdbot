@@ -8,10 +8,8 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptor,
-} from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { WRITE_SCOPE } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";

@@ -16,7 +16,6 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
-  loadStatusProviderUsageModule,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
@@ -115,7 +114,7 @@ export async function statusCommand(
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await statusAllModuleLoader
       .load()
-      .then(({ statusAllCommand }) => statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }));
+      .then(({ statusAllCommand }) => statusAllCommand(runtime, opts));
     return;
   }
 
@@ -241,6 +240,7 @@ export async function statusCommand(
     formatPluginCompatibilityNotice,
     formatTimeAgo,
     formatTokensCompact,
+    formatUsageReportLines,
     formatUpdateAvailableHint,
     getTerminalTableWidth,
     info,
@@ -303,11 +303,7 @@ export async function statusCommand(
     details: gatewayProbe?.connectErrorDetails,
   });
 
-  const usageLines = usage
-    ? await loadStatusProviderUsageModule().then(({ formatUsageReportLines }) =>
-        formatUsageReportLines(usage),
-      )
-    : undefined;
+  const usageLines = usage ? formatUsageReportLines(usage) : undefined;
   const overviewSurface = buildStatusOverviewSurfaceFromScan({
     scan: {
       cfg,

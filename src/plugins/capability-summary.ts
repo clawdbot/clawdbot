@@ -1,10 +1,17 @@
+// Inventory needs capability facts without artifact inspection or lifecycle writes.
+import { createHash } from "node:crypto";
 import { PLUGIN_DECLARED_SURFACE_GROUPS } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
+  PluginInspectSource,
   PluginOperatorGrants,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import type { PluginEntryConfig } from "../config/types.plugins.js";
+import type {
+  PluginAcceptedDeclaredSurface,
+  PluginEntryConfig,
+  PluginInstallRecord,
+} from "../config/types.plugins.js";
 import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
@@ -102,6 +109,47 @@ export function resolvePluginPackageDeclaredSurface(
     surfaces.push(buildPluginCapabilitySummary({ manifest, origin: manifest.origin }).declared);
   }
   return mergePluginDeclaredSurfaces(surfaces);
+}
+
+export function computeDeclaredSurfaceHash(declared: PluginAcceptedDeclaredSurface): string {
+  const canonical = Object.fromEntries(
+    PLUGIN_DECLARED_SURFACE_GROUPS.map((group) => [group, declared[group].toSorted()]),
+  );
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+export function resolvePluginInstallRecordIntegrity(
+  record: Pick<PluginInstallRecord, "integrity" | "npmIntegrity" | "clawpackSha256" | "gitCommit">,
+):
+  | { integrity: string; integrityKind: NonNullable<PluginInspectSource["integrityKind"]> }
+  | undefined {
+  const npmIntegrity = record.integrity ?? record.npmIntegrity;
+  if (npmIntegrity) {
+    return { integrity: npmIntegrity, integrityKind: "ssri" };
+  }
+  if (record.clawpackSha256) {
+    return { integrity: record.clawpackSha256, integrityKind: "sha256" };
+  }
+  return record.gitCommit
+    ? { integrity: record.gitCommit, integrityKind: "git-commit" }
+    : undefined;
+}
+
+export function resolveAcceptedSurfaceCurrent(
+  record: PluginInstallRecord,
+  declared: PluginAcceptedDeclaredSurface,
+): boolean {
+  return (
+    record.acceptedSurface !== undefined &&
+    record.acceptedSurfaceHash !== undefined &&
+    record.acceptedSurfaceHash === computeDeclaredSurfaceHash(record.acceptedSurface) &&
+    record.acceptedSurfaceHash === computeDeclaredSurfaceHash(declared) &&
+    record.acceptedSurfaceIntegrity === resolvePluginInstallRecordIntegrity(record)?.integrity
+  );
+}
+
+export function formatPluginCapabilityConsentRequired(pluginId: string): string {
+  return `Plugin "${pluginId}" requires capability consent; disable and re-enable it or run \`openclaw plugins enable ${pluginId} --accept-capabilities\`.`;
 }
 
 function buildHookGrant(effective: boolean, configured: boolean | undefined): PluginHookGrant {

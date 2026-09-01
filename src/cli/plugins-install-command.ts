@@ -12,7 +12,7 @@ import { defaultRuntime } from "../runtime.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import {
   confirmNonClawHubInstall,
@@ -295,19 +295,12 @@ async function runPluginInstallCommandUnlocked(
         installSnapshot = snapshot,
         installSafetyOverrides = safetyOverrides,
       ) => {
-        const acknowledgement = resolveClawHubRiskAcknowledgementCliOptions({
-          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-          action: "installing",
-        });
         const result = await installManagedPluginSource({
           request: {
             ...sourceRequest,
             ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
             ...(opts.expectedPluginId ? { expectedPluginId: opts.expectedPluginId } : {}),
-            ...(acknowledgement.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-            ...(acknowledgement.onClawHubRisk
-              ? { onClawHubRisk: acknowledgement.onClawHubRisk }
-              : {}),
+            confirmInstall: resolveClawHubInstallConfirmation(),
           },
           snapshot: installSnapshot,
           ...capabilityConsent,

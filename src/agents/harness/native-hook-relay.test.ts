@@ -3350,7 +3350,7 @@ describe("native hook relay registry", () => {
 
       const relay = registerNativeHookRelay({
         provider: "codex",
-        agentId: "agent-1",
+        agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         config: config as never,

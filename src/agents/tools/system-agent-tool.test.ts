@@ -1,8 +1,8 @@
 // OpenClaw ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import {
   createSystemAgentTool,
-  hashSystemAgentOperation,
   resolveSystemAgentDirectiveTransition,
   resolveSystemAgentProposalTransition,
   type SystemAgentToolDirective,
@@ -100,6 +100,46 @@ describe("openclaw tool", () => {
     });
     expect(toolText(result)).toContain("needs-approval");
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it("registers delegated proposals but never instructs a chat 'yes'", async () => {
+    const proposalRef: { current?: string } = {};
+    const args = {
+      action: "config_set" as const,
+      path: "agents.defaults.subagents.thinking",
+      value: "high",
+      approved: true,
+    };
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      proposalRef,
+    });
+
+    const result = await tool.execute("t-delegated", args);
+    const text = toolText(result);
+
+    expect(text).toContain("needs-approval:");
+    expect(text).toContain("OpenClaw operator UI");
+    expect(text).toContain("cannot be applied from this chat");
+    expect(text).not.toContain("ask the user to reply yes");
+    expect(proposalRef.current).toBe(
+      hashSystemAgentOperation({
+        kind: "config-set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+      }),
+    );
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    // Out-of-process CLI hosts still mirror the refusal from the marker line.
+    expect(resolveSystemAgentProposalTransition({ args, resultText: text })).toEqual({
+      proposal: proposalRef.current,
+      operation: {
+        kind: "config-set",
+        path: "agents.defaults.subagents.thinking",
+        value: "high",
+      },
+    });
   });
 
   it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
@@ -412,6 +452,31 @@ describe("openclaw tool", () => {
     expect(directiveRef.current).toEqual({ kind: "open-setup", target: "gateway" });
 
     // Directives are host handoffs, never operation executions.
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "connect_channel", channel: "telegram" },
+    { action: "configure_skills" },
+    { action: "configure_search" },
+    { action: "configure_gateway" },
+    { action: "import_memory" },
+    { action: "configure_model_provider" },
+    { action: "open_agent" },
+    { action: "open_setup", target: "channels" },
+  ])("does not promise a delegated $action handoff", async (args) => {
+    const directiveRef: { current?: SystemAgentToolDirective } = {};
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      directiveRef,
+    });
+
+    const text = toolText(await tool.execute("delegated-navigation", args));
+
+    expect(text).toContain("cannot run from a delegated agent request");
+    expect(directiveRef.current).toBeUndefined();
+    expect(resolveSystemAgentDirectiveTransition({ args, resultText: text })).toBeNull();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 

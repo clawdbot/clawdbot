@@ -306,15 +306,15 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryRaw = await readFile(
-    path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
-    "utf8",
-  );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    if (!registryRaw.includes(`"${entry.locale}"`) || !typesRaw.includes(`| "${entry.locale}"`)) {
-      throw new Error(`runtime locale config is missing ${entry.locale}`);
-    }
+  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registry = (await import(pathToFileURL(registryPath).href)) as {
+    SUPPORTED_LOCALES: readonly string[];
+  };
+  const expectedLocales = ["en", ...CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale)];
+  if (!compareStringArrays(registry.SUPPORTED_LOCALES, expectedLocales)) {
+    throw new Error(
+      `runtime locale config is out of sync: expected ${expectedLocales.join(", ")}, got ${registry.SUPPORTED_LOCALES.join(", ")}`,
+    );
   }
 
   const enMap = (await loadControlUiLocaleCatalog(SOURCE_LOCALE_PATH, "en")) ?? {};

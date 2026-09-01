@@ -40,7 +40,9 @@ const controlUiPerformanceBudgets = {
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
-  largestCssGzipBytes: 53 * KIB,
+  // 53.0 KiB was exhausted by organic growth (main sat at 99.94% by 2026-08-29);
+  // bumped with operator approval on PR #132054.
+  largestCssGzipBytes: 53.5 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -274,7 +276,7 @@ export function formatControlUiPerformanceReport(
       startupBudgetBaseline.startupJsGzipBytes
   ) {
     lines.push(
-      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"`,
+      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${baselineUpdateCommand()}`,
     );
   }
   if (violations.length > 0) {
@@ -287,7 +289,7 @@ export function formatControlUiPerformanceReport(
 }
 
 function baselineUpdateCommand(): string {
-  return 'node --import tsx scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
+  return 'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 }
 
 function isIsoDate(value: string): boolean {

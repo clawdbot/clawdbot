@@ -320,6 +320,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    */
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
 
+  /** Consumes the cancellation fact for a previously drained queue message. */
+  consumeQueuedMessageCancellation?: (message: AgentMessage) => boolean;
+
   /**
    * Tool execution mode.
    * - "sequential": execute tool calls one by one, checking for steering before each starts

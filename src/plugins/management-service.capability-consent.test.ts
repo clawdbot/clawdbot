@@ -3,13 +3,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
-  computeDeclaredSurfaceHash,
   createManagedPluginArtifactConsentHandler,
   resolvePluginArtifactDeclaredSurface,
   resolvePluginCapabilityConsent,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
 import {

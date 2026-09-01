@@ -41,13 +41,16 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
-  resolveAuthProfileOrder: vi.fn(),
   resolveDefaultAgentDir: vi.fn(() => "/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/agent/workspace"),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string, _lookup?: { config?: unknown }) => provider),
-  resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
+  resolveSessionAgentIdsStrict: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   saveAuthProfileStore: vi.fn(),
+}));
+
+const providerAuthMocks = vi.hoisted(() => ({
+  resolveAuthProfileOrder: vi.fn(),
 }));
 
 const codexRequirementsTomlMock = vi.hoisted(() => vi.fn<() => string | undefined>());
@@ -131,9 +134,13 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
   };
 });
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  resolveAuthProfileOrder: providerAuthMocks.resolveAuthProfileOrder,
+}));
 vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>()),
-  resolveSessionAgentIds: agentRuntimeMocks.resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict: agentRuntimeMocks.resolveSessionAgentIdsStrict,
 }));
 
 import {
@@ -426,11 +433,11 @@ describe("codex conversation binding", () => {
     agentRuntimeMocks.ensureAuthProfileStore.mockReset();
     agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     agentRuntimeMocks.resolveApiKeyForProfile.mockReset();
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReset();
+    providerAuthMocks.resolveAuthProfileOrder.mockReset();
     agentRuntimeMocks.resolveDefaultAgentDir.mockClear();
     agentRuntimeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
     agentRuntimeMocks.resolveProviderIdForAuth.mockClear();
-    agentRuntimeMocks.resolveSessionAgentIds.mockClear();
+    agentRuntimeMocks.resolveSessionAgentIdsStrict.mockClear();
     agentRuntimeMocks.saveAuthProfileStore.mockReset();
     codexRequirementsTomlMock.mockReset();
     resolveSandboxContextMock.mockReset();
@@ -443,12 +450,12 @@ describe("codex conversation binding", () => {
       version: 1,
       profiles: {},
     });
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue([]);
+    providerAuthMocks.resolveAuthProfileOrder.mockReturnValue([]);
     agentRuntimeMocks.resolveDefaultAgentDir.mockReturnValue("/agent");
     agentRuntimeMocks.resolveProviderIdForAuth.mockImplementation(
       (provider: string, _lookup?: { config?: unknown }) => provider,
     );
-    agentRuntimeMocks.resolveSessionAgentIds.mockReturnValue({
+    agentRuntimeMocks.resolveSessionAgentIdsStrict.mockReturnValue({
       defaultAgentId: "main",
       sessionAgentId: "main",
     });
@@ -720,7 +727,7 @@ describe("codex conversation binding", () => {
         },
       },
     });
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
+    providerAuthMocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
@@ -740,7 +747,7 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const authOrderParams = mockCallArg(agentRuntimeMocks.resolveAuthProfileOrder) as {
+    const authOrderParams = mockCallArg(providerAuthMocks.resolveAuthProfileOrder) as {
       cfg?: unknown;
       provider?: unknown;
     };
@@ -2505,73 +2512,6 @@ describe("codex conversation binding", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("ignores legacy session exec overlays when no canonical permission mode exists", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const storePath = path.join(tempDir, "sessions.json");
-    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: "agent:main:session-1",
-      entry: {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        execSecurity: "full",
-        execAsk: "off",
-      },
-    });
-    const request = vi.fn(async () => {
-      throw new Error("unexpected native turn");
-    });
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request,
-      addNotificationHandler: vi.fn(() => () => undefined),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
-
-    const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
-        channel: "discord",
-        isGroup: true,
-        commandAuthorized: true,
-        sessionKey: "agent:main:session-1",
-      },
-      {
-        channelId: "discord",
-        sessionKey: "agent:main:session-1",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentId: "main",
-          },
-        },
-      },
-      {
-        timeoutMs: 50,
-        config: {
-          session: { store: storePath },
-          tools: { exec: { mode: "ask" } },
-        } as never,
-      },
-    );
-
-    expect(result?.handled).toBe(true);
-    expect(result?.reply?.text).toContain(
-      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
-    );
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
     const resumeCodexCliSessionOnNode = vi.fn();
 
@@ -2913,8 +2853,6 @@ describe("codex conversation binding", () => {
       entry: {
         sessionId: "destination-session",
         updatedAt: Date.now(),
-        execSecurity: "full",
-        execAsk: "off",
       },
     });
     codexRequirementsTomlMock.mockReturnValue(

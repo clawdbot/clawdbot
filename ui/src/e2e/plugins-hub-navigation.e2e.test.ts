@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,7 +12,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "plugins-hub-shell");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("plugins-hub-shell");
+  }
+});
 
 const methodResponses = {
   "agents.list": {
@@ -85,9 +90,6 @@ type ControlGeometry = {
 };
 
 async function createContext(viewport: { height: number; width: number }): Promise<BrowserContext> {
-  if (captureUiProof) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -220,6 +222,27 @@ suite.define(() => {
         const installed = await hubGeometry(page);
         expect(installed.title).toBe("Plugins");
         expect(installed.titleVisible).toBe(true);
+        const layout = await page.evaluate(() => {
+          const title = document.querySelector<HTMLElement>(".hub-page-header__title");
+          const tabs = document.querySelector<HTMLElement>(".plugins-hub-tabs");
+          const content = document.querySelector<HTMLElement>("#plugins-global-search");
+          if (!title || !tabs || !content) {
+            throw new Error("Plugins hub layout did not render");
+          }
+          return {
+            aboveTabs: tabs.getBoundingClientRect().top - title.getBoundingClientRect().bottom,
+            belowTabs: content.getBoundingClientRect().top - tabs.getBoundingClientRect().bottom,
+            contentLeft: content.getBoundingClientRect().left,
+            tabsLeft: tabs.getBoundingClientRect().left,
+            titleLeft: title.getBoundingClientRect().left,
+          };
+        });
+        expect(Math.abs(layout.tabsLeft - layout.titleLeft)).toBeLessThanOrEqual(1);
+        expect(layout.aboveTabs).toBeGreaterThan(0);
+        expect(Math.abs(layout.belowTabs - layout.aboveTabs)).toBeLessThanOrEqual(1);
+        if (label === "desktop") {
+          expect(Math.abs(layout.tabsLeft - layout.contentLeft)).toBeLessThanOrEqual(1);
+        }
         await captureScreenshot(page, `${label}-01-installed.png`);
 
         await selectHubTab(page, "Discover", {

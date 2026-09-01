@@ -11,6 +11,7 @@ import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
 import ai.openclaw.app.SHARED_VIDEO_MIME_TYPES
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -60,6 +61,7 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
@@ -139,6 +141,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -161,6 +164,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -293,6 +297,8 @@ fun ChatScreen(
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
+  val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
+  val gatewayCatalogRevision by viewModel.gatewayCatalogRevision.collectAsState()
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -664,6 +670,7 @@ fun ChatScreen(
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      sessionColor = sessions.firstOrNull { it.key == sessionKey }?.color,
       showSidebarButton = showSidebarButton,
       onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
@@ -724,6 +731,10 @@ fun ChatScreen(
 
     ChatMessageList(
       sessionKey = sessionKey,
+      fullMessageOwner = composerOwner,
+      selectionGeneration = selectionGeneration,
+      gatewayCatalogRevision = gatewayCatalogRevision,
+      prepareFullMessageRead = { message -> viewModel.prepareFullMessageRead(composerOwner, selectionGeneration, gatewayCatalogRevision, message) },
       session = activeSession,
       messages = messages,
       transcriptAnchor = transcriptAnchor,
@@ -1126,6 +1137,7 @@ internal fun canStartNewChat(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
+  sessionColor: String?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
   healthOk: Boolean,
@@ -1238,13 +1250,18 @@ private fun ChatHeader(
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
       Text(text = nativeString("Chat"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
-      Text(
-        text = sessionTitle,
-        style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
-        color = ClawTheme.colors.textMuted,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ClawTheme.colors.sessionColor(sessionColor)?.let { color ->
+          Box(modifier = Modifier.size(7.dp).background(color, CircleShape).clearAndSetSemantics {})
+        }
+        Text(
+          text = sessionTitle,
+          style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
     }
   }
 }
@@ -1306,6 +1323,10 @@ private fun HeaderIcon(
 @Composable
 private fun ChatMessageList(
   sessionKey: String,
+  fullMessageOwner: ChatComposerOwner,
+  selectionGeneration: Long,
+  gatewayCatalogRevision: Long,
+  prepareFullMessageRead: (ChatMessage) -> ChatController.FullMessageRead?,
   session: ChatSessionEntry?,
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
@@ -1388,145 +1409,157 @@ private fun ChatMessageList(
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
   }
 
-  Box(modifier = modifier.fillMaxWidth()) {
-    LazyColumn(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .padding(bottom = chatReaderListBottomInset(readerScroll.showJumpToLatest)),
-      state = readerScroll.listState,
-      reverseLayout = true,
-      verticalArrangement = Arrangement.spacedBy(5.dp),
-      contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
-    ) {
-      itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
-        when (item) {
-          is ChatTimelineItem.Message ->
-            ChatBubble(
-              messageId = item.message.id,
-              entryId = item.message.entryId,
-              role = item.message.role,
-              live = false,
-              content = item.message.content,
-              timestampMs = item.message.timestampMs,
-              onReplyMessage = onReplyMessage,
-              sessionActionsEnabled = sessionActionsEnabled,
-              onRewindMessage = onRewindMessage,
-              onForkMessage = onForkMessage,
-              speechState = speechState,
-              onToggleListen = onToggleListen,
-              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-              inlineWidgetResolverReady = healthOk,
-              resolveInlineWidgetResource = resolveInlineWidgetResource,
-              loadImageArtifact = loadImageArtifact,
-              loadMediaArtifact = loadMediaArtifact,
-              senderLabel = item.message.senderLabel,
-            )
-          is ChatTimelineItem.OutboxCommand ->
-            ChatOutboxBubble(
-              item = item.item,
-              onRetry = { onRetryOutbox(item.item.id) },
-              onDelete = { onDeleteOutbox(item.item.id) },
-            )
-          is ChatTimelineItem.RecoveryOutboxCommand ->
-            ChatOutboxBubble(
-              item = item.item,
-              retryEnabled = false,
-              onRetry = { onRetryOutbox(item.item.id) },
-              onDelete = { onDeleteOutbox(item.item.id) },
-            )
-          is ChatTimelineItem.OutboxRecoveryHeader ->
-            ChatNotice(
-              title = nativeString("Messages to recover"),
-              body =
-                nativeString(
-                  "\${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
-                  item.count,
-                ),
-            )
-          is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
-          is ChatTimelineItem.SubagentActivity ->
-            SubagentActivityRows(
-              activities = item.activities,
-              moreWorkingCount = item.moreWorkingCount,
-            )
-          is ChatTimelineItem.QuestionPrompt ->
-            ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
-          is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
-          is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
-          is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)
-          is ChatTimelineItem.StreamingAssistant ->
-            ChatBubble(
-              messageId = null,
-              entryId = null,
-              role = "assistant",
-              live = true,
-              content = listOf(ChatMessageContent(text = item.text)),
-              timestampMs = null,
-              onReplyMessage = onReplyMessage,
-              sessionActionsEnabled = false,
-              onRewindMessage = onRewindMessage,
-              onForkMessage = onForkMessage,
-              speechState = null,
-              onToggleListen = onToggleListen,
-              inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-              inlineWidgetResolverReady = healthOk,
-              resolveInlineWidgetResource = resolveInlineWidgetResource,
-              loadImageArtifact = loadImageArtifact,
-              loadMediaArtifact = loadMediaArtifact,
-            )
-          ChatTimelineItem.Thinking -> {
-            val run = workingRun
-            if (run != null) {
-              ChatTypingIndicatorBubble(
-                runKey = run.clockKey,
-                observedAtElapsedMs = run.observedAtElapsedMs,
-                outputTokens = run.outputTokens,
-              )
+  CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.onManualNavigation) {
+    ChatMessageDisclosure(
+      messages = messages,
+      owner = fullMessageOwner,
+      selectionGeneration = selectionGeneration,
+      catalogRevision = gatewayCatalogRevision,
+      prepareRead = prepareFullMessageRead,
+    ) { visibleContent, disclosure ->
+      Box(modifier = modifier.fillMaxWidth()) {
+        LazyColumn(
+          modifier =
+            Modifier
+              .fillMaxSize()
+              .nestedScroll(readerScroll.nestedScrollConnection)
+              .padding(bottom = chatReaderListBottomInset(readerScroll.showJumpToLatest)),
+          state = readerScroll.listState,
+          reverseLayout = true,
+          verticalArrangement = Arrangement.spacedBy(5.dp),
+          contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
+        ) {
+          itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
+            when (item) {
+              is ChatTimelineItem.Message ->
+                ChatBubble(
+                  messageId = item.message.id,
+                  entryId = item.message.entryId,
+                  role = item.message.role,
+                  live = false,
+                  content = visibleContent(item.message),
+                  timestampMs = item.message.timestampMs,
+                  onReplyMessage = onReplyMessage,
+                  sessionActionsEnabled = sessionActionsEnabled,
+                  onRewindMessage = onRewindMessage,
+                  onForkMessage = onForkMessage,
+                  speechState = speechState,
+                  onToggleListen = onToggleListen,
+                  inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+                  inlineWidgetResolverReady = healthOk,
+                  resolveInlineWidgetResource = resolveInlineWidgetResource,
+                  loadImageArtifact = loadImageArtifact,
+                  loadMediaArtifact = loadMediaArtifact,
+                  senderLabel = item.message.senderLabel,
+                  disclosure = { disclosure(item.message) },
+                )
+              is ChatTimelineItem.OutboxCommand ->
+                ChatOutboxBubble(
+                  item = item.item,
+                  onRetry = { onRetryOutbox(item.item.id) },
+                  onDelete = { onDeleteOutbox(item.item.id) },
+                )
+              is ChatTimelineItem.RecoveryOutboxCommand ->
+                ChatOutboxBubble(
+                  item = item.item,
+                  retryEnabled = false,
+                  onRetry = { onRetryOutbox(item.item.id) },
+                  onDelete = { onDeleteOutbox(item.item.id) },
+                )
+              is ChatTimelineItem.OutboxRecoveryHeader ->
+                ChatNotice(
+                  title = nativeString("Messages to recover"),
+                  body =
+                    nativeString(
+                      "\${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+                      item.count,
+                    ),
+                )
+              is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
+              is ChatTimelineItem.SubagentActivity ->
+                SubagentActivityRows(
+                  activities = item.activities,
+                  moreWorkingCount = item.moreWorkingCount,
+                )
+              is ChatTimelineItem.QuestionPrompt ->
+                ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+              is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
+              is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
+              is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)
+              is ChatTimelineItem.StreamingAssistant ->
+                ChatBubble(
+                  messageId = null,
+                  entryId = null,
+                  role = "assistant",
+                  live = true,
+                  content = listOf(ChatMessageContent(text = item.text)),
+                  timestampMs = null,
+                  onReplyMessage = onReplyMessage,
+                  sessionActionsEnabled = false,
+                  onRewindMessage = onRewindMessage,
+                  onForkMessage = onForkMessage,
+                  speechState = null,
+                  onToggleListen = onToggleListen,
+                  inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+                  inlineWidgetResolverReady = healthOk,
+                  resolveInlineWidgetResource = resolveInlineWidgetResource,
+                  loadImageArtifact = loadImageArtifact,
+                  loadMediaArtifact = loadMediaArtifact,
+                )
+              ChatTimelineItem.Thinking -> {
+                val run = workingRun
+                if (run != null) {
+                  ChatTypingIndicatorBubble(
+                    runKey = run.clockKey,
+                    observedAtElapsedMs = run.observedAtElapsedMs,
+                    outputTokens = run.outputTokens,
+                  )
+                }
+              }
             }
           }
         }
-      }
-    }
 
-    if (timeline.items.isEmpty()) {
-      if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
-        ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
-      } else {
-        EmptyChatHint(
-          healthOk = healthOk,
-          gatewayOffline = gatewayOffline,
-          onStarterPrompt = onStarterPrompt,
-          modifier = Modifier.align(Alignment.Center),
-        )
-      }
-    }
+        if (timeline.items.isEmpty()) {
+          if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
+            ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
+          } else {
+            EmptyChatHint(
+              healthOk = healthOk,
+              gatewayOffline = gatewayOffline,
+              onStarterPrompt = onStarterPrompt,
+              modifier = Modifier.align(Alignment.Center),
+            )
+          }
+        }
 
-    if (readerScroll.showJumpToLatest) {
-      // Compact icon-only affordance; parity with the iOS/macOS chat reader circle.
-      // The clickable outer surface stays unsized so Material's 48dp minimum
-      // interactive size applies; the 36dp inner circle is visual only.
-      Surface(
-        onClick = readerScroll.jumpToLatest,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
-        shape = CircleShape,
-        color = Color.Transparent,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
+        if (readerScroll.showJumpToLatest) {
+          // Compact icon-only affordance; parity with the iOS/macOS chat reader circle.
+          // The clickable outer surface stays unsized so Material's 48dp minimum
+          // interactive size applies; the 36dp inner circle is visual only.
           Surface(
-            modifier = Modifier.size(36.dp),
+            onClick = readerScroll.jumpToLatest,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
             shape = CircleShape,
-            color = ClawTheme.colors.surfaceRaised,
-            contentColor = ClawTheme.colors.text,
-            shadowElevation = 6.dp,
-            border = BorderStroke(1.dp, ClawTheme.colors.border),
+            color = Color.Transparent,
           ) {
             Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = Icons.Default.ArrowDownward,
-                contentDescription = nativeString("Jump to latest"),
-                modifier = Modifier.size(18.dp),
-              )
+              Surface(
+                modifier = Modifier.size(36.dp),
+                shape = CircleShape,
+                color = ClawTheme.colors.surfaceRaised,
+                contentColor = ClawTheme.colors.text,
+                shadowElevation = 6.dp,
+                border = BorderStroke(1.dp, ClawTheme.colors.border),
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.ArrowDownward,
+                    contentDescription = nativeString("Jump to latest"),
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
+              }
             }
           }
         }
@@ -1727,6 +1760,7 @@ internal fun ChatBubble(
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
   senderLabel: String? = null,
+  disclosure: @Composable () -> Unit = {},
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -1869,6 +1903,7 @@ internal fun ChatBubble(
           if (messageId != null) {
             ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent)
           }
+          disclosure()
           messageSpeech?.let { speech ->
             FullChatSpeechIndicator(
               phase = speech.phase,
@@ -1953,19 +1988,7 @@ private fun ChatUserMessageText(
 
   if (preview != null) {
     val toggleLabel = if (expanded) nativeString("Close") else nativeString("View all")
-    Surface(
-      onClick = onToggleExpanded,
-      shape = RoundedCornerShape(8.dp),
-      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
-      contentColor = ClawTheme.colors.textMuted,
-      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.6f)),
-    ) {
-      Text(
-        text = toggleLabel,
-        style = ClawTheme.type.body.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-      )
-    }
+    ChatMessageDisclosureButton(toggleLabel, onToggleExpanded)
   }
 }
 

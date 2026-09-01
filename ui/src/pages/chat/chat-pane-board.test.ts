@@ -70,6 +70,7 @@ type TestChatPane = HTMLElement & {
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
   refreshSwarmRoster: () => void;
+  requestUpdate: () => void;
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -221,6 +222,58 @@ describe("chat pane board shell", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["disabled", "disposed", "enabled"] as const)(
+    "coalesces swarm roster redraws while %s",
+    async (mode) => {
+      swarmModuleImport.release();
+      const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
+      const pane = createTestPane({
+        canonicalListRevision: 0,
+        list: vi.fn(async () => ({ sessions: [] })),
+      } as unknown as SessionCapability);
+      pane.context = {
+        ...pane.context,
+        runtimeConfig: {
+          state: {
+            configSnapshot: { config: { tools: { swarm: { enabled: mode === "enabled" } } } },
+          },
+        },
+      } as unknown as ApplicationContext;
+      const previous = mode === "disposed" ? new SwarmRosterHydrator() : null;
+      const dispose = previous ? vi.spyOn(previous, "dispose") : undefined;
+      Reflect.set(pane, "swarmHydrator", previous);
+      await vi.dynamicImportSettled();
+      const frames: FrameRequestCallback[] = [];
+      const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal("requestAnimationFrame", requestFrame);
+      const requestUpdate = vi.spyOn(pane, "requestUpdate");
+
+      try {
+        for (let index = 0; index < 3; index += 1) {
+          pane.refreshSwarmRoster();
+        }
+        await vi.dynamicImportSettled();
+
+        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(pane.state.requestUpdate).not.toHaveBeenCalled();
+        expect(requestFrame).toHaveBeenCalledTimes(mode === "disabled" ? 0 : 1);
+        if (mode !== "disabled") {
+          frames[0]?.(0);
+          expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
+        }
+        if (dispose) {
+          expect(dispose).toHaveBeenCalledOnce();
+          expect(Reflect.get(pane, "swarmHydrator")).toBeNull();
+        }
+      } finally {
+        const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
+          typeof SwarmRosterHydrator
+        > | null;
+        hydrator?.dispose();
+      }
+    },
+  );
 
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {

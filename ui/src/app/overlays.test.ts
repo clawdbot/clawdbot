@@ -563,6 +563,37 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
+  it("keeps a projected approval's resolve failure visible", async () => {
+    let resolveAttempts = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "exec.approval.resolve") {
+        return Promise.resolve([]);
+      }
+      resolveAttempts += 1;
+      return resolveAttempts === 1
+        ? Promise.reject(new Error("gateway unavailable"))
+        : Promise.resolve({ ok: true });
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    const projectedApproval = {
+      ...approval("approval-projected", 1_000),
+      kind: "exec" as const,
+    };
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.get(projectedApproval.id)).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.has(projectedApproval.id)).toBe(false);
+    overlays.dispose();
+  });
+
   it("surfaces a connection error when a rendered approval races a disconnect", async () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
@@ -588,7 +619,7 @@ describe("application approval overlays", () => {
     const secondResolve = deferred();
     let resolveCalls = 0;
     const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
+      if (method !== "exec.approval.resolve") {
         return Promise.resolve([]);
       }
       resolveCalls += 1;
@@ -621,7 +652,7 @@ describe("application approval overlays", () => {
     const firstResolve = deferred();
     let resolveCalls = 0;
     const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
+      if (method !== "exec.approval.resolve") {
         return Promise.resolve([]);
       }
       resolveCalls += 1;
@@ -857,6 +888,7 @@ describe("application update overlays", () => {
   it("promotes restart health polling to the managed handoff budget", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;
+    let updateFinished = false;
     const request = vi.fn<RequestFn>((method) => {
       if (method.endsWith(".list")) {
         return Promise.resolve([]);
@@ -870,7 +902,7 @@ describe("application update overlays", () => {
       if (method === "update.status") {
         statusRequests += 1;
         return Promise.resolve(
-          statusRequests <= 11
+          !updateFinished
             ? {
                 sentinel: {
                   kind: "update",
@@ -895,22 +927,24 @@ describe("application update overlays", () => {
 
     try {
       await overlays.runUpdate();
+      const statusRequestsBeforeReconnect = statusRequests;
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
-      expect(statusRequests).toBe(1);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 1);
 
       harness.update({ sessionKey: "agent:main:next" });
       await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(11);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 11);
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
+      updateFinished = true;
       await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(12);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 12);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
     } finally {
@@ -970,10 +1004,11 @@ describe("application update overlays", () => {
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
 
+      const statusRequestsBeforeReconnect = statusRequests;
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
-      expect(statusRequests).toBe(1);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 1);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",

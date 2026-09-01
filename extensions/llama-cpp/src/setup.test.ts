@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
   prepareServer: vi.fn(),
   removeProfiles: vi.fn(),
+  progressUpdate: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -36,6 +37,10 @@ import {
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 const GIB = 1024 ** 3;
+const CUSTOM_EMBEDDING_MODEL =
+  "hf:ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf";
+const OTHER_CUSTOM_EMBEDDING_MODEL = "hf:example/other-embedding-GGUF/other-Q4_K_M.gguf";
+const NON_LOCAL_EMBEDDING_MODEL = "hf:example/non-local-embedding-GGUF/non-local-Q4.gguf";
 let tempRoot: string;
 let modelPath: string;
 
@@ -58,6 +63,7 @@ beforeEach(async () => {
     args: ["--host", "127.0.0.1", "--port", "19432"],
   });
   mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
+  mocks.progressUpdate.mockReset();
 });
 
 afterEach(async () => {
@@ -86,7 +92,7 @@ function authContext(confirm: boolean): ProviderAuthContext {
     prompter: {
       confirm: vi.fn(async () => confirm),
       note: vi.fn(async () => {}),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      progress: vi.fn(() => ({ update: mocks.progressUpdate, stop: vi.fn() })),
     },
     runtime: {},
   } as unknown as ProviderAuthContext;
@@ -266,6 +272,61 @@ describe("llama.cpp managed setup", () => {
     });
   });
 
+  it.each([
+    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "chat", totalmem: 16 * GIB },
+  ])("uses the configured embedding model during $name setup", async ({ totalmem }) => {
+    vi.mocked(os.totalmem).mockReturnValue(totalmem);
+    const ctx = authContext(true);
+    requestUnconfiguredLocalMemory(ctx);
+    ctx.config.memory = {
+      search: {
+        provider: "local",
+        local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+      },
+    };
+    ctx.config.agents = {
+      entries: {
+        alpha: { memory: { search: { provider: "local" } } },
+        beta: { memory: { search: { provider: "local" } } },
+      },
+    };
+
+    await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("your configured local embedding model"),
+      }),
+    );
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: CUSTOM_EMBEDDING_MODEL,
+        download: true,
+      }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embeddingModelIsDefault: false,
+        embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
+      }),
+    );
+    const customDownload = mocks.ensureModel.mock.calls.find(
+      ([options]) => options.source === CUSTOM_EMBEDDING_MODEL && options.download === true,
+    );
+    if (!customDownload) {
+      throw new Error("configured embedding download was not requested");
+    }
+    customDownload[0].onProgress({
+      downloadedSize: 150_000_000,
+      totalSize: 300_000_000,
+      bytesPerSecond: 12_000_000,
+    });
+    expect(mocks.progressUpdate).toHaveBeenCalledWith(
+      expect.stringContaining("Downloading configured embedding model"),
+    );
+  });
+
   it("requires consent before embedding-only setup", async () => {
     vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
     const ctx = authContext(false);
@@ -296,14 +357,38 @@ describe("llama.cpp managed setup", () => {
     ).toHaveLength(1);
   });
 
-  it("offers embedding-only setup for per-agent local memory intent", async () => {
+  it("uses the sole effective per-agent embedding model", async () => {
     vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
     const ctx = authContext(true);
     delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
     ctx.config.agents = {
       defaults: { model: { primary: "openai/gpt-5.4" } },
       entries: {
-        helper: { memory: { search: { provider: "local" } } },
+        helper: {
+          memory: {
+            search: {
+              provider: "local",
+              local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+        cloud: {
+          memory: {
+            search: {
+              provider: "openai",
+              local: { modelPath: NON_LOCAL_EMBEDDING_MODEL },
+            },
+          },
+        },
+        paused: {
+          memory: {
+            search: {
+              enabled: false,
+              provider: "local",
+              local: { modelPath: OTHER_CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
       },
     };
 
@@ -311,10 +396,62 @@ describe("llama.cpp managed setup", () => {
 
     expect(ctx.prompter.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("only the local embedding model"),
+        message: expect.stringContaining("your configured local embedding model"),
       }),
     );
     expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({ source: CUSTOM_EMBEDDING_MODEL, download: true }),
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: OTHER_CUSTOM_EMBEDDING_MODEL }),
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: NON_LOCAL_EMBEDDING_MODEL }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingModelIsDefault: false }),
+    );
+  });
+
+  it.each([
+    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "chat", totalmem: 16 * GIB },
+  ])("stops $name setup when local-memory agents use different models", async ({ totalmem }) => {
+    vi.mocked(os.totalmem).mockReturnValue(totalmem);
+    const ctx = authContext(true);
+    delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    ctx.config.agents = {
+      entries: {
+        alpha: {
+          memory: {
+            search: {
+              provider: "local",
+              local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+        beta: {
+          memory: {
+            search: {
+              provider: "local",
+              local: { modelPath: OTHER_CUSTOM_EMBEDDING_MODEL },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("different local embedding models"),
+      "Setup skipped",
+    );
+    expect(ctx.prompter.confirm).not.toHaveBeenCalled();
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+    expect(mocks.removeProfiles).not.toHaveBeenCalled();
   });
 
   it.each(externalChatRoutes)(

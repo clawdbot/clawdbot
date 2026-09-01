@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.sessionColor
+import ai.openclaw.app.ui.design.sessionColorStripe
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -189,6 +191,7 @@ internal fun SidebarSessionRow(
     selected = selected,
     stateDescription = sessionStateDescription,
     palette = palette,
+    stripeColor = ClawTheme.colors.sessionColor(session.color),
     onClick = onClick,
   ) {
     Box(
@@ -236,6 +239,7 @@ private fun SidebarRowSurface(
   selected: Boolean?,
   stateDescription: String? = null,
   palette: SidebarPalette,
+  stripeColor: Color? = null,
   onClick: () -> Unit,
   content: @Composable RowScope.() -> Unit,
 ) {
@@ -246,6 +250,7 @@ private fun SidebarRowSurface(
         .heightIn(min = 48.dp)
         .clip(RoundedCornerShape(10.dp))
         .background(if (selected == true) palette.selection else Color.Transparent)
+        .sessionColorStripe(stripeColor)
         .then(
           if (selected == null) {
             Modifier.clickable(role = Role.Button, onClick = onClick)

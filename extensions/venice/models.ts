@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { parseVeniceModelPricing } from "./pricing-api.js";
 
 const VENICE_MANIFEST_CATALOG = manifest.modelCatalog.providers.venice;
 
@@ -29,13 +30,7 @@ const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
 
 function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
-    id: entry.id,
-    name: entry.name,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    cost: VENICE_DEFAULT_COST,
-    contextWindow: entry.contextWindow,
-    maxTokens: entry.maxTokens,
+    ...entry,
     compat: {
       supportsUsageInStreaming: false,
       ...entry.compat,
@@ -54,6 +49,7 @@ interface VeniceModelSpec {
   privacy: "private" | "anonymized";
   availableContextTokens?: number;
   maxCompletionTokens?: number;
+  pricing?: unknown;
   capabilities?: {
     supportsReasoning?: boolean;
     supportsVision?: boolean;
@@ -111,6 +107,7 @@ function projectVeniceModels(
       continue;
     }
     const catalogEntry = catalogById.get(apiModel.id);
+    const liveCost = parseVeniceModelPricing(apiModel.model_spec?.pricing);
     const apiMaxTokens = resolveApiMaxCompletionTokens({
       apiModel,
       knownMaxTokens: catalogEntry?.maxTokens,
@@ -120,7 +117,7 @@ function projectVeniceModels(
       const definition: ModelDefinitionConfig = {
         ...catalogEntry,
         input: [...catalogEntry.input],
-        cost: { ...catalogEntry.cost },
+        cost: liveCost ?? { ...catalogEntry.cost },
         ...(catalogEntry.compat ? { compat: { ...catalogEntry.compat } } : {}),
       };
       if (apiMaxTokens !== undefined) {
@@ -147,7 +144,7 @@ function projectVeniceModels(
         name: apiSpec?.name || apiModel.id,
         reasoning: isReasoning,
         input: hasVision ? ["text", "image"] : ["text"],
-        cost: VENICE_DEFAULT_COST,
+        cost: liveCost ?? VENICE_DEFAULT_COST,
         contextWindow:
           normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
         maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,

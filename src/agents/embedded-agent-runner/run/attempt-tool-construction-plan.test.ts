@@ -122,8 +122,20 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       "read",
       "message",
     ]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, ["exec*"]).map((tool) => tool.name)).toEqual([
+      "exec",
+    ]);
     expect(applyEmbeddedAttemptToolsAllow(tools, ["group:fs"]).map((tool) => tool.name)).toEqual([
       "read",
+    ]);
+  });
+
+  it("preserves runtime write compatibility in the final filter", () => {
+    const tools = [{ name: "write" }, { name: "apply_patch" }, { name: "exec" }];
+
+    expect(applyEmbeddedAttemptToolsAllow(tools, ["write"]).map((tool) => tool.name)).toEqual([
+      "write",
+      "apply_patch",
     ]);
   });
 
@@ -397,6 +409,119 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       );
     }
+  });
+
+  it("materializes the shell family for matching wildcard allowlists", () => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["exec*"] }), {
+      constructTools: true,
+      includeCoreTools: true,
+      runtimeToolAllowlist: ["exec*"],
+      coding: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+    });
+
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["plugin_*"] }),
+      {
+        includeCoreTools: false,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      },
+    );
+
+    const incompatibleIntersection = attachToolAllowlistIntersection(
+      ["exec*"],
+      [["exec*"], ["read"]],
+    );
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: incompatibleIntersection }),
+      {
+        includeCoreTools: false,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      },
+    );
+  });
+
+  it.each([
+    {
+      toolsAllow: ["read*"],
+      coding: { includeBaseCodingTools: true, includeShellTools: false },
+    },
+    {
+      toolsAllow: ["web_*"],
+      coding: { includeOpenClawTools: true, includeShellTools: false },
+    },
+    {
+      toolsAllow: ["group:fs"],
+      coding: { includeBaseCodingTools: true, includeShellTools: true },
+    },
+    {
+      toolsAllow: ["apply-patch"],
+      coding: { includeBaseCodingTools: false, includeShellTools: true },
+    },
+    {
+      toolsAllow: ["apply_*"],
+      coding: { includeBaseCodingTools: false, includeShellTools: true },
+    },
+    {
+      toolsAllow: ["group:runtime"],
+      coding: { includePluginTools: true, includeShellTools: true },
+    },
+  ])("materializes core families for $toolsAllow", ({ toolsAllow, coding }) => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }), {
+      includeCoreTools: true,
+      coding,
+    });
+  });
+
+  it("honors runtime-cap intersections when selecting core families", () => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["write"] }), {
+      includeCoreTools: true,
+      coding: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeOpenClawTools: false,
+      },
+    });
+
+    const narrowedWildcard = attachToolAllowlistIntersection(["*", "write"], [["*"], ["write"]]);
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: narrowedWildcard }),
+      {
+        includeCoreTools: true,
+        coding: {
+          includeBaseCodingTools: true,
+          includeShellTools: false,
+          includeOpenClawTools: false,
+        },
+      },
+    );
+
+    const overlappingGlobs = attachToolAllowlistIntersection([], [["exec*"], ["*xec"]]);
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: overlappingGlobs }),
+      {
+        includeCoreTools: true,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: true,
+          includeOpenClawTools: false,
+        },
+      },
+    );
   });
 
   it("materializes computer for an exact core-tool allowlist", () => {

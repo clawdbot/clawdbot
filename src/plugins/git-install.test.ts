@@ -10,6 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
   requestDeferredPluginInstall,
   resolvePluginInstallTransaction,
 } from "./install-transaction.js";
@@ -157,7 +161,7 @@ describe("isImmutableGitCommitRef", () => {
 });
 
 describe("installPluginFromGitSpec", () => {
-  const tempDirs: string[] = [];
+  let state: OpenClawTestState;
   const trackedTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(async () => {
@@ -165,20 +169,14 @@ describe("installPluginFromGitSpec", () => {
     installPluginFromInstalledPackageDirMock.mockReset();
     preflightPluginGitInstallPolicyMock.mockReset();
     preflightPluginGitInstallPolicyMock.mockResolvedValue(null);
-    const globalConfigRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-git-install-npmrc-"),
-    );
-    tempDirs.push(globalConfigRoot);
-    const globalConfig = path.join(globalConfigRoot, "global-npmrc");
-    await fs.writeFile(globalConfig, "", "utf8");
+    state = await createOpenClawTestState({ label: "git-install" });
+    const globalConfig = await state.writeText("global-npmrc", "");
     vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await state.cleanup();
   });
 
   it("rejects option-leading clone sources before invoking git", async () => {

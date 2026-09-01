@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computeDeclaredSurfaceHash } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   configSnapshot,
   hostedFeedDiffsEntry,
@@ -141,7 +140,6 @@ describe("managed plugin installation", () => {
         request: {
           source: "clawhub",
           packageName: "@openclaw/diffs",
-          acknowledgeClawHubRisk: true,
         },
         env: {},
       }),
@@ -151,7 +149,6 @@ describe("managed plugin installation", () => {
         spec: "clawhub:@openclaw/diffs@2026.6.11",
         expectedPluginId: "diffs",
         expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
-        acknowledgeClawHubRisk: true,
       }),
     );
     expect(mocks.persistInstall).not.toHaveBeenCalled();
@@ -229,7 +226,7 @@ describe("managed plugin installation", () => {
 
     await expect(
       installManagedPlugin({
-        request: { source: "clawhub", packageName: "sonos", acknowledgeClawHubRisk: true },
+        request: { source: "clawhub", packageName: "sonos" },
         env: {},
       }),
     ).rejects.toThrow("expected sonos, got impostor");
@@ -339,7 +336,6 @@ describe("managed plugin installation", () => {
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
-      .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true }));

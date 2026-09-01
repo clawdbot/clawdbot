@@ -18,17 +18,23 @@ import {
 import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  resolveExtensionTestJobFileLimit,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
+import {
+  resolveVitestPretestBuildMode,
+  type VitestPretestBuildMode,
+} from "./vitest-build-prerequisites.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
-  pretestBuildMode?: "private-qa" | "runtime";
+  pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   shardName: string;
@@ -45,27 +51,25 @@ const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
-const PRETEST_RUNTIME_BUILD_TARGETS = new Set([
-  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
-]);
-const PRETEST_PRIVATE_QA_BUILD_TARGETS = new Set([
-  "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
-]);
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
-const DOCKER_SEED_LANE_ORDER = [
+const MCP_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
 ] as const;
+const DOCKER_SEED_LANE_ORDER = [...MCP_DOCKER_SEED_LANES, "update-channel-switch"] as const;
 type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
-  ".github/workflows/ci.yml": DOCKER_SEED_LANE_ORDER,
+  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
-  "scripts/e2e/docker-openai-seed.ts": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
-  "scripts/lib/ci-changed-node-test-plan.mts": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
+  "scripts/lib/ci-changed-node-test-plan.mts": MCP_DOCKER_SEED_LANES,
 };
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
@@ -104,20 +108,27 @@ function isTestOnlyPath(changedPath: string) {
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
 // the build pipeline itself (mirrors the build-all cache key in ci.yml).
-// Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
-// cannot change dist or bundled plugin asset bytes.
+// Built-artifact test inputs below also require this lane even though they do
+// not change the bytes under test.
 const BUILD_INPUT_RE =
   /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+const BUILT_ARTIFACT_TEST_INPUTS = new Set([
+  "extensions/browser/chrome-extension/relay-key.test-support.ts",
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "extensions/browser/src/browser/extension-install.test-support.ts",
+]);
 
 /**
  * True when a changed path can influence built dist/packaging bytes: a
- * non-test build-input source or the build pipeline itself. Diffs entirely
- * outside that set (tests, repo scripts, workflows, qa scenarios) let the
+ * non-test build-input source, build pipeline, or built-artifact test input.
+ * Diffs entirely outside that set (ordinary tests, repo scripts, workflows) let the
  * manifest skip the build-artifacts lane.
  */
 export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   return changedPaths.some(
-    (changedPath) => BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath),
+    (changedPath) =>
+      BUILT_ARTIFACT_TEST_INPUTS.has(changedPath) ||
+      (BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath)),
   );
 }
 
@@ -326,10 +337,9 @@ function createChangedTargetShards(
       shardName: `${names.shardName}${suffix}`,
       targets: chunk,
     };
-    if (chunk.some((target) => PRETEST_PRIVATE_QA_BUILD_TARGETS.has(target))) {
-      shard.pretestBuildMode = "private-qa";
-    } else if (chunk.some((target) => PRETEST_RUNTIME_BUILD_TARGETS.has(target))) {
-      shard.pretestBuildMode = "runtime";
+    const pretestBuildMode = resolveVitestPretestBuildMode([{ includePatterns: chunk }]);
+    if (pretestBuildMode) {
+      shard.pretestBuildMode = pretestBuildMode;
     }
     if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
@@ -355,34 +365,61 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
-  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
-    ...rootsByConfig,
-  ].flatMap(([config, roots]) => {
-    const testFiles = shouldSplitExtensionTestProcesses(config)
-      ? listExtensionTestFilesForRoots(roots)
+  const plans: Array<{
+    config: string;
+    env?: Record<string, string>;
+    includePatterns?: string[];
+  }> = [...rootsByConfig].flatMap(([config, roots]) => {
+    const splitProcesses = shouldSplitExtensionTestProcesses(config);
+    const testFiles = resolveExtensionTestJobFileLimit(config)
+      ? listExtensionTestFilesForRoots(splitProcesses ? roots : ["extensions"]).filter(
+          (file) =>
+            splitProcesses ||
+            resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/")) === config,
+        )
       : [];
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
     return chunks.length > 1
-      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
-      : [{ config, roots }];
+      ? chunks.map((includePatterns, index) =>
+          Object.assign(
+            { config },
+            splitProcesses
+              ? { includePatterns }
+              : {
+                  // Counts size jobs only. Vitest owns the complete config inventory,
+                  // including unrelated plugin roots, excludes and untracked tests.
+                  env: {
+                    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+                      `--shard=${index + 1}/${chunks.length}`,
+                    ]),
+                  },
+                },
+          ),
+        )
+      : [{ config }];
   });
-  return plans.map(({ config, includePatterns, roots }, index) => {
+  return plans.map(({ config, env, includePatterns }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
     const shard: ChangedNodeTestShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
+      // No plans overlap in this row, so CI can scale the single process's worker budget.
+      planConcurrency: 1,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
     };
-    if (roots.includes("extensions/qa-lab")) {
-      shard.pretestBuildMode = "private-qa";
+    const pretestBuildMode = resolveVitestPretestBuildMode([
+      { configs: [config], includePatterns },
+    ]);
+    if (pretestBuildMode) {
+      shard.pretestBuildMode = pretestBuildMode;
     }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }
-    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
-      shard.planConcurrency = 1;
+    if (env) {
+      shard.env = env;
     }
     return shard;
   });
@@ -483,11 +520,14 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  const targets = resolvePreciseChangedTargets(
-    regularLivePaths,
-    cwd,
-    [...policyTargetsByPath.values()].flat(),
-  );
+  const targets = resolvePreciseChangedTargets(regularLivePaths, cwd, [
+    ...[...policyTargetsByPath.values()].flat(),
+    // Plugin changes normally select only extension suites. This host-owned
+    // proof also exercises the real Copilot entrypoint and manifest discovery.
+    ...(livePaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
+      ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
+      : []),
+  ]);
   if (targets === null) {
     return null;
   }

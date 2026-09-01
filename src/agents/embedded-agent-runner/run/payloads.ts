@@ -36,12 +36,8 @@ import {
 } from "../../../shared/text/assistant-visible-text.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
-  formatRawAssistantErrorForUi,
   formatUserFacingAssistantErrorText,
-  getApiErrorPayloadFingerprint,
-  isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
 import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
@@ -120,10 +116,6 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
   );
 }
 
-function normalizeReplyTextForComparison(text: string): string {
-  return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
-}
-
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
  * is the boundary that suppresses duplicate source replies, filters raw API
@@ -160,6 +152,7 @@ export function buildEmbeddedRunPayloads(params: {
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
+  runStopReason?: string;
   deferAssistantTimeoutError?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
@@ -235,6 +228,7 @@ export function buildEmbeddedRunPayloads(params: {
             formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
+              agentId: params.agentId,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
@@ -243,27 +237,13 @@ export function buildEmbeddedRunPayloads(params: {
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
+              agentId: params.agentId,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
             })
       : undefined;
-  const rawErrorFingerprint = rawErrorMessage
-    ? getApiErrorPayloadFingerprint(rawErrorMessage)
-    : null;
-  const formattedRawErrorMessage = rawErrorMessage
-    ? formatRawAssistantErrorForUi(rawErrorMessage)
-    : null;
-  const normalizedFormattedRawErrorMessage = formattedRawErrorMessage
-    ? normalizeTextForComparison(formattedRawErrorMessage)
-    : null;
-  const normalizedRawErrorText = rawErrorMessage
-    ? normalizeTextForComparison(rawErrorMessage)
-    : null;
-  const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
-  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
-  const genericErrorText = "The AI service returned an error. Please try again.";
   const deferAssistantTimeoutError =
     params.deferAssistantTimeoutError === true &&
     rawErrorMessage !== undefined &&
@@ -289,79 +269,38 @@ export function buildEmbeddedRunPayloads(params: {
     ? extractAssistantVisibleText(assistantForPayload)
     : "";
   const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
-  const shouldSuppressRawErrorText = (text: string) => {
-    if (!lastAssistantNeedsErrorSurface) {
-      return false;
-    }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return false;
-    }
-    if (errorText) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalizedErrorText && normalized === normalizedErrorText) {
-        return true;
-      }
-      if (trimmed === genericErrorText) {
-        return true;
-      }
-      if (
-        normalized &&
-        normalizedGenericBillingErrorText &&
-        normalized === normalizedGenericBillingErrorText
-      ) {
-        return true;
-      }
-    }
-    if (rawErrorMessage && trimmed === rawErrorMessage) {
-      return true;
-    }
-    if (formattedRawErrorMessage && trimmed === formattedRawErrorMessage) {
-      return true;
-    }
-    if (normalizedRawErrorText) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalized === normalizedRawErrorText) {
-        return true;
-      }
-    }
-    if (normalizedFormattedRawErrorMessage) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalized === normalizedFormattedRawErrorMessage) {
-        return true;
-      }
-    }
-    if (rawErrorFingerprint) {
-      const fingerprint = getApiErrorPayloadFingerprint(trimmed);
-      if (fingerprint && fingerprint === rawErrorFingerprint) {
-        return true;
-      }
-    }
-    return isRawApiErrorPayload(trimmed);
-  };
   const rawAnswerDirectiveState = fallbackRawAnswerText
     ? parseReplyDirectives(fallbackRawAnswerText)
     : null;
   const rawAnswerHasMedia =
     (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
-  const assistantTextsHaveMedia = params.assistantTexts.some((text) => {
-    const parsed = parseReplyDirectives(text);
-    return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
-  });
-  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
-  const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
+  const normalizedAssistantTexts =
+    rawAnswerHasMedia &&
+    nonEmptyAssistantTexts.length > 0 &&
+    !params.assistantTexts.some((text) => {
+      const parsed = parseReplyDirectives(text);
+      return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
+    })
+      ? normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"))
+      : "";
   const shouldPreferRawAnswerText =
     rawAnswerHasMedia &&
     (!nonEmptyAssistantTexts.length ||
-      (!assistantTextsHaveMedia &&
-        normalizedAssistantTexts.length > 0 &&
-        normalizedAssistantTexts === normalizedRawAnswerText));
+      (normalizedAssistantTexts.length > 0 &&
+        normalizedAssistantTexts ===
+          normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "")));
   // When streamed text lost media directives but the canonical assistant answer
   // still contains them, keep the raw answer so attachments are not dropped.
   const fallbackAnswerSourceText =
     shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
-  const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
-    ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
+  const fallbackAnswerDirectiveState =
+    fallbackAnswerSourceText === fallbackRawAnswerText
+      ? rawAnswerDirectiveState
+      : fallbackAnswerSourceText
+        ? parseReplyDirectives(fallbackAnswerSourceText)
+        : null;
+  const normalizedFallbackAnswerSourceText = fallbackAnswerDirectiveState
+    ? normalizeTextForComparison(fallbackAnswerDirectiveState.text)
     : "";
   const shouldUseCanonicalFinalAnswer =
     !lastAssistantNeedsErrorSurface &&
@@ -371,16 +310,19 @@ export function buildEmbeddedRunPayloads(params: {
   const answerTexts =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? []
-      : (shouldUseCanonicalFinalAnswer
-          ? [fallbackAnswerSourceText]
-          : shouldPreferRawAnswerText && fallbackRawAnswerText
-            ? [fallbackRawAnswerText]
-            : hasAssistantTextPayload
-              ? nonEmptyAssistantTexts
-              : fallbackAnswerText
-                ? [fallbackAnswerText]
-                : []
-        ).filter((text) => !shouldSuppressRawErrorText(text));
+      : shouldUseCanonicalFinalAnswer
+        ? [fallbackAnswerSourceText]
+        : shouldPreferRawAnswerText && fallbackRawAnswerText
+          ? [fallbackRawAnswerText]
+          : hasAssistantTextPayload
+            ? nonEmptyAssistantTexts
+            : fallbackAnswerText
+              ? [fallbackAnswerText]
+              : [];
+  const preparedAnswerDirectives =
+    shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
+      ? fallbackAnswerDirectiveState
+      : null;
   let hasUserFacingReply =
     Boolean(errorText) ||
     completedSourceReplyViaMessageTool ||
@@ -393,7 +335,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = preparedAnswerDirectives ?? parseReplyDirectives(text);
     const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
     const delivery = shouldUseCanonicalFinalAnswer
       ? {
@@ -422,14 +364,19 @@ export function buildEmbeddedRunPayloads(params: {
     hasUserFacingReply = true;
   }
   if (params.lastToolError) {
-    const failureWarning = buildFailureWarning({
-      lastToolError: params.lastToolError,
-      hasUserFacingReply,
-      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
-      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
-      verboseLevel: params.verboseLevel,
-      useMarkdown,
-    });
+    // A restart intentionally aborts the active tool while the Gateway takes over.
+    // Keep that lifecycle status independent from tool-error suppression.
+    const isRestartStatus = params.runStopReason === "restart";
+    const failureWarning = isRestartStatus
+      ? { text: "Gateway restarting…", nonTerminalToolErrorWarning: false }
+      : buildFailureWarning({
+          lastToolError: params.lastToolError,
+          hasUserFacingReply,
+          suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+          suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+          verboseLevel: params.verboseLevel,
+          useMarkdown,
+        });
     if (failureWarning) {
       const normalizedWarning = normalizeTextForComparison(failureWarning.text);
       const duplicateWarning = normalizedWarning
@@ -444,9 +391,13 @@ export function buildEmbeddedRunPayloads(params: {
       if (!duplicateWarning) {
         replyItems.push({
           text: failureWarning.text,
-          isError: true,
-          nonTerminalToolErrorWarning:
-            hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+          ...(!isRestartStatus
+            ? {
+                isError: true,
+                nonTerminalToolErrorWarning:
+                  hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+              }
+            : {}),
         });
       }
     }
@@ -466,6 +417,12 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.media?.length) {
         payload.mediaUrls = item.media;
+      }
+      if (item.attachments?.length) {
+        payload.attachments = item.attachments;
+      }
+      if (item.trustedLocalMedia !== undefined) {
+        payload.trustedLocalMedia = item.trustedLocalMedia;
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;

@@ -12,13 +12,16 @@ import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveFallbackOriginModel } from "./agent-runner-core.js";
+import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
-import { persistRunSessionUsage, incrementRunCompactionCount } from "./session-run-accounting.js";
+import { incrementCompactionCount } from "./session-updates.js";
+import { persistSessionUsageUpdate } from "./session-usage.js";
 
 type AgentTurnAccountingContext = Pick<
   FinalizeReplyAgentRunInput,
@@ -39,7 +42,37 @@ type AgentTurnAccountingContext = Pick<
   | "sessionKey"
   | "shouldInjectGroupIntro"
   | "storePath"
->;
+> & { replyOperation?: FinalizeReplyAgentRunInput["replyOperation"] };
+
+/** Persists only host-bound facts while the exact logical turn still owns accounting. */
+export async function accountAgentTurnCompaction(params: {
+  compaction?: AgentTurnCompaction;
+  sessionStore: FinalizeReplyAgentRunInput["activeSessionStore"];
+  replyOperation?: FinalizeReplyAgentRunInput["replyOperation"];
+}): Promise<number | undefined> {
+  const operation = params.replyOperation;
+  if (!operation) {
+    return undefined;
+  }
+  const authorize = () => replyRunRegistry.get(operation.key) === operation;
+  let count: number | undefined;
+  for (const fact of params.compaction?.durable ?? []) {
+    const persistedCount = await incrementCompactionCount({
+      agentId: fact.target.agentId,
+      sessionStore: params.sessionStore,
+      sessionKey: fact.target.sessionKey,
+      storePath: fact.target.storePath,
+      expectedSession: fact.target,
+      amount: fact.count,
+      tokensAfter: fact.currentContextSnapshot?.tokens,
+      authorize,
+    });
+    if (persistedCount !== undefined) {
+      count = persistedCount;
+    }
+  }
+  return count;
+}
 
 export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const {
@@ -61,6 +94,18 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     storePath,
   } = context;
   let { activeSessionEntry } = context;
+  const latestCompaction = execution.compaction?.durable.at(-1);
+  const currentContextSnapshot = execution.compaction
+    ? (latestCompaction?.currentContextSnapshot ?? { tokens: undefined })
+    : undefined;
+  const expectedSession = latestCompaction?.target ?? {
+    sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
+    lifecycleRevision: activeSessionEntry?.lifecycleRevision,
+  };
+  const operation = context.replyOperation;
+  const authorize = latestCompaction
+    ? () => operation !== undefined && replyRunRegistry.get(operation.key) === operation
+    : undefined;
 
   const runResult = execution.result;
   const fallbackProvider = execution.resolved.provider;
@@ -112,12 +157,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   }
 
   const usage = runResult.meta?.agentMeta?.usage;
-  const hasBillableUsageBuckets =
-    usage &&
-    (usage.input !== undefined ||
-      usage.output !== undefined ||
-      usage.cacheRead !== undefined ||
-      usage.cacheWrite !== undefined);
   const promptTokens = runResult.meta?.agentMeta?.promptTokens;
   const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed =
@@ -252,14 +291,24 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         ? "resolved-v1"
         : undefined);
 
-  await persistRunSessionUsage({
-    storePath,
-    sessionKey,
+  // Count first: terminal usage restores billing buckets without guessing context chronology.
+  const compactionCount = await accountAgentTurnCompaction({
+    compaction: execution.compaction,
+    sessionStore: activeSessionStore,
+    replyOperation: operation,
+  });
+  await persistSessionUsageUpdate({
+    agentId: latestCompaction?.target.agentId ?? followupRun.run.agentId,
+    sessionStore: activeSessionStore,
+    storePath: latestCompaction?.target.storePath ?? storePath,
+    sessionKey: latestCompaction?.target.sessionKey ?? sessionKey,
+    expectedSession,
+    authorize,
     cfg,
     agentDir: followupRun.run.agentDir,
     usage,
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-    compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+    currentContextSnapshot,
     promptTokens,
     isHeartbeat,
     preserveRuntimeModel:
@@ -269,6 +318,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     providerUsed,
     contextTokensUsed,
     contextTokensSource,
+    contextBudgetStatus:
+      compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,
     cliSessionId,
     cliSessionBinding,
@@ -289,9 +340,15 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     });
   }
 
+  if (compactionCount !== undefined && sessionKey) {
+    activeSessionEntry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
+  }
+
   return {
     activeSessionEntry,
     autoCompactionCount,
+    compactionCount,
+    expectedSession,
     configuredFallbackModel,
     contextTokensUsed,
     didLogHeartbeatStrip,
@@ -300,7 +357,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,
@@ -325,12 +381,18 @@ export async function accountFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   execution: FollowupExecutionResult;
 }) {
-  const settled = params.execution.execution.outcome;
+  const { turn, defaults, execution } = params;
+  const settled = execution.execution.outcome;
+  const sessionKey = turn.session.kind === "session" ? turn.session.key : undefined;
   if (settled.kind !== "settled") {
+    // Cancellation is not rollback. The captured target permits bookkeeping, never recovery.
+    await accountAgentTurnCompaction({
+      compaction: settled.compaction,
+      sessionStore: turn.sessionStore,
+      replyOperation: turn.operation,
+    });
     return undefined;
   }
-  const { turn, defaults, execution } = params;
-  const sessionKey = turn.session.kind === "session" ? turn.session.key : undefined;
   const accounting = await accountAgentTurn({
     activeSessionEntry: turn.session.current(),
     activeSessionStore: turn.sessionStore,
@@ -340,6 +402,7 @@ export async function accountFollowupTurn(params: {
     followupRun: turn.queued,
     isHeartbeat: defaults.opts?.isHeartbeat === true,
     pendingToolTasks: execution.pendingToolTasks,
+    replyOperation: turn.operation,
     preflightCompactionApplied: turn.preflightCompactionApplied,
     resolvedVerboseLevel:
       normalizeVerboseLevel(turn.session.current()?.verboseLevel ?? turn.queued.run.verboseLevel) ??
@@ -376,19 +439,7 @@ export async function accountFollowupTurn(params: {
   let compactionNotice: ReplyPayload | undefined;
   if (accounting.autoCompactionCount > 0) {
     const previousSessionId = turn.queued.run.sessionId;
-    const count = await incrementRunCompactionCount({
-      agentId: turn.queued.run.agentId,
-      cfg: turn.config,
-      sessionEntry: turn.session.current(),
-      sessionStore: turn.sessionStore,
-      sessionKey,
-      storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-      amount: accounting.autoCompactionCount,
-      compactionTokensAfter: accounting.runResult.meta?.agentMeta?.compactionTokensAfter,
-      lastCallUsage: accounting.runResult.meta?.agentMeta?.lastCallUsage,
-      contextTokensUsed: accounting.contextTokensUsed,
-      newSessionId: accounting.runResult.meta?.agentMeta?.sessionId,
-    });
+    const count = accounting.compactionCount;
     const refreshed = turn.session.current();
     if (refreshed) {
       turn.session.publish(refreshed);

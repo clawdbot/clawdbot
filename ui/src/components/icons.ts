@@ -246,6 +246,15 @@ export const icons = {
     />
     <path d="M12 9v4" />
     <path d="M12 17h.01" />`),
+  globeOff: strokeIcon(svg` <path
+      d="M10.114 4.462A14.5 14.5 0 0 1 12 2a10 10 0 0 1 9.313 13.643"
+    />
+    <path d="M15.557 15.556A14.5 14.5 0 0 1 12 22 10 10 0 0 1 4.929 4.929" />
+    <path d="M15.892 10.234A14.5 14.5 0 0 0 12 2a10 10 0 0 0-3.643.687" />
+    <path d="M17.656 12H22" />
+    <path d="M19.071 19.071A10 10 0 0 1 12 22 14.5 14.5 0 0 1 8.44 8.45" />
+    <path d="M2 12h10" />
+    <path d="m2 2 20 20" />`),
   hand: strokeIcon(svg` <path d="M18 11V6a2 2 0 0 0-4 0v5" />
     <path d="M14 10V4a2 2 0 0 0-4 0v6" />
     <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
@@ -278,10 +287,6 @@ export const icons = {
     <path d="M4 5v4" />
     <path d="M6 7H2" />
     <path d="M9 2v2" />`),
-  hourglass: strokeIcon(svg` <path d="M5 22h14" />
-    <path d="M5 2h14" />
-    <path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22" />
-    <path d="M7 2v4.2A4 4 0 0 0 8.2 9l3.8 4 3.8-4A4 4 0 0 0 17 6.2V2" />`),
   layoutComfortable: strokeIcon(svg` <rect width="16" height="5" x="4" y="4" rx="1.5" />
     <rect width="16" height="5" x="4" y="15" rx="1.5" />
     <line x1="7" x2="16" y1="7" y2="7" />

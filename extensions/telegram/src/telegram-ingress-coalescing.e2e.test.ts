@@ -177,6 +177,7 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
+      modelCatalog: [],
     }),
     listSkillCommandsForAgents: () => [],
     wasSentByBot: () => false,

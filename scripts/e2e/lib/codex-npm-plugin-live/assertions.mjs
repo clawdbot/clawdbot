@@ -912,6 +912,7 @@ function assertAgentError() {
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run.',
   ];
   if (!expectedErrors.some((message) => combined.includes(message))) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);

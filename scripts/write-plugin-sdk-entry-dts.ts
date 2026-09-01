@@ -1,117 +1,185 @@
-// Write Plugin Sdk Entry Dts script supports OpenClaw repository automation.
+// CI artifacts use the same SDK declaration partitions as full/package builds.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { build } from "tsdown";
+import configs from "../tsdown.config.ts";
 import {
-  buildPluginSdkEntrySources,
-  listPluginSdkDeclarationOutputs,
-  pluginSdkEntrypoints,
-  productionPluginSdkEntrypoints,
-} from "./lib/plugin-sdk-entries.mts";
+  portableRelativePath,
+  resolveBuildStepCacheState,
+  resolveTsdownCompilerFiles,
+  type BuildCacheStep,
+} from "./lib/build-artifact-cache.mts";
+import { CompilerInputSnapshot } from "./lib/compiler-input-snapshot.mts";
+import { publishStagedDeclarations } from "./lib/declaration-stage.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "./lib/tsdown-config-groups.mts";
+import {
+  createDeclarationStage,
+  readDeclarationInputs,
+  requestDeclarationInputs,
+} from "./lib/tsdown-declaration-inputs.mts";
+import {
+  prepareTsdownBuildExecution,
+  TSDOWN_DECLARATION_EXTENSIONS,
+  TSDOWN_DECLARATION_TOOL_INPUTS,
+  TSDOWN_UNIFIED_CACHE_ENV,
+} from "./tsdown-build.mts";
 
-const USE_CANONICAL_DECLARATIONS = process.env.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS === "1";
-
-function isBareImportSpecifier(id: string): boolean {
-  if (
-    id === "@openclaw/llm-core" ||
-    id.startsWith("@openclaw/llm-core/") ||
-    id === "@openclaw/model-catalog-core/model-catalog-types" ||
-    id === "@openclaw/retry" ||
-    id.startsWith("@openclaw/normalization-core/") ||
-    id.startsWith("@openclaw/media-core/") ||
-    id.startsWith("@openclaw/acp-core/")
-  ) {
-    return false;
-  }
-  return !id.startsWith(".") && !id.startsWith("/") && !/^[A-Za-z]:[\\/]/u.test(id);
-}
-
-function removeExistingFlatDeclarations(outDir: string): void {
-  if (!fs.existsSync(outDir)) {
-    return;
-  }
-  for (const entry of fs.readdirSync(outDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
-      continue;
-    }
-    fs.rmSync(path.join(outDir, entry.name), { force: true });
-  }
-}
-
-function copyFlatDeclarations(fromDir: string, toDir: string): void {
-  fs.mkdirSync(toDir, { recursive: true });
-  for (const entry of fs.readdirSync(fromDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
-      continue;
-    }
-    fs.copyFileSync(path.join(fromDir, entry.name), path.join(toDir, entry.name));
-  }
-}
-
-const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
-const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
-  ? pluginSdkEntrypoints
-  : productionPluginSdkEntrypoints;
-const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
-
-if (USE_CANONICAL_DECLARATIONS) {
-  for (const relativePath of listPluginSdkDeclarationOutputs(flatDeclarationEntrypoints)) {
-    const declarationPath = path.resolve(process.cwd(), relativePath);
-    if (!fs.existsSync(declarationPath)) {
-      throw new Error(
-        `Missing canonical plugin SDK declaration: ${path.relative(process.cwd(), declarationPath)}`,
+const root = process.cwd();
+let staging: string | undefined;
+const failures: unknown[] = [];
+try {
+  await withDistArtifactOwnership(root, async () => {
+    staging = createDeclarationStage(root);
+    const output = path.join(staging, "dist");
+    const required: string[] = [];
+    const identity = TSDOWN_UNIFIED_CACHE_ENV.map((name) =>
+      JSON.stringify([name, process.env[name] ?? ""]),
+    );
+    for (const name of TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
+      const config = configs.find((candidate: { name?: string }) => candidate.name === name);
+      if (
+        !config?.dts ||
+        typeof config.dts !== "object" ||
+        !Array.isArray(config.dts.entry) ||
+        !config.entry ||
+        typeof config.entry !== "object" ||
+        Array.isArray(config.entry)
+      ) {
+        throw new Error(`Missing canonical declaration group ${name}`);
+      }
+      for (const source of config.dts.entry) {
+        const selected = Object.entries(config.entry).find(([, input]) => input === source);
+        if (!selected) {
+          throw new Error(`Missing canonical SDK entry for ${source}`);
+        }
+        required.push(`${selected[0]}.d.ts`);
+      }
+      const relative = (file: string) => portableRelativePath(root, path.resolve(root, file));
+      identity.push(
+        JSON.stringify({
+          name,
+          entry: Object.fromEntries(
+            Object.entries(config.entry).map(([entry, source]) => [
+              entry,
+              [source].flat().map(relative),
+            ]),
+          ),
+          declarations: config.dts.entry,
+          sourcemap: config.sourcemap,
+        }),
       );
+      if (process.env.OPENCLAW_BUILD_CACHE !== "0") {
+        requestDeclarationInputs(output, name, config.dts.entry);
+      }
     }
-  }
-} else {
-  const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
-  try {
-    await build({
-      clean: true,
-      config: false,
-      deps: { neverBundle: (id) => isBareImportSpecifier(id) },
-      dts: true,
-      entry: buildPluginSdkEntrySources(flatDeclarationEntrypoints),
-      failOnWarn: false,
-      fixedExtension: false,
-      format: "esm",
-      logLevel: "error",
-      outDir: flatDeclarationTempDir,
-      outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
-      platform: "node",
-      report: false,
-      tsconfig: "tsconfig.plugin-sdk.dts.json",
-    });
-
-    removeExistingFlatDeclarations(distPluginSdkDir);
-    copyFlatDeclarations(flatDeclarationTempDir, distPluginSdkDir);
-  } finally {
-    fs.rmSync(flatDeclarationTempDir, { recursive: true, force: true });
-  }
+    if (!required.length) {
+      throw new Error("Canonical SDK declaration selection is empty");
+    }
+    const args = [
+      "--config",
+      "tsdown.config.ts",
+      ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
+      "--out-dir",
+      output,
+    ];
+    const plan = prepareTsdownBuildExecution(
+      { args },
+      {
+        // The staging directory is fresh. In particular, do not prune live runtime
+        // symlinks or source outputs, and never clean between declaration groups.
+        cleanup() {},
+        reportShortfall(shortfall) {
+          console.error(shortfall.message);
+        },
+      },
+    );
+    if (!plan) {
+      throw new Error("Insufficient memory for SDK declaration build");
+    }
+    const generatorInputs = [
+      ...TSDOWN_DECLARATION_TOOL_INPUTS,
+      "tsdown.config.ts",
+      "scripts/write-plugin-sdk-entry-dts.ts",
+      "scripts/lib/declaration-stage.mts",
+      "scripts/lib/compiler-input-snapshot.mts",
+      "scripts/lib/tsdown-declaration-inputs.mts",
+      "src/infra/runtime-process-entrypoints.ts",
+      "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+    ];
+    const step: BuildCacheStep = {
+      label: "tsdown-plugin-sdk",
+      cache: {
+        env: TSDOWN_UNIFIED_CACHE_ENV,
+        inputs: generatorInputs,
+        outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }],
+        requiredOutputs: required.map((entry) => `dist/${entry}`),
+        restore: "always",
+      },
+    };
+    const snapshot = () =>
+      new CompilerInputSnapshot(root, {
+        toolchainFiles: resolveTsdownCompilerFiles(),
+        generatorInputs,
+        // Config evaluation reads generator modules and package/plugin metadata.
+        // Keep those bytes conservative; only ordinary compiler sources narrow.
+        isGeneratorInput: (file) =>
+          file.startsWith("scripts/") || /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+      });
+    const before = snapshot();
+    const liveDist = path.join(root, "dist");
+    const inputSignature = (inputs: string[]) =>
+      before.signature("tsconfig.json", identity, inputs, liveDist);
+    const params = {
+      rootDir: root,
+      artifactRoot: staging,
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_PRIVATE_QA: process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? "1" : "0",
+      },
+      inputSignature,
+    };
+    const state =
+      process.env.OPENCLAW_BUILD_CACHE === "0"
+        ? undefined
+        : resolveBuildStepCacheState(step, params);
+    const startedAt = Date.now();
+    await publishStagedDeclarations(
+      plan,
+      output,
+      liveDist,
+      required,
+      state
+        ? {
+            step,
+            state,
+            params,
+            sealInputs: () =>
+              snapshot().seal(
+                "tsconfig.json",
+                identity,
+                readDeclarationInputs(output, TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS),
+                before,
+                startedAt,
+                liveDist,
+              ),
+          }
+        : undefined,
+    );
+  });
+} catch (error) {
+  failures.push(error);
 }
-
-// The root npm package ships flat bundled declarations under `dist/plugin-sdk`.
-// The private workspace package keeps source-shaped declaration paths for local
-// package-boundary projects, so bridge them back to the packaged flat entries.
-for (const entry of pluginSdkEntrypoints) {
-  if (!flatDeclarationEntrypointSet.has(entry)) {
-    continue;
+try {
+  if (staging) {
+    fs.rmSync(staging, { recursive: true, force: true });
   }
-
-  const packageTypeOut = path.join(
-    process.cwd(),
-    `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-  );
-  fs.mkdirSync(path.dirname(packageTypeOut), { recursive: true });
-  fs.writeFileSync(
-    packageTypeOut,
-    `export * from "../../../../../dist/plugin-sdk/${entry}.js";\n`,
-    "utf8",
-  );
+} catch (error) {
+  failures.push(error);
 }
-
-const stampPath = path.join(process.cwd(), "dist/plugin-sdk/.boundary-entry-shims.stamp");
-fs.mkdirSync(path.dirname(stampPath), { recursive: true });
-fs.writeFileSync(stampPath, `${new Date().toISOString()}\n`, "utf8");
+// The private entry observes this after module evaluation. Keep unjoined build
+// metadata even if removing the private staging tree also failed.
+if (failures.length) {
+  throw failures.length === 1
+    ? failures[0]
+    : new AggregateError(failures, "SDK build and staging cleanup failed");
+}

@@ -6,7 +6,6 @@ import {
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -32,8 +31,9 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
+import { createIrcIngressSubject, ircIngressIdentity } from "./ingress-identity.js";
 import type { IrcIngressDispatchResult, IrcIngressLifecycle } from "./irc-ingress.js";
-import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
+import { normalizeIrcAllowEntry } from "./normalize.js";
 import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
@@ -41,46 +41,7 @@ import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
-const IRC_NICK_KIND = "plugin:irc-nick" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
-
-const ircIngressIdentity = defineStableChannelIngressIdentity({
-  key: "irc-id",
-  // The IRC server vouches for the connection prefix, but does not bind it to an account owner.
-  authentication: "asserted",
-  normalizeEntry: normalizeIrcStableEntry,
-  normalizeSubject: normalizeLowercaseStringOrEmpty,
-  sensitivity: "pii",
-  aliases: [
-    {
-      key: "irc-id-nick-user",
-      kind: "stable-id" as const,
-      normalizeEntry: normalizeIrcNickUserEntry,
-      normalizeSubject: normalizeLowercaseStringOrEmpty,
-      authentication: "mutable",
-      sensitivity: "pii" as const,
-    },
-    {
-      key: "irc-id-nick-host",
-      kind: "stable-id" as const,
-      authentication: "asserted",
-      normalizeEntry: normalizeIrcNickHostEntry,
-      normalizeSubject: normalizeLowercaseStringOrEmpty,
-      sensitivity: "pii" as const,
-    },
-    {
-      key: "irc-nick",
-      kind: IRC_NICK_KIND,
-      normalizeEntry: normalizeIrcNickEntry,
-      normalizeSubject: normalizeLowercaseStringOrEmpty,
-      authentication: "mutable",
-      sensitivity: "pii",
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeIrcAllowEntry(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    `irc-entry-${entryIndex + 1}:${fieldKey === "irc-nick" ? "nick" : "id"}`,
-});
 
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // IRC nicknames permit punctuation, so ASCII word boundaries lose valid leading/trailing chars.
@@ -105,65 +66,8 @@ function buildIrcNickMentionPattern(value: string): string {
   }).join("");
 }
 
-function isBareNick(value: string): boolean {
-  return !value.includes("!") && !value.includes("@");
-}
-
-function hasVerifiedHost(value: string): boolean {
-  return value.includes("@");
-}
-
-function isHostlessNickUser(value: string): boolean {
-  return value.includes("!") && !value.includes("@");
-}
-
-function normalizeIrcStableEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized.includes("!") || !hasVerifiedHost(normalized)) {
-    return null;
-  }
-  return normalized;
-}
-
-function normalizeIrcNickHostEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  return !normalized.includes("!") && hasVerifiedHost(normalized) ? normalized : null;
-}
-
-function normalizeIrcNickUserEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !isHostlessNickUser(normalized)) {
-    return null;
-  }
-  return normalized;
-}
-
-function normalizeIrcNickEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !isBareNick(normalized)) {
-    return null;
-  }
-  return normalized;
-}
-
 function hasEntries(entries: Array<string | number> | undefined): boolean {
   return normalizeStringEntries(entries).some((entry) => normalizeIrcAllowEntry(entry));
-}
-
-function createIrcIngressSubject(message: IrcInboundMessage) {
-  const candidates = buildIrcAllowlistCandidates(message, { allowNameMatching: true });
-  const stableCandidates = candidates.filter((candidate) => hasVerifiedHost(candidate));
-  const nick = normalizeLowercaseStringOrEmpty(message.senderNick);
-  return {
-    stableId: stableCandidates[stableCandidates.length - 1] ?? nick,
-    aliases: {
-      "irc-id-nick-user": candidates.find((candidate) => isHostlessNickUser(candidate)),
-      "irc-id-nick-host": stableCandidates.find(
-        (candidate) => !candidate.includes("!") && candidate.includes("@"),
-      ),
-      "irc-nick": nick,
-    },
-  };
 }
 
 function routeDescriptorsForIrcGroup(params: {

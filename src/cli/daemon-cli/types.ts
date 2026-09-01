@@ -31,6 +31,7 @@ export type DaemonLifecycleOptions = {
   force?: boolean;
   safe?: boolean;
   skipDeferral?: boolean;
+  preserveDefinition?: boolean;
   wait?: string;
   disable?: boolean;
 };

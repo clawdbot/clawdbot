@@ -1,11 +1,12 @@
 // Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
 import { parseTcpPort } from "./env-limits.ts";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
-import { run, say, die } from "./host-command.ts";
+import { run, say, die, shellQuote } from "./host-command.ts";
 import {
   resolveHostIp,
   resolveHostPort,
@@ -353,6 +354,63 @@ export async function packAndServeSmokeArtifact(
     port: hostPort,
   });
   return [artifact, server, server.port];
+}
+
+export function ensureSmokeGuestRuntime(input: {
+  runShell: (script: string) => string;
+  bootstrap: () => void;
+}): void {
+  const nodeCheck = shellQuote(`process.exit(${PROCESS_NODE_VERSION_CHECK} ? 0 : 1)`);
+  const ready = input.runShell(`if node -e ${nodeCheck} >/dev/null 2>&1 &&
+  npm --version >/dev/null 2>&1 && git --version >/dev/null 2>&1; then
+  printf 'ready\\n'
+fi`);
+  if (ready.trim() === "ready") {
+    say("Reuse supported guest Node, npm, and Git; install candidate directly");
+    return;
+  }
+  // Older pristine snapshots have no Node/npm; retain their installer bootstrap.
+  say("Bootstrap missing or unsupported guest runtime prerequisites");
+  input.bootstrap();
+}
+
+export async function installSmokeRuntimeCompanions(input: {
+  provider: Provider;
+  readCli: (args: string[]) => string;
+  installCli: (args: string[]) => Promise<void> | void;
+}): Promise<void> {
+  const providerConfig = resolveProviderConfig(input.provider);
+  if (!providerConfig) {
+    throw new Error(`missing release smoke configuration for provider: ${input.provider}`);
+  }
+  if (providerConfig.requiredCompanionPackages.length === 0) {
+    return;
+  }
+  const help = input.readCli(["plugins", "install", "--help"]);
+  // Stable 2026.7.1-2 predates capability consent and provisions its own
+  // companion version during onboarding; it must not receive the newer flag.
+  if (!/^\s+--accept-capabilities(?:\s|$)/mu.test(help)) {
+    say("Installed CLI predates capability consent; using its onboarding contract");
+    return;
+  }
+  const version = input
+    .readCli(["--version"])
+    .match(/^OpenClaw\s+(\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)(?:\s|$)/mu)?.[1];
+  if (!version) {
+    throw new Error("could not resolve installed OpenClaw version for runtime companions");
+  }
+  // Candidate registries bind reviewed companion artifacts to the core version.
+  // Only the selected provider's required packages receive explicit consent.
+  for (const packageName of providerConfig.requiredCompanionPackages) {
+    say(`Install reviewed runtime companion: ${packageName}@${version}`);
+    await input.installCli([
+      "plugins",
+      "install",
+      `npm:${packageName}@${version}`,
+      "--pin",
+      "--accept-capabilities",
+    ]);
+  }
 }
 
 async function runRequestedSmokeLanes(input: {

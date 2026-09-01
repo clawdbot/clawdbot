@@ -9,8 +9,6 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
-import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -23,7 +21,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
@@ -102,14 +99,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
-    const requestedPath = path?.trim();
-    const agent = this.activeChipAgent().agent;
+    const requestedPath = path?.trim() || this.activeChipAgent().agent?.workspace?.trim();
     if (!requestedPath) {
-      return agent?.workspaceGit === true
-        ? "git"
-        : agent?.workspaceGit === false
-          ? "not_git"
-          : "unavailable";
+      return "unavailable";
     }
     const sessions = this.context?.sessions;
     const scope = sessions?.captureConnectionScope();
@@ -173,37 +165,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   constructor() {
     super();
     void this.subscriptions;
-    void new BoardAvailabilityController(
-      this,
-      () => {
-        const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
-        return [
-          mainKey,
-          ...this.visibleSessionRowsInOrder()
-            .filter((session) => !session.isChild)
-            .map((session) => session.key),
-        ];
-      },
-      undefined,
-      () => {
-        const snapshot = this.context?.gateway.snapshot;
-        const client = snapshot?.client;
-        const availabilityClient =
-          client &&
-          typeof client.request === "function" &&
-          typeof client.addEventListener === "function"
-            ? client
-            : null;
-        return {
-          client: availabilityClient,
-          connected: snapshot?.phase === "connected",
-          available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
-          key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
-            snapshot?.hello?.server?.version ?? ""
-          }`,
-        };
-      },
-    );
   }
 
   override dismissTransientMenus(): boolean {
@@ -401,10 +362,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   handleSessionListDrop(event: DragEvent): void {
     this.sessionOrganizer.handleSessionListDrop(event);
-  }
-
-  openNewSession(target?: NewSessionTarget): void {
-    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

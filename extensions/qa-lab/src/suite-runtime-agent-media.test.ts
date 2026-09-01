@@ -194,7 +194,6 @@ describe("qa suite runtime agent media helpers", () => {
     const patchCall = firstPatchConfigCall();
     expect(patchCall.env).toBe(env);
     expect(patchCall.patch.plugins.allow).toStrictEqual([
-      "acpx",
       "memory-core",
       "openai",
       "qa-channel",
@@ -206,7 +205,7 @@ describe("qa suite runtime agent media helpers", () => {
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({
       hash: "hash",
-      config: { plugins: { allow: ["openai", "anthropic", "qa-channel"] } },
+      config: { plugins: { allow: ["acpx", "openai", "anthropic", "qa-channel"] } },
     });
 
     await ensureImageGenerationConfigured({
@@ -218,8 +217,8 @@ describe("qa suite runtime agent media helpers", () => {
     expect(patchConfigMock).toHaveBeenCalledTimes(1);
     const patchCall = firstPatchConfigCall();
     expect(patchCall.patch.plugins.allow).toStrictEqual([
-      "acpx",
       "memory-core",
+      "acpx",
       "openai",
       "anthropic",
       "qa-channel",

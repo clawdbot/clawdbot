@@ -11,7 +11,7 @@ import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
 } from "./capability-provider-runtime.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
 import * as installRecords from "./installed-plugin-index-record-reader.js";
 import { loadOpenClawPlugins } from "./loader.js";

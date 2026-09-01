@@ -9,6 +9,16 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
  * an incognito session is never persisted, so "incognito draft" is unrepresentable.
  */
 export type NewSessionVisibility = "normal" | "draft" | "incognito";
+export type DraftSessionCreateOverrides = Partial<
+  Pick<SessionCreateParams, "message" | "attachments">
+> & { visibility?: NewSessionVisibility };
+export type DraftSessionCreateSelection = Partial<
+  Pick<SessionCreateParams, "attachments" | "permissionMode" | "catalogId" | "category">
+> & {
+  message: string;
+  visibility: NewSessionVisibility;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+};
 
 export function canStartSessionAsDraft(params: {
   allowedVisibilities?: readonly string[];
@@ -32,6 +42,7 @@ export function buildDraftSessionCreateParams(draft: {
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
+  fastMode?: SessionCreateParams["fastMode"];
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
   permissionMode?: SessionCreateParams["permissionMode"];
   visibility?: NewSessionVisibility;
@@ -71,6 +82,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),

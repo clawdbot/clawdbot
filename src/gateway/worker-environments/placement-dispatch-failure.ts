@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
@@ -33,7 +34,6 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
-  | "preparePlacementMove"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
@@ -90,6 +90,7 @@ export type WorkerActivationBarrier = (params: {
   agentId: string;
   executionMode: WorkerPlacementExecutionMode;
   authorize?: WorkerPlacementAuthorization;
+  signal?: AbortSignal;
   activate: () => WorkerActiveDispatchPlacement;
 }) => Promise<WorkerActiveDispatchPlacement>;
 
@@ -105,6 +106,21 @@ export function isUnavailableEnvironment(
     environment.state === "destroyed" ||
     environment.state === "failed" ||
     environment.state === "orphaned"
+  );
+}
+
+export function isExactAttachedEnvironment(
+  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
+  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
+): boolean {
+  return Boolean(
+    environment &&
+    environment.environmentId === placement.environmentId &&
+    environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId,
   );
 }
 
@@ -172,7 +188,7 @@ export function createPlacementFailureActions(deps: {
     environmentId: string | null;
     ownerEpoch: number | null;
     primaryError: unknown;
-  }): Promise<void> => {
+  }): Promise<WorkerDispatchPlacement> => {
     const environmentId = params.environmentId;
     const teardownErrors = environmentId
       ? await cleanupEnvironment({
@@ -181,10 +197,22 @@ export function createPlacementFailureActions(deps: {
         })
       : [];
     const recoveryError = [boundedError(params.primaryError), ...teardownErrors].join("; ");
-    updateFailure(
+    return updateFailure(
       params.placement,
       new Error(truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT)),
     );
+  };
+
+  const cancelProvisioning = (
+    placement: WorkerDispatchPlacement | undefined,
+    expected: WorkerDispatchPlacement | undefined,
+  ): WorkerDispatchPlacement => {
+    // Idle recovery has no admission to interrupt. Its Stop must claim only the captured
+    // provisioning tuple before using the ordinary failed-environment cleanup path.
+    if (expected?.state !== "provisioning" || !matchesWorkerPlacementTarget(placement, expected)) {
+      throw new Error("Provisioning cloud worker placement changed during reclaim");
+    }
+    return updateFailure(expected, new Error("Cloud worker provisioning canceled"));
   };
 
   const retryFailedTeardown = async (
@@ -340,6 +368,7 @@ export function createPlacementFailureActions(deps: {
   };
 
   return {
+    cancelProvisioning,
     failActive,
     failDraining,
     reclaimActive,

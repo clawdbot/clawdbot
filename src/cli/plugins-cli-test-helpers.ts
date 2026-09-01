@@ -34,7 +34,7 @@ type UpdateNpmInstalledHookPacksFn =
 type ReadPersistedInstalledPluginIndexFn =
   (typeof import("../plugins/installed-plugin-index-store.js"))["readPersistedInstalledPluginIndex"];
 type RestorePersistedInstalledPluginIndexIfCurrentFn =
-  (typeof import("../plugins/installed-plugin-index-store.js"))["restorePersistedInstalledPluginIndexIfCurrent"];
+  (typeof import("../plugins/installed-plugin-index-store-write.js"))["restorePersistedInstalledPluginIndexIfCurrent"];
 type WritePersistedInstalledPluginIndexInstallRecordsFn =
   (typeof import("../plugins/installed-plugin-index-records.js"))["writePersistedInstalledPluginIndexInstallRecords"];
 type WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn =
@@ -142,7 +142,7 @@ export const loadPluginManifestRegistryMock: UnknownMock = vi.fn();
 export const buildPluginSnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
-const buildAllPluginInspectReports: UnknownMock = vi.fn();
+export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
@@ -425,6 +425,14 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
       invokeMock<unknown[], unknown>(readPersistedInstalledPluginIndexMock, ...args)) as (
       ...args: unknown[]
     ) => unknown,
+  };
+});
+
+vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>();
+  return {
+    ...actual,
     restorePersistedInstalledPluginIndexIfCurrent: ((...args: unknown[]) =>
       invokeMock<unknown[], unknown>(
         restorePersistedInstalledPluginIndexIfCurrentMock,
@@ -487,7 +495,7 @@ vi.mock("../plugins/status.js", () => ({
       Parameters<(typeof import("../plugins/status.js"))["buildAllPluginInspectReports"]>,
       ReturnType<(typeof import("../plugins/status.js"))["buildAllPluginInspectReports"]>
     >(
-      buildAllPluginInspectReports,
+      buildAllPluginInspectReportsMock,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildAllPluginInspectReports"],
   buildPluginDiagnosticsReport: ((
@@ -552,17 +560,30 @@ vi.mock("../plugins/plugin-registry.js", () => ({
       inspectPluginRegistryMock,
       ...args,
     )) as (typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"],
-  refreshPluginRegistry: ((
-    ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"]>,
-      ReturnType<(typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"]>
-    >(
-      refreshPluginRegistryMock,
-      ...args,
-    )) as (typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"],
 }));
+
+vi.mock("../plugins/plugin-registry-refresh.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry-refresh.js")>();
+  return {
+    ...actual,
+    refreshPluginRegistry: ((
+      ...args: Parameters<
+        (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"]
+      >
+    ) =>
+      invokeMock<
+        Parameters<
+          (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"]
+        >,
+        ReturnType<
+          (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"]
+        >
+      >(
+        refreshPluginRegistryMock,
+        ...args,
+      )) as (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"],
+  };
+});
 
 vi.mock("../plugins/loader.js", () => ({
   clearPluginRegistryLoadCache: ((...args: unknown[]) =>
@@ -873,6 +894,7 @@ export function resetPluginsCliTestState() {
   buildPluginSnapshotReportMock.mockReset();
   buildPluginRegistrySnapshotReportMock.mockReset();
   buildPluginInspectReportMock.mockReset();
+  buildAllPluginInspectReportsMock.mockReset();
   buildPluginDiagnosticsReportMock.mockReset();
   buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
@@ -1028,6 +1050,7 @@ export function resetPluginsCliTestState() {
   inspectPluginRegistryMock.mockResolvedValue({
     state: "fresh",
     refreshReasons: [],
+    differences: [],
     persisted: defaultRegistryIndex,
     current: defaultRegistryIndex,
   });

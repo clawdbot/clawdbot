@@ -4,6 +4,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../agents/prepared-model-runtime-generation-scope.js";
+import {
   loadPublishedGatewayReplyDispatchRuntime,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
@@ -44,17 +48,24 @@ type AgentRpcFrame = {
   error?: { code?: string; message?: string };
 };
 
+const rpcDrains: Array<Promise<PromiseSettledResult<AgentRpcFrame>[]>> = [];
+
 function sendAgentRpc(socket: WebSocket, params: { agentId: string; runId: string }) {
-  const accepted = onceMessage<AgentRpcFrame>(
-    socket,
-    (frame) =>
-      frame.type === "res" && frame.id === params.runId && frame.payload?.status === "accepted",
-  );
+  let responseReceived = false;
+  const response = onceMessage<AgentRpcFrame>(socket, (frame) => {
+    if (frame.type !== "res" || frame.id !== params.runId) {
+      return false;
+    }
+    responseReceived = true;
+    return true;
+  });
   const final = onceMessage<AgentRpcFrame>(
     socket,
     (frame) =>
       frame.type === "res" && frame.id === params.runId && frame.payload?.status !== "accepted",
   );
+  // Observe both listeners immediately, then drain them before the shared server resets.
+  rpcDrains.push(Promise.allSettled([response, final]));
   socket.send(
     JSON.stringify({
       type: "req",
@@ -67,7 +78,7 @@ function sendAgentRpc(socket: WebSocket, params: { agentId: string; runId: strin
       },
     }),
   );
-  return { accepted, final };
+  return { response, final, hasResponse: () => responseReceived };
 }
 
 function agentCommandCallsFor(runId: string) {
@@ -99,8 +110,148 @@ describe("gateway agent auth refresh dispatch", () => {
     vi.mocked(agentCommandMock).mockClear();
   });
 
-  afterEach(() => {
-    testState.agentsConfig = undefined;
+  afterEach(async () => {
+    try {
+      const outcomes = await Promise.all(rpcDrains.splice(0));
+      expect(outcomes.flat().every((outcome) => outcome.status === "fulfilled")).toBe(true);
+    } finally {
+      testState.agentsConfig = undefined;
+    }
+  });
+
+  test("keeps an accepted run on its admitted runtime generation", async () => {
+    const affectedAgentId = "auth-pinned";
+    const admittedRunId = "idem-agent-auth-admitted";
+    const subsequentRunId = "idem-agent-auth-next";
+    const before = await prepareAuthDispatchAgents(affectedAgentId);
+    expect(before.runtime).toBeDefined();
+    const preparedRuntime = await import("../agents/prepared-model-runtime.js");
+    const acquireRuntime = preparedRuntime.acquireAgentRunPreparedModelRuntime;
+    const admittedSnapshots: Array<Awaited<ReturnType<typeof acquireRuntime>>["snapshot"]> = [];
+    // Admission can derive a selected snapshot from the configured generation. Capture
+    // the actual lease before ACK, then prove refresh cannot replace that run's identity.
+    const acquireSpy = vi
+      .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
+      .mockImplementation(async (input, options) => {
+        const lease = await acquireRuntime(input, options);
+        if (input.agentId === affectedAgentId) {
+          admittedSnapshots.push(lease.snapshot);
+        }
+        return lease;
+      });
+    const dispatchedSnapshots = new Map<
+      string,
+      ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>
+    >();
+    const originalCommand = agentCommandMock.getMockImplementation();
+    expect(originalCommand).toBeDefined();
+    const dispatchEntered = createDeferred();
+    const releaseDispatch = createDeferred();
+    const handlerHelpers = await import("./agent-turn/agent-handler-helpers.js");
+    // Receiving the ACK is not a barrier against the server's dispatch timer.
+    const yieldSpy = vi
+      .spyOn(handlerHelpers, "yieldAfterAgentAcceptedAck")
+      .mockImplementationOnce(() => {
+        dispatchEntered.resolve();
+        return releaseDispatch.promise;
+      });
+    const published = createDeferred();
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published") {
+        published.resolve();
+      }
+    });
+    try {
+      agentCommandMock.mockImplementation((options, ...args) => {
+        if (
+          !options ||
+          typeof options !== "object" ||
+          !("runId" in options) ||
+          typeof options.runId !== "string"
+        ) {
+          throw new Error("Expected an agent command with a run ID");
+        }
+        const generation = getPreparedModelRuntimePluginGeneration();
+        dispatchedSnapshots.set(
+          options.runId,
+          generation ? getPreparedModelRuntimeBorrowedSnapshot(generation) : undefined,
+        );
+        return originalCommand!(options, ...args);
+      });
+      const admitted = sendAgentRpc(gatewaySuite.ws, {
+        agentId: affectedAgentId,
+        runId: admittedRunId,
+      });
+      await expect(admitted.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
+      await expect(
+        Promise.race([dispatchEntered.promise, admitted.final]),
+      ).resolves.toBeUndefined();
+      expect(agentCommandCallsFor(admittedRunId)).toHaveLength(0);
+      expect(admittedSnapshots.length).toBe(1);
+      const admittedSnapshot = admittedSnapshots[0];
+      expect(admittedSnapshot).toBeDefined();
+
+      setRuntimeAuthProfileStoreSnapshot(
+        {
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "next-generation-key",
+            },
+          },
+        },
+        before.agentDir,
+      );
+      await expect(Promise.race([published.promise, admitted.final])).resolves.toBeUndefined();
+      const after = await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: affectedAgentId,
+      });
+      expect(after).not.toBe(before.runtime);
+      expect(agentCommandCallsFor(admittedRunId)).toHaveLength(0);
+      releaseDispatch.resolve();
+
+      await expect(admitted.final).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect(agentCommandCallsFor(admittedRunId)[0]?.[4]).toMatchObject({
+        config: before.runtime?.config,
+        pluginGeneration: before.runtime?.pluginGeneration,
+      });
+      expect(dispatchedSnapshots.get(admittedRunId) === admittedSnapshot).toBe(true);
+
+      const subsequent = sendAgentRpc(gatewaySuite.ws, {
+        agentId: affectedAgentId,
+        runId: subsequentRunId,
+      });
+      await expect(subsequent.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
+      await expect(subsequent.final).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect(agentCommandCallsFor(subsequentRunId)[0]?.[4]).toMatchObject({
+        config: after?.config,
+        pluginGeneration: after?.pluginGeneration,
+      });
+      expect(admittedSnapshots.length).toBe(2);
+      // Auth refresh may reuse metadata and plugin identities, but the next lease is new.
+      expect(admittedSnapshots[1] === admittedSnapshot).toBe(false);
+      expect(dispatchedSnapshots.get(subsequentRunId) === admittedSnapshots[1]).toBe(true);
+    } finally {
+      releaseDispatch.resolve();
+      unregister();
+      yieldSpy.mockRestore();
+      acquireSpy.mockRestore();
+      agentCommandMock.mockImplementation(originalCommand!);
+    }
   });
 
   test("aborts one affected waiter without cancelling shared auth publication", async () => {
@@ -150,9 +301,11 @@ describe("gateway agent auth refresh dispatch", () => {
         agentId: affectedAgentId,
         runId: waitingRunId,
       });
-      await Promise.all([aborted.accepted, waiting.accepted]);
       const sibling = sendAgentRpc(gatewaySuite.ws, { agentId: "main", runId: siblingRunId });
-      await sibling.accepted;
+      await expect(sibling.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
       await expect(sibling.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
       expect(agentCommandCallsFor(siblingRunId)).toHaveLength(1);
       expect(agentCommandCallsFor(abortedRunId)).toHaveLength(0);
@@ -168,7 +321,7 @@ describe("gateway agent auth refresh dispatch", () => {
         payload: { aborted: true, runIds: [abortedRunId] },
       });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(activeWorkBefore + 1));
-      await expect(aborted.final).resolves.toMatchObject({
+      await expect(aborted.response).resolves.toMatchObject({
         ok: true,
         payload: {
           status: "timeout",
@@ -177,14 +330,16 @@ describe("gateway agent auth refresh dispatch", () => {
           providerStarted: false,
         },
       });
-      await expect(
-        Promise.race([waiting.final.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      expect(waiting.hasResponse()).toBe(false);
 
       publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
       await published.promise;
       const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
       expect(after).not.toBe(before.runtime);
+      await expect(waiting.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
       await expect(waiting.final).resolves.toMatchObject({
         ok: true,
         payload: { status: "ok" },
@@ -199,7 +354,10 @@ describe("gateway agent auth refresh dispatch", () => {
         agentId: affectedAgentId,
         runId: subsequentRunId,
       });
-      await subsequent.accepted;
+      await expect(subsequent.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
       await expect(subsequent.final).resolves.toMatchObject({
         ok: true,
         payload: { status: "ok" },
@@ -253,14 +411,12 @@ describe("gateway agent auth refresh dispatch", () => {
         `prepared reply dispatch runtime owner was not published for ${affectedAgentId}`,
       );
 
-      const dispatched = sendAgentRpc(gatewaySuite.ws, { agentId: affectedAgentId, runId });
-      await expect(dispatched.accepted).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "accepted" },
+      const rejected = sendAgentRpc(gatewaySuite.ws, {
+        agentId: affectedAgentId,
+        runId,
       });
-      await expect(dispatched.final).resolves.toMatchObject({
+      await expect(rejected.response).resolves.toMatchObject({
         ok: false,
-        payload: { status: "error" },
         error: {
           code: "UNAVAILABLE",
           message: expect.stringContaining(

@@ -226,4 +226,14 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
 
     expect(dialog.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
   });
+  it("slides workboard drawers in from the owned edge", async () => {
+    const dialog = await mountModal(1280, {
+      kind: "drawer",
+      modalWidth: "min(460px, 100vw)",
+    });
+    const style = getComputedStyle(dialog);
+
+    expect(style.animationName).toBe("openclaw-drawer-in");
+    expect(style.animationDuration).toBe("0.2s");
+  });
 });

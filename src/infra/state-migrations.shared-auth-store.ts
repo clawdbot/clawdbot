@@ -457,9 +457,10 @@ function finalizeMigration(params: {
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
 export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
+  env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): SharedAuthStoreMigrationDetection {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
   const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
   if (params.doctorOnlyStateMigrations !== true) {
     return { sourcePath, hasLegacy: false };

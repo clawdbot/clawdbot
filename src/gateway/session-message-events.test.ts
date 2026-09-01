@@ -219,6 +219,7 @@ function attributedMessageProjection(value: unknown) {
     content: message.content,
     __openclaw: {
       senderId: metadata.senderId,
+      senderIdentity: metadata.senderIdentity,
       senderName: metadata.senderName,
       senderUsername: metadata.senderUsername,
       senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
@@ -1029,6 +1030,10 @@ describe("session.message websocket events", () => {
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
+        sourceSessionGeneration: {
+          sessionId,
+          lifecycleRevision: "current-cron-revision",
+        },
         runSessionKey: "cron:job-webchat:run:3000",
         sessionId: "detached-cron-session",
         lifecycleRevision: "detached-cron-revision",
@@ -1043,7 +1048,7 @@ describe("session.message websocket events", () => {
           error: new Error("WebChat uses canonical session events"),
         },
         deliveryRequested: true,
-        skipHeartbeatDelivery: false,
+        undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
         sourceDeliveryOutcome: {
           visibleDeliveries: [],
@@ -1185,6 +1190,7 @@ describe("session.message websocket events", () => {
             idempotencyKey: params.idempotencyKey,
             sender: {
               id: profile.id,
+              identity: { type: "profile", id: profile.id },
               name: params.senderName,
               username: "ada",
             },
@@ -1222,6 +1228,7 @@ describe("session.message websocket events", () => {
         content: text,
         __openclaw: {
           senderId: profile.id,
+          senderIdentity: { type: "profile", id: profile.id },
           senderName,
           senderUsername: "ada",
           senderProfileAvatarUrl: avatarUrl,
@@ -2072,7 +2079,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    await persistSessionTranscriptTurn(
+    const persisted = await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -2080,10 +2087,11 @@ describe("session.message websocket events", () => {
         storePath,
       },
       {
-        messages: [{ message: transcriptMessage }],
+        messages: [{ eventId: "msg-selected", message: transcriptMessage }],
         updateMode: "none",
       },
     );
+    expect(persisted.appendedCount).toBe(1);
 
     const ws = await harness.openWs();
     try {
@@ -2102,7 +2110,10 @@ describe("session.message websocket events", () => {
           sessionKey: "agent:main:main",
           storePath,
         },
-        message: transcriptMessage,
+        message: {
+          ...transcriptMessage,
+          content: [{ type: "text", text: "stale queued prompt" }],
+        },
         messageId: "msg-selected",
       });
 
@@ -2111,6 +2122,14 @@ describe("session.message websocket events", () => {
         sessionKey: "agent:main:main",
         messageId: "msg-selected",
         messageSeq: 1,
+      });
+      expect(requireRecord(messageEvent.payload, "selected session event").message).toMatchObject({
+        ...transcriptMessage,
+        __openclaw: {
+          id: "msg-selected",
+          seq: 1,
+          transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
+        },
       });
     } finally {
       ws.close();

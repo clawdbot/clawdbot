@@ -11,6 +11,8 @@ import type { PairingChannel } from "../../pairing/pairing-store.types.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
+import { readChannelIngressHostOwner } from "./ingress-host-owner.js";
+import { prepareChannelParticipantInput } from "./participant-input.js";
 import {
   allReferencedAccessGroupNames,
   normalizeEffectiveEntries,
@@ -556,6 +558,11 @@ export async function resolveChannelMessageIngress(
   params: ResolveChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {
   const channelId = normalizeChannelId(params.channelId);
+  const promptedAt = Date.now();
+  const participantOwner = readChannelIngressHostOwner(channelId);
+  const participant = params.identity.resolveParticipant?.(params.subject);
+  const senderId = params.subject.stableId == null ? undefined : String(params.subject.stableId);
+  const participantBinding = params.contextBinding && { ...params.contextBinding };
   const adapter = createIdentityAdapter(params.identity);
   const subject = createIdentitySubject(params.identity, params.subject);
   const routeFacts = [...routeFactsFromDescriptors(params.route), ...(params.routeFacts ?? [])];
@@ -672,6 +679,33 @@ export async function resolveChannelMessageIngress(
     commandAccess,
     activationAccess,
   };
+  if (
+    (participant || senderId) &&
+    participantBinding &&
+    participantOwner &&
+    ingress.admission === "dispatch"
+  ) {
+    prepareChannelParticipantInput(result, {
+      identity: participant
+        ? {
+            type: "remote",
+            pluginId: channelId,
+            domain: participant.domain,
+            idKind: participant.idKind,
+            id: participant.id,
+          }
+        : {
+            type: "observation",
+            pluginId: channelId,
+            accountId: params.accountId ?? null,
+            senderKind: "unknown",
+            id: senderId!,
+          },
+      binding: participantBinding,
+      promptedAt,
+      owner: participantOwner,
+    });
+  }
   return recordChannelIngressResolution({
     result,
     channelId,

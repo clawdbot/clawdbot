@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   azureSpeechTTS,
@@ -283,12 +284,9 @@ describe("azure speech tts", () => {
       ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
 
       await expect(
-        Promise.race([
-          socketClosed,
-          new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), 250);
-          }),
-        ]),
+        withTimeout(socketClosed, 250, {
+          message: "Azure Speech malformed-response socket did not close",
+        }),
       ).resolves.toBe(true);
     } finally {
       server.closeAllConnections();

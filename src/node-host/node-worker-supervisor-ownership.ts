@@ -81,7 +81,6 @@ export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
   adapter: NodeWorkerChildAdapter;
   done: Promise<void>;
   journalReady: Promise<void>;
-  releaseJournal: () => void;
   scrubber: NodeWorkerCredentialScrubber;
   connectionFailure: { errorText?: string };
   turn?: NodeWorkerActiveTurn;
@@ -130,25 +129,4 @@ export function nodeWorkerReceiptMatchesOwner(
     receipt.container?.containerId === container?.containerId &&
     receipt.container?.engineTarget === container?.engineTarget
   );
-}
-
-/** Delay result observation until the launch's exact owner has been journaled. */
-export function createNodeWorkerJournalGate(): {
-  journalReady: Promise<void>;
-  releaseJournal: () => void;
-} {
-  let released = false;
-  let resolveReady!: () => void;
-  const journalReady = new Promise<void>((resolve) => {
-    resolveReady = resolve;
-  });
-  return {
-    journalReady,
-    releaseJournal: () => {
-      if (!released) {
-        released = true;
-        resolveReady();
-      }
-    },
-  };
 }

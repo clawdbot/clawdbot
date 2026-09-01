@@ -60,6 +60,72 @@ extension OpenClawChatViewModel {
         return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
     }
 
+    public var fastModeIsEnabled: Bool {
+        guard let session = self.currentSessionEntry() else { return false }
+        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true
+    }
+
+    public var composerInlineModelLabel: String {
+        let label = if self.modelSelectionID == Self.defaultModelSelectionID {
+            self.defaultModelLabel.replacingOccurrences(of: "Default: ", with: "")
+        } else {
+            self.modelChoices.first { self.isSelectedModel($0.selectionID) }?.displayLabel ??
+                self.modelSelectionID
+        }
+        return label.split(separator: "/").last.map(String.init) ?? label
+    }
+
+    public var canonicalModelSelectionID: String {
+        if self.modelSelectionID == Self.defaultModelSelectionID {
+            return Self.defaultModelSelectionID
+        }
+        return self.modelChoices.first { self.isSelectedModel($0.selectionID) }?.selectionID ??
+            self.modelSelectionID
+    }
+
+    public func isSelectedModel(_ selectionID: String) -> Bool {
+        Self.modelSelectionMatches(
+            selectionID: selectionID,
+            currentSelectionID: self.modelSelectionID,
+            choices: self.modelChoices)
+    }
+
+    static func modelSelectionMatches(
+        selectionID: String,
+        currentSelectionID: String,
+        choices: [OpenClawChatModelChoice]) -> Bool
+    {
+        if selectionID == defaultModelSelectionID {
+            return currentSelectionID == defaultModelSelectionID
+        }
+        guard let choice = choices.first(where: { $0.selectionID == selectionID }) else {
+            return currentSelectionID == selectionID
+        }
+        return currentSelectionID == choice.selectionID || currentSelectionID == choice.modelID
+    }
+
+    public var composerInlineEffortLabel: String {
+        let effort = self.thinkingOverrideIsInherited
+            ? String(
+                format: String(localized: "Inherited %@"),
+                self.thinkingLevel)
+            : self.thinkingLevel
+        return self.fastModeSelectionID == "on"
+            ? String(
+                format: String(localized: "%@, Fast"),
+                effort)
+            : effort
+    }
+
+    public var composerInlineEffortAngle: Double {
+        guard self.thinkingLevel != "off",
+              let index = self.thinkingLevelOptions.firstIndex(where: { $0.id == self.thinkingLevel })
+        else { return -120 }
+        guard self.thinkingLevelOptions.count > 1 else { return 120 }
+        let fraction = Double(index) / Double(self.thinkingLevelOptions.count - 1)
+        return -120 + fraction * 240
+    }
+
     /// `models.list` currently has no fast-support capability field. Keep the
     /// control available and let the gateway validate the session patch.
     public var selectedModelSupportsFastMode: Bool {

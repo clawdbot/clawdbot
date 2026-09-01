@@ -8,6 +8,11 @@ on:
         required: true
         default: main
         type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
       workflow_ref:
         description: Optional openclaw/openclaw ref that provides the reusable workflow harness
         required: false
@@ -126,6 +131,11 @@ on:
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
+        type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
         type: string
       workflow_ref:
         description: Optional openclaw/openclaw ref that provides the reusable workflow harness
@@ -562,7 +572,7 @@ jobs:
         run: mkdir -p "$(pnpm store path --silent)"
 
       - name: Install workflow validation dependencies
-        if: inputs.candidate_artifact_name != ''
+        if: inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'
         working-directory: workflow
         env:
           CI: "true"
@@ -670,14 +680,26 @@ jobs:
         id: baseline
         env:
           INPUT_PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          INPUT_TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          CANDIDATE_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json
         run: |
           set -euo pipefail
-          if [[ -n "${INPUT_PREVIOUS_VERSION}" ]]; then
-            echo "value=openclaw@${INPUT_PREVIOUS_VERSION}" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [[ "$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"* ||
+                "$INPUT_TARGET_CONTEXT_REF" == "refs/heads/extended-stable/"* ]]; then
+            PUBLISHED_VERSIONS="$RUNNER_TEMP/openclaw-published-versions.json"
+            npm view openclaw versions --json > "$PUBLISHED_VERSIONS"
+            BASELINE_SPEC="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
+              --candidate-version "$(jq -er '.candidateVersion' "$CANDIDATE_JSON")" \
+              --target-context-ref "$INPUT_TARGET_CONTEXT_REF" \
+              --previous-version "$INPUT_PREVIOUS_VERSION" \
+              --versions-json "$PUBLISHED_VERSIONS")"
+          elif [[ -n "${INPUT_PREVIOUS_VERSION}" ]]; then
+            BASELINE_SPEC="openclaw@${INPUT_PREVIOUS_VERSION}"
+          else
+            BASELINE_VERSION="$(npm view openclaw@latest version)"
+            BASELINE_SPEC="openclaw@${BASELINE_VERSION}"
           fi
-          BASELINE_VERSION="$(npm view openclaw@latest version)"
-          echo "value=openclaw@${BASELINE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "value=${BASELINE_SPEC}" >> "$GITHUB_OUTPUT"
 
       - name: Pack baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
@@ -896,15 +918,17 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # Windows Server 2025 with Node 24.19 can crash in libuv fs-event on RUNNER~1.
+      # Keep only packaged-fresh on the last validated Node until an upstream fix ships.
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
 
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           cache-mode: off

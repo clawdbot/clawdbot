@@ -19,6 +19,12 @@ const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
 export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
+// Terminal receipt must still reach settlement; force a bounded abort if the
+// handler tail stalls, or the session can remain active forever.
+export const TURN_TERMINAL_SETTLEMENT_IDLE_TIMEOUT_MS = 2 * 60_000;
+// Aborted/timed-out completions still join queued projection work; this grace
+// bounds a blocked handler tail so finalization cannot hang forever.
+export const TURN_FINALIZE_DRAIN_ABORT_GRACE_MS = 5_000;
 
 type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
 

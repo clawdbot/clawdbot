@@ -16,13 +16,14 @@ type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
+  // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
   const dismissedPanel = [
-    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention"),
+    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention:defined"),
   ]
     .map((attention) => attention.dismissPanel())
     .some((dismissed) => dismissed);
   const dismissedMenu = host
-    .querySelector<AppSidebarElement>("openclaw-app-sidebar")
+    .querySelector<AppSidebarElement>("openclaw-app-sidebar:defined")
     ?.dismissTransientMenus();
   return dismissedMenu === true || dismissedPanel;
 }

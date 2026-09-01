@@ -2,7 +2,6 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
@@ -19,7 +18,6 @@ describe("renderChannelWizard", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
   it.each([
@@ -144,31 +142,25 @@ describe("renderChannelWizard", () => {
     expect(hideToggle?.dataset.sensitiveIcon).toBe("eye-off");
   });
 
-  it("copies setup text through the plain-HTTP clipboard fallback", async () => {
-    vi.stubGlobal("navigator", {});
-    let copiedText: string | undefined;
-    const execCommand = vi.fn().mockImplementation(() => {
-      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
-      return true;
-    });
-    (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
+  it("renders informational setup output as unpadded plain text", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
       renderChannelWizard({
         wizard: {
           phase: "step",
-          channel: null,
+          channel: "imessage",
           step: {
-            id: "copy-command",
+            id: "selected-channels",
             type: "note",
-            message: "openclaw channels add",
+            title: "Selected channels",
+            message: "iMessage — Local iMessage/SMS through the imsg bridge.",
           },
           stepIndex: 1,
           busy: false,
           validationError: null,
         },
-        channelLabel: (channelId) => channelId,
+        channelLabel: () => "iMessage",
         multiselectValues: [],
         onToggleMultiselect: vi.fn(),
         textValue: "",
@@ -187,40 +179,23 @@ describe("renderChannelWizard", () => {
       container,
     );
 
-    const copy = container.querySelector<HTMLButtonElement>(".channels-wizard__links button");
-    expect(copy).not.toBeNull();
-    copy?.click();
-
-    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
-    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe("Copied!"));
-    expect(copy?.getAttribute("aria-label")).toBeNull();
-    expect(copiedText).toBe("openclaw channels add");
-    expect(document.querySelector("textarea")).toBeNull();
+    const output = container.querySelector(".channels-wizard__output");
+    expect(output?.textContent).toBe("iMessage — Local iMessage/SMS through the imsg bridge.");
+    expect(container.querySelector(".channels-wizard__note")).toBeNull();
+    expect(container.querySelector(".channels-wizard__links button")).toBeNull();
   });
 
-  it.each(
-    [true, false].flatMap((copied) => ["pending", "feedback"].map((phase) => ({ copied, phase }))),
-  )(
-    "keeps channel-copy success $copied accessible across a $phase locale rerender",
-    async ({ copied, phase }) => {
-      const write = createDeferred();
-      const writeText = vi.fn(() => write.promise);
-      const execCommand = vi.fn(() => false);
-      vi.stubGlobal("navigator", { clipboard: { writeText } });
-      Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
-      const schedule = vi.spyOn(window, "setTimeout");
-      const container = document.createElement("div");
-      document.body.append(container);
-      const props = {
+  it("links channel docs from the setup subtitle without static helper links", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChannelWizard({
         wizard: {
-          phase: "step",
-          channel: null,
-          step: { id: "copy-command", type: "note", message: "openclaw channels add" },
-          stepIndex: 1,
-          busy: false,
-          validationError: null,
+          phase: "error",
+          channel: "slack",
+          message: "Setup failed",
         },
-        channelLabel: (channelId) => channelId,
+        channelLabel: () => "Slack",
         multiselectValues: [],
         onToggleMultiselect: vi.fn(),
         textValue: "",
@@ -235,57 +210,16 @@ describe("renderChannelWizard", () => {
         whatsappBusy: false,
         onWhatsAppStart: vi.fn(),
         onWhatsAppWait: vi.fn(),
-      } satisfies Parameters<typeof renderChannelWizard>[0];
-      render(renderChannelWizard(props), container);
-      const button = container.querySelector<HTMLButtonElement>(".channels-wizard__links button");
+      }),
+      container,
+    );
 
-      button?.click();
-
-      if (phase === "pending") {
-        expect(button?.disabled).toBe(true);
-        await i18n.setLocale("de");
-        render(renderChannelWizard(props), container);
-        expect(button?.textContent?.trim()).toBe("Kopieren");
-        expect(button?.getAttribute("aria-label")).toBeNull();
-      }
-      if (copied) {
-        write.resolve();
-      } else {
-        write.reject(new DOMException("Clipboard access denied"));
-      }
-      const feedback =
-        phase === "pending"
-          ? copied
-            ? "Kopiert!"
-            : "Kopieren fehlgeschlagen"
-          : copied
-            ? "Copied!"
-            : "Copy failed";
-      await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(feedback));
-      expect(button?.getAttribute("aria-label")).toBeNull();
-      expect(writeText).toHaveBeenCalledWith("openclaw channels add");
-      expect(execCommand).toHaveBeenCalledTimes(copied ? 0 : 1);
-
-      if (phase === "feedback") {
-        await i18n.setLocale("de");
-        expect(() => render(renderChannelWizard(props), container)).not.toThrow();
-        expect(button?.textContent?.trim()).toBe("Kopieren");
-        expect(button?.getAttribute("aria-label")).toBeNull();
-      }
-      const reset = schedule.mock.calls.find(
-        ([, delay]) => delay === (copied ? 1_500 : 2_000),
-      )?.[0];
-      if (typeof reset !== "function") {
-        throw new Error("Expected copy feedback to schedule its reset");
-      }
-      reset();
-      expect(button?.textContent?.trim()).toBe("Kopieren");
-      expect(button?.getAttribute("aria-label")).toBeNull();
-
-      await i18n.setLocale("en");
-      render(renderChannelWizard(props), container);
-      expect(button?.textContent?.trim()).toBe("Copy");
-      expect(button?.getAttribute("aria-label")).toBeNull();
-    },
-  );
+    const subtitle = container.querySelector(".channels-wizard__subtitle");
+    const docs = subtitle?.querySelector<HTMLAnchorElement>(".channels-wizard__link");
+    expect(subtitle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "Guided channel setup View docs",
+    );
+    expect(docs?.href).toBe("https://docs.openclaw.ai/channels/slack");
+    expect(container.querySelector(".channels-wizard__links")).toBeNull();
+  });
 });

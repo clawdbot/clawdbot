@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
-import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
+import { mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
@@ -138,46 +138,6 @@ describe("chat plugin install explicit ClawHub selectors", () => {
           "Review these capabilities, then rerun /plugins install clawhub:@openclaw/clawhub-demo@1.2.3 --accept-capabilities to continue.",
         ].join("\n"),
       );
-      expect(persistPluginInstallMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("reports risky ClawHub install failures without persisting install metadata", async () => {
-    const warning =
-      'ClawHub trust warning for "@openclaw/risky-demo@1.2.3": scan=suspicious; moderation=none; blockedFromDownload=false; pending=false; stale=false; reasons=payload_string. Risk signals: scan status suspicious, payload_string.';
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "clawhub_risk_acknowledgement_required",
-      error:
-        'ClawHub release "@openclaw/risky-demo@1.2.3" has trust warnings. Review the package and rerun with --acknowledge-clawhub-risk to continue.',
-      warning,
-    });
-
-    await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const result = await handlePluginsCommand(
-        buildClawHubPluginsParams(
-          "/plugins install clawhub:@openclaw/risky-demo@1.2.3 --force",
-          workspaceDir,
-        ),
-        true,
-      );
-      if (result === null) {
-        throw new Error("expected plugin install result");
-      }
-
-      expect(result.reply?.text).toContain("has trust warnings");
-      expect(result.reply?.text).toContain("scan=suspicious");
-      expect(result.reply?.text).toContain("payload_string");
-      expect(result.reply?.text).toContain("--acknowledge-clawhub-risk");
-      expect(result.reply?.text).toContain("local openclaw plugins install command");
-      expect(result.reply?.text).toContain("trusted shell");
-      const installParams = mockFirstObjectArg(installPluginFromClawHubMock);
-      expectObjectFields(installParams, {
-        spec: "clawhub:@openclaw/risky-demo@1.2.3",
-        mode: "update",
-      });
-      expect(installParams).not.toHaveProperty("acknowledgeClawHubRisk");
       expect(persistPluginInstallMock).not.toHaveBeenCalled();
     });
   });

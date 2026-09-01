@@ -63,7 +63,6 @@ type ExecDefaults = {
 type ExecParams = {
   ask?: string;
   command?: string;
-  security?: string;
 };
 
 type DiagnosticsSession = {
@@ -319,7 +318,6 @@ describe("diagnostics command", () => {
     expect(execCall.defaults.approvalWarningText).toContain(
       "https://docs.openclaw.ai/gateway/diagnostics",
     );
-    expect(execCall.params.security).toBe("allowlist");
     expect(execCall.params.ask).toBe("always");
     const command = execCall.params.command ?? "";
     expect(command).toContain("gateway");

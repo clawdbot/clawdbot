@@ -1,4 +1,5 @@
 import { nothing, render } from "lit";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -58,8 +59,6 @@ export class SidebarPeopleRuntime {
       event.target instanceof Element
         ? event.target.closest<HTMLElement>(".sidebar-online__row")
         : null;
-    const details =
-      event.target instanceof Element && event.target.closest(".sidebar-online__details");
     if (event.type === "keydown" && event instanceof KeyboardEvent) {
       if (event.key === "Tab" && !event.shiftKey && event.target === this.active?.trigger) {
         const first = this.portal.focusables()[0];
@@ -82,10 +81,6 @@ export class SidebarPeopleRuntime {
       return;
     }
     if (event.type === "click") {
-      if (!details) {
-        this.close();
-        return;
-      }
       if (this.active?.row === row && this.portal.explicitHold) {
         this.close();
         return;
@@ -135,8 +130,8 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const id = row.querySelector<HTMLElement>("[data-online-user-id]")?.dataset.onlineUserId;
-    const trigger = row.querySelector<HTMLElement>(".sidebar-online__details");
+    const id = row.querySelector<HTMLElement>("[data-online-user-key]")?.dataset.onlineUserKey;
+    const trigger = row.querySelector<HTMLElement>(".sidebar-online__person");
     if (!id || !trigger || !this.host.connected) {
       return;
     }
@@ -207,9 +202,9 @@ export class SidebarPeopleRuntime {
     });
     const user = projectOnlinePresenceViewers(
       data.presencePayload,
-      self?.id,
+      self,
       data.presenceInstanceId,
-    ).find((person) => person.id === active.id);
+    ).find((person) => presenceUserKey(person) === active.id);
     if (!user) {
       this.close();
       return;
