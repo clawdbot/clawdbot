@@ -158,6 +158,34 @@ describe("before_tool_call hook merger — requireApproval", () => {
     expectRequireApprovalResult(result, { requireApproval: expectedApproval });
   });
 
+  it("preserves external resolution while stamping its live plugin owner", async () => {
+    const result = await runBeforeToolCallWithHooks(registry, [
+      {
+        pluginId: "agentkit",
+        result: {
+          requireApproval: {
+            title: "World verification",
+            description: "Verify personhood before continuing.",
+            externalResolution: {
+              label: "Verify with World",
+              decisions: ["allow-once", "allow-always"],
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(result?.requireApproval).toEqual({
+      title: "World verification",
+      description: "Verify personhood before continuing.",
+      pluginId: "agentkit",
+      externalResolution: {
+        label: "Verify with World",
+        decisions: ["allow-once", "allow-always"],
+      },
+    });
+  });
+
   it("merges block and requireApproval from different plugins", async () => {
     const result = await runBeforeToolCallWithHooks(registry, [
       {

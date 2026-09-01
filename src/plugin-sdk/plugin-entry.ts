@@ -7,6 +7,14 @@ import type {
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type {
+  PluginExternalResolution,
+  PluginExternalVerificationAttempt,
+  PluginExternalVerificationCompletionResult,
+  PluginExternalVerificationContext,
+  PluginExternalVerificationGrantAuthorization,
+  PluginExternalVerificationGrantStore,
+} from "../plugins/external-verification-approval-types.js";
 
 export type {
   AgentHarness,

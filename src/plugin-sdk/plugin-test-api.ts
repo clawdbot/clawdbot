@@ -19,6 +19,15 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     config: {},
     runtime: {} as OpenClawPluginApi["runtime"],
     logger: { info() {}, warn() {}, error() {}, debug() {} },
+    approvals: {
+      onExternalVerification() {},
+      completeExternalVerification: async () => {
+        throw new Error("external verification approval runtime is not available in tests");
+      },
+      openGrantStore: () => {
+        throw new Error("external verification grant storage is not available in tests");
+      },
+    },
     registerTool() {},
     registerHook() {},
     registerHttpRoute() {},

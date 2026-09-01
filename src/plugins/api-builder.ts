@@ -21,6 +21,15 @@ type BuildPluginApiParams = {
 };
 
 const noops = {
+  approvals: {
+    onExternalVerification: () => {},
+    completeExternalVerification: async () => {
+      throw new Error("external verification approval runtime is not available");
+    },
+    openGrantStore: () => {
+      throw new Error("external verification grant storage is unavailable during plugin discovery");
+    },
+  },
   registerTool: () => {},
   registerHook: () => {},
   registerHttpRoute: () => {},
@@ -137,6 +146,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
     logger: params.logger,
+    approvals: handlers.approvals ?? noops.approvals,
     registerTool: handlers.registerTool ?? noops.registerTool,
     registerHook: handlers.registerHook ?? noops.registerHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noops.registerHttpRoute,

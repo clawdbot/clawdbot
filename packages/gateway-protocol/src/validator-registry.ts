@@ -474,6 +474,12 @@ export const validateQuestionWaitAnswerParams = compile(S.QuestionWaitAnswerPara
 export const validateQuestionResolveParams = compile(S.QuestionResolveParamsSchema);
 export const validateQuestionGetParams = compile(S.QuestionGetParamsSchema);
 export const validateQuestionListParams = compile(S.QuestionListParamsSchema);
+export const validatePluginApprovalExternalPrepareParams = compile(
+  S.PluginApprovalExternalPrepareParamsSchema,
+);
+export const validatePluginApprovalExternalStartParams = compile(
+  S.PluginApprovalExternalStartParamsSchema,
+);
 export const validatePluginApprovalRequestParams = compile(S.PluginApprovalRequestParamsSchema);
 export const validatePluginApprovalResolveParams = compile(S.PluginApprovalResolveParamsSchema);
 export const validateCapabilityConsentErrorDetails = compile(S.CapabilityConsentErrorDetailsSchema);

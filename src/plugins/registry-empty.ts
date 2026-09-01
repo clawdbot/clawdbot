@@ -69,6 +69,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     sessionSchedulerJobs: [],
     sessionActions: [],
     conversationBindingResolvedHandlers: [],
+    externalApprovalVerifiers: [],
     diagnostics: [],
   };
 }
