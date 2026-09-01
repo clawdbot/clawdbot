@@ -42,9 +42,10 @@ identity and revision rather than discovered by scanning every user's files.
 | 2           | Project agent skills   | `<workspace>/.agents/skills`             |
 | 3           | Personal agent skills  | `~/.agents/skills` (default state only)  |
 | 4           | Managed / local skills | `<state-dir>/skills`                     |
-| 5           | Bundled skills         | shipped with the install                 |
-| 5           | Custodian skills       | shipped; configured Custodian agent only |
-| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
+| 5           | Workshop skills        | `<state-dir>/workshop-skills`            |
+| 6           | Bundled skills         | shipped with the install                 |
+| 6           | Custodian skills       | shipped; configured Custodian agent only |
+| 7 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -88,13 +89,14 @@ files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
 In multi-agent setups, each agent has its own workspace. Use the path that
 matches your desired visibility:
 
-| Scope          | Path                         | Visible to                     |
-| -------------- | ---------------------------- | ------------------------------ |
-| Per-agent      | `<workspace>/skills`         | Only that agent                |
-| Project-agent  | `<workspace>/.agents/skills` | Only that workspace's agent    |
-| Personal-agent | `~/.agents/skills`           | Agents using the default state |
-| Shared managed | `<state-dir>/skills`         | All agents using that state    |
-| Extra dirs     | `skills.load.extraDirs`      | All agents using that config   |
+| Scope          | Path                          | Visible to                     |
+| -------------- | ----------------------------- | ------------------------------ |
+| Per-agent      | `<workspace>/skills`          | Only that agent                |
+| Project-agent  | `<workspace>/.agents/skills`  | Only that workspace's agent    |
+| Personal-agent | `~/.agents/skills`            | Agents using the default state |
+| Shared managed | `<state-dir>/skills`          | All agents using that state    |
+| Workshop       | `<state-dir>/workshop-skills` | All agents using that state    |
+| Extra dirs     | `skills.load.extraDirs`       | All agents using that config   |
 
 When `OPENCLAW_STATE_DIR` points somewhere other than the default
 `~/.openclaw`, session skill indexes exclude home-scoped personal or
@@ -269,9 +271,10 @@ skill from model-initiated selection.
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and your active skill files. When the agent spots reusable work, it drafts a
-proposal instead of writing directly to `SKILL.md`. You review and approve
-before anything changes.
+and its global `<state-dir>/workshop-skills` directory. When the agent spots
+reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
+Operators edit skills outside that directory through their owning tools or
+files.
 
 ```bash
 openclaw skills workshop list
@@ -309,6 +312,9 @@ publish and sync.
     directory by default. Add `--global` to install into the shared
     `~/.openclaw/skills` directory, visible to all local agents unless agent
     allowlists narrow it.
+
+    Skill Workshop does not install into either location. Generated skills live
+    in `<state-dir>/workshop-skills`.
 
     Git and local installs expect `SKILL.md` at the source root. The slug comes
     from `SKILL.md` frontmatter `name` when valid, then falls back to the
@@ -353,8 +359,8 @@ publish and sync.
     Workspace, project-agent, and extra-dir skill discovery only accepts skill
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
-    Skill Workshop writes through those trusted targets only when
-    `skills.workshop.allowSymlinkTargetWrites` is enabled.
+    Skill Workshop rejects symlinked skills that resolve outside
+    `<state-dir>/workshop-skills`.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
@@ -713,8 +719,7 @@ aligned.
     for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
-    Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop
-    should also apply proposals through those trusted symlinked paths.
+    Skill Workshop does not use these configured symlink targets.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">

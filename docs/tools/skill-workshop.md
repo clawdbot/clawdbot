@@ -1,5 +1,5 @@
 ---
-summary: "Author workspace proposals and profile-owned personal skills through Skill Workshop"
+summary: "Create Workshop-generated skills and profile-owned personal skills through Skill Workshop"
 read_when:
   - You want the agent to create or update a skill from chat
   - You need to review, apply, reject, or quarantine a generated skill draft
@@ -9,17 +9,17 @@ title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
 ---
 
-Skill Workshop is OpenClaw's governed path for creating and updating workspace
-skills. Through this path, agents and operators create a **proposal** (pending
+Skill Workshop is OpenClaw's governed path for creating and updating its own
+generated skills. Through this path, agents and operators create a **proposal** (pending
 draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
-The workspace proposal workflow described below writes workspace skills only.
-It never rewrites bundled, plugin, ClawHub, extra-root, managed-local,
-personal-agent, or system skill sources. The same authoring tool also supports
-[personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
+Skill Workshop writes only under `<state-dir>/workshop-skills`. Operators edit
+bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
+workspace skills through their owning tools or files. The same authoring tool
+also supports [personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
 when the Gateway supplies an authorized library target; those operations publish
-managed revisions rather than workspace proposals.
+managed revisions rather than Workshop proposals.
 
 ## Personal library authoring
 
@@ -66,11 +66,9 @@ The following lifecycle applies to workspace proposals:
   `SKILL.md`.
 - **Apply is the only live write:** create, update, and revise never change
   active skills.
-- **Workshop-owned agent updates:** creates target the workspace `skills/`
-  root. An agent may apply an update only when an applied Workshop `create`
-  proposal owns the workspace-relative skill directory. Operators can explicitly
-  approve updates to handwritten or externally installed workspace skills;
-  autonomous collection review leaves those user-authored skills untouched.
+- **Directory-owned updates:** creates and updates stay inside
+  `<state-dir>/workshop-skills`. A skill is Workshop-owned exactly when it is
+  contained in that directory.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
@@ -101,8 +99,8 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway runs one system-owned cron job per writable
-workspace each week. The job appears in `openclaw cron list` and runs every
+In `auto` mode, the Gateway runs one system-owned cron job each week. The job
+appears in `openclaw cron list` and runs every
 7 days. Cron owns the cadence; the job is enabled only when
 `skills.workshop.autonomous.mode` is `auto`. The review can only read skills
 and submit one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
@@ -111,45 +109,35 @@ Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval **for Workshop-owned paths only**; `propose` and `off` do not
 run collection review.
 
-The reviewer reads each skill it intends to change. Unlisted skills stay untouched.
-Skills without applied Workshop create provenance are read-only; Workshop-owned
-skills may receive `write` or `drop`. A new
-skill created during collection review is recorded as an automatically applied
-`create` proposal, which makes that directory Workshop-owned. Disabled and
-agent-filtered skills stay untouched.
+The reviewer reads each skill it intends to change. Unlisted skills stay
+untouched. Every skill in the Workshop directory may receive `write` or `drop`.
+Collection review records its changes in review history and the backup manifest;
+it does not create proposal rows.
 
 Recorded usage counts and last-used recency are supporting evidence, not an
 age-based lifecycle: heavy use favors preserving a skill's procedure, while no
 recorded use alone never justifies removing it.
 
-Skills that predate ownership tracking, including skills that earlier reconcile
-runs created directly, have no applied `create` proposal. Skill Workshop
-intentionally classifies them as user-authored and read-only. It manages only
-skills it creates and records from now on.
-
-Shared workspaces use the union of each agent's allowed skills only when
-provider, model, and resolved auth identity match. Reconciliation must leave
-every sharing agent at least one visible skill.
-OpenClaw validates and scans every write before changing the workspace,
-serializes collection edits with a workspace lease, and retains one backup
+OpenClaw validates and scans every write before changing the Workshop directory,
+serializes collection edits with one global lease, and retains one backup
 under the state directory. The changed collection appears in new agent runs;
 running sessions keep their existing skill snapshot.
 
 To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
-workspace lock. Restore refuses if any affected skill changed after cleanup.
+global lock. Restore refuses if any affected skill changed after cleanup.
 
-Each attempt is persisted per workspace before the model starts. Review is admitted only for collections of at most
+Each attempt is persisted under the global `workshop` review key before the
+model starts. Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
 
 Every completed review records its kept, written, and dropped skill names in
 the shared state database, including the reason for each drop. OpenClaw retains
-the latest 90 outcomes per workspace.
+the latest 90 global outcomes.
 
 Collection rewrites and merges produce `SKILL.md` files at or below 10,000
-characters. A skill already above the cap can only become shorter. User-authored
-skills stay untouched.
+characters. A skill already above the cap can only become shorter.
 
 ## Chat
 
@@ -189,7 +177,7 @@ Create:
 Make a skill called morning-catchup that runs my Monday inbox routine.
 ```
 
-Update an existing workspace skill:
+Update an existing Workshop-generated skill:
 
 ```text
 Update trip-planning to also check seat maps before booking.
@@ -233,7 +221,7 @@ openclaw skills workshop propose-create \
   --description "Daily inbox catch-up: triage, archive, surface, draft, plan" \
   --proposal ./PROPOSAL.md
 
-# Update an existing workspace skill
+# Update an existing Workshop-generated skill
 openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
 
 # List and inspect
@@ -252,8 +240,9 @@ openclaw skills workshop reject <proposal-id> --reason "Duplicate"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
-Every subcommand takes `--agent <id>` (target workspace; defaults to
+Every subcommand takes `--agent <id>` (session context only; defaults to
 cwd-inferred, then the default agent) and `--json` (structured output).
+Proposals and generated skill targets are global.
 `propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
 `--evidence <text>` to record proposal context alongside `--proposal`.
 `evaluate` runs through the live Gateway plugin registry, snapshots the current
@@ -431,9 +420,8 @@ In `propose` and `auto` modes, OpenClaw can review one finished substantial turn
 after the agent system becomes idle. The review continues the foreground request
 prefix, so the provider can reuse its prompt cache. Review transcript and session
 metadata changes stay detached. It can draft one pending create, patch, or update.
-In `auto` mode, creates and Workshop-authored updates use the scanner-gated apply
-path. User-authored updates stay pending for operator review. A failed review is
-logged and dropped after one attempt.
+In `auto` mode, creates and Workshop-generated updates use the scanner-gated
+apply path. A failed review is logged and dropped after one attempt.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
@@ -447,7 +435,6 @@ the proposal threshold, and troubleshooting.
       autonomous: {
         mode: "auto",
       },
-      allowSymlinkTargetWrites: false,
       approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -456,13 +443,12 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting                    | Default  | Effect                                                                                                                                                                           |
-| -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
-| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                              |
-| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
-| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                    |
-| `maxSkillBytes`            | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
+| Setting           | Default  | Effect                                                                                                                                                                           |
+| ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
+| `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
+| `maxPending`      | `50`     | Caps global pending and quarantined proposals (1-200).                                                                                                                           |
+| `maxSkillBytes`   | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
 completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
@@ -503,8 +489,8 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.restore`           | `operator.admin` |
 
 `skills.curator.status` reports live skill usage recorded from trusted
-`skill.used` events, plus the latest collection and experience review outcomes
-per workspace. Age-based skill lifecycle curation is retired.
+`skill.used` events, plus the latest global collection review and per-workspace
+experience review outcomes. Age-based skill lifecycle curation is retired.
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
 weekly collection review now manages the skill collection.
@@ -522,6 +508,13 @@ proposals.
 
 ```text
 <OPENCLAW_STATE_DIR>/
+  workshop-skills/<skill-name>/
+    SKILL.md
+    assets/
+    examples/
+    references/
+    scripts/
+    templates/
   state/openclaw.sqlite
   skill-workshop/proposals/<proposal-id>/
     generations/<generation-id>/
@@ -556,8 +549,9 @@ retires the previous bundle.
 
 `openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
 `rollback.json` metadata into SQLite after verifying each proposal, then removes
-the migrated JSON files. If an agent's configured workspace changes, its earlier
-proposals remain listed with a previous-workspace marker instead of disappearing.
+the migrated JSON files. It also moves applied legacy Workshop creates into
+`workshop-skills`, retargets eligible pending creates, and marks outside updates
+stale.
 
 ## Limits
 
@@ -568,7 +562,7 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | Autonomous `SKILL.md`           | 10,000 characters, or strictly shorter when already over the cap             |
 | Support files                   | 64 per proposal                                                              |
 | Support file size               | 256 KiB each, 2 MiB total                                                    |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
+| Pending + quarantined proposals | `skills.workshop.maxPending` globally (default 50)                           |
 
 ## Troubleshooting
 
@@ -578,9 +572,8 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
 | `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
 | `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
-| `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
-| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
+| Proposal does not show in list                 | Check the selected agent and `OPENCLAW_STATE_DIR`.                                                                                                                                                          |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
 ### Tool-policy diagnostic

@@ -81,11 +81,10 @@ the foreground session's sandbox policy, including during compaction.
 
 The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
-read or command-invoked, plus a bounded writable workspace skill list that
-explicitly reports when no writable skills exist. It prefers a used writable
-skill when that skill governs the learning, then another writable skill, and
-creates a new skill only when no writable skill covers the class. Read-only skills
-in the inherited foreground catalog cannot be read or updated during review.
+read or command-invoked, plus a bounded list of skills in the global Workshop
+directory. It prefers a used Workshop-generated skill when that skill governs
+the learning, then another Workshop-generated skill, and creates a new skill
+only when none covers the class. The operator edits all other skills directly.
 
 Before changing an existing skill, the reviewer reads its current body. If the
 complete body is omitted, it can call `prepare_patch` for one non-empty unique
@@ -97,9 +96,8 @@ Longer reference and examples move into bundled files. The reviewer sees the
 foreground tool schemas, but only `skill_workshop` can execute. The reviewed
 transcript is evidence, not instructions.
 
-Workshop-authored skills can apply automatically. Updates to user-authored skills
-stay pending with a reason for operator review. Each review gets one attempt.
-A failure is logged and dropped instead of retrying the turn.
+Workshop-generated skills can apply automatically. Each review gets one
+attempt. A failure is logged and dropped instead of retrying the turn.
 
 Good candidates include:
 
@@ -122,11 +120,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                                              |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `off`     | Does not create experience-review captures.                                                                                   |
-| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                          |
-| `auto`    | Applies autonomous creates and Workshop-authored updates. User-authored updates stay pending for review. This is the default. |
+| Mode      | Capture behavior                                                                |
+| --------- | ------------------------------------------------------------------------------- |
+| `off`     | Does not create experience-review captures.                                     |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.            |
+| `auto`    | Applies autonomous creates and Workshop-generated updates. This is the default. |
 
 Set the mode with the CLI:
 
@@ -164,21 +162,20 @@ Every learned skill receives these controls:
 
 - **Security scan at apply:** Workshop reruns the scanner immediately before the
   live write. A critical finding quarantines the proposal instead of applying it.
-- **Workshop-owned writes:** creates target the selected workspace. Only updates
-  to skills created by Workshop apply automatically. User-authored updates stay
-  pending. Bundled, plugin, managed, system, and extra-root skills remain read-only.
+- **Workshop-owned writes:** creates and updates stay inside
+  `<state-dir>/workshop-skills`. Bundled, plugin, managed, system, personal,
+  project, workspace, and extra-root skills remain outside Workshop ownership.
 - **Hash binding:** update proposals bind to the current live skill and go stale
   if that target changes before apply.
 - **Lean cap:** autonomous results stay at or below 10,000 characters. A skill
   already above the cap can only become shorter.
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
-- **Collection review:** once a week in `auto` mode, an isolated model session
-  reads the skills it intends to change. Externally owned skills stay untouched; only
-  Workshop-owned paths can be rewritten or dropped. Collection-created skills
-  receive automatically applied `create` proposal records.
+- **Collection review:** once a week in `auto` mode, one isolated model session
+  reads the Workshop-generated skills it intends to change. Collection changes
+  are recorded in review history and the backup manifest, without proposal rows.
 - **Collection backup:** review validates and scans every rewrite before changing
-  the workspace, keeps one recoverable collection backup, and restores it if a
+  the Workshop directory, keeps one recoverable collection backup, and restores it if a
   write fails.
 - **Authoring standards:** learned skills use class-level names, trigger-first
   descriptions, evidence-backed steps, and token-efficient language.
@@ -229,19 +226,15 @@ with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
 Weekly collection review also uses the configured agent model. It receives the
-names, descriptions, ownership state, and available usage counts and last-used
-recency of eligible workspace skills, then reads each skill it intends to change
+names, descriptions, and available usage counts and last-used recency of
+Workshop-generated skills, then reads each skill it intends to change
 before one atomic call listing only changes. Usage is supporting evidence: heavy
 use favors preserving a skill's procedure, while no recorded use alone never
-justifies dropping it. Disabled and agent-filtered skills stay untouched. Shared
-workspaces use the union of each agent's allowed skills only when provider,
-model, and resolved auth identity match. Reconciliation must leave every
-sharing agent at least one visible skill. It has no message tool or general
-agent tools. Skill bodies are treated as
-untrusted evidence, not as instructions. A persisted per-workspace attempt time
-prevents Gateway restarts from repeating a failed or successful review within 7 days. The
-foreground agent can restore the one retained collection backup when asked to
-undo the cleanup, unless an affected skill changed afterward.
+justifies dropping it. It has no message tool or general agent tools. Skill
+bodies are treated as untrusted evidence, not as instructions. One persisted global
+attempt time prevents Gateway restarts from repeating a failed or successful review
+within 7 days. The foreground agent can restore the one retained collection backup
+when asked to undo the cleanup, unless an affected skill changed afterward.
 
 Manual history scan uses a separate bounded path. It reviews up to 20 substantial
 sessions with at least six model turns, redacts recognized secrets, bounds the
@@ -290,13 +283,12 @@ result pending regardless of autonomous mode.
 
 ## Configuration reference
 
-| Setting                                    | Default  | Effect                                                                                                                   |
-| ------------------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `skills.workshop.autonomous.mode`          | `"auto"` | Chooses capture behavior; `auto` also enables weekly collection review.                                                  |
-| `skills.workshop.approvalPolicy`           | `"auto"` | Controls prompts for normal agent-initiated lifecycle calls. It never expands the isolated reviewer tool surface.        |
-| `skills.workshop.maxPending`               | `50`     | Caps pending and quarantined proposals per workspace.                                                                    |
-| `skills.workshop.maxSkillBytes`            | `40000`  | Caps proposal body size in bytes.                                                                                        |
-| `skills.workshop.allowSymlinkTargetWrites` | `false`  | Allows apply through explicitly trusted workspace skill symlinks. Capture itself does not widen the trusted target list. |
+| Setting                           | Default  | Effect                                                                                                            |
+| --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `skills.workshop.autonomous.mode` | `"auto"` | Chooses capture behavior; `auto` also enables weekly collection review.                                           |
+| `skills.workshop.approvalPolicy`  | `"auto"` | Controls prompts for normal agent-initiated lifecycle calls. It never expands the isolated reviewer tool surface. |
+| `skills.workshop.maxPending`      | `50`     | Caps pending and quarantined proposals globally.                                                                  |
+| `skills.workshop.maxSkillBytes`   | `40000`  | Caps proposal body size in bytes.                                                                                 |
 
 See [Skills config](/tools/skills-config#workshop-skills-workshop) for ranges and
 the complete `skills.*` schema.
@@ -338,9 +330,9 @@ Automatic apply runs once. Inspect the proposal and its scanner state:
 openclaw skills workshop inspect <proposal-id>
 ```
 
-A user-authored target or normal write failure leaves it pending for manual review. A critical
-scanner result moves it to quarantine. Fix the cause and apply manually; do not
-build a retry loop around automatic capture.
+A normal write failure leaves it pending for manual review. A critical scanner
+result moves it to quarantine. Fix the cause and apply manually; do not build a
+retry loop around automatic capture.
 
 ### Too many low-value captures appear
 
