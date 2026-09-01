@@ -988,6 +988,7 @@ export const en: TranslationMap & {
     owners: "Owners",
     allOwners: "All owners",
     involvingMe: "Involving me",
+    specificOwner: "Specific owner",
     ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",

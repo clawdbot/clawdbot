@@ -39,7 +39,7 @@ suite.define(() => {
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.locator(".sidebar-session-sort-menu");
-      const ownerSubmenu = menu.getByRole("menuitem", { name: "Owners", exact: true });
+      const ownerSubmenu = menu.getByRole("menuitem", { name: "Specific owner", exact: true });
       const allOwnersLabel = menu.locator('[value="owner:"] .session-menu__text');
       const ownersLabel = ownerSubmenu.locator(":scope > .session-menu__text");
       const labelAlignment = await allOwnersLabel.evaluate(
@@ -52,11 +52,21 @@ suite.define(() => {
         await allOwnersLabel.evaluate((label) => getComputedStyle(label).color),
       );
       await expect
-        .poll(() => ownerSubmenu.locator(".sidebar-session-owner-preview .viewer-avatar").count())
-        .toBe(4);
-      await expect
-        .poll(() => ownerSubmenu.locator(".viewer-avatar--overflow").textContent())
-        .toBe("+2");
+        .poll(() => ownerSubmenu.locator(".session-menu__shortcut").textContent())
+        .toBe("5");
+      expect(await ownerSubmenu.locator(":scope > .sidebar-session-owner-selection").count()).toBe(
+        0,
+      );
+      const trailingGap = () =>
+        ownerSubmenu.evaluate((element) => {
+          const details = element.querySelector<HTMLElement>(":scope > [slot='details']");
+          const chevron = element.shadowRoot?.querySelector<HTMLElement>("[part='submenu-icon']");
+          if (!details || !chevron) {
+            throw new Error("expected owner trailing content and submenu chevron");
+          }
+          return chevron.getBoundingClientRect().left - details.getBoundingClientRect().right;
+        });
+      expect(await trailingGap()).toBeLessThanOrEqual(9);
       const focusedTopLevelItem = menu.locator(
         ':scope > wa-dropdown-item:not([slot="submenu"]):focus',
       );
@@ -111,11 +121,24 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .getByRole("menuitem", { name: "Owners", exact: true })
-            .locator(".sidebar-session-owner-preview .viewer-avatar")
+            .getByRole("menuitem", { name: "Specific owner", exact: true })
+            .locator(".sidebar-session-owner-selection .viewer-avatar")
             .count(),
         )
         .toBe(1);
+      const selectedOwnerSubmenu = page.getByRole("menuitem", {
+        name: "Specific owner",
+        exact: true,
+      });
+      await expect
+        .poll(() =>
+          selectedOwnerSubmenu.locator(".sidebar-session-owner-selection__name").textContent(),
+        )
+        .toBe("Ada");
+      await expect
+        .poll(() => page.locator('[value="owner:"]').getAttribute("aria-checked"))
+        .toBe("false");
+      expect(await trailingGap()).toBeLessThanOrEqual(9);
     } finally {
       await context.close();
     }

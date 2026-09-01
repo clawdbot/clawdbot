@@ -2674,19 +2674,27 @@ wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
   color: var(--text);
 }
 
-.sidebar-session-owner-preview {
+.session-menu__shortcut.sidebar-session-owner-selection {
   display: inline-flex;
   align-items: center;
-  padding-right: 14px;
+  gap: 4px;
+  min-width: 0;
+  width: auto;
+  font-family: inherit;
 }
 
-.sidebar-session-owner-preview .viewer-avatar {
+.sidebar-session-owner-selection .viewer-avatar {
+  flex: 0 0 auto;
   border-color: var(--bg-elevated);
 }
 
-.sidebar-session-owner-preview openclaw-viewer-avatar:not(:first-child) .viewer-avatar,
-.sidebar-session-owner-preview > .viewer-avatar:not(:first-child) {
-  margin-left: -5px;
+.sidebar-session-owner-selection__name {
+  max-width: 72px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),

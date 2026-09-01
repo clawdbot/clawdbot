@@ -12,6 +12,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { menuShortcutHint } from "./menu-shortcuts.ts";
 import {
   renderSessionOwnerAvatar,
   renderSessionOwnerChip,
@@ -79,8 +80,6 @@ function renderSidebarOwnerFilter(
     return nothing;
   }
   const selectedOwner = owners.find((owner) => owner.id === ownerFilterId);
-  const previewOwners = selectedOwner ? [selectedOwner] : owners.slice(0, 3);
-  const previewOverflow = selectedOwner ? 0 : owners.length - previewOwners.length;
   return html`
     <div class="session-menu__separator" role="separator"></div>
     <div class="sidebar-session-sort-menu__title">${t("sessionsView.owners")}</div>
@@ -98,13 +97,19 @@ function renderSidebarOwnerFilter(
       ? html`<wa-dropdown-item
           class="sidebar-session-sort-menu__item sidebar-session-owner-submenu"
         >
-          <span class="session-menu__text">${t("sessionsView.owners")}</span>
-          <span slot="details" class="sidebar-session-owner-preview" aria-hidden="true">
-            ${previewOwners.map((owner) => renderSessionOwnerAvatar(owner))}
-            ${previewOverflow > 0
-              ? html`<span class="viewer-avatar viewer-avatar--overflow">+${previewOverflow}</span>`
-              : nothing}
-          </span>
+          <span class="session-menu__text">${t("sessionsView.specificOwner")}</span>
+          ${selectedOwner
+            ? html`<span
+                slot="details"
+                class="session-menu__shortcut sidebar-session-owner-selection"
+                aria-hidden="true"
+              >
+                ${renderSessionOwnerAvatar(selectedOwner)}
+                <span class="sidebar-session-owner-selection__name"
+                  >${selectedOwner.label ?? selectedOwner.id}</span
+                >
+              </span>`
+            : menuShortcutHint(String(owners.length))}
           ${owners.map((owner) =>
             renderSidebarMenuRadioItem({
               value: `owner:${owner.id}`,
