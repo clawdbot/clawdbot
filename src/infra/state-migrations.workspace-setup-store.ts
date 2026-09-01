@@ -450,10 +450,10 @@ export function importAndRecordReceipt(params: {
               source: params.source,
               fingerprint: existingFingerprint,
             });
-            if (
-              params.acceptLegacyWorkspaceState ||
-              (authority && params.source.priority < authority.priority)
-            ) {
+            const shouldReplace = authority
+              ? params.source.priority < authority.priority
+              : params.acceptLegacyWorkspaceState;
+            if (shouldReplace) {
               executeSqliteQuerySync(
                 db,
                 kysely
