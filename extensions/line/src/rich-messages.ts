@@ -26,6 +26,7 @@ import {
   createDeviceControlCard,
   createMediaPlayerCard,
 } from "./flex-templates/media-control-cards.js";
+import { fitsLineFlexBubble } from "./flex-templates/message.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
@@ -191,6 +192,12 @@ export function renderLinePresentation(
           ),
         }
       : undefined;
+  // The card carries the reply's own words, so a long one can outgrow what LINE
+  // accepts. Decline instead of sending it: the caller's fallback keeps every
+  // word and control label as text, while an oversized bubble loses the batch.
+  if (flexMessage && !fitsLineFlexBubble(flexMessage.contents)) {
+    return null;
+  }
   return {
     ...payload,
     channelData: {

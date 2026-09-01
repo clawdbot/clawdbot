@@ -113,6 +113,50 @@ describe("LINE rich-message boundaries", () => {
     });
   });
 
+  it("gives up a card LINE would reject and keeps the reply as text", () => {
+    // 30 KB is LINE's bubble limit; a card built from this much authored text is
+    // refused with "Too large flex message", taking the whole request with it.
+    const body = "a".repeat(40_000);
+    const prepared = prepareLineReplyPayload({
+      text: "",
+      presentation: {
+        blocks: [
+          { type: "text", text: body },
+          {
+            type: "buttons",
+            buttons: [{ label: "Open run", action: { type: "command", command: "/open" } }],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as { flexMessage?: unknown } | undefined;
+    expect(line?.flexMessage).toBeUndefined();
+    expect(prepared.text).toContain(body);
+    expect(prepared.text).toContain("Open run");
+  });
+
+  it("still renders a card that fits inside the bubble limit", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "",
+      presentation: {
+        blocks: [
+          { type: "text", text: "b".repeat(25_000) },
+          {
+            type: "buttons",
+            buttons: [{ label: "Open run", action: { type: "command", command: "/open" } }],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as { flexMessage?: { contents: unknown } } | undefined;
+    expect(line?.flexMessage).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(line?.flexMessage?.contents), "utf8")).toBeLessThan(
+      30_000,
+    );
+  });
+
   it("keeps fallback text when only quick replies render", () => {
     const prepared = prepareLineReplyPayload({
       text: "Agent needs input:\n1. Alpha",
