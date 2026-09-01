@@ -124,13 +124,25 @@ function createPrepackLifecycleFixture() {
   writeFileSync(
     path.join(rootDir, "lifecycle.mjs"),
     `import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 const owner = process.argv[2] === "prepack"
   ? ${JSON.stringify(path.resolve("scripts/openclaw-prepack.ts"))}
   : ${JSON.stringify(path.resolve("scripts/openclaw-postpack.mjs"))};
-const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(import.meta.resolve("tsx"))}, owner], { stdio: "inherit" });
+const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(import.meta.resolve("tsx"))}, owner], { encoding: "utf8" });
+writeFileSync(process.argv[2] + "-result.json", JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }));
+process.stdout.write(result.stdout ?? "");
+process.stderr.write(result.stderr ?? "");
 process.exit(result.status ?? 1);
 `,
   );
+  // pnpm may suppress lifecycle output; observe the actual hook before its reporter.
+  const readLifecycleResult = (event: "prepack" | "postpack") =>
+    JSON.parse(readFileSync(path.join(rootDir, `${event}-result.json`), "utf8")) as {
+      status: number | null;
+      signal: NodeJS.Signals | null;
+      stdout: string;
+      stderr: string;
+    };
   const packDir = path.join(rootDir, "pack");
   mkdirSync(packDir);
   const pack = (prepared: boolean) => {
@@ -166,7 +178,7 @@ process.exit(result.status ?? 1);
       expect(existsSync(path.join(rootDir, name)), name).toBe(false);
     }
   };
-  return { rootDir, sourceFiles, packDir, pack, expectRestored };
+  return { rootDir, sourceFiles, packDir, pack, readLifecycleResult, expectRestored };
 }
 
 type BundledChannelSmokeLayout = "source" | "installed-env" | "installed-path";
@@ -323,7 +335,10 @@ describe("prepack lifecycle", () => {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(path.join(fixture.rootDir, "build-invoked"))).toBe(!prepared);
-    expect(`${result.stdout}\n${result.stderr}`).toContain("channel=1");
+    const prepack = fixture.readLifecycleResult("prepack");
+    expect(prepack).toMatchObject({ status: 0, signal: null });
+    expect(prepack.stdout).toContain("channel=1");
+    expect(fixture.readLifecycleResult("postpack")).toMatchObject({ status: 0, signal: null });
     const extractDir = path.join(fixture.rootDir, "extract");
     mkdirSync(extractDir);
     const tarballs = readdirSync(fixture.packDir).filter((name) => name.endsWith(".tgz"));
@@ -361,7 +376,9 @@ describe("prepack lifecycle", () => {
 
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(
+      const prepack = fixture.readLifecycleResult("prepack");
+      expect(prepack).toMatchObject({ status: 1, signal: null });
+      expect(prepack.stderr).toContain(
         failure === "missing asset"
           ? "missing prepared Control UI .gz asset"
           : "CHANGELOG.md does not contain a release section for 2026.8.1",
