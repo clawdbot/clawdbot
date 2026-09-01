@@ -57,7 +57,7 @@ export function commitCronRuntimeRows<T>(params: {
   transactionHooks?: CronStoreTransactionHooks;
   mutate: (context: {
     database: DatabaseSync;
-    jobs: ReadonlyMap<string, CronJob>;
+    jobs: ReadonlyMap<string, CronStoredJob>;
   }) => CronRuntimeMutation<T>;
 }): T {
   const storeKey = cronStoreKey(params.state.deps.storePath);

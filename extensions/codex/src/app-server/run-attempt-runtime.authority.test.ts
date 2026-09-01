@@ -92,7 +92,7 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
         transport: "websocket",
         homeScope: "agent",
         command: "codex",
-        args: [],
+        args: [] as string[],
         headers: {},
         url: "wss://codex.example.com/app-server",
       },

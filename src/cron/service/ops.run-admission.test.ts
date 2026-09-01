@@ -20,12 +20,10 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
-import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
-import { commitCronRuntimeRows } from "./runtime-store.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -55,43 +53,6 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
-  it("hydrates private runtime authority in runtime row transactions", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-    const job = createDueIsolatedJob({
-      id: "manual-run-runtime-authority",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    const runtimeAuthority = {
-      version: 1 as const,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { auth: { managedRequirementsFingerprint: "f".repeat(64) } },
-    };
-    job.runtimeAuthority = runtimeAuthority;
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    const state = createAdmissionTestState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-
-    const committedJob = commitCronRuntimeRows({
-      state,
-      jobIds: [job.id],
-      operationLabel: "test runtime authority hydration",
-      mutate: ({ jobs }) => ({ value: jobs.get(job.id) }),
-    });
-
-    expect(committedJob?.runtimeAuthority).toEqual(runtimeAuthority);
-  });
-
   it("rechecks a queued if-enabled run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
