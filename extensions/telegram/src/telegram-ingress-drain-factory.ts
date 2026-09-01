@@ -6,10 +6,7 @@ import {
   runWithTelegramUpdateProcessingFrame,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import {
-  getTelegramCallbackQueryAdmissionAnswer,
-  recordTelegramCallbackQueryAdmissionAnswer,
-} from "./callback-query-answer-state.js";
+import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.js";
 import {
   createTelegramIngressMonitor,
   resolveTelegramAdoptionStallTimeoutMs,
@@ -81,14 +78,7 @@ export function createTelegramTransportIngressMonitor(
       if (typeof callbackQueryId !== "string" || callbackQueryId.trim().length === 0) {
         return;
       }
-      if (!context.isNew && getTelegramCallbackQueryAdmissionAnswer(params.bot, callbackQueryId)) {
-        return;
-      }
-      const answerPromise = params.bot.api.answerCallbackQuery(callbackQueryId);
-      if (context.isNew) {
-        recordTelegramCallbackQueryAdmissionAnswer(params.bot, callbackQueryId, answerPromise);
-      }
-      void answerPromise.catch(() => {});
+      void startTelegramCallbackQueryAnswer(params.bot, callbackQueryId, context.isNew);
     },
     dispatch: async (update, lifecycle) => {
       if (params.dispatchUpdate) {

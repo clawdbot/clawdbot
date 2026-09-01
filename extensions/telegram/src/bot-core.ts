@@ -54,6 +54,7 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import {
   setTelegramCallbackQueryAnswerPromise,
+  startTelegramCallbackQueryAnswer,
   takeTelegramCallbackQueryAdmissionAnswer,
 } from "./callback-query-answer-state.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
@@ -237,14 +238,14 @@ export function createTelegramBotCore(
   });
 
   // Durable transports start the answer after spool commit; classic polling and
-  // restart replay start it here. Both paths must beat same-lane sequentialization
-  // or Telegram expires answerCallbackQuery while an agent turn is still running.
+  // restart replay start it here. Both paths precede same-lane sequentialization
+  // so callback acknowledgements cannot wait for earlier handlers.
   bot.use(async (ctx, next) => {
     const callback = ctx.callbackQuery;
     if (callback) {
       const answerPromise =
         takeTelegramCallbackQueryAdmissionAnswer(bot, callback.id) ??
-        bot.api.answerCallbackQuery(callback.id);
+        startTelegramCallbackQueryAnswer(bot, callback.id, false);
       setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
       void answerPromise.catch(() => {});
     }
