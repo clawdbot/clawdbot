@@ -77,7 +77,7 @@ function createSlackBookmarkActionSchema(): Record<string, TSchema> {
     emoji: Type.Optional(
       Type.String({
         description:
-          'Slack emoji shortcode (for example "bookmark") shown on the bookmark. Optional for op="add" and op="edit".',
+          'Slack emoji shortcode shown on the bookmark, colon-wrapped (for example ":pushpin:"). A bare shortcode (for example "pushpin") is also accepted and normalized. Optional for op="add" and op="edit".',
       }),
     ),
     bookmarkId: Type.Optional(

@@ -202,7 +202,7 @@ describe("Slack bookmark action mock-gateway trace", () => {
           title: "Runbook",
           link: "https://runbook.example",
           type: "link",
-          emoji: "bookmark",
+          emoji: ":bookmark:",
         },
       },
     ]);
@@ -228,7 +228,7 @@ describe("Slack bookmark action mock-gateway trace", () => {
           channel_id: "C123",
           bookmark_id: "B001",
           title: "Updated",
-          emoji: "rotating_light",
+          emoji: ":rotating_light:",
         },
       },
     ]);

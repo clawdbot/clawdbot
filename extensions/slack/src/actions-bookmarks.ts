@@ -14,6 +14,26 @@ export type SlackBookmark = {
   date_updated?: number;
 };
 
+// Slack's bookmarks.add/edit `emoji` field requires a colon-wrapped shortcode
+// (e.g. `:pushpin:`); a bare shortcode like `pushpin` is rejected with
+// `invalid_emoji`. Unlike reactions.add (which takes a bare name), bookmarks
+// only accept the wrapped form, so normalize any caller input here at the
+// owner boundary instead of forcing every caller to know the wire format.
+function normalizeBookmarkEmoji(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutColons = trimmed.replace(/^:+|:+$/g, "");
+  if (!withoutColons) {
+    return undefined;
+  }
+  return `:${withoutColons}:`;
+}
+
 export async function addSlackChannelBookmark(
   channelId: string,
   title: string,
@@ -21,12 +41,13 @@ export async function addSlackChannelBookmark(
   opts: SlackActionClientOpts & { emoji?: string } = {},
 ): Promise<SlackBookmark> {
   const client = await getClient(opts, "write");
+  const emoji = normalizeBookmarkEmoji(opts.emoji);
   const result = await client.bookmarks.add({
     channel_id: channelId,
     title,
     link,
     type: "link",
-    ...(opts.emoji ? { emoji: opts.emoji } : {}),
+    ...(emoji ? { emoji } : {}),
   });
   // SAFETY: Slack Web API bookmarks.add returns a Bookmark object whose shape matches SlackBookmark.
   return (result.bookmark ?? {}) as SlackBookmark;
@@ -48,12 +69,13 @@ export async function editSlackChannelBookmark(
   opts: SlackActionClientOpts & { title?: string; link?: string; emoji?: string } = {},
 ): Promise<SlackBookmark> {
   const client = await getClient(opts, "write");
+  const emoji = normalizeBookmarkEmoji(opts.emoji);
   const result = await client.bookmarks.edit({
     channel_id: channelId,
     bookmark_id: bookmarkId,
     ...(opts.title ? { title: opts.title } : {}),
     ...(opts.link ? { link: opts.link } : {}),
-    ...(opts.emoji ? { emoji: opts.emoji } : {}),
+    ...(emoji ? { emoji } : {}),
   });
   // SAFETY: Slack Web API bookmarks.edit returns a Bookmark object whose shape matches SlackBookmark.
   return (result.bookmark ?? {}) as SlackBookmark;

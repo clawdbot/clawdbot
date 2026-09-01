@@ -131,7 +131,7 @@ describe("Slack channel bookmark real-behavior trace", () => {
           title: "Runbook",
           link: "https://runbook.example",
           type: "link",
-          emoji: "bookmark",
+          emoji: ":bookmark:",
         },
       },
     ]);
@@ -139,6 +139,59 @@ describe("Slack channel bookmark real-behavior trace", () => {
       ok: true,
       bookmark: { id: "B001", title: "Runbook" },
     });
+  });
+
+  it("normalizes a colon-wrapped bookmark emoji without double-wrapping", async () => {
+    await handleSlackAction(
+      {
+        action: "addChannelBookmark",
+        channelId: "C123",
+        title: "Runbook",
+        link: "https://runbook.example",
+        emoji: ":pushpin:",
+      },
+      slackConfig(),
+      trustedContext,
+    );
+
+    expect(traceState.calls).toEqual([
+      {
+        method: "bookmarks.add",
+        args: {
+          channel_id: "C123",
+          title: "Runbook",
+          link: "https://runbook.example",
+          type: "link",
+          emoji: ":pushpin:",
+        },
+      },
+    ]);
+  });
+
+  it("omits the emoji field when the bookmark emoji is blank", async () => {
+    await handleSlackAction(
+      {
+        action: "addChannelBookmark",
+        channelId: "C123",
+        title: "Runbook",
+        link: "https://runbook.example",
+        emoji: "  ",
+      },
+      slackConfig(),
+      trustedContext,
+    );
+
+    expect(traceState.calls).toEqual([
+      {
+        method: "bookmarks.add",
+        args: {
+          channel_id: "C123",
+          title: "Runbook",
+          link: "https://runbook.example",
+          type: "link",
+        },
+      },
+    ]);
   });
 
   it("routes listChannelBookmarks through the action runtime to bookmarks.list", async () => {
@@ -172,7 +225,7 @@ describe("Slack channel bookmark real-behavior trace", () => {
           channel_id: "C123",
           bookmark_id: "B001",
           title: "Updated",
-          emoji: "rotating_light",
+          emoji: ":rotating_light:",
         },
       },
     ]);
