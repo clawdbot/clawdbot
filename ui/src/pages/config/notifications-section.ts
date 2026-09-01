@@ -15,8 +15,11 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+
+registerSettingsEnglish();
 
 // Leaf props contract: view.ts imports this module, so importing ConfigProps
 // back from view.ts would create an import cycle. ConfigProps is structurally

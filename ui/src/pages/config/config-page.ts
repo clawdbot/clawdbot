@@ -43,6 +43,7 @@ import {
 import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -87,6 +88,8 @@ import {
   type ConfigProps,
   type ConfigViewState,
 } from "./view.ts";
+
+registerSettingsEnglish();
 
 export type { ConfigPageId } from "./config-sections.ts";
 
