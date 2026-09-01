@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
   SubagentCompletionDeliveryState,
@@ -14,13 +15,12 @@ export type SubagentDeleteCleanupTarget = {
 export function normalizeDeleteCleanupTarget(
   value: unknown,
 ): SubagentDeleteCleanupTarget | undefined {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const record = value as { sessionId?: unknown; lifecycleRevision?: unknown };
-  const sessionId = typeof record.sessionId === "string" ? record.sessionId.trim() : "";
+  const sessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
   const lifecycleRevision =
-    typeof record.lifecycleRevision === "string" ? record.lifecycleRevision.trim() : "";
+    typeof value.lifecycleRevision === "string" ? value.lifecycleRevision.trim() : "";
   if (!sessionId || !lifecycleRevision) {
     return undefined;
   }
