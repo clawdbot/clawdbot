@@ -31,6 +31,41 @@ describe("collectSecretsInConfigFindings", () => {
     setConfigResolutionFacts(config, new Set());
     expect(collectSecretsInConfigFindings(config)).toHaveLength(1);
   });
+
+  it("does not flag gateway passwords externalized via file or exec SecretRefs", () => {
+    const fileConfig = {
+      gateway: {
+        auth: {
+          password: { source: "file", provider: "default", id: "/run/secrets/gateway-password" },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(collectSecretsInConfigFindings(fileConfig)).toHaveLength(0);
+
+    const execConfig = {
+      gateway: {
+        auth: {
+          password: { source: "exec", provider: "vault", id: "gateway/password" },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expect(collectSecretsInConfigFindings(execConfig)).toHaveLength(0);
+  });
+
+  it("flags plaintext hooks tokens but not SecretRef-backed tokens", () => {
+    const plaintext = {
+      hooks: { enabled: true, token: "hooks-plaintext-token" },
+    } satisfies OpenClawConfig;
+    expect(collectSecretsInConfigFindings(plaintext)).toHaveLength(1);
+
+    const secretRef = {
+      hooks: {
+        enabled: true,
+        token: { source: "file", provider: "default", id: "/run/secrets/hooks-token" },
+      },
+    } satisfies OpenClawConfig;
+    expect(collectSecretsInConfigFindings(secretRef)).toHaveLength(0);
+  });
 });
 
 describe("collectAttackSurfaceSummaryFindings", () => {

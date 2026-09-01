@@ -15,7 +15,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "../commands/agents.binding-format.js";
 import { mergeAccountConfig } from "../config/channel-account-config.js";
-import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -589,10 +589,28 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
+function isPersistedPlaintextSecret(cfg: OpenClawConfig, path: string, value: unknown): boolean {
+  if (hasUnresolvedConfigPath(cfg, path)) {
+    return false;
+  }
+  if (
+    resolveConfigSecretRef({
+      config: cfg,
+      path,
+      value,
+      defaults: cfg.secrets?.defaults,
+    })
+  ) {
+    return false;
+  }
+  const literal = normalizeOptionalString(value) ?? "";
+  return literal.length > 0;
+}
+
 export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !hasUnresolvedConfigPath(cfg, "gateway.auth.password")) {
+  const passwordValue = cfg.gateway?.auth?.password;
+  if (isPersistedPlaintextSecret(cfg, "gateway.auth.password", passwordValue)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -604,8 +622,11 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
     });
   }
 
-  const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !hasUnresolvedConfigPath(cfg, "hooks.token")) {
+  const hooksTokenValue = cfg.hooks?.token;
+  if (
+    cfg.hooks?.enabled === true &&
+    isPersistedPlaintextSecret(cfg, "hooks.token", hooksTokenValue)
+  ) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
