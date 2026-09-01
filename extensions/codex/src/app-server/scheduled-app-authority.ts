@@ -395,12 +395,12 @@ export async function captureScheduledCodexAppAuthority(params: {
           .toSorted()
           .map((toolName) => [
             toolName,
-            readToolApprovalMode(
+            readCurrentToolPolicy(
               currentPolicy.config,
               id,
               toolName,
               appApprovalCeiling(defaultApprovalMode(policy)),
-            ),
+            ).approvalMode,
           ]),
       ),
     }))
