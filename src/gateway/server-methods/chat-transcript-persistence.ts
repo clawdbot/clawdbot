@@ -616,6 +616,8 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
 export async function publishAssistantTranscriptRewrite(params: {
   scope: SessionTranscriptWriteScope;
   rewritten: readonly { messageId: string }[];
+  /** Unfiltered live projection broadcast alongside the filtered durable rewrite. */
+  liveMessage?: unknown;
 }): Promise<void> {
   if (params.rewritten.length === 0) {
     return;
@@ -623,5 +625,6 @@ export async function publishAssistantTranscriptRewrite(params: {
   await touchAssistantTranscriptSessionEntry(params.scope);
   await publishTranscriptUpdate(params.scope, {
     messageId: params.rewritten.at(-1)?.messageId,
+    ...(params.liveMessage !== undefined ? { message: params.liveMessage } : {}),
   });
 }

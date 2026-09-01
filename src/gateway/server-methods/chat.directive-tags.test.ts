@@ -1387,15 +1387,12 @@ async function expectUnpersistedAgentRunFinal(params: {
       (entry as { role?: string }).role === "assistant",
   );
   if (params.expectedMediaFailure) {
-    expect(assistantUpdates).toHaveLength(1);
-    expect(assistantUpdates[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: params.payload.text }],
-    });
     expect(assistantEntries).toHaveLength(1);
+    // The visible failure card stays on the live projection, while the durable
+    // row is filtered to replay-safe assistant blocks.
+    expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantUpdates)).toContain(params.expectedMediaFailure.label);
     expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
-    // attachment_error is a live UI-only card; it must never enter durable history.
-    expect(JSON.stringify(assistantUpdates)).not.toContain("attachment_error");
     expect(JSON.stringify(assistantEntries)).not.toContain("attachment_error");
     return;
   }

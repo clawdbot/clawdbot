@@ -8,6 +8,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
+import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.sqlite-events.js";
 import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
@@ -310,6 +311,7 @@ export function createChatSendReplyDispatch(params: {
         await publishAssistantTranscriptRewrite({
           scope: transcriptScope,
           rewritten: [rewritten],
+          liveMessage: { role: "assistant", content: persistedContentForAppend },
         });
         if (assistantContent?.length) {
           attachManagedOutgoingMediaToMessage({
@@ -350,6 +352,7 @@ export function createChatSendReplyDispatch(params: {
         await publishAssistantTranscriptRewrite({
           scope: transcriptScope,
           rewritten: [rewritten],
+          liveMessage: { role: "assistant", content: persistedContentForAppend },
         });
         if (assistantContent?.length) {
           attachManagedOutgoingMediaToMessage({
@@ -401,6 +404,18 @@ export function createChatSendReplyDispatch(params: {
         attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
+        });
+      }
+      if (
+        appended.messageId &&
+        transcriptScope &&
+        persistedContentForAppend.some((block) => block.type === "attachment_error")
+      ) {
+        // Keep the visible failure card on the live projection while the durable
+        // row stays filtered to replay-safe assistant blocks.
+        await publishTranscriptUpdate(transcriptScope, {
+          messageId: appended.messageId,
+          message: { role: "assistant", content: persistedContentForAppend },
         });
       }
       appendedWebchatAgentMedia = true;
