@@ -3,6 +3,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
@@ -18,13 +19,17 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   conversationToolPolicy?: GroupToolPolicyConfig;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   trace?: DiagnosticTraceContext;
 }) {
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,
-    forceToolNames:
-      params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
+    // Owner-granted plugin tools must survive the narrowed runtime filter after materialization.
+    forceToolNames: [
+      ...(params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : []),
+      ...(params.runtimePluginToolGrant?.toolNames ?? []),
+    ],
   });
   return {
     trigger: params.trigger,
@@ -35,6 +40,9 @@ export function buildEmbeddedAttemptToolRunContext(params: {
     ...(runtimeToolAllowlist ? { runtimeToolAllowlist } : {}),
     ...(params.conversationToolPolicy
       ? { conversationToolPolicy: params.conversationToolPolicy }
+      : {}),
+    ...(params.runtimePluginToolGrant
+      ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
       : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.

@@ -8,6 +8,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 
 type CreateOpenClawToolsArg = {
   agentAccountId?: string;
@@ -17,6 +19,7 @@ type CreateOpenClawToolsArg = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  pluginToolAllowlist?: string[];
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
   gatewayCallerAccountId?: string;
@@ -138,6 +141,39 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
+  it("materializes only the owner-scoped tools in a runtime plugin grant", () => {
+    const workboardTools = [
+      "workboard_heartbeat",
+      "workboard_complete",
+      "workboard_block",
+      "workboard_list",
+    ].map((name) => hoisted.makeTool(name));
+    for (const tool of workboardTools) {
+      setPluginToolMeta(tool as never, { pluginId: "workboard", optional: false });
+    }
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce(workboardTools);
+
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { profile: "coding" } } as OpenClawConfig,
+      sessionKey: "agent:main:subagent:workboard-card",
+      surface: "loopback",
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+      },
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      "workboard_heartbeat",
+      "workboard_complete",
+      "workboard_block",
+    ]);
+    const allowlist = new Set(readCreateToolsArgs().pluginToolAllowlist);
+    expect(isPluginToolAllowed(allowlist, "workboard", "workboard_complete")).toBe(true);
+    expect(isPluginToolAllowed(allowlist, "workboard", "workboard_list")).toBe(false);
+    expect(isPluginToolAllowed(allowlist, "other-plugin", "workboard_complete")).toBe(false);
   });
 
   it("passes immutable source-reply authority into message-tool construction", () => {

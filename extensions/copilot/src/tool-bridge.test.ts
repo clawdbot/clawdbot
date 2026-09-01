@@ -239,6 +239,12 @@ describe("createCopilotToolBridge", () => {
     await createCopilotToolBridge({
       abortSignal: controller.signal,
       agentDir: "/agent",
+      attemptParams: {
+        runtimePluginToolGrant: {
+          pluginId: "workboard",
+          toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+        },
+      },
       computerContextEpoch,
       createOpenClawCodingTools,
       cwd: "/workspace/task",
@@ -259,6 +265,10 @@ describe("createCopilotToolBridge", () => {
         cwd: "/workspace/task",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
+        runtimePluginToolGrant: {
+          pluginId: "workboard",
+          toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+        },
         sessionId: "session-1",
         // sessionKey is the sandboxSessionKey derivation; with no
         // attemptParams the bridge falls back to input.sessionKey.

@@ -310,6 +310,16 @@ const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEF
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
+const QA_WORKBOARD_LIFECYCLE_PILOT_MARKER = "QA-WORKBOARD-LIFECYCLE-PILOT";
+
+function extractQaWorkboardLifecycleClaim(prompt: string) {
+  if (!prompt.includes(QA_WORKBOARD_LIFECYCLE_PILOT_MARKER)) {
+    return null;
+  }
+  const cardId = /^Card id:\s*(\S+)$/mu.exec(prompt)?.[1];
+  const token = /^Claim token:\s*(\S+)$/mu.exec(prompt)?.[1];
+  return cardId && token ? { cardId, token } : null;
+}
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -918,6 +928,37 @@ async function buildResponsesPayload(
     return buildFailedResponseEvents();
   }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  const workboardClaim = extractQaWorkboardLifecycleClaim(prompt);
+  if (workboardClaim) {
+    if (
+      !hasToolDefinition(toolDeclarationBody, "workboard_heartbeat") ||
+      !hasToolDefinition(toolDeclarationBody, "workboard_complete")
+    ) {
+      return buildAssistantEvents("QA Workboard lifecycle tools unavailable.");
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("workboard_heartbeat", {
+        id: workboardClaim.cardId,
+        token: workboardClaim.token,
+        note: "QA lifecycle pilot heartbeat persisted.",
+      });
+    }
+    if (completedToolName === "workboard_heartbeat") {
+      return buildToolCallEventsWithArgs("workboard_complete", {
+        id: workboardClaim.cardId,
+        token: workboardClaim.token,
+        summary: "QA lifecycle pilot completed through the claimed worker tool.",
+        proof: {
+          status: "passed",
+          label: "Workboard lifecycle pilot",
+          note: "Heartbeat and completion ran through the dispatched worker.",
+        },
+      });
+    }
+    if (completedToolName === "workboard_complete") {
+      return buildAssistantEvents("QA-WORKBOARD-LIFECYCLE-PILOT-DONE");
+    }
+  }
   // The hard-kill fixture shares the first real checkpoint below, but recovery
   // must settle without scheduling the repeated-restart fixture's later waits.
   if (

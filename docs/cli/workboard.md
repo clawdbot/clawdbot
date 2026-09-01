@@ -73,6 +73,9 @@ openclaw workboard create "Write Workboard docs" --status ready --agent docs-age
 | `--json`                | Print the created card as machine JSON  |
 
 `create` writes directly to Workboard SQLite state. The card is immediately visible in the Control UI Workboard tab and to Workboard tools.
+If the selected board has a default workspace, a card without an explicit
+workspace adopts that default when it is first dispatched; dispatch validates
+and persists the workspace under the card's recorded authority.
 
 ## `show`
 

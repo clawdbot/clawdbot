@@ -293,6 +293,20 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
+  it("preserves an owner-scoped plugin tool grant at harness dispatch", async () => {
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    const runtimePluginToolGrant = {
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+    };
+    input.params.runtimePluginToolGrant = runtimePluginToolGrant;
+
+    const result = await dispatchEmbeddedRunAttempt(input);
+
+    expect(result.preparedAttempt.runtimePluginToolGrant).toBe(runtimePluginToolGrant);
+    expect(mocks.runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant).toBe(runtimePluginToolGrant);
+  });
+
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {

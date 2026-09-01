@@ -240,6 +240,7 @@ async function runEmbeddedAgentViaCliBackend(
       lifecycleGeneration: params.lifecycleGeneration,
       lane: params.lane,
       extraSystemPrompt: params.extraSystemPrompt,
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
       bootstrapContextMode: params.bootstrapContextMode,

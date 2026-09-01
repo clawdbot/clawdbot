@@ -2685,7 +2685,7 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
 
-  it("forwards runtime toolsAllow into CLI attempts so the CLI harness can fail closed", async () => {
+  it("forwards runtime tool authority into CLI attempts so the CLI harness can fail closed", async () => {
     const sessionKey = "agent:main:direct:claude-tools-allow";
     const sessionEntry = makeSessionEntry("openclaw-session-cli-tools-allow");
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -2699,7 +2699,13 @@ describe("CLI attempt execution", () => {
       sessionKey,
       body: "route this",
       runId: "run-cli-tools-allow",
-      opts: { toolsAllow: ["read", "web_search"] },
+      opts: {
+        toolsAllow: ["read", "web_search"],
+        runtimePluginToolGrant: {
+          pluginId: "workboard",
+          toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+        },
+      },
       messageChannel: "discord",
       sessionStore,
     });
@@ -2707,6 +2713,10 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       toolsAllow: ["read", "web_search"],
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+      },
     });
   });
 

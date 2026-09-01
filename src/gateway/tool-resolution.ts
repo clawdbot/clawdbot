@@ -54,6 +54,8 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import type { ExecMode } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
+import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
@@ -113,6 +115,8 @@ export function resolveGatewayScopedTools(params: {
   mediatedToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
+  /** Host-minted exact plugin tool grant for this loopback run. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
   includeNodeExecTool?: boolean;
   execSession?: ExecSessionDefaults;
@@ -182,15 +186,18 @@ export function resolveGatewayScopedTools(params: {
       ? "message_tool_only"
       : undefined);
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
+  const runtimePluginToolNames = params.runtimePluginToolGrant?.toolNames ?? [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
     ...gatewayRequestedTools,
     ...runtimeAlsoAllow,
+    ...runtimePluginToolNames,
   ]);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
     ...(providerProfileAlsoAllow ?? []),
     ...gatewayRequestedTools,
     ...runtimeAlsoAllow,
+    ...runtimePluginToolNames,
   ]);
   const senderId = params.channelContext?.sender?.id;
   // Only immutable Gateway-launched grants can opt into node exec. Match the
@@ -339,20 +346,23 @@ export function resolveGatewayScopedTools(params: {
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-      inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-    ]),
+    pluginToolAllowlist: appendRuntimePluginToolGrant(
+      collectExplicitAllowlist([
+        profilePolicy,
+        providerProfilePolicy,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        groupPolicy,
+        senderPolicy,
+        sandboxPolicy,
+        subagentPolicy,
+        inheritedToolPolicy,
+        gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+      ]),
+      params.runtimePluginToolGrant,
+    ),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,

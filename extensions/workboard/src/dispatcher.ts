@@ -342,7 +342,8 @@ async function runWorkboardDispatch(
   if (selection.rejection) {
     startFailures.push(selection.rejection);
   }
-  for (const card of selection.cards) {
+  for (const selectedCard of selection.cards) {
+    let card = selectedCard;
     const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
     if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
@@ -357,7 +358,10 @@ async function runWorkboardDispatch(
     let runStarted = false;
     let workspaceMutation: { before: WorkboardCard; after: WorkboardCard } | undefined;
     let preparedLaunch: WorkboardPreparedLaunch | undefined;
-    const requestedWorkspace = card.metadata?.automation?.workspace;
+    const explicitWorkspace = card.metadata?.automation?.workspace;
+    const requestedWorkspace =
+      explicitWorkspace ??
+      (await params.store.getBoardMetadata(cardBoardId(card)))?.defaultWorkspace;
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
     let persistWorkspaceAccess: boolean;
@@ -442,6 +446,17 @@ async function runWorkboardDispatch(
       }
     }
     try {
+      if (!explicitWorkspace && requestedWorkspace) {
+        card = await params.store.update(
+          card.id,
+          {
+            workspace: requestedWorkspace,
+            ...(persistWorkspaceAccess ? { workspaceAccess } : {}),
+          },
+          { expectedUpdatedAt: card.updatedAt },
+        );
+        persistWorkspaceAccess = false;
+      }
       const claimed = await params.store.claim(
         card.id,
         { ownerId, ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds },

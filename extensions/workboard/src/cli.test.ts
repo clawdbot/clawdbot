@@ -2,7 +2,12 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import type {
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
@@ -101,6 +106,37 @@ describe("registerWorkboardCli", () => {
         }),
       }),
     ]);
+  });
+
+  it("dispatches a CLI-created card in its board's default workspace", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      boards: createMemoryStore<PersistedWorkboardBoard>(),
+    });
+    await store.upsertBoard({ id: "ops", defaultWorkspace: { kind: "scratch" } });
+    const program = createProgram(store);
+    await program.parseAsync(
+      ["workboard", "create", "Inherited workspace", "--board", "ops", "--status", "ready"],
+      { from: "user" },
+    );
+    const run = vi.fn().mockResolvedValue({ runId: "run-inherited" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { boardId: "ops", maxStarts: 1 },
+    });
+
+    expect(result.startFailures).toEqual([]);
+    expect(result.started).toHaveLength(1);
+    await expect(store.get(result.started[0]!.cardId)).resolves.toMatchObject({
+      metadata: {
+        automation: {
+          boardId: "ops",
+          workspace: { kind: "scratch" },
+          workspaceAccess: { unrestricted: true },
+        },
+      },
+    });
   });
 
   it("redacts claim tokens from card JSON output", async () => {

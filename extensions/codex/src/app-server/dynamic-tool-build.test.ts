@@ -207,6 +207,26 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("forwards the owner-scoped plugin tool grant into dynamic tool construction", async () => {
+    const workspaceDir = path.join(tempDir, "runtime-plugin-grant-workspace");
+    const params = createParams(path.join(tempDir, "runtime-plugin-grant.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePluginToolGrant = {
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+    };
+    let grant: unknown;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      grant = options.runtimePluginToolGrant;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(grant).toEqual(params.runtimePluginToolGrant);
+  });
+
   it("forwards the explicit yield acknowledgment without exposing private context", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

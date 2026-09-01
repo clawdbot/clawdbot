@@ -24,7 +24,12 @@ type WorkboardCard = {
   id: string;
   runId?: string;
   status?: string;
-  metadata?: { automation?: { workspace?: WorkboardWorkspace } };
+  events?: Array<{ kind?: string }>;
+  metadata?: {
+    automation?: { workspace?: WorkboardWorkspace };
+    proof?: Array<{ label?: string; status?: string }>;
+    workerProtocol?: { state?: string };
+  };
 };
 type WorkboardCreateResult = { card: WorkboardCard };
 type WorkboardCompleteResult = { card: WorkboardCard };
@@ -35,6 +40,15 @@ type WorkboardDispatchResult = {
 };
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { status?: unknown };
+type TasksListResult = {
+  tasks: Array<{
+    kind?: string;
+    runtime?: string;
+    runId?: string;
+    status?: string;
+    childSessionKey?: string;
+  }>;
+};
 
 let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
@@ -71,13 +85,14 @@ async function initializeRepository(root: string): Promise<string> {
   return await fs.realpath(repo);
 }
 
-async function startHarness() {
+async function startHarness(options: { forcedRuntime?: "codex" } = {}) {
   gatewayOwner = createQaLiveLaneGateway();
   harness = await gatewayOwner.start({
     repoRoot: process.cwd(),
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",
     alternateModel: "mock-openai/gpt-5.6-luna",
+    ...(options.forcedRuntime ? { forcedRuntime: options.forcedRuntime } : {}),
     transport: {
       requiredPluginIds: [],
       createGatewayConfig: () => ({}),
@@ -105,6 +120,28 @@ function managedWorktreeName(cardId: string): string {
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-");
   return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
+}
+
+function collectDeclaredToolNames(value: unknown, names = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectDeclaredToolNames(item, names);
+    }
+    return names;
+  }
+  if (!value || typeof value !== "object") {
+    return names;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["name", "tool", "functionName"] as const) {
+    if (typeof record[key] === "string") {
+      names.add(record[key]);
+    }
+  }
+  for (const item of Object.values(record)) {
+    collectDeclaredToolNames(item, names);
+  }
+  return names;
 }
 
 async function createCard(params: {
@@ -202,6 +239,135 @@ async function waitForWorktreeState(params: {
 }
 
 describe("managed worktrees Workboard-owner product proof", () => {
+  it(
+    "runs a board-default card through task, worktree, heartbeat, and completion",
+    { timeout: 180_000 },
+    async () => {
+      const canonicalTmp = await fs.realpath(os.tmpdir());
+      const fixtureRoot = tempDirs.make("openclaw-workboard-lifecycle-pilot-", canonicalTmp);
+      const repo = await initializeRepository(fixtureRoot);
+      const activeHarness = await startHarness({ forcedRuntime: "codex" });
+      const stateDir = path.join(await fs.realpath(activeHarness.gateway.tempRoot), "state");
+      const boardId = "qa-lifecycle-pilot";
+      await activeHarness.gateway.call("workboard.boards.upsert", {
+        id: boardId,
+        defaultWorkspace: { kind: "worktree", path: repo, branch: "main" },
+      });
+      const created = (await activeHarness.gateway.call("workboard.cards.create", {
+        title: "QA-WORKBOARD-LIFECYCLE-PILOT",
+        status: "ready",
+        agentId: "qa",
+        boardId,
+      })) as WorkboardCreateResult;
+      expect(created.card.metadata?.automation?.workspace).toBeUndefined();
+      const name = managedWorktreeName(created.card.id);
+
+      const { materializedPath, started } = await dispatchCardAndWaitForWorktree({
+        boardId,
+        cardId: created.card.id,
+        name,
+        stateDir,
+      });
+      const terminal = (await activeHarness.gateway.call(
+        "agent.wait",
+        { runId: started.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      )) as GatewayRunResult;
+      expect(terminal.status).toBe("ok");
+
+      const deadline = Date.now() + 30_000;
+      let completedCard: WorkboardCard | undefined;
+      while (Date.now() < deadline) {
+        const cards = (await activeHarness.gateway.call("workboard.cards.list", {
+          boardId,
+        })) as WorkboardListResult;
+        completedCard = cards.cards.find((card) => card.id === created.card.id);
+        if (
+          completedCard?.status === "done" &&
+          completedCard.metadata?.workerProtocol?.state === "completed"
+        ) {
+          break;
+        }
+        await sleep(50);
+      }
+      expect(completedCard).toMatchObject({
+        id: created.card.id,
+        status: "done",
+        metadata: {
+          automation: {
+            workspace: expect.any(Object),
+          },
+          proof: [
+            expect.objectContaining({ label: "Workboard lifecycle pilot", status: "passed" }),
+          ],
+          workerProtocol: { state: "completed" },
+        },
+      });
+      expect(completedCard?.events?.map((event) => event.kind)).toContain("heartbeat");
+
+      const tasks = (await activeHarness.gateway.call("tasks.list", {
+        agentId: "qa",
+        limit: 100,
+      })) as TasksListResult;
+      expect(tasks.tasks).toContainEqual(
+        expect.objectContaining({
+          kind: "subagent",
+          runtime: "subagent",
+          runId: started.runId,
+          status: "completed",
+          childSessionKey: started.sessionKey,
+        }),
+      );
+
+      const requests = (await fetch(`${activeHarness.mock!.baseUrl}/debug/requests`).then(
+        (response) => response.json(),
+      )) as Array<{
+        body?: { tools?: unknown; dynamicTools?: unknown };
+        plannedToolName?: string;
+        prompt?: string;
+        toolOutput?: string;
+      }>;
+      const initialRequest = requests.find(
+        (request) =>
+          request.prompt?.includes("QA-WORKBOARD-LIFECYCLE-PILOT") && !request.toolOutput,
+      );
+      const declaredWorkboardTools = [
+        ...collectDeclaredToolNames([
+          initialRequest?.body?.tools,
+          initialRequest?.body?.dynamicTools,
+        ]),
+      ]
+        .filter((name) => name.startsWith("workboard_"))
+        .toSorted();
+      expect(declaredWorkboardTools).toEqual(
+        ["workboard_heartbeat", "workboard_complete", "workboard_block"].toSorted(),
+      );
+      expect(
+        requests
+          .map((request) => request.plannedToolName)
+          .filter((name): name is string => Boolean(name?.startsWith("workboard_"))),
+      ).toEqual(["workboard_heartbeat", "workboard_complete"]);
+
+      const worktree = (await listWorktrees()).worktrees.find(
+        (record) => record.ownerKind === "workboard" && record.ownerId === created.card.id,
+      );
+      const removed = await waitForWorktreeState({
+        id: worktree?.id ?? "",
+        predicate: (record) => record?.runEndCleanup?.outcome === "removed-lossless",
+        timeoutMs: 30_000,
+      });
+      expect(removed?.removedAt).toEqual(expect.any(Number));
+      await expect(fs.access(materializedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const finalCards = (await activeHarness.gateway.call("workboard.cards.list", {
+        boardId,
+      })) as WorkboardListResult;
+      expect(
+        finalCards.cards.find((card) => card.id === created.card.id)?.metadata?.automation
+          ?.workspace,
+      ).toEqual({ kind: "worktree", path: repo, branch: "main" });
+    },
+  );
+
   it(
     "nudges a persisted future automation when a linked worker ends",
     { timeout: 120_000 },

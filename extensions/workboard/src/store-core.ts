@@ -422,6 +422,11 @@ export class WorkboardCoreStore {
     };
   }
 
+  async getBoardMetadata(id: unknown): Promise<WorkboardBoardMetadata | undefined> {
+    const entry = await this.boardStore.lookup(normalizeBoardIdRequired(id));
+    return entry?.version === 1 ? entry.board : undefined;
+  }
+
   async upsertBoard(input: WorkboardBoardInput): Promise<WorkboardBoardMetadata> {
     return await this.enqueueMutation(async () => {
       const id = normalizeBoardIdRequired(input.id);

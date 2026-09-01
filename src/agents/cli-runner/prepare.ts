@@ -1318,6 +1318,7 @@ export async function prepareCliRunContext(
       sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
       runtimeToolAllowlist: runtimeToolsAllowPolicy,
       inheritRuntimeToolAllowlist: true,
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
       inputProvenance: params.inputProvenance,
       scheduledToolPolicy: params.scheduledToolPolicy,
     });

@@ -1020,6 +1020,7 @@ export function runAgentAttempt(params: {
             onExecutionPhase: onRuntimeActivity,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
+            runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
             inputProvenance: params.opts.inputProvenance,
             cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,

@@ -206,6 +206,13 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
 
+When a card has no explicit workspace, its board's current default workspace is
+validated and copied onto the card at first dispatch. An explicit card
+workspace, including `scratch`, always wins. The copied workspace keeps the
+card's recorded authority ceiling and is intersected with the dispatching
+caller's current access before the worker starts. A legacy card without
+recorded workspace authority adopts the current caller's access at that point.
+
 Workspace paths follow the caller's existing filesystem authority. Gateway
 clients with `operator.write` can use configured agent workspaces;
 `operator.admin` clients can use other host checkouts. Sandboxed agent tools use

@@ -16,6 +16,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 
@@ -55,6 +56,8 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  /** Host-minted exact plugin tool grant; never sourced from MCP request fields. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   skillWorkshop?: SkillWorkshopRunOptions;
   /**
    * Attempt-local authority to start or redirect delegated work, stamped into

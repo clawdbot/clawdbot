@@ -105,6 +105,19 @@ describe("resolveMcpLoopbackScopedTools", () => {
     );
   });
 
+  it("forwards the owner-scoped plugin tool grant into loopback tool construction", () => {
+    const runtimePluginToolGrant = {
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+    } as const;
+
+    resolveMcpLoopbackScopedTools(scopeParams({ runtimePluginToolGrant }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimePluginToolGrant }),
+    );
+  });
+
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
 
@@ -219,6 +232,26 @@ describe("McpLoopbackToolCache", () => {
     // Same allowlist reuses the cached row.
     cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not share cache rows across different owner-scoped plugin grants", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(
+      scopeParams({
+        cfg,
+        runtimePluginToolGrant: { pluginId: "workboard", toolNames: ["workboard_complete"] },
+      }),
+    );
+    cache.resolve(
+      scopeParams({
+        cfg,
+        runtimePluginToolGrant: { pluginId: "workboard", toolNames: ["workboard_block"] },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
   it("does not share cache rows across different runtime policy agents", () => {
