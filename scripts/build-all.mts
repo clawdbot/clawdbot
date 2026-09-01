@@ -17,7 +17,6 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -85,7 +84,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   {
     ...tsxStep("tsdown-ai", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"),
     cache: {
-      env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
       inputs: [
         ...TSDOWN_DECLARATION_TOOL_INPUTS,
         "tsdown.ai.config.ts",
@@ -108,7 +106,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       TSDOWN_PACKAGE_CONFIG_GROUP,
     ),
     cache: {
-      env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
       inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, "tsdown.config.ts", TSDOWN_PACKAGES_CACHE_INPUT],
       outputs: declarationCacheOutputs(TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS),
       restore: "always",
@@ -128,12 +125,9 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
     ),
     cache: {
-      env: [...TSDOWN_UNIFIED_CACHE_ENV, "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
+      env: TSDOWN_UNIFIED_CACHE_ENV,
       inputs: TSDOWN_UNIFIED_CACHE_INPUTS,
       outputs: declarationCacheOutputs(["dist"]),
-      // Shared declaration snapshots cannot make a replaced live dist complete.
-      // Rebuild the unified unit when its package artifacts are no longer intact.
-      requiredCacheHitOutputs: listPluginSdkDistArtifacts(),
       restore: "always",
       runOnHit: {
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
@@ -375,7 +369,7 @@ export function resolveBuildAllSteps(
     throw new Error(`Unknown build profile: ${profile}`);
   }
   // A cold runtime-only build has no declarations for the canonical SDK gates.
-  // Keep the full runtime artifact surface, but use the uncached runtime graph.
+  // Its uncached graph cannot seed the declaration-only caches used by full builds.
   const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
   const labels =
     profile === "full" && runtimeOnly
