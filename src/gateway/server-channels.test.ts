@@ -1877,112 +1877,217 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
-  it("transfers an abandoned task's HTTP route to its recovery replacement", async () => {
-    const routeHandlers = ["abandoned", "replacement"].map((body) =>
-      vi.fn((_req: IncomingMessage, res: ServerResponse) => {
-        res.statusCode = 200;
-        res.end(body);
-        return true;
-      }),
-    );
-    let startCount = 0;
-    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
-      const handler = routeHandlers[startCount];
-      const settlesOnAbort = startCount > 0;
-      startCount += 1;
-      if (!handler) {
-        throw new Error("unexpected channel start");
-      }
-      registerPluginHttpRoute({
-        path: "/plugins/discord",
-        auth: "plugin",
-        pluginId: "discord",
-        source: "account-route",
-        handler,
-        throwOnFailure: true,
-      });
-      await new Promise<void>((resolve) => {
-        abortSignal.addEventListener(
-          "abort",
-          () => {
-            if (settlesOnAbort) {
-              resolve();
+  it.each([false, true])(
+    "scopes stop routes to their Gateway and releases them when teardown settles (rejects=%s)",
+    async (rejects) => {
+      const routeRegistry = createEmptyPluginRegistry();
+      const stopStarted = createDeferred();
+      const releaseStop = createDeferred();
+      const failure = new Error("stop failed");
+      let unregister: (() => void) | undefined;
+      const registry = installTestRegistry(
+        createTestPlugin({
+          startAccount: async ({ abortSignal }) =>
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            }),
+          stopAccount: async () => {
+            unregister = registerPluginHttpRoute({
+              path: "/plugins/stopping",
+              auth: "plugin",
+              handler: vi.fn(),
+              throwOnFailure: true,
+            });
+            stopStarted.resolve();
+            await releaseStop.promise;
+            if (rejects) {
+              throw failure;
             }
           },
-          { once: true },
-        );
-      });
-    });
-    const registry = installTestRegistry(
-      createTestPlugin({
-        startAccount,
-      }),
-    );
-    const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
-
-    await manager.startChannels();
-    await waitForMicrotaskCondition(
-      () => startAccount.mock.calls.length === 1,
-      "expected initial channel task to start",
-    );
-    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
-      manual: false,
-    });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await recoveryStopTask;
-
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    let account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(startAccount).toHaveBeenCalledTimes(1);
-    expect(registry.httpRoutes[0]?.handler).toBe(routeHandlers[0]);
-    expect(account?.running).toBe(false);
-    expect(account?.restartPending).toBe(true);
-
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    await waitForMicrotaskCondition(
-      () => startAccount.mock.calls.length === 2,
-      "expected replacement channel task to start",
-    );
-
-    account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.handler).toBe(routeHandlers[1]);
-    expect(account?.running).toBe(true);
-    expect(account?.restartPending).toBe(false);
-    expect(account?.reconnectAttempts).toBe(0);
-    expect(account?.lastError).toBeNull();
-
-    const server = createTestGatewayServer({
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        handlePluginRequest: createGatewayPluginRequestHandler({
-          registry,
-          log: createSubsystemLogger("gateway/server-channels-route-test"),
         }),
-      },
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected Gateway HTTP server to listen on a TCP port");
-    }
-    try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/plugins/discord`);
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("replacement");
-      expect(routeHandlers[0]).not.toHaveBeenCalled();
-      expect(routeHandlers[1]).toHaveBeenCalledOnce();
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+      );
+      const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+      await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+      const stopping = manager
+        .stopChannel("discord", DEFAULT_ACCOUNT_ID)
+        .catch((error: unknown) => error);
+      try {
+        await stopStarted.promise;
+        expect(routeRegistry.httpRoutes.map((route) => route.path)).toEqual(["/plugins/stopping"]);
+        expect(registry.httpRoutes).toHaveLength(0);
+        releaseStop.resolve();
+        expect(await stopping).toBe(rejects ? failure : undefined);
+        expect(routeRegistry.httpRoutes).toHaveLength(0);
+      } finally {
+        releaseStop.resolve();
+        await stopping;
+        unregister?.();
+      }
+    },
+  );
 
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
+  it.each([
+    { abandonedHook: "start", replacementFails: false },
+    { abandonedHook: "stop", replacementFails: false },
+    { abandonedHook: "start", replacementFails: true },
+    { abandonedHook: "stop", replacementFails: true },
+  ])(
+    "preserves HTTP recovery after an abandoned $abandonedHook resumes (replacementFails=$replacementFails)",
+    async ({ abandonedHook, replacementFails }) => {
+      const releaseAbandoned = createDeferred();
+      const abandonedStarted = createDeferred();
+      const lateErrors: unknown[] = [];
+      let abandonedTask: Promise<void> | undefined;
+      let unregisterAbandoned: (() => void) | undefined;
+      let unregisterLate: (() => void) | undefined;
+      const route = {
+        path: "/plugins/discord",
+        auth: "plugin" as const,
+        pluginId: "discord",
+        source: "account-route",
+        throwOnFailure: true,
+      };
+      const routeHandlers = ["abandoned", "replacement", "resumed-abandoned"].map((body) =>
+        vi.fn((_req: IncomingMessage, res: ServerResponse) => {
+          res.statusCode = 200;
+          res.end(body);
+          return true;
+        }),
+      );
+      const runAbandonedCallback = () => {
+        abandonedTask = (async () => {
+          abandonedStarted.resolve();
+          await releaseAbandoned.promise;
+          try {
+            unregisterLate = registerPluginHttpRoute({
+              ...route,
+              registry,
+              replaceExisting: true,
+              handler: routeHandlers[2]!,
+            });
+          } catch (error) {
+            lateErrors.push(error);
+          } finally {
+            unregisterAbandoned?.();
+          }
+        })();
+        return abandonedTask;
+      };
+      let startCount = 0;
+      const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+        const first = startCount++ === 0;
+        const unregister = registerPluginHttpRoute({
+          ...route,
+          handler: routeHandlers[first ? 0 : 1]!,
+        });
+        if (first) {
+          unregisterAbandoned = unregister;
+          if (abandonedHook === "start") {
+            await runAbandonedCallback();
+            return;
+          }
+        }
+        try {
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        } finally {
+          unregister();
+        }
+      });
+      let stopCount = 0;
+      const stopAccount = vi.fn(async () => {
+        if (++stopCount === 1 && abandonedHook === "stop") {
+          await runAbandonedCallback();
+        }
+      });
+      const replacementError = new Error("replacement preflight failed");
+      let preflightCount = 0;
+      const isConfigured = vi.fn(async () => {
+        if (++preflightCount > 1 && replacementFails) {
+          throw replacementError;
+        }
+        return true;
+      });
+      const registry = installTestRegistry(
+        createTestPlugin({ startAccount, stopAccount, isConfigured }),
+      );
+      const manager = createManager({ getPluginHttpRouteRegistry: () => registry });
+      const server = createTestGatewayServer({
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          handlePluginRequest: createGatewayPluginRequestHandler({
+            registry,
+            log: createSubsystemLogger("gateway/server-channels-route-test"),
+          }),
+        },
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected Gateway HTTP server to listen on a TCP port");
+      }
+      const readIngress = async () => {
+        const response = await fetch(`http://127.0.0.1:${address.port}/plugins/discord`);
+        return { status: response.status, body: await response.text() };
+      };
+
+      try {
+        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+        expect(await readIngress()).toEqual({ status: 200, body: "abandoned" });
+        const stopping = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+        await abandonedStarted.promise;
+        await flushMicrotasks();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await stopping;
+
+        if (abandonedHook === "start") {
+          await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+          expect(startAccount).toHaveBeenCalledTimes(1);
+          expect(registry.httpRoutes[0]?.handler).toBe(routeHandlers[0]);
+        }
+        if (replacementFails) {
+          await expect(manager.startChannel("discord", DEFAULT_ACCOUNT_ID)).rejects.toBe(
+            replacementError,
+          );
+        } else {
+          await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+        }
+        const expectedIngress = {
+          status: replacementFails ? 404 : 200,
+          body: replacementFails ? expect.any(String) : "replacement",
+        };
+        expect(await readIngress()).toEqual(expectedIngress);
+
+        releaseAbandoned.resolve();
+        await abandonedTask;
+        await flushMicrotasks();
+        expect(await readIngress()).toEqual(expectedIngress);
+        expect(lateErrors).toHaveLength(1);
+        expect(lateErrors[0]).toMatchObject({
+          message: "plugin runtime HTTP route lease is no longer active",
+        });
+        expect(startAccount).toHaveBeenCalledTimes(replacementFails ? 1 : 2);
+        expect(
+          manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+        ).toMatchObject({
+          running: !replacementFails,
+          lastError: replacementFails ? replacementError.message : null,
+        });
+      } finally {
+        releaseAbandoned.resolve();
+        await abandonedTask;
+        unregisterLate?.();
+        await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+      expect(registry.httpRoutes).toHaveLength(0);
+    },
+  );
 
   it("keeps the second recovery task running when the stale task rejects", async () => {
     const releaseFirstTask = createDeferred();

@@ -312,6 +312,46 @@ describe("registerPluginHttpRoute", () => {
     unregisterFirst();
   });
 
+  it.each(["unregister", "revoke"] as const)(
+    "preserves a static plugin route when a dynamic holder calls %s",
+    (cleanup) => {
+      const pluginRegistry = createPluginRegistry({
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+        runtime: {} as PluginRuntime,
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({ id: "demo", source: "/plugins/demo/index.js" });
+      const handler = vi.fn();
+      pluginRegistry.registry.plugins.push(record);
+      pluginRegistry.createApi(record, { config: {} as OpenClawConfig }).registerHttpRoute({
+        path: "/plugins/shared",
+        auth: "plugin",
+        handler,
+      });
+      const owner = createTrackedRouteLease();
+      const unregister = withPluginHttpRouteRegistry(
+        pluginRegistry.registry,
+        () =>
+          registerPluginHttpRoute({
+            path: "/PLUGINS//SHARED/",
+            auth: "plugin",
+            handler: vi.fn(),
+            pluginId: record.id,
+            source: record.source,
+            reuseExistingSameOwner: true,
+            throwOnFailure: true,
+          }),
+        owner.lease,
+      );
+
+      (cleanup === "unregister" ? unregister : owner.revoke)();
+      expect(pluginRegistry.registry.httpRoutes).toHaveLength(1);
+      expect(pluginRegistry.registry.httpRoutes[0]?.handler).toBe(handler);
+      unregister();
+      owner.revoke();
+    },
+  );
+
   it.each([
     { pluginId: "other", source: "shared-route" },
     { pluginId: "demo", source: "other-route" },

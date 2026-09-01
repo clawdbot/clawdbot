@@ -1227,6 +1227,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           const runtime = ensureChannelRuntime(channelId);
           let outcome: ChannelAccountStopOutcome = { status: "fulfilled" };
           if (plugin?.gateway?.stopAccount) {
+            // The start task can settle before stopAccount. Shutdown routes need
+            // their own lease, bounded by this stop attempt rather than that task.
+            const capabilityLease = createPluginRuntimeCapabilityLease("channel account stop");
             try {
               const account = plugin.config.resolveAccount(cfg, id);
               // A plugin stopAccount that never settles must not wedge every
@@ -1234,37 +1237,41 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               // Bound it like the task teardown below; the timed-out path flows
               // into the existing recoveryStopTimedOut two-call restart contract.
               let stopAttemptAbandoned = false;
-              const stopAccountAttempt = plugin.gateway
-                .stopAccount({
-                  cfg,
-                  accountId: id,
-                  account,
-                  runtime,
-                  abortSignal: abort?.signal ?? new AbortController().signal,
-                  log,
-                  getStatus: () => getRuntime(channelId, id),
-                  setStatus: (next) => {
-                    // A stop we abandoned may settle after a replacement started;
-                    // its late writes must not repaint or tear down that account.
-                    setRuntime(
-                      channelId,
-                      id,
-                      stopAttemptAbandoned
-                        ? sanitizeAbortedTaskStatusPatch(next, getRuntime(channelId, id))
-                        : next,
-                    );
-                  },
-                })
-                .catch((error: unknown) => {
-                  if (stopAttemptAbandoned) {
-                    log.warn?.(
-                      `[${id}] abandoned stopAccount failed late: ${formatErrorMessage(error)}`,
-                    );
-                    return;
-                  }
-                  outcome = { status: "rejected", error };
-                  log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
-                });
+              const runStopAccount = plugin.gateway.stopAccount.bind(plugin.gateway, {
+                cfg,
+                accountId: id,
+                account,
+                runtime,
+                abortSignal: abort?.signal ?? new AbortController().signal,
+                log,
+                getStatus: () => getRuntime(channelId, id),
+                setStatus: (next) => {
+                  // A stop we abandoned may settle after a replacement started;
+                  // its late writes must not repaint or tear down that account.
+                  setRuntime(
+                    channelId,
+                    id,
+                    stopAttemptAbandoned
+                      ? sanitizeAbortedTaskStatusPatch(next, getRuntime(channelId, id))
+                      : next,
+                  );
+                },
+              });
+              const routeRegistry = getPluginHttpRouteRegistry?.();
+              const stopAccountAttempt = (
+                routeRegistry
+                  ? withPluginHttpRouteRegistry(routeRegistry, runStopAccount, capabilityLease)
+                  : runStopAccount()
+              ).catch((error: unknown) => {
+                if (stopAttemptAbandoned) {
+                  log.warn?.(
+                    `[${id}] abandoned stopAccount failed late: ${formatErrorMessage(error)}`,
+                  );
+                  return;
+                }
+                outcome = { status: "rejected", error };
+                log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
+              });
               const stopAccountSettled = await waitForChannelStopGracefully(
                 stopAccountAttempt,
                 CHANNEL_STOP_ABORT_TIMEOUT_MS,
@@ -1278,6 +1285,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             } catch (error) {
               outcome = { status: "rejected", error };
               log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
+            } finally {
+              capabilityLease.revoke();
             }
           }
           const stoppedCleanly = await waitForChannelStopGracefully(

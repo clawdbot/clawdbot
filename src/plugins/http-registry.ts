@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
-// Tracks plugin HTTP registry context for current async execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -15,18 +14,11 @@ type PluginHttpRouteHandler = (
 
 type PluginHttpRouteRegistrationLease = Pick<PluginRuntimeCapabilityLease, "isActive" | "retain">;
 
-type PluginHttpRouteLifetime = {
-  holders: Set<() => void>;
-};
-
 const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
   registry: PluginRegistry;
   leases: readonly PluginHttpRouteRegistrationLease[];
 }>();
-const pluginHttpRouteLifetimes = new WeakMap<
-  PluginHttpRouteRegistration,
-  PluginHttpRouteLifetime
->();
+const pluginHttpRouteHolders = new WeakMap<PluginHttpRouteRegistration, Set<() => void>>();
 const noopUnregister = () => {};
 
 // Same-owner reuse creates independent holders so one task cannot evict a route
@@ -36,20 +28,21 @@ function retainPluginHttpRoute(params: {
   routes: PluginHttpRouteRegistration[];
   leases: readonly PluginHttpRouteRegistrationLease[];
 }): () => void {
-  const lifetime = pluginHttpRouteLifetimes.get(params.entry) ?? { holders: new Set() };
-  pluginHttpRouteLifetimes.set(params.entry, lifetime);
+  const holders = pluginHttpRouteHolders.get(params.entry);
+  // Static API routes belong to the registry; borrowing one cannot give a
+  // dynamic caller authority to remove it on unregister or lease expiry.
+  if (!holders) {
+    return noopUnregister;
+  }
   const leaseReleases: Array<() => void> = [];
-  let active = true;
   const release = () => {
-    if (!active) {
+    if (!holders.delete(release)) {
       return;
     }
-    active = false;
-    lifetime.holders.delete(release);
     for (const releaseLease of leaseReleases.splice(0)) {
       releaseLease();
     }
-    if (lifetime.holders.size > 0) {
+    if (holders.size > 0) {
       return;
     }
     const index = params.routes.indexOf(params.entry);
@@ -57,7 +50,7 @@ function retainPluginHttpRoute(params: {
       params.routes.splice(index, 1);
     }
   };
-  lifetime.holders.add(release);
+  holders.add(release);
   for (const lease of params.leases) {
     leaseReleases.push(lease.retain(release));
   }
@@ -104,7 +97,7 @@ export function registerPluginHttpRoute(params: {
     }
     return noopUnregister;
   };
-  // AsyncLocalStorage survives timed-out service callbacks; expired continuations must not
+  // AsyncLocalStorage survives timed-out lifecycle callbacks; expired continuations must not
   // regain route authority, even when they retained an explicit registry reference.
   if (scope?.leases.some((lease) => !lease.isActive())) {
     return rejectRegistration("plugin runtime HTTP route lease is no longer active");
@@ -206,6 +199,7 @@ export function registerPluginHttpRoute(params: {
     pluginId: params.pluginId,
     source: params.source,
   };
+  pluginHttpRouteHolders.set(entry, new Set());
   routes.push(entry);
   return retainPluginHttpRoute({
     entry,
