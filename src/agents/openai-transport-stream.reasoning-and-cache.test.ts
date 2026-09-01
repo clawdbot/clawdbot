@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesParams,
@@ -26,6 +27,107 @@ function lookupWeatherContext(
 }
 
 describe("openai transport stream", () => {
+  it("uses the OpenClaw stable boundary for GPT-5.6 explicit prompt caching", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+      }),
+      {
+        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+    ) as Record<string, unknown>;
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.prompt_cache_options).toEqual({ mode: "explicit" });
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+    expect(params.input).toEqual([
+      {
+        type: "message",
+        role: "developer",
+        content: [
+          {
+            type: "input_text",
+            text: "Stable instructions",
+            prompt_cache_breakpoint: { mode: "explicit" },
+          },
+          { type: "input_text", text: "Dynamic turn context" },
+        ],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
+  });
+
+  it("lets a verified GPT-5.6 Responses-compatible endpoint opt into explicit caching", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "openai.gpt-5.6-terra",
+        name: "openai.gpt-5.6-terra",
+        api: "openclaw-openai-responses-transport" as never,
+        provider: "amazon-bedrock-mantle",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+        compat: {
+          supportsExplicitPromptCaching: true,
+          supportsPromptCacheKey: true,
+          supportsLongCacheRetention: false,
+        } as never,
+      }),
+      {
+        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        messages: [],
+        tools: [],
+      } as never,
+      { cacheRetention: "long", sessionId: "session-123" } as never,
+    ) as Record<string, unknown>;
+
+    expect(params.prompt_cache_options).toEqual({ mode: "explicit" });
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+    expect(JSON.stringify(params.input)).toContain("prompt_cache_breakpoint");
+  });
+
+  it("uses explicit mode without a breakpoint when GPT-5.6 caching is disabled", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({ id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }),
+      {
+        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        messages: [],
+        tools: [],
+      } as never,
+      { cacheRetention: "none", sessionId: "session-123" } as never,
+    ) as Record<string, unknown>;
+
+    expect(params.prompt_cache_options).toEqual({ mode: "explicit" });
+    expect(params).not.toHaveProperty("prompt_cache_key");
+    expect(JSON.stringify(params.input)).not.toContain("prompt_cache_breakpoint");
+  });
+
+  it("keeps an unverified GPT-5.6-compatible endpoint on implicit caching", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "custom-provider",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+      {
+        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+    ) as Record<string, unknown>;
+
+    expect(params).not.toHaveProperty("prompt_cache_options");
+    expect(JSON.stringify(params.input)).not.toContain("prompt_cache_breakpoint");
+  });
+
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({

@@ -3,6 +3,21 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import bedrockMantlePlugin from "./index.js";
 
+function createGpt56ResponsesModel() {
+  return {
+    id: "openai.gpt-5.6-luna",
+    name: "openai.gpt-5.6-luna",
+    api: "openai-responses",
+    provider: "amazon-bedrock-mantle",
+    baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0.22, output: 1.32, cacheRead: 0.022, cacheWrite: 0.275 },
+    contextWindow: 272_000,
+    maxTokens: 65_536,
+  };
+}
+
 describe("amazon-bedrock-mantle provider plugin", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -126,6 +141,24 @@ describe("amazon-bedrock-mantle provider plugin", () => {
         },
       } as never),
     ).toBeUndefined();
+  });
+
+  it("declares shared GPT-5.6 Responses cache capabilities", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const model = createGpt56ResponsesModel();
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "amazon-bedrock-mantle",
+      modelId: model.id,
+      model,
+    } as never);
+
+    expect(normalized?.compat).toMatchObject({
+      supportsExplicitPromptCaching: true,
+      supportsLongCacheRetention: false,
+      supportsPromptCacheKey: true,
+    });
+    expect(provider.wrapStreamFn).toBeUndefined();
+    expect(provider.wrapSimpleCompletionStreamFn).toBeUndefined();
   });
 
   it("restores missing or stale Opus 5 pricing during runtime normalization", async () => {

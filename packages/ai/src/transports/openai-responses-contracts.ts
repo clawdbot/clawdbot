@@ -193,6 +193,7 @@ export type OpenAIResponsesRequestParams = {
   stream: true;
   instructions?: string;
   prompt_cache_key?: string;
+  prompt_cache_options?: { mode: "explicit"; ttl?: "30m" };
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
   previous_response_id?: string;

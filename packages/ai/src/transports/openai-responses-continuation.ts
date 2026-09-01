@@ -1,6 +1,11 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
+import type {
+  ResponseInput,
+  ResponseInputItem,
+  ResponseInputText,
+  ResponseOutputItem,
+} from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { sha256Hex } from "./transport-utils.js";
@@ -84,6 +89,67 @@ function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
   });
 }
 
+type ExplicitCacheContinuationInput = {
+  input: ResponseInput;
+  dynamicInput: ResponseInput;
+  hasExplicitBoundary: boolean;
+};
+
+function isInstructionInputMessage(item: ResponseInputItem): item is ResponseInputItem.Message {
+  return (
+    item.type === "message" &&
+    "role" in item &&
+    (item.role === "developer" || item.role === "system") &&
+    "content" in item &&
+    Array.isArray(item.content)
+  );
+}
+
+function isResponseInputText(
+  part: ResponseInputItem.Message["content"][number],
+): part is ResponseInputText {
+  return part.type === "input_text";
+}
+
+// Full-history requests keep the volatile suffix after the explicit breakpoint for cache hits.
+// Continuation compares only the stable message and appends the current suffix after the stored
+// response, so changing runtime facts neither invalidate previous_response_id nor move before the
+// cached prefix.
+function splitExplicitCacheContinuationInput(input: ResponseInput): ExplicitCacheContinuationInput {
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (!item || !isInstructionInputMessage(item)) {
+      continue;
+    }
+    const boundaryIndex = item.content.findIndex(
+      (part) => part.type === "input_text" && part.prompt_cache_breakpoint?.mode === "explicit",
+    );
+    if (boundaryIndex < 0) {
+      continue;
+    }
+    const dynamicParts = item.content.slice(boundaryIndex + 1);
+    if (!dynamicParts.every(isResponseInputText)) {
+      return { input, dynamicInput: [], hasExplicitBoundary: false };
+    }
+    const stableMessage: ResponseInputItem.Message = {
+      ...item,
+      content: item.content.slice(0, boundaryIndex + 1),
+    };
+    const stableInput: ResponseInput = input.slice();
+    stableInput[index] = stableMessage;
+    const dynamicMessage: ResponseInputItem.Message = {
+      ...item,
+      content: dynamicParts,
+    };
+    return {
+      input: stableInput,
+      dynamicInput: dynamicParts.length > 0 ? [dynamicMessage] : [],
+      hasExplicitBoundary: true,
+    };
+  }
+  return { input, dynamicInput: [], hasExplicitBoundary: false };
+}
+
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
@@ -99,19 +165,37 @@ export function resolveResponsesContinuationRequest(
   ) {
     return { request, continuationStatus: "request_changed" };
   }
-  const currentInput = request.input ?? [];
-  const previousInput = continuation.lastRequest.input ?? [];
-  const baselineLength = previousInput.length + continuation.lastResponseItems.length;
-  if (currentInput.length < baselineLength) {
+  const canExtractExplicitCacheDynamicInput =
+    request.instructions === undefined && continuation.lastRequest.instructions === undefined;
+  const currentInput = canExtractExplicitCacheDynamicInput
+    ? splitExplicitCacheContinuationInput(request.input ?? [])
+    : { input: request.input ?? [], dynamicInput: [], hasExplicitBoundary: false };
+  const previousInput = canExtractExplicitCacheDynamicInput
+    ? splitExplicitCacheContinuationInput(continuation.lastRequest.input ?? [])
+    : {
+        input: continuation.lastRequest.input ?? [],
+        dynamicInput: [],
+        hasExplicitBoundary: false,
+      };
+  if (currentInput.hasExplicitBoundary !== previousInput.hasExplicitBoundary) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  if (previousInput.dynamicInput.length > 0 && currentInput.dynamicInput.length === 0) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  const baselineLength = previousInput.input.length + continuation.lastResponseItems.length;
+  if (currentInput.input.length < baselineLength) {
     return { request, continuationStatus: "history_shorter" };
   }
   if (
     !jsonValuesEqual(
-      normalizeAssistantReplayInput(currentInput.slice(0, previousInput.length)),
-      normalizeAssistantReplayInput(previousInput),
+      normalizeAssistantReplayInput(currentInput.input.slice(0, previousInput.input.length)),
+      normalizeAssistantReplayInput(previousInput.input),
     ) ||
     !jsonValuesEqual(
-      normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
+      normalizeAssistantReplayInput(
+        currentInput.input.slice(previousInput.input.length, baselineLength),
+      ),
       normalizeAssistantReplayInput(continuation.lastResponseItems),
     )
   ) {
@@ -121,7 +205,7 @@ export function resolveResponsesContinuationRequest(
     request: {
       ...request,
       previous_response_id: continuation.lastResponseId,
-      input: currentInput.slice(baselineLength),
+      input: [...currentInput.dynamicInput, ...currentInput.input.slice(baselineLength)],
     },
     continuationStatus: "continued",
   };

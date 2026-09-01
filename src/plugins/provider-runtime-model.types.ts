@@ -8,7 +8,10 @@ import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.m
  * discovery, overrides, and compat normalization.
  */
 export type ProviderRuntimeModel = Omit<Model, "compat"> & {
-  compat?: ModelCompatConfig;
+  compat?: ModelCompatConfig & {
+    /** Provider-owned declaration for GPT-5.6 Responses explicit prompt caching. */
+    supportsExplicitPromptCaching?: boolean;
+  };
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;

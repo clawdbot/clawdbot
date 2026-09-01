@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const openAiMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -25,7 +26,7 @@ vi.mock("openai", () => ({
 }));
 
 import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
-import { streamOpenAIResponses } from "./openai-responses.js";
+import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -136,5 +137,53 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
+  });
+
+  it("applies explicit GPT-5.6 caching to simple Responses completions", async () => {
+    await streamSimpleOpenAIResponses(
+      model({
+        id: "openai.gpt-5.6-luna",
+        name: "openai.gpt-5.6-luna",
+        provider: "amazon-bedrock-mantle",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+        compat: {
+          supportsExplicitPromptCaching: true,
+          supportsPromptCacheKey: true,
+          supportsLongCacheRetention: false,
+        } as never,
+      }),
+      {
+        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sentinel-key",
+        cacheRetention: "long",
+        sessionId: "session-123",
+      },
+    ).result();
+
+    const payload = openAiMockState.params[0] as Record<string, unknown>;
+    expect(payload.prompt_cache_options).toEqual({ mode: "explicit" });
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "developer",
+        content: [
+          {
+            type: "input_text",
+            text: "Stable instructions",
+            prompt_cache_breakpoint: { mode: "explicit" },
+          },
+          { type: "input_text", text: "Dynamic turn context" },
+        ],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
   });
 });

@@ -21,6 +21,7 @@ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js"
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import { resolveOpenAIResponsesPromptCachePlan } from "./openai-responses-prompt-cache.js";
 import {
   applyCommonResponsesParams,
   applyResponsesServiceTierPricing,
@@ -181,24 +182,31 @@ function buildParams(
   options?: OpenAIResponsesOptions,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const promptCachePlan = resolveOpenAIResponsesPromptCachePlan(model, cacheRetention);
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
     replayMode,
+    promptCacheBreakpoint: promptCachePlan?.useBreakpoint,
   });
 
-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
+  const promptCacheKey =
+    cacheRetention === "none"
+      ? undefined
+      : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+  const promptCacheRetention = promptCachePlan
+    ? undefined
+    : getPromptCacheRetention(compat, cacheRetention);
   const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
-    prompt_cache_key:
-      cacheRetention === "none"
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
+    ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
+    ...(promptCachePlan ? { prompt_cache_options: promptCachePlan.options } : {}),
+    ...(promptCacheRetention ? { prompt_cache_retention: promptCacheRetention } : {}),
     store: false,
   };
 

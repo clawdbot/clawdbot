@@ -13,7 +13,10 @@ import {
   isImageWithMediaPayload,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../utils/system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./host-policy.js";
 import {
   buildOpenAIResponsesReplayContext,
@@ -214,12 +217,54 @@ export function createOpenAIResponsesAssistantOutput(
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
+  promptCacheBreakpoint?: boolean;
   replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
 };
+
+function buildResponsesSystemPromptContent(
+  systemPrompt: string,
+  promptCacheBreakpoint: boolean,
+): ResponseInputMessageContentList {
+  if (!promptCacheBreakpoint) {
+    return [
+      {
+        type: "input_text",
+        text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(systemPrompt)),
+      },
+    ];
+  }
+
+  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  if (!split) {
+    return [
+      {
+        type: "input_text",
+        text: sanitizeTransportPayloadText(systemPrompt),
+        prompt_cache_breakpoint: { mode: "explicit" },
+      },
+    ];
+  }
+
+  const content: ResponseInputMessageContentList = [];
+  if (split.stablePrefix) {
+    content.push({
+      type: "input_text",
+      text: sanitizeTransportPayloadText(split.stablePrefix),
+      prompt_cache_breakpoint: { mode: "explicit" },
+    });
+  }
+  if (split.dynamicSuffix) {
+    content.push({
+      type: "input_text",
+      text: sanitizeTransportPayloadText(split.dynamicSuffix),
+    });
+  }
+  return content.length > 0 ? content : [{ type: "input_text", text: "" }];
+}
 
 function convertResponsesMessagesWithStyle(
   model: Model,
@@ -305,14 +350,10 @@ function convertResponsesMessagesWithStyle(
             ?.supportsDeveloperRole !== false
           ? "developer"
           : "system",
-        [
-          {
-            type: "input_text",
-            text: sanitizeTransportPayloadText(
-              stripSystemPromptCacheBoundary(context.systemPrompt),
-            ),
-          },
-        ],
+        buildResponsesSystemPromptContent(
+          context.systemPrompt,
+          options?.promptCacheBreakpoint === true,
+        ),
       ),
     );
   }
@@ -533,6 +574,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
   allowedToolCallProviders: ReadonlySet<string>,
   options?: {
     includeSystemPrompt?: boolean;
+    promptCacheBreakpoint?: boolean;
     replayResponsesItemIds?: boolean;
     sessionId?: string;
     authProfileId?: string;

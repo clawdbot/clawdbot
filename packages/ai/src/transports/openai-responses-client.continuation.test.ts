@@ -50,6 +50,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
@@ -179,6 +180,7 @@ describe("native OpenAI Responses SSE continuation", () => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
+      sdkCompletion("resp_3", "third answer"),
     );
     const firstUser = userMessage("first question", 1);
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
@@ -200,6 +202,93 @@ describe("native OpenAI Responses SSE continuation", () => {
           type: "message",
           role: "user",
           content: [{ type: "input_text", text: "second question" }],
+        },
+      ],
+    });
+  });
+
+  it("continues explicit-cache turns while refreshing the dynamic prompt suffix", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      {
+        systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Active tasks: none`,
+        messages: [firstUser],
+        tools: [],
+      },
+      { onPayload },
+    );
+    const secondUser = userMessage("second question", 2);
+    const second = await run(
+      {
+        systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Active tasks: one`,
+        messages: [firstUser, first, secondUser],
+        tools: [],
+      },
+      { onPayload },
+    );
+    await run(
+      {
+        systemPrompt: `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Active tasks: two`,
+        messages: [firstUser, first, secondUser, second, userMessage("third question", 3)],
+        tools: [],
+      },
+      { onPayload },
+    );
+
+    expect(sseState.requests[0]).toMatchObject({
+      prompt_cache_options: { mode: "explicit" },
+      input: [
+        {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: "Stable policy",
+              prompt_cache_breakpoint: { mode: "explicit" },
+            },
+            { type: "input_text", text: "Active tasks: none" },
+          ],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "first question" }],
+        },
+      ],
+    });
+    expect(sseState.requests[1]).toMatchObject({
+      previous_response_id: "resp_1",
+      input: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Active tasks: one" }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "second question" }],
+        },
+      ],
+    });
+    expect(sseState.requests[2]).toMatchObject({
+      previous_response_id: "resp_2",
+      input: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Active tasks: two" }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "third question" }],
         },
       ],
     });

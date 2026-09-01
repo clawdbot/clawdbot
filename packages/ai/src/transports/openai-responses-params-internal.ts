@@ -11,6 +11,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import { resolveOpenAIResponsesPromptCachePlan } from "../providers/openai-responses-prompt-cache.js";
 import {
   projectOpenAITools,
   reconcileOpenAIResponsesToolChoice,
@@ -274,6 +275,7 @@ function convertOpenAIResponsesMessagesForRequest(
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   replayMode: OpenAIResponsesReplayMode,
+  promptCacheBreakpoint: boolean,
 ): ResponseInput {
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
@@ -284,7 +286,8 @@ function convertOpenAIResponsesMessagesForRequest(
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
+    includeSystemPrompt: promptCacheBreakpoint || !payloadPolicy.usesInstructionsField,
+    promptCacheBreakpoint,
     replayReasoningItems: true,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
@@ -303,21 +306,30 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
-  const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
-  ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
-  const instructions = resolveOpenAIResponsesInstructions(
+  const promptCachePlan = resolveOpenAIResponsesPromptCachePlan(model, cacheRetention);
+  const messages = convertOpenAIResponsesMessagesForRequest(
     model,
     context,
-    payloadPolicy.usesInstructionsField,
+    options,
+    replayMode,
+    promptCachePlan?.useBreakpoint === true,
   );
+  ensureOpenAIResponsesNonEmptyInput(messages, context);
+  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
+  const instructions = promptCachePlan?.useBreakpoint
+    ? undefined
+    : resolveOpenAIResponsesInstructions(model, context, payloadPolicy.usesInstructionsField);
+  const promptCacheRetention = promptCachePlan
+    ? undefined
+    : getPromptCacheRetention(model.baseUrl, cacheRetention);
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
-    prompt_cache_key: promptCacheKey,
-    prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+    ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
+    ...(promptCachePlan ? { prompt_cache_options: promptCachePlan.options } : {}),
+    ...(promptCacheRetention ? { prompt_cache_retention: promptCacheRetention } : {}),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };

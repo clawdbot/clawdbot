@@ -61,6 +61,7 @@ interface OpenAIResponsesStreamOptions {
 
 interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
+  promptCacheBreakpoint?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
