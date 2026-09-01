@@ -19,6 +19,7 @@ import type {
   SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -297,7 +298,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         }
       }
       if (editError !== undefined) {
-        throw editError instanceof Error ? editError : new Error(String(editError));
+        throw editError instanceof Error ? editError : new Error(formatErrorMessage(editError));
       }
     },
   },
