@@ -10034,8 +10034,7 @@ extension NodeAppModel {
     private func handleAgentDeepLink(_ link: AgentDeepLink, originalURL: URL) async {
         let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        self.deepLinkLogger.info(
-            "agent deep link messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)")
+        self.deepLinkLogger.info("agent deep link messageChars=\(message.count, privacy: .public)")
 
         if message.count > IOSDeepLinkAgentPolicy.maxMessageChars {
             self.recordShareEvent("Rejected: message too large (\(message.count) chars).")

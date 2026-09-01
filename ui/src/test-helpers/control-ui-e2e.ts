@@ -276,6 +276,14 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reset",
   "sessions.rewind",
   "sessions.search",
+  "users.github.status",
+  "users.github.authorize.start",
+  "users.github.authorize.poll",
+  "users.github.authorize.cancel",
+  "users.github.disconnect",
+  "sessions.github.options",
+  "sessions.github.status",
+  "sessions.github.confirm",
   "tools.github.status",
   "tools.github.configure",
   "tools.github.authorize.start",
@@ -1852,6 +1860,74 @@ function installControlUiMockGateway(
           type: "hello-ok",
         };
       }
+      case "sessions.github.options":
+        return {
+          personal: scenario.presenceUsers.some((user) => user.self)
+            ? {
+                state: "disconnected",
+                generation: null,
+                account: null,
+                accessExpiresAtMs: null,
+                refreshState: "not_applicable",
+                pending: null,
+              }
+            : null,
+          shared: { source: "system-configured", accountId: 1, login: "system-bot" },
+          pendingPersonal: null,
+        };
+      case "users.github.status":
+      case "tools.github.status": {
+        const system = {
+          source: "system-detected",
+          credentialKind: "native",
+          credentialState: "unavailable",
+          account: null,
+          gitAuthor: { name: null, email: null },
+          evidence: "none",
+          accessExpiresAtMs: null,
+          refreshState: "not_applicable",
+          oauthScopes: [],
+          repositoryGrants: "unknown",
+        };
+        if (method === "users.github.status") {
+          return scenario.presenceUsers.some((user) => user.self)
+            ? {
+                personal: {
+                  state: "disconnected",
+                  generation: null,
+                  account: null,
+                  accessExpiresAtMs: null,
+                  refreshState: "not_applicable",
+                  pending: null,
+                },
+                system,
+              }
+            : {
+                __mockError: {
+                  code: "FORBIDDEN",
+                  message:
+                    "My GitHub requires a verified durable user profile; sign in and try again.",
+                },
+              };
+        }
+        const selectedScope =
+          isRecord(params) && params.selectedScope === "agent" ? "agent" : "system";
+        return {
+          agentId: isRecord(params) ? params.agentId : scenario.defaultAgentId,
+          selectedScope,
+          selected: {
+            scope: selectedScope,
+            configured: false,
+            identity: selectedScope === "system" ? system : null,
+          },
+          effective: system,
+        };
+      }
+      case "users.github.authorize.cancel":
+      case "tools.github.authorize.cancel":
+        return { cancelled: true };
+      case "users.github.disconnect":
+        return { disconnected: true };
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,

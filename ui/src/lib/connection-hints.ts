@@ -4,6 +4,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { formatUiError } from "./format-error.ts";
 
 const AUTH_REQUIRED_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_REQUIRED,
@@ -117,4 +118,19 @@ export function shouldShowInsecureContextHint(
   }
   const lower = normalizeLowercaseStringOrEmpty(lastError);
   return lower.includes("secure context") || lower.includes("device identity required");
+}
+
+// Shared with offline presentation so no disconnected surface prints credentials.
+export function redactLoginFailureError(value: string): string {
+  const redacted = value
+    .replace(
+      /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
+      "$1[redacted-credential]",
+    )
+    .replace(/\bBearer\s+([A-Za-z0-9._~+/-]+=*)/gi, "Bearer [redacted]")
+    .replace(
+      /(["']?(?:access|accessToken|deviceToken|password|refresh|refreshToken|token)["']?\s*[:=]\s*)["']?[^"',\s}]+/gi,
+      "$1[redacted]",
+    );
+  return formatUiError(redacted);
 }

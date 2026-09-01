@@ -107,6 +107,20 @@ original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
 
+## Personal GitHub connections and publication
+
+Personal GitHub connection state uses the existing `secret_store_entries` identity scope, with the canonical authenticated profile as `scope_id` and the fixed private name `github-connection`. It is not a generic identity-secret API or a profile preference. One bounded record owns selection, pending device authorization, and refresh recovery. Personal managed CLI credentials use a separate `credentials/github/personal/<opaque-profile-id>` directory, outside older system/agent cleanup roots.
+
+Personal publication uses the lazy, same-version `github_personal_publication_requests` table. It records the requesting profile, selected connection generation and account, immutable target/workspace snapshot, idempotency, and outcome; it contains no tokens. Reading status does not create the table. Existing system and agent requests remain in their original table and retain their existing lifecycle.
+
+Older builds ignore both the personal request table and identity-scoped credential rows instead of executing a personal request as System. Re-upgrade still enforces original authorization expiry. Unfinished personal publication requires fresh confirmation by the same authenticated owner after a Gateway restart; remote-result reconciliation reuses the original request markers.
+
+Disconnect removes usable local credentials and retains a secret-free disconnected selection to fence stale work. Profile merges preserve target state, including an explicit disconnection; a source connection transfers only when the target has no state, with new selection authority. Credentials stranded by a profile merge performed on an older build require reconnect, not runtime adoption through aliases.
+
+Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. Permanent session deletion fences execution and removes its personal receipts. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
+
+See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
+
 ## Review checkpoint for material changes
 
 Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.

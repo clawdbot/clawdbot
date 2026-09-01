@@ -605,14 +605,20 @@ export class ToolSearchRuntime {
         return await params.acceptResultBeforeProjection(result);
       });
     let preExecutionBlocked = false;
+    // Reuse only this call's accepted snapshot; outer schema validation must still run.
+    let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
-      const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      const snapshot =
+        candidate === acceptedSnapshot
+          ? candidate
+          : snapshotToolSearchTargetTranscriptResult(candidate);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
+      acceptedSnapshot = snapshot;
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
