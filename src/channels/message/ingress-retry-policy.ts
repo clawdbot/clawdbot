@@ -7,7 +7,7 @@ import {
   collectNestedErrorCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
-import { SESSION_WORK_START_INVALIDATED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
+import { SESSION_WORK_START_CHANGED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
@@ -49,7 +49,7 @@ type IngressFailureDisposition =
 
 function isSessionStartConflictFailure(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(
-    (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+    (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_CHANGED_ERROR_CODE,
   );
 }
 

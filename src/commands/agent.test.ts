@@ -25,7 +25,6 @@ import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { isSessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -1566,7 +1565,7 @@ describe("agentCommand", () => {
           },
           runtime,
         ),
-      ).rejects.toSatisfy(isSessionWorkStartInvalidatedError);
+      ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });

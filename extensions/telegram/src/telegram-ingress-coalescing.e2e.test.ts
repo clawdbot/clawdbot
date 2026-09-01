@@ -491,7 +491,7 @@ describe("Telegram durable ingress coalescing", () => {
     const poisonId = telegramQueueEventId(poison.update_id);
     const sessionError = Object.assign(
       new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
-      { code: "SESSION_WORK_START_INVALIDATED" },
+      { code: "SESSION_WORK_START_CHANGED" },
     );
     downstreamTurns.mockImplementation(async (turn) => {
       if ((turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {

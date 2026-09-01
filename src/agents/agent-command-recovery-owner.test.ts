@@ -2,7 +2,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { isSessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
@@ -511,7 +510,7 @@ describe("agent command restart recovery ownership", () => {
         },
         run,
       }),
-    ).rejects.toSatisfy(isSessionWorkStartInvalidatedError);
+    ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     expect(run).not.toHaveBeenCalled();
   });
 

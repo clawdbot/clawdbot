@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
@@ -994,7 +993,7 @@ describe("plugin runtime session work admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(work).rejects.toSatisfy(isSessionWorkStartInvalidatedError);
+    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("admits fresh work and protects session creation inside the callback", async () => {

@@ -168,7 +168,7 @@ describe("ingress retry policy", () => {
     const maxAttempts = 3;
     const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
     const conflict = Object.assign(new Error(message), {
-      code: "SESSION_WORK_START_INVALIDATED",
+      code: "SESSION_WORK_START_CHANGED",
     });
     const wrapped = Object.assign(new Error("BotError in middleware"), {
       error: new Error("telegram spooled update processing failed", { cause: conflict }),
@@ -190,6 +190,15 @@ describe("ingress retry policy", () => {
     expect(
       resolveIngressFailureDisposition({
         err: new Error(message),
+        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts },
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "release", attempt: maxAttempts });
+    expect(
+      resolveIngressFailureDisposition({
+        err: Object.assign(new Error(message), { code: "SESSION_WORK_START_INVALIDATED" }),
         event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
         formatError: coerceErrorMessage,
         config: { maxAttempts },

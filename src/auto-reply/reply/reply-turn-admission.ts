@@ -9,7 +9,7 @@ import {
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import {
   isRestartRecoveryTombstone,
-  SessionWorkStartInvalidatedError,
+  SessionWorkStartChangedError,
   resolveSessionWorkStartError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
@@ -106,7 +106,7 @@ function rejectLifecycleInvalidatedWork(params: {
     throw new SessionRestartRecoveryTombstoneError(params.message);
   }
   if (params.kind === "visible" && params.transientSessionChange === true) {
-    throw new SessionWorkStartInvalidatedError(params.message);
+    throw new SessionWorkStartChangedError(params.message);
   }
   throw new Error(params.message);
 }
