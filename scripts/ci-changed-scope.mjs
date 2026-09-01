@@ -64,6 +64,7 @@ const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 // Native bundling reads the root aliases and this shared coercion dependency.
 const MERMAID_ASSET_INPUT_RE =
   /^(?:packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)|tsconfig\.json$)/;
+const ANDROID_TALK_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\.json$/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
@@ -237,7 +238,9 @@ export function detectChangedScope(changedPaths) {
 
     if (
       !NATIVE_PROTOCOL_GEN_RE.test(path) &&
-      (ANDROID_NATIVE_RE.test(path) || MERMAID_ASSET_INPUT_RE.test(path))
+      (ANDROID_NATIVE_RE.test(path) ||
+        ANDROID_TALK_CONTRACT_FIXTURE_RE.test(path) ||
+        MERMAID_ASSET_INPUT_RE.test(path))
     ) {
       runAndroid = true;
     }
