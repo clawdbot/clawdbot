@@ -2608,16 +2608,14 @@ describe("activateSetupInference", () => {
       expect.objectContaining({ provider: "claude-cli", model: "claude-opus-5" }),
     );
     const persisted = configHarness.current();
+    expect(persisted.agents?.defaults?.models).toEqual(initialConfig.agents.defaults.models);
     expect(persisted.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
-    expect(Object.keys(persisted.agents?.defaults?.models ?? {})).toEqual([
-      "anthropic/claude-fable-5",
-      "anthropic/claude-opus-5",
-    ]);
-    expect(persisted.agents?.defaults?.models?.["anthropic/claude-opus-5"]).toEqual({
-      alias: "Claude Code · Opus 5",
-      agentRuntime: { id: "claude-cli" },
+    expect(persisted.agents?.entries?.main).toMatchObject({
+      default: true,
+      models: {
+        "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+      },
     });
-    expect(persisted.agents?.defaults?.models?.["claude-cli/claude-opus-5"]).toBeUndefined();
   });
 
   it.each([

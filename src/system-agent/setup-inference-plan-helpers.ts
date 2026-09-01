@@ -54,13 +54,6 @@ export type SetupInferenceTestPlan = {
   };
 };
 
-/** Config identity written after a successful probe; execution may use a CLI alias. */
-export function resolveSetupPersistedModelRef(
-  plan: Pick<SetupInferenceTestPlan, "modelRef" | "persistModelRef">,
-): string {
-  return plan.persistModelRef ?? plan.modelRef;
-}
-
 export function configureCodexCliPreparedAuth(
   cfg: OpenClawConfig,
   homeScope: "agent" | "user",

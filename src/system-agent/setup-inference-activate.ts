@@ -57,7 +57,6 @@ import {
   configureCodexCliPreparedAuth,
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
-  resolveSetupPersistedModelRef,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
@@ -376,7 +375,7 @@ async function activateSetupInferenceUnredacted(
       stagedRoute.runner !== testPlan.runner ||
       stagedRoute.provider !== testPlan.provider ||
       stagedRoute.model !== testPlan.model ||
-      stagedRoute.modelLabel !== resolveSetupPersistedModelRef(plan) ||
+      stagedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
       (plan.authProfileId && stagedRoute.authProfileId !== plan.authProfileId)
     ) {
       return {

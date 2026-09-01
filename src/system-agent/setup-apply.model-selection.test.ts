@@ -80,40 +80,4 @@ describe("applySystemAgentModelSelection", () => {
     expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
     expect(result.agents?.defaults?.models).toBeUndefined();
   });
-
-  it("pins Claude CLI runtime on the canonical Anthropic key without a legacy alias", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-fable-5": {},
-            "anthropic/claude-opus-5": {
-              alias: "Claude Code · Opus 5",
-              agentRuntime: { id: "claude-cli" },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await applySystemAgentModelSelection({
-      config,
-      model: "anthropic/claude-opus-5",
-      agentRuntimeId: "claude-cli",
-    });
-
-    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
-      "anthropic/claude-fable-5",
-      "anthropic/claude-opus-5",
-    ]);
-    expect(result.agents?.defaults?.models?.["claude-cli/claude-opus-5"]).toBeUndefined();
-    expect(result.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
-    expect(result.agents?.defaults?.models?.["anthropic/claude-opus-5"]).toEqual({
-      alias: "Claude Code · Opus 5",
-      agentRuntime: { id: "claude-cli" },
-    });
-    expect(result.agents?.entries?.main?.models?.["anthropic/claude-opus-5"]).toEqual({
-      agentRuntime: { id: "claude-cli" },
-    });
-  });
 });
