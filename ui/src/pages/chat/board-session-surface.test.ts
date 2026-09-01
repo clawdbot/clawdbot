@@ -31,7 +31,7 @@ describe("board session shell", () => {
   it("delegates the optional Workboard chip to its lazy element", () => {
     const linked = createContainer();
     const unlinked = createContainer();
-    const provider = boardProviderForSession("agent:main:workboard-link");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:workboard-link" });
     const client = {
       request: vi.fn(async () => ({ cards: [] })),
       addEventListener: vi.fn(() => () => {}),
@@ -217,7 +217,7 @@ describe("board session shell", () => {
 
   it.each(["left", "right", "bottom"] as const)("lays out the %s dock", (dock) => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     render(
       renderBoardSessionSurface({
         active: true,
@@ -247,7 +247,7 @@ describe("board session shell", () => {
 
   it("renders the hidden dock as board-only", () => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     render(
       renderBoardSessionSurface({
         active: true,
@@ -276,7 +276,7 @@ describe("board session shell", () => {
 
   it("preserves the board while the bottom chat mounts only for that dock", () => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     const props = {
       active: true,
       snapshot: provider.snapshot$.value,

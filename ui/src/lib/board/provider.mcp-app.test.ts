@@ -37,53 +37,59 @@ function mcpAppSnapshot(sessionKey: string) {
 }
 
 describe("board provider MCP App views", () => {
-  it("deduplicates leases until an explicit refresh", async () => {
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const snapshot = mcpAppSnapshot("agent:main:app");
-    let lease = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "board.get") {
-        return snapshot;
-      }
-      if (method === "board.widget.appView") {
-        lease += 1;
-        return { viewId: `mcp-app-${lease}`, expiresAtMs: lease === 1 ? 10_000 : 20_000 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const provider = new GatewayBoardProvider("agent:main:app", {
-      request: request as never,
-      addEventListener: () => () => {},
-    });
-    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
+  it.each([
+    { session: { sessionKey: "agent:main:app" }, acknowledgedKey: "agent:main:app" },
+    { session: { sessionKey: "global", agentId: "work" }, acknowledgedKey: "agent:work:global" },
+  ])(
+    "deduplicates scoped $session app leases until an explicit refresh",
+    async ({ session, acknowledgedKey }) => {
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const snapshot = mcpAppSnapshot(acknowledgedKey);
+      let lease = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "board.get") {
+          return snapshot;
+        }
+        if (method === "board.widget.appView") {
+          lease += 1;
+          return { viewId: `mcp-app-${lease}`, expiresAtMs: lease === 1 ? 10_000 : 20_000 };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const provider = new GatewayBoardProvider(session, {
+        request: request as never,
+        addEventListener: () => () => {},
+      });
+      await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
 
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
-      status: "ready",
-      viewId: "mcp-app-1",
-    });
-    expect(request).toHaveBeenCalledWith("board.widget.appView", {
-      sessionKey: "agent:main:app",
-      name: "server-app",
-      revision: 1,
-      instanceId: "app-instance",
-    });
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
-      viewId: "mcp-app-1",
-    });
-    now = 6_000;
-    await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
-      status: "ready",
-      viewId: "mcp-app-1",
-    });
-    await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
-      status: "ready",
-      viewId: "mcp-app-2",
-    });
-    expect(request.mock.calls.filter(([method]) => method === "board.widget.appView")).toHaveLength(
-      2,
-    );
-  });
+      await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+        status: "ready",
+        viewId: "mcp-app-1",
+      });
+      expect(request).toHaveBeenCalledWith("board.widget.appView", {
+        ...session,
+        name: "server-app",
+        revision: 1,
+        instanceId: "app-instance",
+      });
+      await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+        viewId: "mcp-app-1",
+      });
+      now = 6_000;
+      await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
+        status: "ready",
+        viewId: "mcp-app-1",
+      });
+      await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
+        status: "ready",
+        viewId: "mcp-app-2",
+      });
+      expect(
+        request.mock.calls.filter(([method]) => method === "board.widget.appView"),
+      ).toHaveLength(2);
+    },
+  );
 
   it("does not reuse a cached lease for a same-name replacement", async () => {
     const cache = new BoardMcpAppViewCache();
@@ -125,7 +131,7 @@ describe("board provider MCP App views", () => {
       }) as never,
       addEventListener: () => () => {},
     };
-    const provider = new GatewayBoardProvider(snapshot.sessionKey, client);
+    const provider = new GatewayBoardProvider({ sessionKey: snapshot.sessionKey }, client);
     await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(snapshot));
     await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
       viewId: "view-1",
@@ -154,7 +160,7 @@ describe("board provider MCP App views", () => {
         ) as never,
         addEventListener: () => () => {},
       };
-      const provider = new GatewayBoardProvider(sessionKey, client);
+      const provider = new GatewayBoardProvider({ sessionKey }, client);
       await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(snapshot));
 
       const pending = provider.widgetAppView("server-app", 1);
@@ -214,10 +220,13 @@ describe("board provider MCP App views", () => {
       }
       return { viewId: "mcp-app-restored", expiresAtMs: Date.now() + 60_000 };
     });
-    const provider = new GatewayBoardProvider("agent:main:stale-app", {
-      request: request as never,
-      addEventListener: () => () => {},
-    });
+    const provider = new GatewayBoardProvider(
+      { sessionKey: "agent:main:stale-app" },
+      {
+        request: request as never,
+        addEventListener: () => () => {},
+      },
+    );
     await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
 
     await expect(provider.widgetAppView("server-app", 1)).resolves.toEqual({

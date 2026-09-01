@@ -1,6 +1,7 @@
 import "../../components/modal-dialog.ts";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -56,9 +57,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected confirmConversationReset(): Promise<boolean> {
     const board = this.resolveBoardView();
-    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const scopeKey = boardProviderCacheKey(this.resolveBoardConversation());
     const pending = this.resetConfirmation;
-    if (pending && !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
+    if (pending && pending.scopeKey !== scopeKey) {
       this.settleResetConfirmation(false);
     }
     if (!board.hasBoard) {
@@ -71,14 +72,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const promise = new Promise<boolean>((next) => {
       resolve = next;
     });
-    this.resetConfirmation = { sessionKey, promise, resolve };
+    this.resetConfirmation = { scopeKey, promise, resolve };
     this.resetConfirmationOpen = true;
     return promise;
   }
 
   protected cancelResetConfirmationForSessionChange(): void {
     const pending = this.resetConfirmation;
-    if (pending && !areUiSessionKeysEquivalent(pending.sessionKey, this.resolveBoardSessionKey())) {
+    if (pending && pending.scopeKey !== boardProviderCacheKey(this.resolveBoardConversation())) {
       this.settleResetConfirmation(false);
     }
   }

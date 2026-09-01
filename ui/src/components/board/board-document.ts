@@ -54,6 +54,12 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   private unsubscribeEvents: (() => void) | null = null;
   private bindingGeneration = 0;
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    // Reattaching unchanged properties must reacquire the released binding.
+    this.requestUpdate("gatewaySnapshot");
+  }
+
   override disconnectedCallback(): void {
     this.releaseProvider();
     super.disconnectedCallback();
@@ -87,6 +93,9 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   }
 
   private synchronizeProvider(): void {
+    if (!this.isConnected) {
+      return;
+    }
     const sessionKey = this.sessionKey?.trim() ?? "";
     if (!sessionKey) {
       this.releaseProvider();
@@ -143,7 +152,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
         return;
       }
       const lease = acquireBoardProviderForSession(
-        binding.sessionKey,
+        { sessionKey: described.session.key, agentId: described.session.agentId },
         binding.client,
         current.phase === "connected",
         capabilities.canPinWidgets,
