@@ -50,6 +50,7 @@ export * from "./schema/snapshot.js";
 export * from "./schema/system-info.js";
 export * from "./schema/system-event.js";
 export * from "./schema/task-suggestions.js";
+export * from "./schema/task-lanes.js";
 export * from "./schema/tasks.js";
 export * from "./schema/terminal.js";
 export * from "./schema/ui-command.js";
