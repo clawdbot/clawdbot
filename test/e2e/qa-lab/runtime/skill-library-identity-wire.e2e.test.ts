@@ -125,8 +125,9 @@ describe("skill library real Gateway identity boundary", () => {
             "users.list",
             {},
           );
-          expect(profiles.profiles.map((profile) => profile.id).toSorted()).toEqual(
-            [aliceList.profileId, bobList.profileId].toSorted(),
+          expect(profiles.profiles).toHaveLength(2);
+          expect(profiles.profiles.map((profile) => profile.id)).toEqual(
+            expect.arrayContaining([aliceList.profileId, bobList.profileId]),
           );
 
           const original = skillLibraryProofBundle();
@@ -235,7 +236,7 @@ describe("skill library real Gateway identity boundary", () => {
             ...edited,
             skillId: created.entry.skillId,
             expectedRevision: updated.entry.revision,
-            files: [...current.files].reverse(),
+            files: current.files.toReversed(),
           });
           expect(unchanged).toMatchObject({
             state: "unchanged",
@@ -315,7 +316,7 @@ describe("skill library real Gateway identity boundary", () => {
           );
         },
         async () => {
-          for (const client of clients.reverse()) {
+          for (const client of clients.toReversed()) {
             await client.close();
           }
         },
