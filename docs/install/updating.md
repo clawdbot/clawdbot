@@ -360,9 +360,11 @@ path applies the same OpenClaw-only Bun trust when it owns the install.
 ### Package lifecycle and operator state
 
 Package lifecycle hooks validate the Node runtime and update only package-local
-artifacts: the installed `dist` tree and lifecycle markers. Plugin-registry
-migration and legacy plugin-dependency cleanup belong to Doctor, not package
-installation. `openclaw update` still runs Doctor after installing the candidate;
+artifacts: the installed `dist` tree and lifecycle markers. Plugin-registry and
+operator-state migration belong to Doctor, not package installation. Doctor also
+removes genuinely dangling global plugin-runtime links, but preserves shared and
+versioned runtime caches and valid links to them: other installs or profiles may
+still use them. `openclaw update` still runs Doctor after installing the candidate;
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
 

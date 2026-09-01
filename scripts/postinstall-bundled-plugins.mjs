@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Package lifecycle cleanup and completion touch only this installed package.
-// Operator state migration and legacy dependency cleanup belong to Doctor:
-// another installed Gateway may still depend on the old state and files.
+// Doctor owns operator-state migration and genuinely dangling runtime-link repair;
+// shared caches outside this package can still serve other installs or profiles.
 import {
   existsSync,
   lstatSync,

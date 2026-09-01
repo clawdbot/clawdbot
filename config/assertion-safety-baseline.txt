@@ -2508,7 +2508,6 @@ src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	2
 src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
-src/commands/doctor/shared/plugin-dependency-cleanup.ts	1
 src/commands/doctor/shared/plugin-registry-migration.ts	1
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	4
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	2
