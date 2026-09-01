@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- this suite owns the real Gateway behavior coverage. */
 // Gateway server integration tests cover startup, auth, device pairing, session
 // routing, OpenAI-compatible paths, and environment isolation for local servers.
 import fs from "node:fs/promises";
@@ -754,9 +755,10 @@ describe("gateway e2e", () => {
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         if (url === `${openaiBaseUrl}/responses`) {
           responseCount += 1;
-          const body = JSON.parse(
-            String((init as { body?: unknown } | undefined)?.body ?? "{}"),
-          ) as { input?: unknown[] };
+          const rawBody = (init as { body?: unknown } | undefined)?.body;
+          const body = JSON.parse(typeof rawBody === "string" ? rawBody : "{}") as {
+            input?: unknown[];
+          };
           const hasToolOutput = body.input?.some(
             (item) =>
               item &&
@@ -877,7 +879,9 @@ describe("gateway e2e", () => {
           const wallClockBeforeRollback = Date.now();
           const wallClock = vi.spyOn(Date, "now").mockReturnValue(wallClockBeforeRollback - 5_000);
           try {
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 50);
+            });
             await expect(
               client.request("plugin.approval.resolve", {
                 id: approvalId,

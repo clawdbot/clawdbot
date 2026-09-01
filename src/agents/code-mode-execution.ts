@@ -117,7 +117,7 @@ export async function runCodeModeExec(params: {
     const result = await runCodeModeWorker(
       {
         kind: "exec",
-        source: params.code,
+        source,
         language: params.language,
         config: { ...config, timeoutMs: remainingMs },
         catalog: catalogProjection.guestBindings,
