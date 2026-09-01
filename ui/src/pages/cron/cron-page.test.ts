@@ -275,6 +275,53 @@ describe("CronPage editor state sync", () => {
     expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
   });
 
+  it("loads heartbeat scratch into the read-only monitor field", async () => {
+    const job: CronJob = {
+      id: "heartbeat-job",
+      name: "Heartbeat monitor",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "heartbeat" },
+      state: {},
+    };
+    const jobs = createDeferred<CronJobsListResult>();
+    const scratchContent = "# Heartbeat scratch\n\nHEARTBEAT_OK\n";
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return jobs.promise;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, triggersEnabled: true };
+      }
+      if (method === "cron.scratch.get") {
+        return {
+          scratch: { content: scratchContent, revision: 1, updatedAtMs: 0 },
+          currentRevision: 1,
+          maxBytes: 262144,
+        };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    page.routeSearch = "?job=heartbeat-job";
+
+    jobs.resolve(cronListResponse([job]));
+    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(job.id));
+    await waitForCronPage(() => expect(page.cron.cronForm.payloadText).toBe(scratchContent));
+    expect(request).toHaveBeenCalledWith("cron.scratch.get", { id: job.id });
+  });
+
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },
     { scenario: "an unsaved disable edit", active: true, edited: false, saved: false },

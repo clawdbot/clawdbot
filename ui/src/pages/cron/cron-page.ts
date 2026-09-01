@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { AgentsListResult, CronJob } from "../../api/types.ts";
+import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -284,6 +284,11 @@ class CronPage extends OpenClawLightDomElement {
     this.cron.cronCreateOpen = false;
     startCronEdit(this.cron, job);
     this.requestCronUpdate();
+    // Heartbeat instructions live in per-job scratch, not the payload; fetch
+    // them so the read-only "Heartbeat monitor" field is not always empty.
+    if (job.payload?.kind === "heartbeat") {
+      void this.loadHeartbeatScratch(job.id);
+    }
     void this.runCronTask(async (cronState) => {
       updateCronRunsFilter(cronState, { cronRunsScope: "job" });
       // Claim the run pane before awaiting: loadCronRuns drops responses whose
@@ -292,6 +297,33 @@ class CronPage extends OpenClawLightDomElement {
       cronState.cronRunsJobId = job.id;
       await loadCronRuns(cronState, job.id);
     });
+  }
+
+  private async loadHeartbeatScratch(jobId: string) {
+    const connectionScope = this.gateway.capture();
+    const client = this.gateway.client;
+    if (!connectionScope || !client) {
+      return;
+    }
+    try {
+      const result = await client.request<CronScratchGetResult>("cron.scratch.get", { id: jobId });
+      // The operator may have switched jobs or scopes while the read was in
+      // flight; only patch the form for the still-selected heartbeat job.
+      if (
+        this.gateway.isCurrent(connectionScope) &&
+        this.cron.cronEditingJob?.id === jobId &&
+        this.cron.cronForm.payloadKind === "heartbeat"
+      ) {
+        this.cron.cronForm = {
+          ...this.cron.cronForm,
+          payloadText: result.scratch?.content ?? "",
+        };
+        this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
+        this.requestCronUpdate();
+      }
+    } catch {
+      // Display-only read: leave the field empty if scratch cannot be fetched.
+    }
   }
 
   private openCreate(patch?: Partial<CronFormState>) {
