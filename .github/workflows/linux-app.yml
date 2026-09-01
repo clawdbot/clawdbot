@@ -96,6 +96,7 @@ jobs:
 
       - name: Test native first-run setup without a CLI
         id: first-run
+        shell: bash
         run: |
           xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
             /usr/bin/python3 apps/linux/tests/first_run.py \

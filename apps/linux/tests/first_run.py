@@ -55,7 +55,9 @@ def exercise(app, Atspi, GLib):
                 last_headings.clear()
                 for node in nodes():
                     name = node.get_name()
-                    actual_role = node.get_role_name()
+                    # WebKitGTK 2.50.4 emits shifted numeric AT-SPI roles. Ask it
+                    # for the role name instead; the child locale is C.UTF-8.
+                    actual_role = node.get_localized_role_name()
                     if actual_role == "heading":
                         last_headings.add(name)
                     if role is None:
@@ -74,6 +76,7 @@ def exercise(app, Atspi, GLib):
                     ):
                         print(f"Observed {label}", flush=True)
                         return node
+                last_error = None
             except GLib.Error as error:
                 # WebKit can replace accessible objects during a screen transition.
                 last_error = error
