@@ -1803,6 +1803,35 @@ class TalkModeManagerTest {
     return method.invoke(manager) as Boolean
   }
 
+  @Test
+  fun aLaterSessionReachingTheSameStateStillReportsIt() {
+    // The observation reports edges, so it is deliberately silent while a state persists. Across
+    // two sessions that is wrong: the second relay would inherit the first's state and publish
+    // nothing, leaving exactly the session under investigation without evidence.
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+
+    val base = uplinkObservations()
+    observeEnqueued(manager)
+    assertEquals("the first session reports its state", base + 1, uplinkObservations())
+    observeEnqueued(manager)
+    assertEquals("and stays quiet while it holds", base + 1, uplinkObservations())
+
+    resetUplinkObservation(manager)
+    observeEnqueued(manager)
+
+    assertEquals("a new session in the same state must report again", base + 2, uplinkObservations())
+    assertEquals("ENQUEUED_DURING_PLAYBACK", uplinkPhaseName(manager))
+  }
+
+  private fun resetUplinkObservation(manager: TalkModeManager) {
+    val method = manager.javaClass.getDeclaredMethod("resetRealtimeUplinkObservation")
+    method.isAccessible = true
+    method.invoke(manager)
+  }
+
   private fun startPlaybackForTest(manager: TalkModeManager) {
     setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 5_000)
   }

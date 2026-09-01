@@ -1463,6 +1463,7 @@ class TalkModeManager internal constructor(
     // superseded job cannot win the compare-and-set, so until the new capture reports its own
     // state no session has reported one, and the answer to "may the uplink stay open" is no.
     publishRealtimeAecCapability(inputGeneration, false)
+    resetRealtimeUplinkObservation()
     onAppliedAudioInputChanged(null)
     val audioFrames =
       Channel<ByteArray>(
@@ -1744,6 +1745,18 @@ class TalkModeManager internal constructor(
     length > 0 &&
       pendingRealtimeOutputClear == null &&
       !shouldSuppressRealtimeCaptureForPlayback()
+
+  /**
+   * Forgets the previous session's reported state, at the same boundary that clears the capability.
+   *
+   * The observation reports edges, which makes it silent while a state persists -- correct within a
+   * session, wrong across two. Without this, a second relay whose first qualified frame lands in the
+   * same state as the previous session's last one would publish nothing, and the session that most
+   * needs the evidence would be the one that produces none.
+   */
+  private fun resetRealtimeUplinkObservation() {
+    realtimeUplinkPhase.set(uplinkPhaseUnobserved)
+  }
 
   /**
    * Publishes a change in the playback-time forwarding decision, and only a change.
