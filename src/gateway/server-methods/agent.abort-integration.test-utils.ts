@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -14,7 +15,10 @@ import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getSessionWorkAdmissionOwnerRelease,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
@@ -2415,6 +2419,82 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expectReactivationFailure(respond, runId);
+  });
+
+  it("keeps ordinary restart recovery visible until Gateway execution settles", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = "recovery-session";
+    const runId = "recovery-owner-admission";
+    const storePath = "/tmp/sessions.json";
+    const store: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 1,
+          chargedAttempts: 1,
+          reservation: {
+            runId,
+            attempt: 1,
+            lifecycleGeneration: "test-generation",
+          },
+        },
+      },
+    };
+    mocks.loadSessionEntry.mockImplementation(() => ({
+      cfg: {},
+      storePath,
+      entry: structuredClone(store[sessionKey]),
+      canonicalKey: sessionKey,
+    }));
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    let resolveAgent!: (value: {
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }) => void;
+    const agentResult = new Promise<{
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }>((resolve) => {
+      resolveAgent = resolve;
+    });
+    mocks.agentCommand.mockReturnValueOnce(agentResult);
+
+    await invokeAgent(
+      {
+        message: "resume after restart",
+        agentId: "main",
+        sessionKey,
+        expectedExistingSessionId: sessionId,
+        idempotencyKey: runId,
+        inputProvenance: {
+          kind: "internal_system",
+          sourceSessionKey: sessionKey,
+          sourceTool: "main_session_restart_recovery",
+        },
+      },
+      { client: backendGatewayClient(), reqId: runId },
+    );
+
+    const ownerRelease = getSessionWorkAdmissionOwnerRelease({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+    });
+    expect(ownerRelease).toBeInstanceOf(Promise);
+
+    resolveAgent({ payloads: [{ text: "recovered" }], meta: { durationMs: 1 } });
+    await ownerRelease;
+    expect(
+      getSessionWorkAdmissionOwnerRelease({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+      }),
+    ).toBeUndefined();
   });
 
   it("restores admitted restart recovery if pre-dispatch reactivation fails", async () => {

@@ -111,6 +111,8 @@ export type FollowupRun = {
   abortSignal?: AbortSignal;
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
   queueAbortSignal?: AbortSignal;
+  /** Owner release that must settle before this queued turn can seek reply-lane admission. */
+  queueOwnerRelease?: Promise<void>;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;

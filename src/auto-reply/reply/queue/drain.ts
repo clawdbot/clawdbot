@@ -522,6 +522,7 @@ type FollowupRuntimeMetadata = Pick<
   | "disableTools"
   | "abortSignal"
   | "queueAbortSignal"
+  | "queueOwnerRelease"
   | "deliveryCorrelations"
   | "turnAdoptionLifecycle"
   | "queuedFollowupReplyDisposition"
@@ -768,6 +769,7 @@ function collectRuntimeMetadata(
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const queueOwnerReleases = items.flatMap((item) => item.queueOwnerRelease ?? []);
   const explicitSkillSelections = [
     ...new Map(
       items
@@ -788,6 +790,10 @@ function collectRuntimeMetadata(
     disableTools: authoritySource?.disableTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
+    queueOwnerRelease:
+      queueOwnerReleases.length > 0
+        ? Promise.all(queueOwnerReleases).then(() => undefined)
+        : undefined,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
@@ -1147,6 +1153,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
   return {
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
+    queueOwnerRelease: source.queueOwnerRelease,
     transcriptPrompt: source.transcriptPrompt,
     userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
     explicitSkillSelections: source.explicitSkillSelections,
@@ -1228,6 +1235,7 @@ async function runSyntheticOverflowSummary(params: {
   await params.runFollowup({
     prompt: params.prompt,
     queueAbortSignal: params.source.queueAbortSignal,
+    queueOwnerRelease: runtimeMetadata.queueOwnerRelease,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,

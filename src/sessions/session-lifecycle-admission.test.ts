@@ -15,6 +15,7 @@ import {
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
+  getSessionWorkAdmissionOwnerRelease,
   getSessionWorkAdmissionRelease,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
@@ -64,6 +65,37 @@ it("waits for a competing session admission outside the caller context", async (
   await release;
   await Promise.resolve();
   expect(settled).toBe(true);
+});
+
+it("observes only the named session admission owner while it is starting", async () => {
+  const scope = "store-named-owner";
+  const identities = ["agent:main:named-owner", "session-named-owner"];
+  const owner = Symbol.for("openclaw.test.namedSessionWorkAdmissionOwner");
+  const unrelated = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
+  const ownerStarted = createDeferred();
+  const allowOwner = createDeferred();
+  const admissionPromise = beginSessionWorkAdmission({
+    scope,
+    identities,
+    owner,
+    assertAllowed: async () => {
+      ownerStarted.resolve();
+      await allowOwner.promise;
+    },
+  });
+  await ownerStarted.promise;
+  const release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
+  expect(release).toBeInstanceOf(Promise);
+
+  unrelated.release();
+  await Promise.resolve();
+  expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(Promise);
+
+  allowOwner.resolve();
+  const admission = await admissionPromise;
+  admission.release();
+  await release;
+  expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {

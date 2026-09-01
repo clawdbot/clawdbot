@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyPayload } from "../types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -50,6 +51,10 @@ vi.mock("./followup-delivery.js", () => ({
 vi.mock("./queue.js", () => ({
   completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
   FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
+  resolveFollowupAbortSignal: (run: FollowupRun) =>
+    run.abortSignal && run.queueAbortSignal
+      ? AbortSignal.any([run.abortSignal, run.queueAbortSignal])
+      : (run.abortSignal ?? run.queueAbortSignal),
 }));
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
@@ -141,6 +146,54 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
+  it("waits for the queued owner release before seeking reply-lane admission", async () => {
+    const ownerRelease = createDeferred();
+    const queued = createQueuedRun({ queueOwnerRelease: ownerRelease.promise });
+    state.admit.mockResolvedValue({ kind: "skipped", reason: "aborted" });
+
+    const run = createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(queued);
+    await Promise.resolve();
+    expect(state.admit).not.toHaveBeenCalled();
+
+    ownerRelease.resolve();
+    await run;
+    expect(state.admit).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before", "during"] as const)(
+    "consumes an item aborted %s the queued owner wait",
+    async (timing) => {
+      const ownerRelease = createDeferred();
+      const abortController = new AbortController();
+      const typing = createTypingController();
+      const queued = createQueuedRun({
+        queueOwnerRelease: ownerRelease.promise,
+        queueAbortSignal: abortController.signal,
+      });
+
+      if (timing === "before") {
+        abortController.abort();
+      }
+      const run = createFollowupRunner({
+        typing,
+        typingMode: "instant",
+        defaultModel: "claude",
+      })(queued);
+      if (timing === "during") {
+        abortController.abort();
+      }
+      await run;
+
+      expect(state.admit).not.toHaveBeenCalled();
+      expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
+      expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
+    },
+  );
+
   it("completes lifecycle and both typing signals for an already-aborted item", async () => {
     const typing = createTypingController();
     const controller = new AbortController();

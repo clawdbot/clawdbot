@@ -57,6 +57,8 @@ import {
 } from "../../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
+  consumeSessionWorkAdmissionHandoff,
+  getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
@@ -93,6 +95,7 @@ import {
   mockCallArg,
   waitForFast,
 } from "../subagent-test-fixtures.test-helpers.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -4587,7 +4590,14 @@ describe("main-session-restart-recovery", () => {
     await writeTranscript(sessionsDir, sessionId, [{ role: "user", content: "recover me" }]);
     const dispatchEntered = createDeferred();
     const releaseDispatch = createDeferred();
-    vi.mocked(callGateway).mockImplementationOnce(async () => {
+    let adoptedAdmission: ReturnType<typeof consumeSessionWorkAdmissionHandoff>;
+    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+      const handoffId = (params as { internalRuntimeHandoffId?: string }).internalRuntimeHandoffId;
+      adoptedAdmission = consumeSessionWorkAdmissionHandoff({
+        handoffId: handoffId ?? "",
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+      });
       dispatchEntered.resolve();
       await releaseDispatch.promise;
       return { runId: "recovery-main" };
@@ -4606,6 +4616,12 @@ describe("main-session-restart-recovery", () => {
     try {
       await dispatchEntered.promise;
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
+      const recoveryAdmissionRelease = getSessionWorkAdmissionOwnerRelease({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+      });
+      expect(recoveryAdmissionRelease).toBeInstanceOf(Promise);
       mutation = runExclusiveSessionLifecycleMutation({
         scope: storePath,
         identities: [sessionKey, sessionId],
@@ -4629,8 +4645,18 @@ describe("main-session-restart-recovery", () => {
 
       releaseDispatch.resolve();
       await expect(recovery).resolves.toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      expect(mutationRan).toBe(false);
+      adoptedAdmission?.release();
+      await recoveryAdmissionRelease;
       await mutation;
       expect(mutationRan).toBe(true);
+      expect(
+        getSessionWorkAdmissionOwnerRelease({
+          scope: storePath,
+          identities: [sessionKey, sessionId],
+          owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        }),
+      ).toBeUndefined();
     } finally {
       releaseDispatch.resolve();
       await Promise.allSettled([recovery, ...(mutation ? [mutation] : [])]);
