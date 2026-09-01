@@ -44,7 +44,12 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, jsonResult, type AnyAgentTool } from "./tools/common.js";
+import {
+  asToolParamsRecord,
+  jsonResult,
+  ToolInputError,
+  type AnyAgentTool,
+} from "./tools/common.js";
 
 export {
   clearToolSearchCatalog,
@@ -191,6 +196,32 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   return render();
 }
 
+async function executeParsedToolSearchRequest(
+  runtime: ToolSearchRuntime,
+  request: ReturnType<typeof readToolSearchRequest>,
+): Promise<AgentToolResult<unknown>> {
+  if (request.kind === "single") {
+    return jsonResult(await runtime.search(request.search.query, { limit: request.search.limit }));
+  }
+  const results = await Promise.all(
+    request.searches.map(async (search) => ({
+      query: search.query,
+      candidates: await runtime.search(search.query, { limit: search.limit }),
+    })),
+  );
+  return jsonResult(boundToolSearchBatchResponse(results));
+}
+
+/** Execute the retained scalar-or-batch contract outside the model-facing tool boundary. */
+async function executeInternalToolSearchRequest(
+  ctx: ToolSearchToolContext,
+  args: unknown,
+): Promise<AgentToolResult<unknown>> {
+  const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
+  const runtime = new ToolSearchRuntime(ctx, config);
+  return await executeParsedToolSearchRequest(runtime, readToolSearchRequest(args, config));
+}
+
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   if (name === TOOL_SEARCH_CODE_MODE_TOOL_NAME) {
     return mode === "code";
@@ -317,29 +348,20 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       ),
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const params = asToolParamsRecord(args);
+        if (params.query === undefined) {
+          throw new ToolInputError("query must be a string.");
+        }
         // Provider compatibility passes may strip additionalProperties. Once the
         // required scalar query is present, discard undeclared fields before parsing.
+        // Batch execution remains available only through executeInternalToolSearchRequest.
         const request = readToolSearchRequest(
-          params.query === undefined
-            ? params
-            : {
-                query: params.query,
-                limit: params.limit,
-              },
+          {
+            query: params.query,
+            limit: params.limit,
+          },
           config,
         );
-        if (request.kind === "single") {
-          return jsonResult(
-            await runtime.search(request.search.query, { limit: request.search.limit }),
-          );
-        }
-        const results = await Promise.all(
-          request.searches.map(async (search) => ({
-            query: search.query,
-            candidates: await runtime.search(search.query, { limit: search.limit }),
-          })),
-        );
-        return jsonResult(boundToolSearchBatchResponse(results));
+        return await executeParsedToolSearchRequest(runtime, request);
       },
     },
     {
@@ -402,6 +424,7 @@ const testing = {
   setToolSearchMinCodeTimeoutMsForTest,
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
+  executeInternalToolSearchRequest,
   runCodeModeChild,
 };
 

@@ -228,9 +228,11 @@ Model-facing calls return the compact candidate array directly. Omitted limits
 use `searchDefaultLimit`, and explicit limits may not exceed `maxSearchLimit`.
 The scalar handler canonicalizes calls to these advertised fields, so a
 provider compatibility pass that removes object-closure keywords cannot route
-undeclared legacy batch fields into the model-facing parser.
+undeclared legacy batch fields into the model-facing parser. A batch-only
+payload is rejected at the model-visible handler even after that normalization.
 
-The runtime retains batch parsing for internal callers. Internal batches return
+The separately named internal request entry point retains batch parsing and
+execution for non-model callers. Internal batches return
 `{ results: [{ query, candidates }] }` in request order and accept at most 16
 queries, 50 requested candidates, 512 characters per query, and 512 UTF-8 bytes
 across the serialized query list. If the complete batch would exceed the

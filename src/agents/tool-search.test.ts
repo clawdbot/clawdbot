@@ -272,6 +272,11 @@ describe("Tool Search", () => {
     await expect(
       finalizedSearchTool.execute("call-normalized-scalar", mixedInput),
     ).resolves.toMatchObject({ details: [{ name: "fake_calendar" }] });
+    await expect(
+      finalizedSearchTool.execute("call-normalized-batch", {
+        queries: [{ query: "calendar", limit: 1 }],
+      }),
+    ).rejects.toThrow("query must be a string");
   });
 
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
@@ -301,8 +306,8 @@ describe("Tool Search", () => {
       input: { queries: [{ query: "calendar" }], limit: 1 },
       error: "set limit on each batch query",
     },
-  ])("rejects $label", async ({ input, error }) => {
-    await expect(limitSearchTool.execute("call-invalid-batch", input)).rejects.toThrow(error);
+  ])("rejects $label in the retained internal request parser", ({ input, error }) => {
+    expect(() => readToolSearchRequest(input, resolveToolSearchConfig())).toThrow(error);
   });
 
   it.each(["", "  "])("preserves scalar empty-query compatibility for %j", async (query) => {
@@ -321,28 +326,27 @@ describe("Tool Search", () => {
     });
   });
 
-  it("rejects batches whose effective result limits exceed the shared budget", async () => {
-    const searchTool = expectDefined(
-      createToolSearchTools({
-        config: {
-          tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 50 } },
-        } as never,
-      }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
-      "batch budget search tool",
-    );
-    await expect(
-      searchTool.execute("call-batch-budget", {
-        queries: [
-          { query: "calendar", limit: 25 },
-          { query: "Slack", limit: 26 },
-        ],
-      }),
-    ).rejects.toThrow("resolve to 51 results, but may request at most 50 in total");
-    await expect(
-      searchTool.execute("call-default-batch-budget", {
-        queries: Array.from({ length: 7 }, (_, index) => ({ query: `surface ${index}` })),
-      }),
-    ).rejects.toThrow(
+  it("rejects internal batches whose effective result limits exceed the shared budget", () => {
+    const config = resolveToolSearchConfig({
+      tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 50 } },
+    } as never);
+    expect(() =>
+      readToolSearchRequest(
+        {
+          queries: [
+            { query: "calendar", limit: 25 },
+            { query: "Slack", limit: 26 },
+          ],
+        },
+        config,
+      ),
+    ).toThrow("resolve to 51 results, but may request at most 50 in total");
+    expect(() =>
+      readToolSearchRequest(
+        { queries: Array.from({ length: 7 }, (_, index) => ({ query: `surface ${index}` })) },
+        config,
+      ),
+    ).toThrow(
       "resolve to 56 results, but may request at most 50 in total. An omitted limit counts as 8; set smaller per-query limits and retry",
     );
   });
@@ -361,21 +365,18 @@ describe("Tool Search", () => {
     await expect(
       searchTool.execute("call-long-query", { query: longScalarQuery }),
     ).resolves.toBeDefined();
-    await expect(
-      limitSearchTool.execute("call-long-batch-query", {
-        queries: [{ query: "q".repeat(512) }, { query: "r" }],
-      }),
-    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
-    await expect(
-      limitSearchTool.execute("call-multibyte-batch-query", {
-        queries: [{ query: "😀".repeat(128) }],
-      }),
-    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
-    await expect(
-      limitSearchTool.execute("call-too-long-batch-query", {
-        queries: [{ query: "q".repeat(513) }],
-      }),
-    ).rejects.toThrow("queries[0].query must not exceed 512 characters");
+    expect(() =>
+      readToolSearchRequest(
+        { queries: [{ query: "q".repeat(512) }, { query: "r" }] },
+        resolveToolSearchConfig(),
+      ),
+    ).toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
+    expect(() =>
+      readToolSearchRequest({ queries: [{ query: "😀".repeat(128) }] }, resolveToolSearchConfig()),
+    ).toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
+    expect(() =>
+      readToolSearchRequest({ queries: [{ query: "q".repeat(513) }] }, resolveToolSearchConfig()),
+    ).toThrow("queries[0].query must not exceed 512 characters");
   });
 
   it("preserves legacy scalar grapheme length semantics at runtime", async () => {
@@ -415,28 +416,27 @@ describe("Tool Search", () => {
       config,
       catalogRef,
     });
-    const searchTool = expectDefined(
-      createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
-      ),
-      "boundary batch search tool",
-    );
-
     const duplicateQueries = Array.from({ length: 16 }, () => ({
       query: "boundary duplicate",
     }));
-    const duplicateResult = await searchTool.execute("call-sixteen-queries", {
-      queries: duplicateQueries,
-    });
+    const duplicateResult = await testing.executeInternalToolSearchRequest(
+      { config, catalogRef },
+      {
+        queries: duplicateQueries,
+      },
+    );
     expect(resultDetails(duplicateResult).results).toHaveLength(16);
     expect(catalogRef.current?.searchCount).toBe(16);
 
-    const clampedResult = await searchTool.execute("call-exact-result-budget", {
-      queries: Array.from({ length: 5 }, (_, index) => ({
-        query: `boundary ${index}`,
-        limit: 999,
-      })),
-    });
+    const clampedResult = await testing.executeInternalToolSearchRequest(
+      { config, catalogRef },
+      {
+        queries: Array.from({ length: 5 }, (_, index) => ({
+          query: `boundary ${index}`,
+          limit: 999,
+        })),
+      },
+    );
     expect(resultDetails(clampedResult).results).toHaveLength(5);
     expect(catalogRef.current?.searchCount).toBe(21);
   });
@@ -454,17 +454,13 @@ describe("Tool Search", () => {
       config,
       catalogRef,
     });
-    const searchTool = expectDefined(
-      createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
-      ),
-      "atomic batch search tool",
-    );
-
     await expect(
-      searchTool.execute("call-invalid-later-item", {
-        queries: [{ query: "atomic validation" }, { query: " " }],
-      }),
+      testing.executeInternalToolSearchRequest(
+        { config, catalogRef },
+        {
+          queries: [{ query: "atomic validation" }, { query: " " }],
+        },
+      ),
     ).rejects.toThrow("queries[1].query must be a non-empty string");
     expect(catalogRef.current?.searchCount).toBe(0);
   });
@@ -510,9 +506,12 @@ describe("Tool Search", () => {
       (candidate) => candidate.id,
     );
 
-    const result = await searchTool.execute("call-bounded-response", {
-      queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
-    });
+    const result = await testing.executeInternalToolSearchRequest(
+      { config, catalogRef },
+      {
+        queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
+      },
+    );
     const details = resultDetails(result);
     expect(details.truncated).toBe(true);
     expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(4_000);
@@ -529,9 +528,12 @@ describe("Tool Search", () => {
     }
 
     const manyGroups = resultDetails(
-      await searchTool.execute("call-bounded-many-groups", {
-        queries: Array.from({ length: 16 }, () => ({ query: "large surface", limit: 1 })),
-      }),
+      await testing.executeInternalToolSearchRequest(
+        { config, catalogRef },
+        {
+          queries: Array.from({ length: 16 }, () => ({ query: "large surface", limit: 1 })),
+        },
+      ),
     );
     expect(JSON.stringify(manyGroups, null, 2).length).toBeLessThanOrEqual(4_000);
     for (const group of manyGroups.results as Array<{
@@ -562,17 +564,13 @@ describe("Tool Search", () => {
       config,
       catalogRef,
     });
-    const searchTool = expectDefined(
-      createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
-      ),
-      "untrusted description search tool",
-    );
-
     const result = resultDetails(
-      await searchTool.execute("call-repeated-huge-description", {
-        queries: Array.from({ length: 16 }, () => ({ query: "large remote surface", limit: 1 })),
-      }),
+      await testing.executeInternalToolSearchRequest(
+        { config, catalogRef },
+        {
+          queries: Array.from({ length: 16 }, () => ({ query: "large remote surface", limit: 1 })),
+        },
+      ),
     );
     expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(4_000);
     expect(JSON.stringify(result)).not.toContain("unbounded tail");
@@ -608,20 +606,16 @@ describe("Tool Search", () => {
 
     const clientTool = fakeTool(`client_large_name_${"n".repeat(20_000)}`, "oversized metadata");
     addClientToolsToToolSearchCatalog({ tools: [clientTool], config, catalogRef });
-    const searchTool = expectDefined(
-      createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
-      ),
-      "untrusted metadata search tool",
-    );
-
     const result = resultDetails(
-      await searchTool.execute("call-repeated-huge-metadata", {
-        queries: Array.from({ length: 16 }, () => ({
-          query: "oversized metadata",
-          limit: 2,
-        })),
-      }),
+      await testing.executeInternalToolSearchRequest(
+        { config, catalogRef },
+        {
+          queries: Array.from({ length: 16 }, () => ({
+            query: "oversized metadata",
+            limit: 2,
+          })),
+        },
+      ),
     );
     expect(JSON.stringify(result, null, 2).length).toBeLessThanOrEqual(4_000);
     expect(result.truncated).toBe(true);
@@ -676,7 +670,7 @@ describe("Tool Search", () => {
       createToolSearchTools({ config, catalogRef }).find(
         (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
       ),
-      "structured batch search tool",
+      "scalar model search tool",
     );
 
     const scalar = await searchTool.execute("call-scalar-search", {
@@ -687,13 +681,16 @@ describe("Tool Search", () => {
       expect.objectContaining({ name: "fake_attention", source: "openclaw" }),
     ]);
 
-    const batch = await searchTool.execute("call-batch-search", {
-      queries: [
-        { query: "  calendar events  ", limit: 1 },
-        { query: "Slack messages", limit: 1 },
-        { query: "zzzzunmatched", limit: 1 },
-      ],
-    });
+    const batch = await testing.executeInternalToolSearchRequest(
+      { config, catalogRef },
+      {
+        queries: [
+          { query: "  calendar events  ", limit: 1 },
+          { query: "Slack messages", limit: 1 },
+          { query: "zzzzunmatched", limit: 1 },
+        ],
+      },
+    );
     expect(batch.details).toEqual({
       results: [
         {
@@ -710,7 +707,7 @@ describe("Tool Search", () => {
     expect(catalogRef.current?.searchCount).toBe(4);
   });
 
-  it("uses the same structured batch contract in directory mode", async () => {
+  it("uses the same internal batch contract in directory mode", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { toolSearch: { enabled: true, mode: "directory" } },
@@ -725,16 +722,12 @@ describe("Tool Search", () => {
       config,
       catalogRef,
     });
-    const searchTool = expectDefined(
-      createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
-      ),
-      "directory batch search tool",
+    const result = await testing.executeInternalToolSearchRequest(
+      { config, catalogRef },
+      {
+        queries: [{ query: "directory calendar", limit: 1 }],
+      },
     );
-
-    const result = await searchTool.execute("call-directory-batch-search", {
-      queries: [{ query: "directory calendar", limit: 1 }],
-    });
 
     expect(result.details).toEqual({
       results: [
