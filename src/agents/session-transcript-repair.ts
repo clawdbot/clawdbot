@@ -443,6 +443,7 @@ export function sanitizeToolUseResultPairingForModel(
 type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
+  discarded: AgentMessage[];
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
   moved: boolean;
@@ -471,6 +472,7 @@ export function repairToolUseResultPairing(
   const { frames } = pairing;
   const droppedDuplicateCount = pairing.droppedDuplicateCount;
   let droppedOrphanCount = pairing.droppedOrphanCount;
+  const discarded: AgentMessage[] = [...pairing.droppedResults];
 
   const out: AgentMessage[] = [];
   let cursor = 0;
@@ -482,6 +484,7 @@ export function repairToolUseResultPairing(
       }
       if (message.role === "toolResult" && !preserveUnframed) {
         droppedOrphanCount += 1;
+        discarded.push(message);
         continue;
       }
       out.push(message);
@@ -511,6 +514,12 @@ export function repairToolUseResultPairing(
         added.push(missing);
         out.push(missing);
       }
+    } else {
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.sourceResult) {
+          discarded.push(occurrence.sourceResult);
+        }
+      }
     }
     out.push(...frame.remainder);
   }
@@ -521,6 +530,7 @@ export function repairToolUseResultPairing(
   return {
     messages: changed ? out : messages,
     added,
+    discarded,
     droppedDuplicateCount,
     droppedOrphanCount,
     moved: changed,

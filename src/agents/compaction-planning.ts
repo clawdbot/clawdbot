@@ -338,8 +338,7 @@ function pruneHistoryForContextShare(params: {
     // Dropping a call owner also drops orphaned results; providers reject replay without the pair.
     const retained = chunks.slice(1).flat();
     const repairReport = repairToolUseResultPairing(retained);
-    const retainedAfterRepair = new Set(repairReport.messages);
-    const repairedDropped = retained.filter((message) => !retainedAfterRepair.has(message));
+    const repairedDropped = repairReport.discarded;
 
     droppedChunks += 1;
     droppedMessages += dropped.length + repairedDropped.length;

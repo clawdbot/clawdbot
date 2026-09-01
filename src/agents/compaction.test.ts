@@ -613,4 +613,26 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedTokens).toBe(estimateMessagesTokens([messages[0], messages[1]]));
     expect(retainedTokens).toBeGreaterThan(0);
   });
+
+  it("does not count normalized retained tool_results as dropped", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_read", "result"),
+      { ...makeToolResult(3, "call_read", "result"), toolName: "   " },
+      makeMessage(4, 4000),
+    ];
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: Math.ceil(estimateMessagesTokens(messages)),
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(pruned.droppedMessagesList).not.toContain(messages[2]);
+    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
+    expect(pruned.messages).not.toContain(messages[2]);
+    expect(
+      pruned.messages.find((message) => message.role === "toolResult"),
+    ).toMatchObject({ toolName: "test_tool" });
+  });
 });

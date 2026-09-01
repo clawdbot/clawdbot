@@ -313,6 +313,25 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
+  it("reports the original messages discarded during pairing repair", () => {
+    const orphan = {
+      role: "toolResult" as const,
+      toolCallId: "call_orphan",
+      toolName: "read",
+      content: [{ type: "text" as const, text: "orphan" }],
+      isError: false,
+    };
+    const input = castAgentMessages([
+      { role: "user", content: "hello" },
+      orphan,
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.discarded).toEqual([orphan]);
+  });
+
   it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
     // When an assistant message has stopReason: "error", its tool_use blocks may be
     // incomplete/malformed. We should NOT create synthetic tool_results for them,
@@ -621,6 +640,7 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
         (message) => message.role === "toolResult" && message.toolCallId === "call_read",
       ),
     ).toMatchObject({ toolName: "exec" });
+    expect(result.discarded).toEqual([]);
   });
 
   it("handles a long valid repeated-id transcript as an unchanged linear pass", () => {
