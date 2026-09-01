@@ -57,20 +57,34 @@ export function createFollowupRunner(
         disposition = { kind: "consumed" };
         return;
       }
-      const admission = await admitFollowupTurn({
-        queued,
-        defaults,
-        onCompactionNoticePayload: async (payload, turn) => {
-          await deliverFollowupDecision({
-            decision: { kind: "deliver", payloads: [payload] },
-            turn,
-            defaults,
-            runId: turn.runId,
-            runFollowup,
-            kind: "block",
-          });
-        },
-      });
+      const admit = () =>
+        admitFollowupTurn({
+          queued,
+          defaults,
+          onCompactionNoticePayload: async (payload, turn) => {
+            await deliverFollowupDecision({
+              decision: { kind: "deliver", payloads: [payload] },
+              turn,
+              defaults,
+              runId: turn.runId,
+              runFollowup,
+              kind: "block",
+            });
+          },
+        });
+      let admission = await admit();
+      while (admission.kind === "owner-wait") {
+        try {
+          await racePromiseWithAbortSignal(admission.release, abortSignal);
+        } catch (error) {
+          if (!isAbortError(error)) {
+            throw error;
+          }
+          disposition = { kind: "consumed" };
+          return;
+        }
+        admission = await admit();
+      }
       switch (admission.kind) {
         case "deferred":
           throw new FollowupRunDeferredError(

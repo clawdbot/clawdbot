@@ -83,19 +83,31 @@ it("observes only the named session admission owner while it is starting", async
       await allowOwner.promise;
     },
   });
-  await ownerStarted.promise;
-  const release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
-  expect(release).toBeInstanceOf(Promise);
+  let admission: Awaited<typeof admissionPromise> | undefined;
+  let release: Promise<void> | undefined;
+  try {
+    await ownerStarted.promise;
+    release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
+    expect(release).toBeInstanceOf(Promise);
 
-  unrelated.release();
-  await Promise.resolve();
-  expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(Promise);
+    unrelated.release();
+    await Promise.resolve();
+    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
+      Promise,
+    );
 
-  allowOwner.resolve();
-  const admission = await admissionPromise;
-  admission.release();
-  await release;
-  expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
+    allowOwner.resolve();
+    admission = await admissionPromise;
+    admission.release();
+    await release;
+    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
+  } finally {
+    unrelated.release();
+    allowOwner.resolve();
+    admission ??= await admissionPromise;
+    admission.release();
+    await release;
+  }
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {

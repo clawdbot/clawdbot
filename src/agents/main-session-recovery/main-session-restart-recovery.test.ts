@@ -4659,6 +4659,7 @@ describe("main-session-restart-recovery", () => {
       ).toBeUndefined();
     } finally {
       releaseDispatch.resolve();
+      adoptedAdmission?.release();
       await Promise.allSettled([recovery, ...(mutation ? [mutation] : [])]);
     }
   });

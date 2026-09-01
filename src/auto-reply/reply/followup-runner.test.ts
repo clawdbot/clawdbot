@@ -170,6 +170,66 @@ describe("createFollowupRunner", () => {
     expect(removeAbortListener).toHaveBeenCalledOnce();
   });
 
+  it("resamples recovery ownership after each asynchronous admission", async () => {
+    const initialOwnerRelease = createDeferred();
+    const replacementOwnerRelease = createDeferred();
+    const turn = createTurn();
+    state.admit
+      .mockResolvedValueOnce({ kind: "owner-wait", release: replacementOwnerRelease.promise })
+      .mockResolvedValueOnce({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(createRejectedExecution());
+    state.account.mockResolvedValue(undefined);
+    state.deliver.mockResolvedValue(undefined);
+
+    const run = createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(createQueuedRun({ queueOwnerRelease: initialOwnerRelease.promise }));
+    await Promise.resolve();
+    expect(state.admit).not.toHaveBeenCalled();
+
+    initialOwnerRelease.resolve();
+    await vi.waitFor(() => expect(state.admit).toHaveBeenCalledOnce());
+    expect(state.execute).not.toHaveBeenCalled();
+
+    replacementOwnerRelease.resolve();
+    await run;
+    expect(state.admit).toHaveBeenCalledTimes(2);
+    expect(state.execute).toHaveBeenCalledOnce();
+  });
+
+  it("consumes an item canceled while waiting for a replacement recovery owner", async () => {
+    const replacementOwnerRelease = createDeferred();
+    const abortController = new AbortController();
+    const queued = createQueuedRun({ queueAbortSignal: abortController.signal });
+    state.admit.mockResolvedValue({
+      kind: "owner-wait",
+      release: replacementOwnerRelease.promise,
+    });
+
+    const run = createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(queued);
+    let runSettled = false;
+    void run.then(() => {
+      runSettled = true;
+    });
+    await vi.waitFor(() => expect(state.admit).toHaveBeenCalledOnce());
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(runSettled).toBe(false);
+    abortController.abort();
+    await run;
+
+    expect(state.admit).toHaveBeenCalledOnce();
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
+  });
+
   it.each(["before", "during"] as const)(
     "consumes an item aborted %s the queued owner wait",
     async (timing) => {

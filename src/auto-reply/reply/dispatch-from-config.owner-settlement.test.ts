@@ -3,7 +3,9 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import {
+  beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -139,6 +141,66 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       releaseResolver();
       await mutation;
       externalLifecycleRequest.emitDestroy();
+    }
+  });
+
+  it("carries the observed recovery owner release into the reply resolver", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:discord:channel:recovery-owner-handoff";
+    const sessionId = "recovery-owner-session";
+    const storePath = "/tmp/mock-sessions.json";
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      status: "running",
+      abortedLastRun: true,
+    };
+    const recoveryAdmission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+      assertAllowed: () => {},
+    });
+    type ResolverOptions = import("./get-reply-run.types.js").InternalGetReplyOptions;
+    let queueOwnerRelease: Promise<void> | undefined;
+    let queuedFollowupAbortSignal: AbortSignal | undefined;
+    let replyOperationAbortSignal: AbortSignal | undefined;
+    const queuedTurnController = new AbortController();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: ResolverOptions) => {
+      queueOwnerRelease = opts?.queueOwnerRelease;
+      queuedFollowupAbortSignal = opts?.queuedFollowupAbortSignal;
+      replyOperationAbortSignal = opts?.replyOperation?.abortSignal;
+      return { text: "queued after recovery" } satisfies ReplyPayload;
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          To: "discord:channel:recovery-owner-handoff",
+          AccountId: "default",
+          SessionKey: sessionKey,
+          Body: "preserve the recovery fence",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver,
+        replyOptions: {
+          turnAdoptionLifecycle: {
+            abortSignal: queuedTurnController.signal,
+            onAdopted: async () => {},
+          },
+        },
+      });
+      expect(queueOwnerRelease).toBeDefined();
+      expect(queuedFollowupAbortSignal).toBe(queuedTurnController.signal);
+      expect(queuedFollowupAbortSignal).not.toBe(replyOperationAbortSignal);
+
+      recoveryAdmission.release();
+      await queueOwnerRelease;
+    } finally {
+      recoveryAdmission.release();
     }
   });
 

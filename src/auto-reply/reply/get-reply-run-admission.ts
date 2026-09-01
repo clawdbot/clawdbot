@@ -473,7 +473,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveActiveEmbeddedSessionId() ??
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
-  let queueOwnerRelease: Promise<void> | undefined;
+  let queueOwnerRelease = opts?.queueOwnerRelease;
   const resolveQueueBusyState = () => {
     const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
@@ -489,7 +489,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (
       !activeSessionId ||
-      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !recoveryOwnerRelease)
+      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !queueOwnerRelease)
     ) {
       return { activeSessionId: undefined, isActive: false };
     }
@@ -505,7 +505,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
         replyOperationActive ||
-        recoveryOwnerRelease !== undefined,
+        queueOwnerRelease !== undefined,
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {

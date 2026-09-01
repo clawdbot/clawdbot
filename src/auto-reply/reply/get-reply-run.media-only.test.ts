@@ -2417,6 +2417,30 @@ describe("runPreparedReply media-only handling", () => {
       }
     },
   );
+  it("queues behind an inherited recovery fence after its registry owner releases", async () => {
+    let releaseOwner!: () => void;
+    const queueOwnerRelease = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+
+    try {
+      await expect(
+        runPrepared({
+          isNewSession: false,
+          sessionId: "session-inherited-recovery-owner",
+          storePath: "/tmp/inherited-recovery-owner-sessions.json",
+          opts: { queueOwnerRelease },
+        }),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireRunReplyAgentCall();
+      expect(call.isActive).toBe(true);
+      expect(call.shouldFollowup).toBe(true);
+      expect(call.followupRun.queueOwnerRelease).toBe(queueOwnerRelease);
+    } finally {
+      releaseOwner();
+    }
+  });
   it("interrupts an embedded-only heartbeat before running a visible Telegram turn", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");

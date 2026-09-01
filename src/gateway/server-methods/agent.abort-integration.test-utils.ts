@@ -16,6 +16,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
+  getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -2463,38 +2464,49 @@ describe("gateway agent handler chat.abort integration", () => {
     });
     mocks.agentCommand.mockReturnValueOnce(agentResult);
 
-    await invokeAgent(
-      {
-        message: "resume after restart",
-        agentId: "main",
-        sessionKey,
-        expectedExistingSessionId: sessionId,
-        idempotencyKey: runId,
-        inputProvenance: {
-          kind: "internal_system",
-          sourceSessionKey: sessionKey,
-          sourceTool: "main_session_restart_recovery",
+    let admissionRelease: Promise<void> | undefined;
+    let ownerRelease: Promise<void> | undefined;
+    try {
+      await invokeAgent(
+        {
+          message: "resume after restart",
+          agentId: "main",
+          sessionKey,
+          expectedExistingSessionId: sessionId,
+          idempotencyKey: runId,
+          inputProvenance: {
+            kind: "internal_system",
+            sourceSessionKey: sessionKey,
+            sourceTool: "main_session_restart_recovery",
+          },
         },
-      },
-      { client: backendGatewayClient(), reqId: runId },
-    );
+        { client: backendGatewayClient(), reqId: runId },
+      );
 
-    const ownerRelease = getSessionWorkAdmissionOwnerRelease({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-    });
-    expect(ownerRelease).toBeInstanceOf(Promise);
-
-    resolveAgent({ payloads: [{ text: "recovered" }], meta: { durationMs: 1 } });
-    await ownerRelease;
-    expect(
-      getSessionWorkAdmissionOwnerRelease({
+      admissionRelease = getSessionWorkAdmissionRelease({
+        scope: storePath,
+        identities: [sessionId],
+      });
+      ownerRelease = getSessionWorkAdmissionOwnerRelease({
         scope: storePath,
         identities: [sessionKey, sessionId],
         owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-      }),
-    ).toBeUndefined();
+      });
+      expect(ownerRelease).toBeInstanceOf(Promise);
+
+      resolveAgent({ payloads: [{ text: "recovered" }], meta: { durationMs: 1 } });
+      await ownerRelease;
+      expect(
+        getSessionWorkAdmissionOwnerRelease({
+          scope: storePath,
+          identities: [sessionKey, sessionId],
+          owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        }),
+      ).toBeUndefined();
+    } finally {
+      resolveAgent({ payloads: [{ text: "recovered" }], meta: { durationMs: 1 } });
+      await admissionRelease;
+    }
   });
 
   it("restores admitted restart recovery if pre-dispatch reactivation fails", async () => {

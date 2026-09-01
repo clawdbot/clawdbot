@@ -1,3 +1,4 @@
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
@@ -25,6 +26,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginSessionWorkAdmission,
+  getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -50,7 +52,12 @@ import { isReplyRunRecoveryBlocked } from "./reply-run-registry.state.js";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
-  | { status: "owned"; operation: ReplyOperation; sessionEntry?: SessionEntry }
+  | {
+      status: "owned";
+      operation: ReplyOperation;
+      sessionEntry?: SessionEntry;
+      queueOwnerRelease?: Promise<void>;
+    }
   | {
       status: "skipped";
       reason: "active-run" | "aborted" | "lifecycle-invalidated";
@@ -208,6 +215,7 @@ export async function admitReplyTurn(
       let operation: ReplyOperation | undefined;
       let admittedSessionEntry: InternalSessionEntry | undefined;
       let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
+      let queueOwnerRelease: Promise<void> | undefined;
       let interruptedBeforeOperation = false;
       const admission = storePath
         ? await beginSessionWorkAdmission({
@@ -294,18 +302,26 @@ export async function admitReplyTurn(
         if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
           throw new ReplyRunSuccessorAdmissionBlockedError(params.sessionKey);
         }
-        if (
-          storePath &&
-          !params.resetTriggered &&
-          params.allowRestartTombstoneParentFork !== true &&
+        const mayWaitForRecoveryOwner =
+          storePath && !params.resetTriggered && params.allowRestartTombstoneParentFork !== true;
+        // The named admission is the authoritative process-local busy fact even
+        // after startup recovery has cleared the durable aborted marker.
+        queueOwnerRelease = mayWaitForRecoveryOwner
+          ? getSessionWorkAdmissionOwnerRelease({
+              scope: storePath,
+              identities: [params.sessionKey, sessionId],
+              owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+            })
+          : undefined;
+        const shouldClaimRecoveryOwner =
+          mayWaitForRecoveryOwner &&
           admittedSessionEntry &&
           ((admittedSessionEntry.status === "running" &&
             (admittedSessionEntry.abortedLastRun === true ||
-              admittedSessionEntry.restartRecoveryRuns !== undefined ||
-              admittedSessionEntry.mainRestartRecovery !== undefined)) ||
+              admittedSessionEntry.restartRecoveryRuns !== undefined)) ||
             admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
-          isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey)
-        ) {
+          isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);
+        if (shouldClaimRecoveryOwner && queueOwnerRelease === undefined) {
           const ownerClaim = await claimMainSessionRecoveryOwner({
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
             sessionId,
@@ -402,6 +418,7 @@ export async function admitReplyTurn(
         status: "owned",
         operation,
         ...(admittedSessionEntry ? { sessionEntry: admittedSessionEntry } : {}),
+        ...(queueOwnerRelease ? { queueOwnerRelease } : {}),
       };
     } catch (error) {
       if (isAbortSignalAborted(params.upstreamAbortSignal)) {
