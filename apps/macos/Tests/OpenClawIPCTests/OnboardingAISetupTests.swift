@@ -4,6 +4,7 @@ import ConcurrencyExtras
 import CryptoKit
 import Foundation
 import ObjectiveC
+import Observation
 import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
@@ -409,6 +410,19 @@ private func wizardDoneResponse(
 
 private func settleQueuedAISetupTasks() async {
     try? await Task.sleep(nanoseconds: 100_000_000)
+}
+
+@MainActor
+private func waitForAISetupState(_ condition: () -> Bool) async {
+    while !condition() {
+        await withCheckedContinuation { continuation in
+            withObservationTracking {
+                _ = condition()
+            } onChange: {
+                continuation.resume()
+            }
+        }
+    }
 }
 
 private func pendingState(
@@ -1810,11 +1824,14 @@ struct OnboardingAISetupTests {
         await harness.gateway.shutdown()
     }
 
-    @Test(arguments: ["timeout", "replacement-unavailable", "commit-locked"])
-    func `unresolved provider auth cancellation dismisses locally and still sends exact cancellation`(
-        failure: String) async throws
+    @Test(
+        arguments: ["timeout", "replacement-unavailable", "commit-locked"],
+        [OnboardingAISetupModel.ProviderWizardKind.auth, .prepare])
+    func `unresolved provider cancellation stays visible and retries the exact session`(
+        failure: String, kind: OnboardingAISetupModel.ProviderWizardKind) async throws
     {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUnresolvedAuthCancellationTests"))
+        let cancellationFails = LockIsolated(true)
         let cancelledSessions = LockIsolated<[String]>([])
         let recorder = AISetupRequestRecorder()
         let session = makeAISetupRequestSession(
@@ -1823,7 +1840,7 @@ struct OnboardingAISetupTests {
                 switch request.method {
                 case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
-                case "openclaw.setup.auth.start":
+                case kind.startMethod:
                     let sessionID = try #require(request.params["sessionId"] as? String)
                     task.emitReceiveSuccess(.data(Data(
                         """
@@ -1835,6 +1852,11 @@ struct OnboardingAISetupTests {
                 case "wizard.cancel":
                     let sessionID = try #require(request.params["sessionId"] as? String)
                     cancelledSessions.withValue { $0.append(sessionID) }
+                    if !cancellationFails.value {
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"cancelled"}}"#.utf8)))
+                        return
+                    }
                     switch failure {
                     case "timeout":
                         throw URLError(.timedOut)
@@ -1851,7 +1873,7 @@ struct OnboardingAISetupTests {
                 }
             },
             receiveHook: { task, receiveIndex in
-                if failure == "replacement-unavailable", !cancelledSessions.value.isEmpty {
+                if failure == "replacement-unavailable", cancellationFails.value, !cancelledSessions.value.isEmpty {
                     throw URLError(.cannotConnectToHost)
                 }
                 if receiveIndex == 0 {
@@ -1868,33 +1890,43 @@ struct OnboardingAISetupTests {
             groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
 
         await model.detectAndAutoConnect()
-        model.startProviderAuth(option)
-        for _ in 0..<200 where model.authStep == nil {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        model.startProviderWizard(option, kind: kind)
+        await waitForAISetupState { model.authStep != nil }
         #expect(model.authStep?.id == "login")
         #expect(!model.authBusy)
         let sessionID = try #require(model._test_authSessionID)
 
         model.cancelProviderAuth()
-        #expect(model.activeAuthOption == nil)
+        try #require(model.activeAuthOption == option)
+        #expect(model.authError == nil)
+        #expect(model._test_authSessionID == sessionID)
+        #expect(model.authBusy)
+        #expect(model.providerAuthCancellation == .requesting)
+        #expect(!model.connected)
+
+        await waitForAISetupState { model.providerAuthCancellation != .requesting }
+        #expect(model.providerAuthCancellation == .unconfirmed)
+        #expect(model.activeAuthOption == option)
+        #expect(model.authError == OnboardingAISetupModel.providerAuthCancellationUnconfirmed())
+        let sheet = await inspectAISetupSheet(model)
+        #expect(sheet.labels.contains("Cancellation not confirmed"))
+        #expect(sheet.buttons["Cancel"] == true)
+        #expect(sheet.buttons["Submit"] == nil)
+        cancellationFails.setValue(false)
+        model.cancelProviderAuth()
+        await waitForAISetupState { model.activeAuthOption == nil }
         #expect(model.authError == nil)
         #expect(model._test_authSessionID == nil)
         #expect(!model.authBusy)
-        #expect(!model.connected)
-
-        for _ in 0..<200 where cancelledSessions.value.isEmpty {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
         #expect(!cancelledSessions.value.isEmpty)
         #expect(cancelledSessions.value.allSatisfy { $0 == sessionID })
         #expect(await recorder.snapshot().methods.allSatisfy {
-            ["openclaw.setup.detect", "openclaw.setup.auth.start", "wizard.cancel"].contains($0)
+            ["openclaw.setup.detect", kind.startMethod, "wizard.cancel"].contains($0)
         })
         await gateway.shutdown()
     }
 
-    @Test func `cancellation locked provider commit reconciles after local dismissal`() async throws {
+    @Test func `cancellation locked provider commit reconciles while cancellation stays visible`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingLockedAuthCancellationTests"))
         let nextGate = AISetupRequestGate()
         let detections = AISetupSocketGeneration()
@@ -1947,9 +1979,9 @@ struct OnboardingAISetupTests {
         await nextGate.waitUntilStarted()
 
         model.cancelProviderAuth()
-        #expect(model.activeAuthOption == nil)
-        #expect(model._test_authSessionID == nil)
-        #expect(!model.authBusy)
+        #expect(model.activeAuthOption == option)
+        #expect(model._test_authSessionID == sessionID)
+        #expect(model.authBusy)
 
         await nextGate.release()
         for _ in 0..<400 where !model.connected {
@@ -2010,6 +2042,8 @@ struct OnboardingAISetupTests {
 
         model.cancelProviderAuth()
         await cancellationGate.waitUntilStarted()
+        model.resetForGatewayChange()
+        await model.detectAndAutoConnect()
         model.startProviderAuth(option)
         for _ in 0..<200 where model._test_authSessionID == nil || model.authStep == nil {
             try? await Task.sleep(nanoseconds: 5_000_000)
