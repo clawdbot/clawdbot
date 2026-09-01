@@ -41,17 +41,6 @@ describe("package docs map", () => {
     expect(existsSync(mapPath)).toBe(false);
   });
 
-  it("preserves an identical map that existed before packaging", async () => {
-    const root = makePackageRoot();
-    const mapPath = path.join(root, "docs", "docs_map.md");
-    const content = renderDocsHeadingMap(path.join(root, "docs"));
-    writeFileSync(mapPath, content, "utf8");
-
-    await expect(preparePackageDocsMap(root)).resolves.toBe(false);
-    await expect(restorePackageDocsMap(root)).resolves.toBe(false);
-    expect(readFileSync(mapPath, "utf8")).toBe(content);
-  });
-
   it("restores a tracked source stub after packaging", async () => {
     const root = makePackageRoot();
     const mapPath = path.join(root, "docs", "docs_map.md");
@@ -64,29 +53,35 @@ describe("package docs map", () => {
     expect(readFileSync(mapPath, "utf8")).toBe(stub);
   });
 
-  it("serializes concurrent package preparations with the receipt", async () => {
-    const root = makePackageRoot();
-    const mapPath = path.join(root, "docs", "docs_map.md");
-    const stub = "# Docs map source\n";
-    writeFileSync(mapPath, stub, "utf8");
+  it.each(["source stub", "generated map"])(
+    "serializes preparations starting from a %s",
+    async (initialMap) => {
+      const root = makePackageRoot();
+      const mapPath = path.join(root, "docs", "docs_map.md");
+      const original =
+        initialMap === "generated map"
+          ? renderDocsHeadingMap(path.join(root, "docs"))
+          : "# Docs map source\n";
+      writeFileSync(mapPath, original, "utf8");
 
-    const results = await Promise.allSettled([
-      preparePackageDocsMap(root),
-      preparePackageDocsMap(root),
-    ]);
+      const results = await Promise.allSettled([
+        preparePackageDocsMap(root),
+        preparePackageDocsMap(root),
+      ]);
 
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    const rejected = results.find((result) => result.status === "rejected");
-    expect(rejected).toMatchObject({
-      reason: expect.objectContaining({
-        code: "PACKAGE_DOCS_MAP_ACTIVE",
-        message: expect.stringContaining("node scripts/openclaw-postpack.mjs"),
-      }),
-    });
-    expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
-    await expect(restorePackageDocsMap(root)).resolves.toBe(true);
-    expect(readFileSync(mapPath, "utf8")).toBe(stub);
-  });
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected).toMatchObject({
+        reason: expect.objectContaining({
+          code: "PACKAGE_DOCS_MAP_ACTIVE",
+          message: expect.stringContaining("node scripts/openclaw-postpack.mjs"),
+        }),
+      });
+      expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
+      await expect(restorePackageDocsMap(root)).resolves.toBe(true);
+      expect(readFileSync(mapPath, "utf8")).toBe(original);
+    },
+  );
 
   it("refuses to remove a transient map changed after prepack", async () => {
     const root = makePackageRoot();

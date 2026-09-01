@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
@@ -50,7 +51,13 @@ export function resolveCliExecutionAuthProfileId(params: {
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
   });
+  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
+    params.cliExecutionProvider,
+  )?.nativeAuthProfileIds;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
+  if (selectedAuthProfileId && nativeAuthProfileIds?.includes(selectedAuthProfileId)) {
+    return undefined;
+  }
   if (selectedAuthProfileId) {
     const credential = store.profiles[selectedAuthProfileId];
     if (credential?.provider === params.cliExecutionProvider) {
@@ -80,7 +87,11 @@ export function resolveCliExecutionAuthProfileId(params: {
     cfg: params.config,
     store,
     provider: params.cliExecutionProvider,
-  })[0];
+  }).find(
+    (profileId) =>
+      store.profiles[profileId]?.provider === params.cliExecutionProvider &&
+      !nativeAuthProfileIds?.includes(profileId),
+  );
   if (cliProfileId) {
     return cliProfileId;
   }

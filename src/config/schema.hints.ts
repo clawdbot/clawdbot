@@ -5,6 +5,7 @@ import {
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { z } from "zod";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
@@ -19,6 +20,7 @@ const GROUP_HINTS = [
   ["update", "Update", 25],
   ["cli", "CLI", 26],
   ["diagnostics", "Diagnostics", 27],
+  ["telemetry", "Telemetry", 28],
   ["logging", "Logging", 900],
   ["gateway", "Gateway", 30],
   ["nodeHost", "Node Host", 35],
@@ -33,7 +35,7 @@ const GROUP_HINTS = [
   ["commands", "Commands", 85],
   ["session", "Session", 90],
   ["cron", "Automations", 100],
-  ["worktrees", "Worktrees", 105],
+  ["worktreeRoot", "Worktree Root", 105],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],
   ["browser", "Browser", 130],
@@ -50,7 +52,7 @@ const GROUP_HINTS = [
 const SECTION_DOCS_URLS = {
   accessGroups: "https://docs.openclaw.ai/channels/access-groups",
   messages: "https://docs.openclaw.ai/concepts/messages",
-  tts: "https://docs.openclaw.ai/tts",
+  tts: "https://docs.openclaw.ai/tools/tts",
   commands: "https://docs.openclaw.ai/tools/slash-commands",
   hooks: "https://docs.openclaw.ai/automation/hooks",
   cron: "https://docs.openclaw.ai/automation/cron-jobs",
@@ -74,6 +76,7 @@ const SECTION_DOCS_URLS = {
   env: "https://docs.openclaw.ai/help/environment",
   auth: "https://docs.openclaw.ai/concepts/oauth",
   update: "https://docs.openclaw.ai/install/updating",
+  telemetry: "https://docs.openclaw.ai/gateway/telemetry",
   logging: "https://docs.openclaw.ai/logging",
   diagnostics: "https://docs.openclaw.ai/gateway/diagnostics",
   cli: "https://docs.openclaw.ai/cli",
@@ -87,7 +90,7 @@ const SECTION_DOCS_URLS = {
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
   desktop: "https://docs.openclaw.ai/gateway/configuration",
-  worktrees: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
   proxy: "https://docs.openclaw.ai/security/network-proxy",
   transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
   surfaces: "https://docs.openclaw.ai/concepts/messages",
@@ -104,6 +107,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.sshTarget": "user@host",
   "gateway.remote.sshHostKeyPolicy": "strict",
   "gateway.controlUi.basePath": "/openclaw",
+  "gateway.controlUi.environment.label": "edge",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
@@ -112,15 +116,15 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
-const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isKernelOwnedChannelHintPath(path: string): boolean {
   if (path === "channels") {
     return true;
   }
-  return CHANNEL_KERNEL_HINT_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
+    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
+    : undefined;
+  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
@@ -154,6 +158,12 @@ export function buildBaseHints(): ConfigUiHints {
         hints[path] = { ...hints[path], [field]: value };
       }
     }
+  }
+  for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
+    const runtimePath = `${path}.agentRuntime`;
+    const codeModePath = `${path}.codeMode`;
+    hints[runtimePath] = { ...hints[runtimePath], order: -2 };
+    hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
   }
   return applyDerivedTags(applyConfigTierHints(hints));
 }

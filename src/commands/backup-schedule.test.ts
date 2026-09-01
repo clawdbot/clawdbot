@@ -9,6 +9,9 @@ const gatewayRpc = vi.hoisted(() => ({
   call: vi.fn(),
   isImplicitLocalTarget: vi.fn(async () => true),
 }));
+const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+}));
 
 vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli/gateway-rpc.js")>();
@@ -17,6 +20,11 @@ vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
     callGatewayFromCli: gatewayRpc.call,
     isImplicitLocalGatewayTargetFromCli: gatewayRpc.isImplicitLocalTarget,
   };
+});
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
 });
 
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
@@ -41,6 +49,9 @@ describe("scheduled backups", () => {
   beforeEach(() => {
     gatewayRpc.call.mockReset();
     gatewayRpc.isImplicitLocalTarget.mockReset().mockResolvedValue(true);
+    configMocks.getRuntimeConfig.mockReset().mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+    });
   });
 
   afterEach(async () => {
@@ -94,6 +105,51 @@ describe("scheduled backups", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("schedules a configured agent using its normalized id", async () => {
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+    const runtime = createTestRuntime();
+
+    await backupEnableCommand(runtime, {
+      repository: "/tmp/openclaw-backups",
+      agent: "Ops Team",
+    });
+
+    const spec = gatewayRpc.call.mock.calls[0]?.[2] as { payload: { argv: string[] } };
+    expect(spec.payload.argv).toContain("ops-team");
+    expect(spec.payload.argv).not.toContain("--all");
+  });
+
+  it.each([
+    [
+      "unknown",
+      "nope-agent",
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ],
+    ["empty", "", "--agent must not be blank"],
+    ["whitespace-only", "   ", "--agent must not be blank"],
+  ])("rejects an %s scheduled backup agent", async (_label, agent, message) => {
+    const runtime = createTestRuntime();
+
+    await expect(
+      backupEnableCommand(runtime, {
+        repository: "/tmp/openclaw-backups",
+        agent,
+      }),
+    ).rejects.toThrow(message);
+
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])("rejects an explicit blank interval %j before scheduling", async (every) => {
+    const runtime = createTestRuntime();
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+
+    await expect(
+      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every }),
+    ).rejects.toThrow("Invalid duration (empty)");
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
+  });
+
   it("atomically converges an existing declaration and removes it idempotently", async () => {
     gatewayRpc.call.mockResolvedValueOnce({
       created: false,
@@ -113,6 +169,7 @@ describe("scheduled backups", () => {
       expect.anything(),
       expect.objectContaining({
         declarationKey: BACKUP_CRON_JOB_NAME,
+        schedule: { kind: "every", everyMs: 86_400_000 },
         payload: expect.objectContaining({ argv: expect.arrayContaining(["--global"]) }),
       }),
     );

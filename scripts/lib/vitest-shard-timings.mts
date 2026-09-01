@@ -1,30 +1,11 @@
 // Persists per-shard Vitest timing samples for later scheduling.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-
-type ShardTimingSpec = {
-  config: string;
-  env?: NodeJS.ProcessEnv;
-  includePatterns?: string[] | null;
-  watchMode?: boolean;
-};
+import { resolveShardTimingKey, type VitestShardTimingSpec } from "./vitest-shard-metadata.mts";
 
 const TIMINGS_FILE_ENV_KEY = "OPENCLAW_TEST_PROJECTS_TIMINGS_PATH";
 const TIMINGS_DISABLE_ENV_KEY = "OPENCLAW_TEST_PROJECTS_TIMINGS";
-const SHARD_NAME_ENV_KEY = "OPENCLAW_VITEST_SHARD_NAME";
-
-function sanitizeTimingLabel(value: unknown): string {
-  return String(value)
-    .trim()
-    .replace(/[^a-zA-Z0-9_.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function hashIncludePatterns(includePatterns: string[]): string {
-  return createHash("sha1").update(JSON.stringify(includePatterns)).digest("hex").slice(0, 12);
-}
 
 function shouldUseShardTimings(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[TIMINGS_DISABLE_ENV_KEY] !== "0";
@@ -35,27 +16,9 @@ function resolveShardTimingsPath(cwd = process.cwd(), env = process.env): string
 }
 
 /**
- * Resolves the stable timing key for a Vitest shard specification.
- */
-export function resolveShardTimingKey(spec: ShardTimingSpec): string {
-  if (!Array.isArray(spec.includePatterns) || spec.includePatterns.length === 0) {
-    return spec.config;
-  }
-
-  const shardName = sanitizeTimingLabel(spec.env?.[SHARD_NAME_ENV_KEY] ?? "");
-  if (shardName) {
-    return `${spec.config}#${shardName}`;
-  }
-
-  return `${spec.config}#include-${spec.includePatterns.length}-${hashIncludePatterns(
-    spec.includePatterns,
-  )}`;
-}
-
-/**
  * Creates a timing sample for completed non-watch Vitest shard runs.
  */
-export function createShardTimingSample(spec: ShardTimingSpec, durationMs: number) {
+export function createShardTimingSample(spec: VitestShardTimingSpec, durationMs: number) {
   if (spec.watchMode || !Number.isFinite(durationMs) || durationMs <= 0) {
     return null;
   }

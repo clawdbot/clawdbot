@@ -44,6 +44,7 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
 const ASSISTANT_OVERFLOW_PATTERNS = [
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
+  /input length and `?max_tokens`? exceed context limit: [\d,]+ \+ [\d,]+ > [\d,]+/i, // Anthropic direct API
   /input is too long for requested model/i, // Amazon Bedrock
   /exceeds the context window/i, // OpenAI (Completions & Responses API)
   /exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))/i, // OpenAI-compatible proxies (LiteLLM)
@@ -89,7 +90,7 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /exceed context limit/i,
   /exceeds the model'?s maximum context/i,
   /max_tokens[\s\S]*exceed[\s\S]*context/i,
-  /input length[\s\S]*exceed[\s\S]*context/i,
+  /input(?: length[\s\S]*exceed[\s\S]*context| \([\d,]+\s*tokens?\) is longer than (?:the )?model'?s context length)/i,
   /413[\s\S]*too large/i,
   /context_window_exceeded/i,
   // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; this is provider overflow.

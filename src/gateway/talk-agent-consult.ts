@@ -8,14 +8,18 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
-import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  buildRealtimeVoiceAgentConsultChatMessage,
+} from "../talk/agent-consult-tool.js";
 import { abortChatRunById } from "./chat-abort.js";
-import { handleChatSend } from "./server-methods/chat-send-handler.js";
+import { handleTrustedInternalChatSend } from "./server-methods/chat-send-handler.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./server-methods/shared-types.js";
+import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -78,12 +82,13 @@ export async function startTalkRealtimeAgentConsult(params: {
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(params.context.getRuntimeConfig().talk);
+  const authority = resolveTalkAgentConsultAuthority(params.client?.connect?.scopes);
   let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
   >((resolve) => {
     let acknowledged = false;
-    const chatSendResult = handleChatSend({
+    const chatSendOptions = {
       req: {
         type: "req",
         id: `${params.requestId}:talk-tool-call`,
@@ -96,6 +101,11 @@ export async function startTalkRealtimeAgentConsult(params: {
         sessionKey: params.sessionKey,
         message,
         idempotencyKey,
+        suppressCommandInterpretation: true,
+        systemInputProvenance: {
+          kind: "internal_system",
+          sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        },
         ...(normalizedTalk?.consultThinkingLevel
           ? { thinking: normalizedTalk.consultThinkingLevel }
           : {}),
@@ -146,7 +156,13 @@ export async function startTalkRealtimeAgentConsult(params: {
               },
         );
       },
-    } as GatewayRequestHandlerOptions);
+    } as GatewayRequestHandlerOptions;
+    // Keep the caller's tool boundary while hiding generated consult input;
+    // the finalized speech already owns the human transcript.
+    const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
+      toolsAllow: authority.toolsAllow,
+      display: false,
+    });
     void Promise.resolve(chatSendResult).then(
       () => {
         if (!acknowledged) {

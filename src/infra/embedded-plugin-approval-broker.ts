@@ -49,6 +49,7 @@ export class EmbeddedPluginApprovalBroker {
     const id = `plugin:${randomUUID()}`;
     const createdAtMs = Date.now();
     const record: PluginApprovalRequest = {
+      approvalKind: "plugin",
       id,
       request: params.request,
       createdAtMs,

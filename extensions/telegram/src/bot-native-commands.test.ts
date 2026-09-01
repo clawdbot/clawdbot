@@ -17,7 +17,6 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
 type TelegramInlineKeyboardReplyMarkup = {
@@ -76,7 +75,6 @@ registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -184,6 +182,7 @@ describe("registerTelegramNativeCommands", () => {
     const native = listNativeCommandSpecsForConfig(cfg, {
       skillCommands,
       provider: "telegram",
+      includeBundledChannelFallback: false,
     }).map((command) => ({
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
@@ -192,10 +191,14 @@ describe("registerTelegramNativeCommands", () => {
     expect(registered).toEqual([
       { command: "custom_two", description: "Custom two unchanged" },
       { command: "custom_one", description: "Custom one unchanged" },
-      ...native.filter((command) => !command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
       { command: "alpha", description: "Alpha unchanged" },
       { command: "zeta", description: "Zeta unchanged" },
-      ...native.filter((command) => command.isAlias).map(({ isAlias: _, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
   });
 
@@ -239,7 +242,11 @@ describe("registerTelegramNativeCommands", () => {
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
     const expectedTotalCommands =
-      customCommands.length + listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).length;
+      customCommands.length +
+      listNativeCommandSpecsForConfig(cfg, {
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      }).length;
     expect(runtimeLog).toHaveBeenCalledWith(
       `Telegram limits bots to 100 commands. ${expectedTotalCommands} configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
     );

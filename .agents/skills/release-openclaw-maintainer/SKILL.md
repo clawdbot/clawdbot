@@ -1,6 +1,6 @@
 ---
 name: release-openclaw-maintainer
-description: Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts.
+description: "Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts."
 ---
 
 # OpenClaw Release Maintainer
@@ -42,6 +42,8 @@ a workflow fix that the existing parent run cannot consume.
   approval for its categorized set before mutating the release branch. This
   audit is required for discovery; it does not authorize optional backports on
   an already-frozen candidate.
+- Backports are optional and operator-selected. When a backport is requested
+  without a target, use the newest open `release/` branch.
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
@@ -150,9 +152,10 @@ a workflow fix that the existing parent run cannot consume.
   extra fixes during an active release unless the operator explicitly asks for
   that audit. Operators may authorize up to 4 autonomous beta attempts; after
   4 failed beta attempts, stop and report.
-- As soon as the Code SHA exists, dispatch `OpenClaw Performance`
-  with `target_ref=<code-sha>` in parallel with the other release work. Do
-  not wait for full release validation to start the performance signal.
+- An early standalone `OpenClaw Performance` run with `target_ref=<code-sha>`
+  is optional beta confidence and may overlap other release work. Do not add
+  a duplicate mandatory prepublish wait. Stable/full Full Release Validation
+  retains its required blocking performance child.
 - Before publish/closeout, compare available product performance metrics with
   earlier releases: Kova agent-turn/resource metrics, gateway startup
   ready/listen/RSS/CPU metrics, and CLI startup metrics from release evidence
@@ -772,13 +775,24 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`
 - Release validation phases:
   - `beta-publish`: `release_profile=beta`, `run_release_soak=false`. This is
-    the bounded prepublish gate; it excludes broad live/E2E, QA-live, and
-    Parallels confidence work.
+    the bounded prepublish gate. An `all` run for an actual beta package on its
+    matching canonical release branch or beta tag records
+    `coveragePolicy=npm-beta-v1`: native app CI, performance, and
+    published-package Telegram move to confidence. Linux/macOS/Windows Node,
+    Control UI, plugin, package, install/update, cross-OS, QA parity,
+    runtime-pair/restart, and tool-coverage gates remain. Beta `all` without
+    soak also defers Package Acceptance Telegram, broad live/E2E, QA-live, and
+    Parallels. Package Telegram deferral also applies to beta-profile `main`
+    or alpha checks; those targets do not qualify for `npm-beta-v1`.
   - `postpublish-confidence`: run against the exact published beta package with
     `run_release_soak=true` or explicit focused groups. This is the default home
-    for QA-live, broad Docker/live E2E, mobile, and Parallels.
+    for native apps, performance, Telegram, QA-live, broad Docker/live E2E, and
+    Parallels. Deferred checks are not run, never passed. Focused groups and
+    soak retain existing coverage; every selected child needs terminal evidence.
   - `stable-publish`: `release_profile=stable`; require the stable publish
-    roster and accepted confidence evidence.
+    roster and accepted confidence evidence. Stable/full retain soak and
+    blocking performance. Native artifact publication retains its own build,
+    signing, notarization, and promotion gates.
 - Post-published beta verification roster:
   - `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <beta-version>`
   - install/update smoke against the published beta channel
@@ -1018,16 +1032,21 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 6. Make every repo version location match the beta tag. Apply only explicitly
    selected backports or release fixes. Make a pre-publish main change only
    under the active release scope lock. Freeze the result as the Code SHA.
-7. Immediately dispatch Actions > `OpenClaw Performance` from the pinned
-   trusted workflow source with `target_ref=<code-sha>`, `profile=release`,
-   `repeat=3`, deep profiling
-   off, live OpenAI off, and regression failure off. Let it run in parallel
-   with Code SHA validation.
+7. If early beta performance confidence is useful, dispatch Actions >
+   `OpenClaw Performance` from the pinned trusted workflow source with
+   `target_ref=<code-sha>`, `profile=release`, `repeat=3`, deep profiling off,
+   live OpenAI off, and `fail_on_regression=false`. This optional run may
+   overlap Code SHA validation; it adds no mandatory beta prepublish wait.
+   Stable/full validation retains its blocking performance child.
 8. Run the deterministic source preflight, then Full Release Validation against
    the exact Code SHA with
-   `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`.
+   `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`.
+   Reuse the recorded full Tooling SHA for every later release validation; do
+   not refresh it from moving `main`.
    For beta-publish, keep `release_profile=beta` and
-   `run_release_soak=false`. Record the Validation SHA + Tooling SHA tuple
+   `run_release_soak=false`. Confirm `coveragePolicy=npm-beta-v1` for the
+   matching canonical beta target; policy absence retains historical full
+   behavior. Record the Validation SHA + Tooling SHA tuple
    (Validation SHA is the Code SHA in this phase) and use one transition
    watcher. Product failures return to step 6 with a new Code SHA;
    tooling/harness/provenance, infrastructure/credential, and wrapper failures
@@ -1063,6 +1082,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     option when it reported none. This consumes the existing reused full
     evidence and exact Release SHA preflight instead of dispatching either
     again. It completes package/install proof and prints the publish command.
+    Admitted `npm-beta-v1` evidence records the helper's Telegram package check
+    as `deferred-postpublish`; other evidence keeps the existing check. The
+    focused `npm-telegram` and postpublish `release:beta-smoke` paths remain.
     Beta and alpha candidates defer Parallels to postpublish
     `pnpm release:beta-smoke` by default; stable/full candidates run it
     prepublish. Use `--run-parallels` or `--skip-parallels` only for an explicit
@@ -1122,7 +1144,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     with the original child run IDs and an evidence output path before manually
     recreating the workflow's draft, dependency evidence asset, proof section,
     and publish step.
-27. Run the post-published beta verification roster. Do not scan current `main`
+27. Keep campaign generation outside the release path. The isolated
+    `release-validation-skill-runner.yml` workflow owns campaign updates, and
+    `$openclaw-release-validation` dispatches it when a tester finds the
+    stable-train issue missing or behind the latest beta. Campaign guidance is
+    useful postpublish context, never a publication blocker.
+28. Run the post-published beta verification roster. Do not scan current `main`
     for extra fixes unless the operator explicitly requests a backport audit.
     Apply only operator-selected backports, and increment to the next beta if a
     selected fix must change the already-published package. A failed confidence
@@ -1142,10 +1169,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     all-group cycle. The operator's separate beta-attempt cap, normally 4,
     remains a ceiling for admitted product attempts, not an automatic retry
     budget.
-28. Announce the beta/stable release on Discord best-effort using the configured secret workflow.
-29. If the operator requested beta only, stop after beta verification and the
+29. Announce the beta/stable release on Discord best-effort using the configured secret workflow.
+30. If the operator requested beta only, stop after beta verification and the
     announcement.
-30. If the stable release was published to `beta`, use the light stable
+31. If the stable release was published to `beta`, use the light stable
     promotion roster when the matching beta already carried the full confidence
     pass: published npm postpublish verify, Docker install/update smoke,
     macOS-only Parallels install/update smoke, and required QA signal.
@@ -1153,25 +1180,25 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow
     to promote that stable version from `beta` to `latest`, then verify
     `latest` now points at that version.
-31. If the stable release was published directly to `latest` and `beta` should
+32. If the stable release was published directly to `latest` and `beta` should
     follow it, start that same release-ops dist-tag workflow to point `beta` at
     the stable version, then verify both `latest` and `beta` point at that
     version.
-32. For stable releases, start
+33. For stable releases, start
     `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` for the
     real publish with the successful release-ops mac `preflight_run_id` and wait
     for success.
-33. Verify the successful real release-ops mac run uploaded the `.zip`, `.dmg`,
+34. Verify the successful real release-ops mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
-34. For stable releases, download `macos-appcast-<tag>` from the successful
+35. For stable releases, download `macos-appcast-<tag>` from the successful
     release-ops mac run, update `appcast.xml` on `main`, verify the feed, then
     complete the **Close stable releases on main** gate.
-35. For beta releases, publish the mac assets only when intentionally requested;
+36. For beta releases, publish the mac assets only when intentionally requested;
     expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-36. After stable main closeout, verify npm and the attached release artifacts.
+37. After stable main closeout, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

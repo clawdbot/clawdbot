@@ -46,12 +46,17 @@ describe("dispatchReplyFromConfig", () => {
 
     let isActive: (() => boolean) | undefined;
     let activeDuringRun: boolean | undefined;
+    let activeAfterLevelChange: boolean | undefined;
     const replyResolver = async (
       _ctx: MsgContext,
       _opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
       activeDuringRun = isActive?.();
+      sessionStoreMocks.currentEntry = {
+        verboseLevel: "off",
+      };
+      activeAfterLevelChange = isActive?.();
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -68,6 +73,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(activeDuringRun).toBe(true);
+    expect(activeAfterLevelChange).toBe(false);
 
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -92,60 +98,88 @@ describe("dispatchReplyFromConfig", () => {
     expect(activeDuringOffRun).toBe(false);
   });
 
-  it("keeps block-owned commentary out of the standalone durable progress lane", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "direct",
-    });
-    const onItemEvent = vi.fn();
+  it.each([
+    { surface: "slack", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
+    { surface: "slack", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
+    { surface: "discord", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
+    { surface: "discord", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
+  ] as const)(
+    "routes $surface commentary through one owner with verbose $verboseLevel",
+    async ({ surface, verboseLevel, nextVerboseLevel, durableCommentary }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        verboseLevel,
+      };
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: surface,
+        Surface: surface,
+        ChatType: "group",
+        From: `${surface}:channel:C123`,
+        SessionKey: `agent:main:${surface}:channel:C123`,
+      });
+      const onItemEvent = vi.fn();
+      let isVerboseProgressActive = () => false;
 
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onItemEvent?.({
+      const replyResolver = async (
+        _ctx: MsgContext,
+        opts?: GetReplyOptions,
+        _cfg?: OpenClawConfig,
+      ) => {
+        sessionStoreMocks.currentEntry = {
+          verboseLevel: nextVerboseLevel,
+        };
+        expect(isVerboseProgressActive()).toBe(durableCommentary);
+        expect(opts?.commentaryPayloadsEnabled).toBe(durableCommentary);
+        await opts?.onItemEvent?.({
+          itemId: "commentary-1",
+          kind: "preamble",
+          progressText: "Inspecting the dispatch path.",
+          ...(durableCommentary ? { suppressDurableProgress: true } : {}),
+        });
+        await opts?.onBlockReply?.({
+          text: "Inspecting the dispatch path.",
+          isCommentary: true,
+        });
+        return { text: "Done." } satisfies ReplyPayload;
+      };
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg: automaticGroupReplyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          suppressDefaultToolProgressMessages: true,
+          commentaryProgressEnabled: true,
+          progressPreambleEnabled: true,
+          commentaryPayloadsEnabled: true,
+          shouldDeliverCommentaryPayloads: () => isVerboseProgressActive(),
+          onVerboseProgressVisibility: (getter) => {
+            isVerboseProgressActive = getter;
+          },
+          onItemEvent,
+        },
+      });
+
+      expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
         itemId: "commentary-1",
         kind: "preamble",
         progressText: "Inspecting the dispatch path.",
-        suppressDurableProgress: true,
+        ...(durableCommentary ? { suppressDurableProgress: true } : {}),
       });
-      await opts?.onBlockReply?.({ text: "Inspecting the dispatch path." });
-      return { text: "Done." } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        suppressDefaultToolProgressMessages: true,
-        commentaryProgressEnabled: true,
-        progressPreambleEnabled: true,
-        commentaryPayloadsEnabled: true,
-        onItemEvent,
-      },
-    });
-
-    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
-      itemId: "commentary-1",
-      kind: "preamble",
-      progressText: "Inspecting the dispatch path.",
-      suppressDurableProgress: true,
-    });
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith({
-      text: "Inspecting the dispatch path.",
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
-  });
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      if (durableCommentary) {
+        expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith({
+          text: "Inspecting the dispatch path.",
+          isCommentary: true,
+        });
+      } else {
+        expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      }
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
+    },
+  );
 
   it("forwards channel-owned group progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
@@ -1254,12 +1288,10 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
       await opts?.onToolResult?.({
         text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
       });
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -1274,7 +1306,6 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -1322,7 +1353,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses terminal tool-error fallbacks when regular verbose progress is visible", async () => {
+  it("forwards failed command progress in regular verbose mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -1340,7 +1371,6 @@ describe("dispatchReplyFromConfig", () => {
     let receivedOptions: GetReplyOptions | undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
       await opts?.onCommandOutput?.({
         phase: "end",
         name: "exec",
@@ -1365,7 +1395,6 @@ describe("dispatchReplyFromConfig", () => {
       exitCode: 1,
     });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
@@ -1417,11 +1446,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(commandOutputResult).toBe(false);
     expect(itemEventResult).toBe(false);
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("suppresses terminal tool-error fallbacks in group sessions when verbose progress is visible", async () => {
+  it("forwards failed group tool progress in regular verbose mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -1441,7 +1470,6 @@ describe("dispatchReplyFromConfig", () => {
     let receivedOptions: GetReplyOptions | undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
       await opts?.onItemEvent?.({
         itemId: "item-1",
         kind: "tool",
@@ -1466,7 +1494,6 @@ describe("dispatchReplyFromConfig", () => {
       status: "failed",
     });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
@@ -1498,7 +1525,6 @@ describe("dispatchReplyFromConfig", () => {
         ...sessionStoreMocks.currentEntry,
         verboseLevel: "on",
       };
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
       return { text: "done" } satisfies ReplyPayload;
     });
 
@@ -1515,47 +1541,8 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("does not pre-latch terminal tool-error suppression when diagnostics are disabled", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
-    let receivedOptions: GetReplyOptions | undefined;
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
-      sessionStoreMocks.currentEntry = {
-        ...sessionStoreMocks.currentEntry,
-        verboseLevel: "off",
-      };
-      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBe(false);
-      return { text: "done" } satisfies ReplyPayload;
-    });
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: { diagnostics: { enabled: false } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(false);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
   it("keeps terminal tool-error fallbacks available in verbose full mode", async () => {

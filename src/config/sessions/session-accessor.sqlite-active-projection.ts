@@ -12,6 +12,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import { hasUnclassifiedSessionTranscriptEvents } from "./session-transcript-projection-rebuild.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 type ActiveTranscriptDatabase = Pick<
@@ -101,7 +102,8 @@ export function withCurrentProjectionSnapshot<T>(
       if (
         snapshot.state &&
         !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq
+        snapshot.state.indexedSeq === snapshot.latestSeq &&
+        !hasUnclassifiedSessionTranscriptEvents(database.db, resolved.sessionId)
       ) {
         return {
           kind: "value" as const,

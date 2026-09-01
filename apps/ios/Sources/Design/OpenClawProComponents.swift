@@ -284,39 +284,25 @@ struct OpenClawSidebarControlButton: View {
     }
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            self.identified(self.button.buttonStyle(.plain))
-        } else {
-            self.identified(self.button.openClawGlassButton(tint: OpenClawBrand.accent))
-        }
+        self.identified(self.button.buttonStyle(.plain))
     }
 
     private var button: some View {
         Button(action: self.headerAction.action) {
             self.icon
         }
-        .buttonBorderShape(.circle)
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .accessibilityLabel(self.headerAction.accessibilityLabel.text)
     }
 
-    @ViewBuilder
     private var icon: some View {
-        let icon = Image(systemName: self.headerAction.systemName)
+        Image(systemName: self.headerAction.systemName)
             .font(OpenClawType.subheadSemiBold)
+            .foregroundStyle(OpenClawBrand.accent)
             .frame(
                 width: OpenClawProMetric.compactControlSize,
                 height: OpenClawProMetric.compactControlSize)
-        if #available(iOS 26.0, *) {
-            icon
-                .foregroundStyle(OpenClawBrand.accent)
-                .glassEffect(
-                    .regular.interactive(),
-                    in: Circle())
-        } else {
-            icon
-        }
     }
 
     @ViewBuilder
@@ -347,8 +333,8 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
             ToolbarItem(placement: self.placement) {
                 OpenClawSidebarControlButton(action: self.action)
             }
-            // The button owns an explicit circular glass shape; suppress the
-            // toolbar's shared pill so it cannot stretch the leading control.
+            // Sidebar reveal is intentionally background-free in every host;
+            // suppress the toolbar's automatic glass so it cannot reappear.
             .sharedBackgroundVisibility(.hidden)
         } else {
             ToolbarItem(placement: self.placement) {

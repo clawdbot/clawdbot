@@ -47,6 +47,9 @@ function resolveZaloAccountWithMode(params: {
     token: tokenResolution.token,
     tokenSource: tokenResolution.source,
     tokenStatus: tokenResolution.status,
+    ...(tokenResolution.credentialDiagnostics
+      ? { credentialDiagnostics: tokenResolution.credentialDiagnostics }
+      : {}),
     config: merged,
   };
 }
@@ -58,9 +61,16 @@ export function resolveZaloAccount(params: {
   return resolveZaloAccountWithMode({ ...params, mode: "strict" });
 }
 
-export function inspectZaloAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): ResolvedZaloAccount {
-  return resolveZaloAccountWithMode({ ...params, mode: "inspect" });
+export function inspectZaloAccount(params: { cfg: OpenClawConfig; accountId?: string | null }) {
+  const account = resolveZaloAccountWithMode({ ...params, mode: "inspect" });
+  return {
+    ...account,
+    configured: isZaloAccountConfigured(account),
+    mode: account.config.webhookUrl ? "webhook" : "polling",
+    dmPolicy: account.config.dmPolicy ?? "pairing",
+  };
+}
+
+export function isZaloAccountConfigured(account: ResolvedZaloAccount): boolean {
+  return account.tokenStatus ? account.tokenStatus !== "missing" : Boolean(account.token?.trim());
 }

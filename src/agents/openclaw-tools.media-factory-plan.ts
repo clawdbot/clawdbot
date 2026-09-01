@@ -11,7 +11,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import {
   hasSnapshotCapabilityAvailability,
@@ -62,17 +62,6 @@ function hasExplicitPdfModelConfig(config: OpenClawConfig | undefined): boolean 
   );
 }
 
-function isToolAllowedByFactoryPolicy(params: {
-  toolName: string;
-  allowlist?: string[];
-  denylist?: string[];
-}): boolean {
-  return isToolAllowedByPolicyName(params.toolName, {
-    allow: params.allowlist,
-    deny: params.denylist,
-  });
-}
-
 /** Returns true only when an allowlist explicitly enables the requested tool. */
 export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   toolName: string;
@@ -82,7 +71,10 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   if (!params.allowlist?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
     return false;
   }
-  return isToolAllowedByFactoryPolicy(params);
+  return isToolAllowedByPolicyName(params.toolName, {
+    allow: params.allowlist,
+    deny: params.denylist,
+  });
 }
 
 /** Merges factory policy lists while preserving stable unique entries. */
@@ -229,26 +221,11 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
     params.toolAllowlist,
   );
   const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
-  const allowImageGenerate = isToolAllowedByFactoryPolicy({
-    toolName: "image_generate",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const allowVideoGenerate = isToolAllowedByFactoryPolicy({
-    toolName: "video_generate",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const allowMusicGenerate = isToolAllowedByFactoryPolicy({
-    toolName: "music_generate",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const allowPdf = isToolAllowedByFactoryPolicy({
-    toolName: "pdf",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
+  const matches = createToolPolicyMatcher({ allow: toolAllowlist, deny: toolDenylist });
+  const allowImageGenerate = matches("image_generate");
+  const allowVideoGenerate = matches("video_generate");
+  const allowMusicGenerate = matches("music_generate");
+  const allowPdf = matches("pdf");
   const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.image);
   const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.video);
   const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.music);

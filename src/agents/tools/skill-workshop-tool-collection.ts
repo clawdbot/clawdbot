@@ -1,5 +1,6 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -14,9 +15,26 @@ import {
   reconcileSkillCollection,
   restoreLatestSkillCollectionBackup,
 } from "../../skills/workshop/collection-reconcile.js";
+import { listSkillCollectionReviewOutcomes } from "../../skills/workshop/collection-review-state.js";
 import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";
 import { readToolStringParam, ToolInputError } from "./common.js";
+import { textResult } from "./tool-results.js";
+
+const SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS = 300;
+const SKILL_COLLECTION_HISTORY_NAME_LIMIT = 10;
+const SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER = "\n(history truncated)";
+
+function summarizeSkillNames(names: string[]) {
+  const remaining = names.length - SKILL_COLLECTION_HISTORY_NAME_LIMIT;
+  return {
+    count: names.length,
+    names: [
+      ...names.slice(0, SKILL_COLLECTION_HISTORY_NAME_LIMIT),
+      ...(remaining > 0 ? [`+${remaining} more`] : []),
+    ],
+  };
+}
 
 export async function recordSkillCollectionReadReceipt(params: {
   context: SkillCollectionReconcileContext;
@@ -52,9 +70,9 @@ export const skillCollectionPlanSchema = Type.Optional(
   Type.Array(
     Type.Object(
       {
-        action: stringEnum(["keep", "write", "drop"] as const),
+        action: stringEnum(["write", "drop"] as const),
         name: Type.String(),
-        description: Type.Optional(Type.String({ maxLength: 160 })),
+        description: Type.Optional(Type.String()),
         content: Type.Optional(Type.String()),
         reason: Type.Optional(Type.String()),
       },
@@ -63,7 +81,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     {
       maxItems: MAX_RECONCILED_SKILLS,
       description:
-        "Exactly one decision for every current writable skill, plus optional new write decisions. write requires description and complete SKILL.md content; drop requires a reason.",
+        "Only the skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason. Skills not created by Skill Workshop are read-only.",
     },
   ),
 );
@@ -95,6 +113,7 @@ export async function executeSkillCollectionReconcile(params: {
       agentIds: params.context?.agentIds,
       approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
       env: params.env,
+      ...(params.context?.assertCurrent ? { assertCurrent: params.context.assertCurrent } : {}),
     });
     if (params.context) {
       params.context.result = result;
@@ -104,15 +123,10 @@ export async function executeSkillCollectionReconcile(params: {
       params.context.reconciling = false;
     }
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Reconciled the skill collection: kept ${result.kept.length}, wrote ${result.written.length}, dropped ${result.dropped.length}. Backup ${result.backupId}.`,
-      },
-    ],
-    details: result,
-  };
+  return textResult(
+    `Reconciled the skill collection: kept ${result.kept.length}, wrote ${result.written.length}, dropped ${result.dropped.length}. Backup ${result.backupId}.`,
+    result,
+  );
 }
 
 export async function executeSkillCollectionRestore(params: {
@@ -120,15 +134,56 @@ export async function executeSkillCollectionRestore(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   const result = await restoreLatestSkillCollectionBackup(params);
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
-      },
-    ],
-    details: result,
-  };
+  return textResult(
+    `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
+    result,
+  );
+}
+
+export function executeSkillCollectionHistory(
+  params: {
+    workspaceDir: string;
+    env?: NodeJS.ProcessEnv;
+  },
+  maxChars: number,
+) {
+  const outcomes = listSkillCollectionReviewOutcomes(
+    params.workspaceDir,
+    params.env ? { env: params.env } : {},
+  );
+  const reviews = [];
+  let text = "Recent collection reviews, newest first:";
+  let truncated = false;
+  const textLimit = maxChars - SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER.length;
+  for (const outcome of outcomes) {
+    const review = {
+      createTime: new Date(outcome.createTime).toISOString(),
+      backupId: outcome.backupId,
+      kept: summarizeSkillNames(outcome.kept),
+      written: summarizeSkillNames(outcome.written),
+      dropped: outcome.dropped.map((entry) => ({
+        name: entry.name,
+        reason:
+          entry.reason.length > SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS
+            ? `${truncateUtf16Safe(entry.reason, SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS - 1)}…`
+            : entry.reason,
+      })),
+    };
+    const candidate = `${text}\n${JSON.stringify(review)}`;
+    if (truncateUtf16Safe(candidate, textLimit) !== candidate) {
+      truncated = true;
+      break;
+    }
+    reviews.push(review);
+    text = candidate;
+  }
+  if (truncated) {
+    text = `${truncateUtf16Safe(text, textLimit)}${SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER}`;
+  }
+  return textResult(outcomes.length === 0 ? "No recorded collection reviews." : text, {
+    reviews,
+    truncated,
+  });
 }
 
 function readCollectionPlanParam(params: Record<string, unknown>): SkillCollectionPlanEntry[] {
@@ -142,9 +197,6 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
     }
     const action = readToolStringParam(entry, "action", { required: true });
     const name = readToolStringParam(entry, "name", { required: true });
-    if (action === "keep") {
-      return { action, name };
-    }
     if (action === "drop") {
       return {
         action,
@@ -160,9 +212,9 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
         content: readToolStringParam(entry, "content", { required: true, trim: false }),
       };
     }
-    throw new ToolInputError(`collection[${index}].action must be keep, write, or drop`);
+    throw new ToolInputError(`collection[${index}].action must be write or drop`);
   });
 }
 
 export const SKILL_COLLECTION_ACTION_DESCRIPTION =
-  "read = inspect one current skill; reconcile = atomically keep, rewrite, create, or drop the whole writable skill collection.";
+  "read = inspect one current skill; reconcile = one atomic call that rewrites, creates, or drops the listed skills; unlisted skills stay.";

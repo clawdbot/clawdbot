@@ -1,18 +1,15 @@
 // Control UI view renders dreaming screen content.
-import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderHubTabs } from "../../../components/hub-tabs.ts";
-import {
-  createLobsterPetLook,
-  lobsterPetSeed,
-  renderLobsterSvg,
-} from "../../../components/lobster-pet.ts";
-import "../../../components/modal-dialog.ts";
+import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
+import { createLobsterPetLook, renderLobsterSvg } from "../../../components/lobster-pet-look.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import { t } from "../../../i18n/index.ts";
+import "../../../components/modal-dialog.ts";
+import { i18n, t } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import "../../../styles/dreams.css";
 import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
 
@@ -588,7 +585,7 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
     state.wikiPreviewTruncated = preview.truncated === true;
   } catch (error) {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {
-      state.wikiPreviewError = String(error);
+      state.wikiPreviewError = formatUiError(error);
     }
   } finally {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {
@@ -635,7 +632,9 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
             </div>
             <div class="dreams-diary__preview-meta">
               ${state.wikiPreviewPath}
-              ${state.wikiPreviewUpdatedAt ? ` · ${state.wikiPreviewUpdatedAt}` : ""}
+              ${state.wikiPreviewUpdatedAt
+                ? ` · ${formatCompactDateTime(state.wikiPreviewUpdatedAt)}`
+                : ""}
             </div>
           </div>
           <button
@@ -1152,12 +1151,19 @@ function renderDiaryNavigation(props: DreamingProps, labels: string[], selectedP
 }
 
 function renderWikiClusterSection<
-  Cluster extends { key: string; label: string; items: { pagePath: string }[] },
+  Cluster extends {
+    key: string;
+    label: string;
+    itemCount: number;
+    items: { pagePath: string }[];
+  },
 >(
   props: DreamingProps,
   params: {
     kind: "imports" | "wiki";
     clusters: Cluster[];
+    totalItems: number;
+    truncated: boolean;
     loading: boolean;
     loadingKey: string;
     emptyKey: string;
@@ -1189,6 +1195,7 @@ function renderWikiClusterSection<
       ? "selected imported insight cluster"
       : "selected memory overview cluster",
   );
+  const returnedItems = clusters.reduce((total, entry) => total + entry.itemCount, 0);
   return {
     navigation: renderDiaryNavigation(
       props,
@@ -1199,6 +1206,14 @@ function renderWikiClusterSection<
       <article class="dreams-diary__entry" key="${params.kind}-${cluster.key}">
         <div class="dreams-diary__accent"></div>
         <div class="dreams-diary__date">${params.date(cluster)}</div>
+        ${params.truncated
+          ? html`<p class="dreams-diary__para dreams-diary__bounded-result">
+              ${t("dreaming.wiki.boundedResults", {
+                returned: returnedItems.toLocaleString(i18n.getLocale()),
+                total: params.totalItems.toLocaleString(i18n.getLocale()),
+              })}
+            </p>`
+          : nothing}
         <div class="dreams-diary__prose">${params.prose(cluster)}</div>
         <div class="dreams-diary__insights">${cluster.items.map(params.renderItem)}</div>
       </article>
@@ -1210,6 +1225,8 @@ function renderDiaryImportsSection(props: DreamingProps) {
   return renderWikiClusterSection(props, {
     kind: "imports",
     clusters: props.wikiImportInsights?.clusters ?? [],
+    totalItems: props.wikiImportInsights?.totalItems ?? 0,
+    truncated: props.wikiImportInsights?.truncated ?? false,
     loading: props.wikiImportInsightsLoading,
     loadingKey: "dreaming.wiki.loadingInsights",
     emptyKey: "dreaming.wiki.noInsights",
@@ -1251,6 +1268,8 @@ function renderWikiOverviewSection(props: DreamingProps) {
   return renderWikiClusterSection(props, {
     kind: "wiki",
     clusters: overview?.clusters ?? [],
+    totalItems: overview?.totalItems ?? 0,
+    truncated: overview?.truncated ?? false,
     loading: props.wikiOverviewLoading,
     loadingKey: "dreaming.wiki.loadingWiki",
     emptyKey: "dreaming.wiki.emptyWiki",

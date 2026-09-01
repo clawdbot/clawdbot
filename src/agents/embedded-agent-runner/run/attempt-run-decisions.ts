@@ -1,7 +1,6 @@
 /**
  * Resolves per-attempt runtime decisions from config and channel context.
  */
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /**
@@ -13,25 +12,6 @@ export function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
 ): string | undefined {
   return params.runtimePlan?.auth.forwardedAuthProfileId;
-}
-
-/**
- * Resolves the consecutive unknown-tool threshold for the provider stream
- * guard. The guard remains active even when generic loop detection is disabled
- * because an unregistered tool call is an objective dead end for this run.
- */
-export function resolveUnknownToolGuardThreshold(loopDetection?: { enabled?: boolean }): number {
-  // The unknown-tool guard is a safety net against the model hallucinating a
-  // tool name or calling a tool that has since been removed from the allowlist
-  // (for example after a `skills.allowBundled` config change). After `threshold`
-  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
-  // message content to tell the model to stop, which breaks otherwise-infinite
-  // Tool-not-found loops against the provider. Unlike the genericRepeat /
-  // pingPong / pollNoProgress detectors this guard has no false-positive
-  // surface because the tool is objectively not registered in this run, so it
-  // stays on regardless of `tools.loopDetection.enabled`.
-  void loopDetection;
-  return UNKNOWN_TOOL_THRESHOLD;
 }
 
 /**

@@ -27,7 +27,6 @@ type RuntimeEntryParams = {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  idleTtlMs: number;
   includeServerNames?: ReadonlySet<string>;
   excludeServerNames?: ReadonlySet<string>;
   safeServerNamesByServer?: ReadonlyMap<string, string>;
@@ -49,7 +48,6 @@ type SessionMcpRuntimeManagerInstall = {
     agentDir?: string;
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    idleTtlMs: number;
     oauthRequesterNameSet: ReadonlySet<string>;
     mcpServers: Record<string, BundleMcpServerConfig>;
     resolverRequesterServerNames: readonly string[];
@@ -115,81 +113,55 @@ export function createSessionMcpRuntimeManagerInstall(
         safeServerNamesByServer: params.safeServerNamesByServer,
         toolOverrides: params.toolOverrides,
       }).fingerprint;
-    const existing = store.runtimesBySessionId.get(params.runtimeKey);
-    if (existing) {
-      if (
-        !matchesStaticReuse({
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          configFingerprint: nextFingerprint,
-          candidate: existing,
-        })
-      ) {
-        store.runtimesBySessionId.delete(params.runtimeKey);
-        store.idleTtlMsBySessionId.delete(params.runtimeKey);
-        store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
-        await existing.dispose();
-      } else {
-        reconcileReusableRetirement(params.sessionId, existing);
-        existing.markUsed();
-        store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
-        return existing;
-      }
-    }
-    const inFlight = store.createInFlight.get(params.runtimeKey);
-    if (inFlight) {
-      if (
-        matchesStaticReuse({
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          configFingerprint: nextFingerprint,
-          candidate: inFlight,
-        })
-      ) {
-        return inFlight.promise;
-      }
-      store.createInFlight.delete(params.runtimeKey);
-      const staleRuntime = await inFlight.promise.catch(() => undefined);
-      store.runtimesBySessionId.delete(params.runtimeKey);
-      store.idleTtlMsBySessionId.delete(params.runtimeKey);
-      store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
-      await staleRuntime?.dispose();
-    }
-    const created = Promise.resolve(
-      store.createRuntime({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        cfg: params.cfg,
-        manifestRegistry: params.manifestRegistry,
-        includeServerNames: params.includeServerNames,
-        excludeServerNames: params.excludeServerNames,
-        safeServerNamesByServer: params.safeServerNamesByServer,
-        connectionOverrides: params.connectionOverrides,
-        redactConnectionServerNames: params.redactConnectionServerNames,
-        requesterScope: params.requesterScope,
-        requesterConnect: params.requesterConnect,
-        configFingerprint: nextFingerprint,
-        toolOverrides: params.toolOverrides,
-      }),
-    ).then((runtime) => {
-      reconcileReusableRetirement(params.sessionId, runtime);
-      runtime.markUsed();
-      store.runtimesBySessionId.set(params.runtimeKey, runtime);
-      store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
-      return runtime;
-    });
-    store.createInFlight.set(params.runtimeKey, {
-      promise: created,
+    const { runtimeKey, ...runtimeParams } = params;
+    const identity = {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       configFingerprint: nextFingerprint,
+    };
+    const inFlight = store.createInFlight.get(runtimeKey);
+    if (inFlight && matchesStaticReuse({ ...identity, candidate: inFlight })) {
+      return inFlight.promise;
+    }
+    const existing = store.runtimesBySessionId.get(runtimeKey);
+    if (!inFlight && existing && matchesStaticReuse({ ...identity, candidate: existing })) {
+      reconcileReusableRetirement(params.sessionId, existing);
+      existing.markUsed();
+      return existing;
+    }
+    store.runtimesBySessionId.delete(runtimeKey);
+    store.connectionMetaByRuntimeKey.delete(runtimeKey);
+    const isCurrent = (): boolean => store.createInFlight.get(runtimeKey)?.promise === created;
+    const superseded = () =>
+      new Error(`MCP runtime creation superseded for session ${params.sessionId}`);
+    // Claim replacement before awaiting cleanup or imports. Its producer owns late
+    // disposal; an obsolete producer must never publish or clear its successor.
+    const created: Promise<SessionMcpRuntime> = Promise.resolve().then(async () => {
+      await existing?.dispose();
+      await inFlight?.promise.catch(() => undefined);
+      if (!isCurrent()) {
+        throw superseded();
+      }
+      const runtime = await store.createRuntime({
+        ...runtimeParams,
+        configFingerprint: nextFingerprint,
+      });
+      if (!isCurrent()) {
+        await runtime.dispose();
+        throw superseded();
+      }
+      reconcileReusableRetirement(params.sessionId, runtime);
+      runtime.markUsed();
+      store.runtimesBySessionId.set(runtimeKey, runtime);
+      return runtime;
     });
+    store.createInFlight.set(runtimeKey, { ...identity, promise: created });
     try {
       return await created;
     } finally {
-      store.createInFlight.delete(params.runtimeKey);
+      if (isCurrent()) {
+        store.createInFlight.delete(runtimeKey);
+      }
     }
   };
 
@@ -202,7 +174,6 @@ export function createSessionMcpRuntimeManagerInstall(
     agentDir?: string;
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    idleTtlMs: number;
     safeServerNamesByServer: ReadonlyMap<string, string>;
     includeServerNames: ReadonlySet<string>;
     requesterConnect?: RequesterMcpConnect;
@@ -240,7 +211,6 @@ export function createSessionMcpRuntimeManagerInstall(
     ) {
       reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
-      store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,
         resolvedAt: store.now(),
@@ -249,7 +219,6 @@ export function createSessionMcpRuntimeManagerInstall(
     }
     if (existing) {
       store.runtimesBySessionId.delete(params.runtimeKey);
-      store.idleTtlMsBySessionId.delete(params.runtimeKey);
       store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
       await existing.dispose();
     }
@@ -261,7 +230,6 @@ export function createSessionMcpRuntimeManagerInstall(
       agentDir: params.agentDir,
       cfg: params.cfg,
       manifestRegistry: params.manifestRegistry,
-      idleTtlMs: params.idleTtlMs,
       includeServerNames: params.includeServerNames,
       safeServerNamesByServer: params.safeServerNamesByServer,
       connectionOverrides: params.connectionOverrides,
@@ -295,7 +263,6 @@ export function createSessionMcpRuntimeManagerInstall(
     agentDir?: string;
     cfg?: OpenClawConfig;
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    idleTtlMs: number;
     oauthRequesterNameSet: ReadonlySet<string>;
     mcpServers: Record<string, BundleMcpServerConfig>;
     resolverRequesterServerNames: readonly string[];
@@ -353,7 +320,6 @@ export function createSessionMcpRuntimeManagerInstall(
     ) {
       reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
-      store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       return existing;
     }
 
@@ -386,7 +352,6 @@ export function createSessionMcpRuntimeManagerInstall(
       agentDir: params.agentDir,
       cfg: params.cfg,
       manifestRegistry: params.manifestRegistry,
-      idleTtlMs: params.idleTtlMs,
       safeServerNamesByServer: params.safeServerNamesByServer,
       includeServerNames: activeNameSet,
       requesterConnect,

@@ -17,6 +17,7 @@ function activePlacement(
     sessionKey: "agent:main:session-disk",
     agentId: "main",
     state: "active",
+    executionMode: "worker-turn",
     environmentId: "environment-disk",
     generation: 3,
     activeOwnerEpoch: 7,
@@ -169,6 +170,22 @@ describe("active worker placement disk-space monitoring", () => {
 
     expect(harness.monitor.read(harness.placement)).toBeUndefined();
     expect(harness.monitor.version()).toBe(0);
+  });
+
+  it("advances the projection fence when an observation loses its active placement", async () => {
+    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+
+    await harness.monitor.sweep();
+    expect(harness.monitor.version()).toBe(1);
+
+    harness.setPlacement({ ...activePlacement(), state: "draining" });
+    await harness.monitor.sweep();
+
+    expect(harness.monitor.read(harness.placement)).toBeUndefined();
+    expect(harness.monitor.version()).toBe(2);
+
+    await harness.monitor.sweep();
+    expect(harness.monitor.version()).toBe(2);
   });
 
   it("keeps the last exact-binding sample when a later advisory probe fails", async () => {

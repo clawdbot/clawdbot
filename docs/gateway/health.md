@@ -26,6 +26,12 @@ read stored conversation state. A provider can reconnect and show healthy channe
 status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
+Per-agent session counts and recent activity include only that agent's sessions,
+even when agents share a SQLite session store. Status counts each physical store
+once in its aggregate. The top-level health session summary represents the
+default agent, or the first configured agent when there is no default; it is not
+a fleet total.
+
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
@@ -93,8 +99,10 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
 gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
 The command reports linked creds/auth age when available, per-channel probe summaries,
-session-store summary, and probe duration. It exits non-zero if the gateway is
-unreachable or the probe fails/times out.
+session-store summary, and probe duration. Live probes use bounded account concurrency
+and a Gateway-owned deadline, so one slow account returns a structured timeout while
+completed sibling results remain available. The command exits non-zero if the gateway is
+unreachable or the Gateway call itself times out.
 
 ### Queue warnings
 
@@ -120,7 +128,7 @@ payloads, claim owners or tokens, recorded errors, or session and target identif
 Options:
 
 - `--json`: machine-readable JSON output
-- `--timeout <ms>`: override the default 10s probe timeout
+- `--timeout <ms>`: override the default 10s Gateway connection timeout; it does not widen the Gateway's internal live-probe deadline
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 

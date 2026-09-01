@@ -9,10 +9,12 @@ describe("inheritSessionSelection", () => {
         sessionId: "legacy-user",
         updatedAt: 1,
         authProfileOverride: "openai:work",
+        thinkingLevel: "ultra",
       }),
     ).toMatchObject({
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
+      thinkingLevel: "ultra",
     });
 
     const automatic = inheritSessionSelection({
@@ -27,6 +29,37 @@ describe("inheritSessionSelection", () => {
     });
     expect(automatic.authProfileOverrideCompactionCount).toBeUndefined();
   });
+  it.each([
+    { source: "auto" as const, profile: "google-vertex:fallback", inheritedProfile: undefined },
+    { source: "user" as const, profile: "openai:work", inheritedProfile: "openai:work" },
+  ])(
+    "drops fallback model state while preserving only $source auth intent",
+    ({ source, profile, inheritedProfile }) => {
+      const inherited = inheritSessionSelection({
+        sessionId: "legacy-auto-model",
+        updatedAt: 1,
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: profile,
+        authProfileOverrideSource: source,
+        thinkingLevel: "high",
+      });
+
+      expect(inherited.providerOverride).toBeUndefined();
+      expect(inherited.modelOverride).toBeUndefined();
+      expect(inherited.modelOverrideSource).toBeUndefined();
+      expect(inherited.agentRuntimeOverride).toBeUndefined();
+      expect(inherited.contextWindow).toBe("1m");
+      expect(inherited.authProfileOverride).toBe(inheritedProfile);
+      expect(inherited.authProfileOverrideSource).toBe(inheritedProfile ? "user" : undefined);
+      expect(inherited.thinkingLevel).toBe("high");
+    },
+  );
 });
 
 describe("SessionLabelOwnerIndex", () => {

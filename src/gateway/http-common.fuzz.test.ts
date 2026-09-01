@@ -1,7 +1,7 @@
 // Deterministic fuzz coverage for shared Gateway HTTP helpers and disconnect
 // handling without adding a property-test dependency.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -248,55 +248,81 @@ describe("fuzz: sendInvalidRequest", () => {
 });
 
 describe("fuzz: readJsonBodyOrError", () => {
-  const makeRequest = () => ({}) as IncomingMessage;
-
   it("maps readJsonBody results to the documented status/body contract", async () => {
     const rng = makeRng(0xc0de);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, end } = makeMockHttpResponse();
-      const pick = randInt(rng, 0, 3);
-      let expectedStatus: number | undefined;
-      let expectedBody: string | undefined;
-      let expectedValue: unknown;
+    let maxBytes = 0;
+    let receivedRequest: IncomingMessage | undefined;
+    const tasks: Promise<void>[] = [];
+    const server = createServer((req, res) => {
+      receivedRequest = req;
+      tasks.push(
+        readJsonBodyOrError(req, res, maxBytes).then((value) => {
+          if (!res.headersSent) {
+            sendJson(res, 200, value);
+          }
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
+    }
+    try {
+      for (let i = 0; i < ITERATIONS; i += 1) {
+        const pick = randInt(rng, 0, 3);
+        let expectedStatus: number | undefined;
+        let expectedBody: string | undefined;
+        let expectedValue: unknown;
 
-      if (pick === 0) {
-        const value = randBody(rng);
-        expectedValue = value;
-        readJsonBodyMock.mockResolvedValueOnce({ ok: true, value });
-      } else if (pick === 1) {
-        expectedStatus = 413;
-        expectedBody = JSON.stringify({
-          error: { message: "Payload too large", type: "invalid_request_error" },
-        });
-        readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "payload too large" });
-      } else if (pick === 2) {
-        expectedStatus = 408;
-        expectedBody = JSON.stringify({
-          error: { message: "Request body timeout", type: "invalid_request_error" },
-        });
-        readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
-      } else {
-        // Arbitrary error text must neither collide with the 413/408 sentinels
-        // nor accidentally reuse them; pick a prefix that can never match.
-        const text = `err-${randString(rng, 24)}`;
-        expectedStatus = 400;
-        expectedBody = JSON.stringify({
-          error: { message: text, type: "invalid_request_error" },
-        });
-        readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: text });
-      }
+        if (pick === 0) {
+          const value = randBody(rng);
+          expectedValue = value;
+          readJsonBodyMock.mockResolvedValueOnce({ ok: true, value });
+        } else if (pick === 1) {
+          expectedStatus = 413;
+          expectedBody = JSON.stringify({
+            error: { message: "Payload too large", type: "invalid_request_error" },
+          });
+          readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "payload too large" });
+        } else if (pick === 2) {
+          expectedStatus = 408;
+          expectedBody = JSON.stringify({
+            error: { message: "Request body timeout", type: "invalid_request_error" },
+          });
+          readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
+        } else {
+          // Arbitrary error text must neither collide with the 413/408 sentinels
+          // nor accidentally reuse them; pick a prefix that can never match.
+          const text = `err-${randString(rng, 24)}`;
+          expectedStatus = 400;
+          expectedBody = JSON.stringify({
+            error: { message: text, type: "invalid_request_error" },
+          });
+          readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: text });
+        }
 
-      const maxBytes = randInt(rng, 1, 1 << 20);
-      const req = makeRequest();
-      const result = await readJsonBodyOrError(req, res, maxBytes);
-      if (pick === 0) {
-        expect(result).toEqual(expectedValue);
-      } else {
-        expect(result).toBeUndefined();
-        expect(res.statusCode).toBe(expectedStatus);
-        expect(end).toHaveBeenCalledWith(expectedBody);
+        maxBytes = randInt(rng, 1, 1 << 20);
+        const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+          headers: { Connection: "close" },
+        });
+        if (pick === 0) {
+          expect(response.status).toBe(200);
+          expect(await response.json()).toEqual(expectedValue);
+        } else {
+          expect(response.status).toBe(expectedStatus);
+          expect(await response.text()).toBe(expectedBody);
+        }
+        expect(readJsonBodyMock).toHaveBeenLastCalledWith(receivedRequest, maxBytes);
       }
-      expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await Promise.all(tasks);
     }
   });
 });

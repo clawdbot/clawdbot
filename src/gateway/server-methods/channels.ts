@@ -17,9 +17,10 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -32,7 +33,10 @@ import {
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
-import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type {
+  ChannelAccountStartOutcome,
+  ChannelRuntimeSnapshot,
+} from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -48,6 +52,7 @@ type ChannelStartPayload = {
   channel: ChannelId;
   accountId: string;
   started: boolean;
+  outcome: ChannelAccountStartOutcome;
 };
 
 type ChannelStopPayload = {
@@ -292,7 +297,15 @@ async function startChannelAccount(params: {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
   }
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
-  await params.context.startChannel(params.channelId, resolvedAccountId, { manual: true });
+  const outcomes = await params.context.startChannel(params.channelId, resolvedAccountId, {
+    manual: true,
+  });
+  const outcome = outcomes.get(resolvedAccountId);
+  if (!outcome) {
+    throw new Error(
+      `Channel ${params.channelId} did not report a start outcome for ${resolvedAccountId}`,
+    );
+  }
   const runtime = params.context.getRuntimeSnapshot();
   const started =
     resolveRuntimeAccountSnapshot({
@@ -304,6 +317,7 @@ async function startChannelAccount(params: {
     channel: params.channelId,
     accountId: resolvedAccountId,
     started,
+    outcome,
   };
 }
 
@@ -376,12 +390,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     ): ChannelAccountSnapshot | undefined => {
       const accounts = runtime.channelAccounts[channelId];
       const defaultRuntimeLocal = runtime.channels[channelId];
-      const raw =
-        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntimeLocal : undefined);
-      if (!raw) {
-        return undefined;
-      }
-      return raw;
+      return (
+        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntimeLocal : undefined)
+      );
     };
 
     const isAccountEnabled = (plugin: ChannelPlugin, account: unknown) =>
@@ -397,6 +408,17 @@ export const channelsHandlers: GatewayRequestHandlers = {
       accountId: string,
       defaultAccountId: string,
     ) => {
+      const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
+      const unavailable = resolveUnavailableChannelAccountSnapshot({
+        channelId,
+        accountId,
+        runtime: runtimeSnapshot,
+      });
+      const diagnosticSnapshot =
+        unavailable ?? (runtimeSnapshot?.enabled === false ? runtimeSnapshot : undefined);
+      if (diagnosticSnapshot) {
+        return { accountId, snapshot: diagnosticSnapshot };
+      }
       const account = plugin.config.resolveAccount(cfg, accountId);
       const enabled = isAccountEnabled(plugin, account);
       let probeResult: unknown;
@@ -448,11 +470,11 @@ export const channelsHandlers: GatewayRequestHandlers = {
           });
         }
       }
-      const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
-      const snapshot = await resolveChannelAccountSnapshot({
+      const snapshot = await buildChannelAccountSnapshotFromAccount({
         plugin,
         cfg,
         accountId,
+        account,
         runtime: runtimeSnapshot,
         probe: probeResult,
         audit: auditResult,
@@ -518,7 +540,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const accounts: ChannelAccountSnapshot[] = [];
       for (const result of results) {
         if (result) {
-          resolvedAccounts[result.accountId] = result.account;
+          if ("account" in result) {
+            resolvedAccounts[result.accountId] = result.account;
+          }
           accounts.push(result.snapshot);
         }
       }
@@ -547,21 +571,22 @@ export const channelsHandlers: GatewayRequestHandlers = {
       tasks: statusPlugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
           await buildChannelAccounts(plugin.id);
-        const fallbackAccount =
-          resolvedAccounts[defaultAccountId] ?? plugin.config.resolveAccount(cfg, defaultAccountId);
-        const fallbackSummary = (lastError?: string) => ({
+        const fallbackSummary = (lastError = defaultAccount?.lastError) => ({
           configured: defaultAccount?.configured ?? false,
           ...(lastError ? { lastError } : {}),
         });
         let summary: unknown = fallbackSummary();
-        if (plugin.status?.buildChannelSummary) {
+        if (
+          plugin.status?.buildChannelSummary &&
+          Object.hasOwn(resolvedAccounts, defaultAccountId)
+        ) {
           const summaryResult = await runChannelStatusSummary({
             channelId: plugin.id,
             timeoutMs,
             warnings: statusWarnings,
             run: () =>
               plugin.status!.buildChannelSummary!({
-                account: fallbackAccount,
+                account: resolvedAccounts[defaultAccountId],
                 cfg,
                 defaultAccountId,
                 snapshot:

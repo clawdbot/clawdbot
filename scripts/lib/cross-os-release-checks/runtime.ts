@@ -47,7 +47,6 @@ import {
   registerActiveChildProcessTree,
   runCommand,
   waitForGatewayWithStartupMigrationRestart,
-  withAllocatedGatewayPort,
 } from "./process.ts";
 import { logLanePhase } from "./reporting.ts";
 import { formatError, sleep } from "./shared.ts";
@@ -70,18 +69,16 @@ export async function runOpenClaw(params: {
 }
 
 export async function runOnboard(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
-  await withAllocatedGatewayPort(params.lane, async () => {
-    await runOpenClaw({
-      lane: params.lane,
-      env: params.env,
-      args: buildReleaseOnboardArgs({
-        authChoice: params.providerConfig.authChoice,
-        gatewayPort: params.lane.gatewayPort,
-        skipHealth: true,
-      }),
-      logPath: params.logPath,
-      timeoutMs: 10 * 60 * 1000,
-    });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: buildReleaseOnboardArgs({
+      authChoice: params.providerConfig.authChoice,
+      gatewayPort: params.lane.gatewayPort,
+      skipHealth: true,
+    }),
+    logPath: params.logPath,
+    timeoutMs: 10 * 60 * 1000,
   });
 }
 

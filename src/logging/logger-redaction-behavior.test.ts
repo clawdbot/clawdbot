@@ -8,7 +8,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { testApi as loggerTest } from "./logger.test-support.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
@@ -162,13 +162,15 @@ describe("file log redaction", () => {
     expect(content).toContain("configured log path works");
   });
 
-  it("expands leading tilde in logging.file", () => {
+  it("expands leading tilde in logging.file", async () => {
     const home = path.join(path.dirname(logPathTracker.nextPath()), "home");
+    const logPath = path.join(home, "custom-openclaw.log");
 
-    withEnv({ HOME: home }, () => {
-      expect(loggerTest.resolveActiveLogFile("~/custom-openclaw.log")).toBe(
-        path.join(home, "custom-openclaw.log"),
-      );
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      setLoggerOverride({ level: "info", file: "~/custom-openclaw.log" });
+      getLogger().info("tilde log path works");
+
+      expect(await readLogFile(logPath)).toContain("tilde log path works");
     });
   });
 

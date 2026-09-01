@@ -120,17 +120,21 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     coalescedMessageGuids.push(guid);
   }
 
-  // Reply context: prefer any entry that carries one.
-  const entryWithReply = payloads.find((p) => p.reply_to_id != null);
+  // Keep both parent GUIDs and their quote fields attached to the same source.
+  const reply =
+    payloads.find(
+      (payload) => payload.thread_originator_guid != null || payload.reply_to_guid != null,
+    ) ?? first;
 
   return {
     ...first,
     text: combinedText,
     attachments: allAttachments.length > 0 ? allAttachments : null,
     created_at: latestCreatedAt,
-    reply_to_id: entryWithReply?.reply_to_id ?? first.reply_to_id ?? null,
-    reply_to_text: entryWithReply?.reply_to_text ?? first.reply_to_text ?? null,
-    reply_to_sender: entryWithReply?.reply_to_sender ?? first.reply_to_sender ?? null,
+    thread_originator_guid: reply.thread_originator_guid ?? null,
+    reply_to_guid: reply.reply_to_guid ?? null,
+    reply_to_text: reply.reply_to_text ?? null,
+    reply_to_sender: reply.reply_to_sender ?? null,
     coalescedMessageGuids: coalescedMessageGuids.length > 0 ? coalescedMessageGuids : undefined,
     coalescedCatchupCursor:
       Number.isFinite(maxRowid) && Number.isFinite(maxDateMs)

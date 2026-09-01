@@ -85,6 +85,20 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 /**
+ * Read the required value following a split CLI option.
+ * @param {readonly string[]} argv
+ * @param {number} index
+ * @param {string} optionName
+ * @returns {string}
+ */
+export function requireOptionArgument(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+/**
  * Remove the leading `--` separator inserted by package-manager script invocations.
  * @internal Shared repository-script contract.
  * @param {string[]} argv

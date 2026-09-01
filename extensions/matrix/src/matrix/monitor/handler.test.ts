@@ -144,6 +144,7 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+  sendMessageMatrixMock.mockReset().mockResolvedValue({ messageId: "evt", roomId: "!room" });
   sendTypingMatrixMock.mockReset().mockResolvedValue(undefined);
   deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
 });
@@ -320,6 +321,55 @@ describe("matrix monitor handler pairing account scope", () => {
 
     expect(logVerboseMessage).toHaveBeenCalledWith(
       `matrix inbound: room=!room:example.org from=@user:example.org preview="${"x".repeat(199)}"`,
+    );
+  });
+
+  it("logs final delivery from the settled receipt instead of legacy counters", async () => {
+    const logVerboseMessage = vi.fn();
+    const { handler } = createMatrixHandlerTestHarness({
+      logVerboseMessage,
+      dispatchInboundMessage: async () => ({
+        queuedFinal: false,
+        counts: { final: 0, block: 0, tool: 0 },
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: {
+            tool: {
+              delivered: 0,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+            block: {
+              delivered: 0,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+            final: {
+              delivered: 1,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+          },
+        },
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$settled-final",
+        body: "hello",
+      }),
+    );
+
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/^matrix: delivered 1 reply to /),
     );
   });
 
@@ -1247,6 +1297,7 @@ describe("matrix monitor handler pairing account scope", () => {
       "finalized context",
     );
     expect(context.MessageThreadId).toBe("$root");
+    expect(context.ParentSessionKey).toBe("agent:ops:main");
     expect(context.ThreadStarterBody).toBe("Matrix thread root $root from Alice:\nRoot topic");
     expectMockCallWithFields(recordInboundSession, { sessionKey: "agent:ops:main:thread:$root" });
   });
@@ -1743,19 +1794,19 @@ describe("matrix monitor handler pairing account scope", () => {
           : null,
       touch,
     });
-    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
-      client: {
-        getEvent: async () =>
-          createMatrixTextMessageEvent({
-            eventId: "$root",
-            sender: "@alice:example.org",
-            body: "Root topic",
-          }),
-      },
-      isDirectMessage: false,
-      finalizeInboundContext: (ctx: unknown) => ctx,
-      getMemberDisplayName: async () => "sender",
-    });
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        client: {
+          getEvent: async () =>
+            createMatrixTextMessageEvent({
+              eventId: "$root",
+              sender: "@alice:example.org",
+              body: "Root topic",
+            }),
+        },
+        isDirectMessage: false,
+        getMemberDisplayName: async () => "sender",
+      });
 
     await handler(
       "!room:example",
@@ -1770,6 +1821,11 @@ describe("matrix monitor handler pairing account scope", () => {
         mentions: { room: true },
       }),
     );
+    const context = requireRecord(
+      callArg(finalizeInboundContext, 0, 0, "finalized context"),
+      "finalized context",
+    );
+    expect(context.ParentSessionKey).toBeUndefined();
 
     expectMockCallWithFields(recordInboundSession, { sessionKey: "agent:bound:session-1" });
     expect(touch).toHaveBeenCalledTimes(1);
@@ -2732,6 +2788,124 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
   });
 
+  it("sends one durable threaded notice and commits replay after restart tombstone rejection", async () => {
+    const callOrder: string[] = [];
+    const commit = vi.fn(async () => {
+      callOrder.push("commit");
+      return true;
+    });
+    const release = vi.fn();
+    const inboundDeduper = {
+      claim: vi.fn(async () => {
+        callOrder.push("claim");
+        return {
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        };
+      }),
+    };
+    const runtime = { error: vi.fn() };
+    const dispatchInboundMessage = vi.fn(async () => {
+      callOrder.push("dispatch");
+      throw Object.assign(new Error("session ended during restart recovery"), {
+        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+      });
+    });
+    sendMessageMatrixMock.mockImplementationOnce(async () => {
+      callOrder.push("notice");
+      return { messageId: "$notice", roomId: "!room:example.org" };
+    });
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      runtime: runtime as never,
+      recordInboundSession: vi.fn(async () => {
+        callOrder.push("record");
+      }),
+      isDirectMessage: false,
+      roomsConfig: { "!room:example.org": { requireMention: false } },
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$thread-root",
+            sender: "@alice:example.org",
+            body: "Thread root",
+          }),
+      },
+      dispatchInboundMessage,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$tombstone-event",
+        body: "continue",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$thread-root",
+          "m.in_reply_to": { event_id: "$thread-root" },
+        },
+      }),
+    );
+
+    expect(dispatchInboundMessage).toHaveBeenCalledOnce();
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(callArg(sendMessageMatrixMock, 0, 0, "notice room")).toBe("!room:example.org");
+    expect(String(callArg(sendMessageMatrixMock, 0, 1, "notice body"))).toContain(
+      "Send /new or /reset",
+    );
+    expect(callArg(sendMessageMatrixMock, 0, 2, "notice options")).toMatchObject({
+      accountId: "ops",
+      replyToId: "$thread-root",
+      threadId: "$thread-root",
+      deliveryQueueId: "matrix:restart-recovery-tombstone:ops:!room:example.org:$tombstone-event",
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+      extraContent: { msgtype: "m.notice" },
+    });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["claim", "record", "dispatch", "notice", "commit"]);
+  });
+
+  it("releases replay for retry when the restart tombstone notice cannot be sent", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
+    const inboundDeduper = {
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
+    };
+    const runtime = { error: vi.fn() };
+    sendMessageMatrixMock.mockRejectedValueOnce(new Error("homeserver unavailable"));
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      runtime: runtime as never,
+      dispatchInboundMessage: vi.fn(async () => {
+        throw Object.assign(new Error("session ended during restart recovery"), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        });
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$tombstone-notice-failed",
+        body: "continue",
+      }),
+    );
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    expectRuntimeErrorContaining(
+      runtime.error,
+      "failed completing restart-recovery tombstone notice",
+    );
+  });
+
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
     const commit = vi.fn(async () => true);
     const release = vi.fn();
@@ -3586,7 +3760,10 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("keeps partial preview-first finalization on the existing draft when text is unchanged", async () => {
+  it.each([
+    { name: "plain text", payload: { text: "Single block" } },
+    { name: "blank-only media", payload: { text: "Single block", mediaUrls: ["   "] } },
+  ])("finalizes unchanged partial drafts for $name", async ({ payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({
       blockStreamingEnabled: true,
       streaming: "partial",
@@ -3605,7 +3782,7 @@ describe("matrix monitor handler draft streaming", () => {
     expect(draftOptions.msgtype).not.toBe("m.notice");
     expect(draftOptions.includeMentions).toBe(false);
 
-    await deliver({ text: "Single block" }, { kind: "final" });
+    await deliver(payload, { kind: "final" });
 
     // MSC4357: even when text is unchanged, a finalize edit is sent to clear
     // the live marker so supporting clients stop the streaming animation.
@@ -4657,7 +4834,10 @@ describe("matrix monitor handler draft streaming", () => {
     expect(redactEventMock).not.toHaveBeenCalled();
   });
 
-  it("keeps shutdown cleanup for empty final payloads that send nothing", async () => {
+  it.each([
+    { name: "no media", payload: {} },
+    { name: "blank-only media", payload: { mediaUrls: ["   "] } },
+  ])("cleans up empty final drafts with $name", async ({ payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -4671,7 +4851,7 @@ describe("matrix monitor handler draft streaming", () => {
       visibleReplySent: false,
       suppression: { reason: "no_visible_result" },
     });
-    await deliver({}, { kind: "final" });
+    await deliver(payload, { kind: "final" });
 
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(redactEventMock).not.toHaveBeenCalled();
@@ -4700,25 +4880,57 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("redacts stale draft when payload reply target mismatches", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
+  it.each([
+    {
+      name: "an implicit reply with reply mode first",
+      replyToMode: "first" as const,
+      payload: { text: "Final text", replyToId: "$different_msg" },
+    },
+    {
+      name: "an explicit reply tag with reply mode off",
+      replyToMode: "off" as const,
+      payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
+    },
+  ])(
+    "redacts stale draft when $name targets a different event",
+    async ({ replyToMode, payload }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode });
+      const { deliver, opts, finish } = await dispatch();
+
+      // Simulate streaming: partial reply creates draft message.
+      opts.onPartialReply?.({ text: "Partial reply" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+
+      // Final delivery carries a different replyToId than the draft's.
+      deliverMatrixRepliesMock.mockClear();
+      await deliver(payload, { kind: "final" });
+
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+      // Draft should be redacted since it can't change reply relation.
+      expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+      // Final answer delivered via normal path.
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+      await finish();
+    },
+  );
+
+  it("finalizes the existing draft when an implicit reply is suppressed by off mode", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "off" });
     const { deliver, opts, finish } = await dispatch();
 
-    // Simulate streaming: partial reply creates draft message.
     opts.onPartialReply?.({ text: "Partial reply" });
     await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
-    // Final delivery carries a different replyToId than the draft's.
     deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Final text", replyToId: "$different_msg" }, { kind: "final" });
+    await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
 
-    expect(editMessageMatrixMock).not.toHaveBeenCalled();
-    // Draft should be redacted since it can't change reply relation.
-    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
-    // Final answer delivered via normal path.
-    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(editMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     await finish();
   });
 
@@ -4808,7 +5020,10 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("finalizes partial drafts before reusing unchanged media captions", async () => {
+  it.each([
+    { name: "a singular attachment", mediaUrls: undefined },
+    { name: "a singular fallback after blank plural entries", mediaUrls: ["   "] },
+  ])("reuses partial-draft captions for $name", async ({ mediaUrls }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -4822,6 +5037,7 @@ describe("matrix monitor handler draft streaming", () => {
       {
         text: "screenshot ready",
         mediaUrl: "https://example.com/image.png",
+        mediaUrls,
       },
       { kind: "final" },
     );

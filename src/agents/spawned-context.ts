@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
@@ -22,6 +23,7 @@ export type SpawnedToolContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   workspaceDir?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
 };

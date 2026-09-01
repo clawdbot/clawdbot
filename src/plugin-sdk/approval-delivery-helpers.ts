@@ -1,6 +1,8 @@
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 // Approval delivery helpers format approval prompts and results for channel plugins.
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -14,9 +16,11 @@ import type { OpenClawConfig } from "./config-runtime.js";
 import { normalizeMessageChannel } from "./routing.js";
 import { normalizeOptionalString } from "./string-coerce-runtime.js";
 
-type ApprovalKind = "exec" | "plugin";
 type NativeApprovalDeliveryMode = "dm" | "channel" | "both";
-type NativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type NativeApprovalRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 type NativeApprovalSurface = "origin" | "approver-dm";
 type ChannelApprovalCapabilitySurfaces = Pick<
   ChannelApprovalCapability,
@@ -36,7 +40,7 @@ type DeliverySuppressionParams = {
   /** Full config used to inspect native approval delivery settings. */
   cfg: OpenClawConfig;
   /** Approval kind being delivered. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   /** Forwarding fallback target under consideration. */
   target: { channel: string; accountId?: string | null };
   /** Approval request metadata, including original turn source when available. */
@@ -80,14 +84,14 @@ type ApproverRestrictedNativeApprovalFlatParams = {
   resolveOriginTarget?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget | null | Promise<NativeApprovalTarget | null>;
   /** Resolves approver DM targets for native approval delivery. */
   resolveApproverDmTargets?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
   /** Whether DM-only native delivery should also notify the origin channel. */
@@ -142,7 +146,7 @@ type StandardNativeApprovalRoutingParams = {
   isOriginTargetAllowed?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind?: ApprovalKind;
+    approvalKind?: ChannelApprovalKind;
     request: NativeApprovalRequest;
     target: NativeApprovalTarget;
   }) => boolean;
@@ -312,7 +316,7 @@ function buildApproverRestrictedNativeApprovalCapability(
       accountId?: string | null;
       senderId?: string | null;
       action: "approve";
-      approvalKind: ApprovalKind;
+      approvalKind: ChannelApprovalKind;
     }) => {
       const authorized =
         approvalKind === "plugin"
@@ -332,7 +336,7 @@ function buildApproverRestrictedNativeApprovalCapability(
       cfg: OpenClawConfig;
       accountId?: string | null;
       action: "approve";
-      approvalKind?: ApprovalKind;
+      approvalKind?: ChannelApprovalKind;
     }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
     getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
@@ -381,7 +385,7 @@ function buildApproverRestrictedNativeApprovalCapability(
             }: {
               cfg: OpenClawConfig;
               accountId?: string | null;
-              approvalKind: ApprovalKind;
+              approvalKind: ChannelApprovalKind;
               request: NativeApprovalRequest;
             }) => ({
               enabled: isExecInitiatingSurfaceEnabled({ cfg, accountId }),

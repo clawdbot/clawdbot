@@ -16,7 +16,6 @@ import {
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -26,6 +25,7 @@ import {
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import {
+  capText,
   metadataIsEmpty,
   normalizeEvents,
   normalizeTimestamp,
@@ -131,12 +131,25 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
-function latestMetadataIdChanged(
-  existing: readonly { id: string }[] | undefined,
-  next: readonly { id: string }[] | undefined,
+function metadataEntriesChanged(
+  existing: WorkboardCard,
+  next: WorkboardCard,
+  key:
+    | "comments"
+    | "links"
+    | "proof"
+    | "artifacts"
+    | "attachments"
+    | "workerLogs"
+    | "notifications",
 ): boolean {
-  const latestId = next?.at(-1)?.id;
-  return Boolean(latestId && latestId !== existing?.at(-1)?.id);
+  const previous = existing.metadata?.[key];
+  const current = next.metadata?.[key];
+  const latestId = current?.at(-1)?.id;
+  return (
+    (previous?.length ?? 0) !== (current?.length ?? 0) ||
+    Boolean(latestId && latestId !== previous?.at(-1)?.id)
+  );
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
@@ -180,6 +193,22 @@ export function shouldSkipPersistedLifecycleStatusUpdate(
   }
   const statusTransitionAt = latestStatusTransitionAt(existing);
   return statusTransitionAt !== undefined && sourceUpdatedAt < statusTransitionAt;
+}
+
+export function shouldSyncWorkboardLifecycleStatus(
+  card: WorkboardCard,
+  target: WorkboardStatus | undefined,
+): boolean {
+  if (!target || card.status === target) {
+    return false;
+  }
+  if (target === "running") {
+    return card.status === "backlog" || card.status === "todo" || card.status === "ready";
+  }
+  return (
+    (target === "blocked" || target === "review") &&
+    (card.status === "running" || card.status === "todo" || card.status === "ready")
+  );
 }
 
 export function updateEvent(
@@ -242,34 +271,17 @@ export function updateEvent(
       ...(cardRunId(next) ? { runId: cardRunId(next) } : {}),
     };
   }
-  if (
-    (existing.metadata?.comments?.length ?? 0) !== (next.metadata?.comments?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.comments, next.metadata?.comments)
-  ) {
-    return { kind: "comment_added" };
+  for (const [key, kind] of [
+    ["comments", "comment_added"],
+    ["links", "link_added"],
+    ["proof", "proof_added"],
+    ["artifacts", "artifact_added"],
+  ] as const) {
+    if (metadataEntriesChanged(existing, next, key)) {
+      return { kind };
+    }
   }
-  if (
-    (existing.metadata?.links?.length ?? 0) !== (next.metadata?.links?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.links, next.metadata?.links)
-  ) {
-    return { kind: "link_added" };
-  }
-  if (
-    (existing.metadata?.proof?.length ?? 0) !== (next.metadata?.proof?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.proof, next.metadata?.proof)
-  ) {
-    return { kind: "proof_added" };
-  }
-  if (
-    (existing.metadata?.artifacts?.length ?? 0) !== (next.metadata?.artifacts?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.artifacts, next.metadata?.artifacts)
-  ) {
-    return { kind: "artifact_added" };
-  }
-  if (
-    (existing.metadata?.attachments?.length ?? 0) !== (next.metadata?.attachments?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.attachments, next.metadata?.attachments)
-  ) {
+  if (metadataEntriesChanged(existing, next, "attachments")) {
     return (next.metadata?.attachments?.length ?? 0) > (existing.metadata?.attachments?.length ?? 0)
       ? { kind: "attachment_added" }
       : { kind: "edited" };
@@ -277,20 +289,13 @@ export function updateEvent(
   if (existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state) {
     return { kind: "orchestration" };
   }
-  if (
-    (existing.metadata?.workerLogs?.length ?? 0) !== (next.metadata?.workerLogs?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.workerLogs, next.metadata?.workerLogs)
-  ) {
+  if (metadataEntriesChanged(existing, next, "workerLogs")) {
     return { kind: "orchestration" };
   }
   if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
     return { kind: "diagnostic" };
   }
-  if (
-    (existing.metadata?.notifications?.length ?? 0) !==
-      (next.metadata?.notifications?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.notifications, next.metadata?.notifications)
-  ) {
+  if (metadataEntriesChanged(existing, next, "notifications")) {
     return { kind: "notification" };
   }
   if (
@@ -517,13 +522,6 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
   return diagnostics;
 }
 
-export function capText(value: string | undefined, max: number): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
-}
-
 export function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
 }
@@ -534,6 +532,19 @@ function cardResultSummary(card: WorkboardCard): string | undefined {
     card.metadata?.comments?.findLast((comment) => comment.body.trim())?.body ??
     card.metadata?.proof?.findLast((proof) => proof.note?.trim())?.note
   );
+}
+
+function appendWorkerContextSection<T>(
+  lines: string[],
+  heading: string,
+  entries: readonly T[] | undefined,
+  format: (entry: T) => string,
+  maxEntries = 8,
+): void {
+  const recent = entries?.slice(-maxEntries) ?? [];
+  if (recent.length) {
+    lines.push("", `## ${heading}`, ...recent.map(format));
+  }
 }
 
 export function buildWorkerContext(
@@ -551,85 +562,69 @@ export function buildWorkerContext(
   if (card.notes) {
     lines.push("", "## Notes", capText(card.notes, 4000) ?? "");
   }
-  const attempts = card.metadata?.attempts?.slice(-8) ?? [];
-  if (attempts.length) {
-    lines.push("", "## Recent attempts");
-    for (const attempt of attempts) {
-      lines.push(
-        `- ${attempt.status} ${attempt.model ?? ""} ${attempt.error ? `error=${capText(attempt.error, 240)}` : ""}`.trim(),
-      );
-    }
-  }
-  const comments = card.metadata?.comments?.slice(-12) ?? [];
-  if (comments.length) {
-    lines.push("", "## Recent comments");
-    for (const comment of comments) {
-      lines.push(`- ${capText(comment.body, 400)}`);
-    }
-  }
-  const proof = card.metadata?.proof?.slice(-8) ?? [];
-  if (proof.length) {
-    lines.push("", "## Proof");
-    for (const entry of proof) {
-      lines.push(
-        `- ${entry.status}: ${capText(entry.label ?? entry.command ?? entry.url ?? entry.note, 400)}`,
-      );
-    }
-  }
-  const artifacts = card.metadata?.artifacts?.slice(-8) ?? [];
-  if (artifacts.length) {
-    lines.push("", "## Artifacts");
-    for (const artifact of artifacts) {
-      lines.push(`- ${capText(artifact.label ?? artifact.url ?? artifact.path, 400)}`);
-    }
-  }
-  const attachments = card.metadata?.attachments?.slice(-8) ?? [];
-  if (attachments.length) {
-    lines.push("", "## Attachments");
-    for (const attachment of attachments) {
-      const detail = [
-        attachment.fileName,
-        `${attachment.byteSize} bytes`,
-        attachment.mimeType,
-        attachment.note,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      lines.push(`- ${capText(detail, 500)}`);
-    }
-  }
+  appendWorkerContextSection(lines, "Recent attempts", card.metadata?.attempts, (attempt) =>
+    `- ${attempt.status} ${attempt.model ?? ""} ${attempt.error ? `error=${capText(attempt.error, 240)}` : ""}`.trim(),
+  );
+  appendWorkerContextSection(
+    lines,
+    "Recent comments",
+    card.metadata?.comments,
+    (comment) => `- ${capText(comment.body, 400)}`,
+    12,
+  );
+  appendWorkerContextSection(
+    lines,
+    "Proof",
+    card.metadata?.proof,
+    (entry) =>
+      `- ${entry.status}: ${capText(entry.label ?? entry.command ?? entry.url ?? entry.note, 400)}`,
+  );
+  appendWorkerContextSection(
+    lines,
+    "Artifacts",
+    card.metadata?.artifacts,
+    (artifact) => `- ${capText(artifact.label ?? artifact.url ?? artifact.path, 400)}`,
+  );
+  appendWorkerContextSection(lines, "Attachments", card.metadata?.attachments, (attachment) => {
+    const detail = [
+      attachment.fileName,
+      `${attachment.byteSize} bytes`,
+      attachment.mimeType,
+      attachment.note,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return `- ${capText(detail, 500)}`;
+  });
   if (card.metadata?.workerProtocol) {
     const protocol = card.metadata.workerProtocol;
     lines.push("", "## Worker protocol");
     lines.push(`${protocol.state}: ${capText(protocol.detail, 500) ?? "no detail"}`);
   }
-  const workerLogs = card.metadata?.workerLogs?.slice(-8) ?? [];
-  if (workerLogs.length) {
-    lines.push("", "## Worker logs");
-    for (const log of workerLogs) {
-      lines.push(`- ${log.level}: ${capText(log.message, 500)}`);
-    }
-  }
-  const links = card.metadata?.links?.slice(-8) ?? [];
-  if (links.length) {
-    lines.push("", "## Links");
-    for (const link of links) {
-      lines.push(`- ${link.type}: ${link.title ?? link.url ?? link.targetCardId ?? ""}`);
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    "Worker logs",
+    card.metadata?.workerLogs,
+    (log) => `- ${log.level}: ${capText(log.message, 500)}`,
+  );
+  appendWorkerContextSection(
+    lines,
+    "Links",
+    card.metadata?.links,
+    (link) => `- ${link.type}: ${link.title ?? link.url ?? link.targetCardId ?? ""}`,
+  );
   const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
   const parentResults = cardParentIds(card)
     .map((parentId) => cardsById.get(parentId))
     .filter((parent): parent is WorkboardCard => parent !== undefined && parent.status === "done")
     .slice(-6);
-  if (parentResults.length) {
-    lines.push("", "## Parent results");
-    for (const parent of parentResults) {
-      lines.push(
-        `- ${parent.id} ${parent.title}: ${capText(cardResultSummary(parent), 500) ?? "done"}`,
-      );
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    "Parent results",
+    parentResults,
+    (parent) =>
+      `- ${parent.id} ${parent.title}: ${capText(cardResultSummary(parent), 500) ?? "done"}`,
+  );
   const recentAgentWork =
     card.agentId && cards.length
       ? cards
@@ -643,14 +638,12 @@ export function buildWorkerContext(
           .toSorted((a, b) => b.updatedAt - a.updatedAt)
           .slice(0, 5)
       : [];
-  if (recentAgentWork.length) {
-    lines.push("", `## Recent done work by ${card.agentId}`);
-    for (const entry of recentAgentWork) {
-      lines.push(
-        `- ${entry.id} ${entry.title}: ${capText(cardResultSummary(entry), 300) ?? "done"}`,
-      );
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    `Recent done work by ${card.agentId}`,
+    recentAgentWork,
+    (entry) => `- ${entry.id} ${entry.title}: ${capText(cardResultSummary(entry), 300) ?? "done"}`,
+  );
   const automation = card.metadata?.automation;
   if (automation) {
     lines.push("", "## Automation");
@@ -673,12 +666,13 @@ export function buildWorkerContext(
     }
   }
   const diagnostics = computeCardDiagnostics(card, Date.now());
-  if (diagnostics.length) {
-    lines.push("", "## Active diagnostics");
-    for (const entry of diagnostics) {
-      lines.push(`- ${entry.severity}: ${entry.title}`);
-    }
-  }
+  appendWorkerContextSection(
+    lines,
+    "Active diagnostics",
+    diagnostics,
+    (entry) => `- ${entry.severity}: ${entry.title}`,
+    diagnostics.length,
+  );
   return lines.join("\n");
 }
 

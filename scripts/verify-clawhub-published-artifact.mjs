@@ -471,7 +471,10 @@ export async function verifyPublishedClawHubPackage(options) {
   );
   return {
     schemaVersion: 1,
-    verificationMode: "oidc-postpublish",
+    // Registry bytes and current publisher configuration do not attest the
+    // actor or credential that originally published this version.
+    verificationMode: "artifact-postpublish",
+    publicationAuthentication: "not-verified",
     expectedArtifact: {
       fileName,
       ...expected,

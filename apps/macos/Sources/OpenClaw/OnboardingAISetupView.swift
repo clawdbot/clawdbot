@@ -438,10 +438,10 @@ struct OnboardingAISetupView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }
+                        .openClawSelectableRowChrome(selected: false)
                     }
                     .buttonStyle(.plain)
                     .disabled(self.model.isBusy)
-                    .openClawSelectableRowChrome(selected: false)
                 }
             }
             .padding(12)
@@ -511,10 +511,10 @@ struct OnboardingAISetupView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
+            .openClawSelectableRowChrome(selected: self.model.showManualEntry)
         }
         .buttonStyle(.plain)
         .disabled(self.model.isBusy)
-        .openClawSelectableRowChrome(selected: self.model.showManualEntry)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
@@ -544,10 +544,10 @@ struct OnboardingAISetupView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
+            .openClawSelectableRowChrome(selected: false)
         }
         .buttonStyle(.plain)
         .disabled(self.model.isBusy)
-        .openClawSelectableRowChrome(selected: false)
     }
 
     private var providerAuthSheet: some View {
@@ -556,7 +556,9 @@ struct OnboardingAISetupView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
-                    Text(self.model.isPreparingModel
+                    Text(self.model.providerWizardKind == .activation
+                        ? "Review any required plugin capabilities before the Gateway installs or enables them."
+                        : self.model.isPreparingModel
                         ? "OpenClaw will detect and verify the prepared model before using it."
                         : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
@@ -594,7 +596,9 @@ struct OnboardingAISetupView: View {
             } else if self.model.authBusy {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
-                    Text(self.model.isPreparingModel
+                    Text(self.model.providerWizardKind == .activation
+                        ? "Preparing your AI connection…"
+                        : self.model.isPreparingModel
                         ? "Starting local model setup…"
                         : "Starting secure sign-in…")
                 }

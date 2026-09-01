@@ -25,6 +25,14 @@ export function readErrorName(err: unknown): string {
   return typeof name === "string" ? name : "";
 }
 
+export function readErrorCause(error: unknown): unknown {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard permits direct optional cause access without coercion.
+  return (error as { cause?: unknown }).cause;
+}
+
 export function collectErrorGraphCandidates(
   err: unknown,
   resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
@@ -56,6 +64,10 @@ export function collectErrorGraphCandidates(
 
 export function formatErrorMessage(err: unknown): string {
   return formatSharedErrorMessage(err, { redact: redactSensitiveText });
+}
+
+export function formatErrorMessageWithCode(err: unknown): string {
+  return formatSharedErrorMessage(err, { includeCode: true, redact: redactSensitiveText });
 }
 
 export { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";

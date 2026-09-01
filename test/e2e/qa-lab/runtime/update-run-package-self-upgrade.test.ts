@@ -134,9 +134,6 @@ describe("update.run package self-upgrade producer", () => {
       'gateway_call wizard.next "$target_active_next_params" \\\n  "$TARGET_WIZARD_NEXT_JSON" "$TARGET_WIZARD_NEXT_ERR"',
     );
     expect(script).toContain(
-      '"$TARGET_WIZARD_DUPLICATE_JSON" \\\n  "$TARGET_WIZARD_DUPLICATE_ERR" \\\n  "wizard already running"',
-    );
-    expect(script).toContain(
       'gateway_call wizard.cancel "$target_active_session_params" \\\n  "$TARGET_WIZARD_CANCEL_JSON" "$TARGET_WIZARD_CANCEL_ERR"',
     );
     expect(script).toContain("wait_for_target_wizard_start()");

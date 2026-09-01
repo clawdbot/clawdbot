@@ -61,7 +61,8 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
     openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi
@@ -156,9 +157,32 @@ status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
 STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
+assert_package_dry_run() {
+  local expected_kind="$1" expected_channel="$2"
+  shift 2
+  local preview
+  preview="$(openclaw update --dry-run --json --no-restart "$@")"
+  printf "%s\n" "$preview"
+  UPDATE_JSON="$preview" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+    assert-dry-run "$expected_kind" "$expected_channel"
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
+}
+dev_channel_args=(--channel dev)
+# Legacy package acceptance permits missing channel persistence; keep its explicit switch.
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
+  echo "==> package dry-run channel and one-off tag precedence"
+  openclaw config set update.channel dev
+  assert_package_dry_run git dev
+  assert_package_dry_run git dev --channel dev
+  assert_package_dry_run git dev --channel dev --tag beta
+  assert_package_dry_run package dev --tag beta
+  assert_package_dry_run package stable --channel stable
+  dev_channel_args=()
+fi
+
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(openclaw update --channel dev --yes --json --no-restart)"
+dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"

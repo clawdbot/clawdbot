@@ -264,6 +264,7 @@ export async function writeQaDockerHarnessFiles(params: {
     providerBaseUrl,
     workspaceDir: "/tmp/openclaw/workspace",
     controlUiRoot: "/app/dist/control-ui",
+    enabledPluginIds: ["acpx"],
     transportPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
     transportConfig: createQaChannelGatewayConfig({
       baseUrl: qaBusBaseUrl,

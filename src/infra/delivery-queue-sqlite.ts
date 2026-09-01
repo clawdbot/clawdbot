@@ -1,27 +1,31 @@
 // Stores durable delivery queue entries in SQLite.
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
   bindDeliveryQueueEntry,
+  deliveryQueueEntriesQuery,
   inflateDeliveryQueueRow,
   loadDeliveryQueueEntryInDatabase,
+  pruneDeliveryQueueTombstoneAges,
+  pruneDeliveryQueueTombstones,
+  terminalizeBoundDeliveryQueueEntry,
   type DeliveryQueueDatabase,
-  type DeliveryQueueRowMetadata,
+  type DeliveryQueueReadMode,
   type DeliveryQueueSqliteRow,
   type UpsertDeliveryQueueEntryParams,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
-import type {
-  DeliveryQueueCompletionRetention,
-  DeliveryQueueEntryState,
-} from "./delivery-queue-sqlite.types.js";
+import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  hasLiveDeliveryQueueClaim,
+  inferDeliveryQueueFailureRetention,
+  parseDeliveryQueueCompletionRetention,
+  projectDeliveryQueueTerminalEntry,
+} from "./delivery-queue-sqlite.types.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export type {
@@ -32,11 +36,16 @@ export type {
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed" | "completed";
-const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
-const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
+type DeliveryQueueStatusRow = {
+  queue_name: string;
+  status?: QueueStatus;
+  entry_json: string;
+  recovery_state: string | null;
+};
 
-type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
+type TerminalizePendingDeliveryQueueEntryResult =
+  | { status: "terminalized"; retained: boolean }
+  | { status: "not_pending" };
 
 function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
@@ -64,80 +73,6 @@ export function upsertDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams)
   return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir));
 }
 
-type CommitStagedDeliveryQueueEntryParams = {
-  queueName: string;
-  entry: DeliveryQueueEntryState;
-  metadata?: DeliveryQueueRowMetadata;
-  stagingId: string;
-  stagingQueueName: string;
-  stateDir?: string;
-};
-
-function commitStagedDeliveryQueueEntryInternal(
-  params: CommitStagedDeliveryQueueEntryParams,
-): "created" | "existing" | "missing" {
-  const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      const staging = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select("id")
-          .where("queue_name", "=", params.stagingQueueName)
-          .where("id", "=", params.stagingId)
-          .where("status", "=", "pending"),
-      ) as { id: string } | undefined;
-      if (!staging) {
-        return "missing";
-      }
-      const inserted = upsertDeliveryQueueEntryInDatabase(
-        {
-          queueName: params.queueName,
-          entry: params.entry,
-          metadata: params.metadata,
-          insertOnly: true,
-        },
-        database,
-      );
-      if (!inserted) {
-        return "existing";
-      }
-      const deleted = executeSqliteQuerySync(
-        database.db,
-        queueDb
-          .deleteFrom("delivery_queue_entries")
-          .where("queue_name", "=", params.stagingQueueName)
-          .where("id", "=", params.stagingId)
-          .where("status", "=", "pending"),
-      );
-      if (deleted.numAffectedRows !== 1n) {
-        throw new Error(
-          `Delivery queue staging row changed during commit: ${params.stagingQueueName}/${params.stagingId}`,
-        );
-      }
-      return "created";
-    },
-    {
-      databaseLabel: "openclaw-state",
-      operationLabel: "commit staged delivery queue entry",
-    },
-  );
-}
-
-/** Atomically publish a queue row only while its staging row still exists. */
-export function commitStagedDeliveryQueueEntry(
-  params: CommitStagedDeliveryQueueEntryParams,
-): boolean {
-  const result = commitStagedDeliveryQueueEntryInternal(params);
-  if (result === "existing") {
-    throw new Error(`Delivery queue entry already exists: ${params.queueName}/${params.entry.id}`);
-  }
-  return result === "created";
-}
-
 /**
  * Expire abandoned staging rows and capture destination/staging ownership in
  * one write snapshot. A concurrent commit either lands before this snapshot or
@@ -153,41 +88,26 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
   stagingEntries: DeliveryQueueEntryState[];
 } {
   const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const snapshot = runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      executeSqliteQuerySync(
-        database.db,
-        queueDb
-          .deleteFrom("delivery_queue_entries")
-          .where("queue_name", "=", params.stagingQueueName)
-          .where("status", "=", "pending")
-          .where("enqueued_at", "<=", params.expireBeforeMs),
-      );
-      const selectPending = (queueNames: readonly string[]) =>
+      // sqlite-allow-raw: Expiry must share the write snapshot with both ownership reads.
+      database.db
+        .prepare(
+          `DELETE FROM delivery_queue_entries
+            WHERE queue_name = ? AND status = 'pending' AND enqueued_at <= ?`,
+        )
+        .run(params.stagingQueueName, params.expireBeforeMs);
+      const read = (queueNames: readonly string[]) =>
         executeSqliteQuerySync(
           database.db,
-          queueDb
-            .selectFrom("delivery_queue_entries")
-            .select([
-              "id",
-              "entry_json",
-              "enqueued_at",
-              "retry_count",
-              "last_attempt_at",
-              "last_error",
-              "platform_send_started_at",
-              "recovery_state",
-            ])
-            .where("queue_name", "in", queueNames)
-            .where("status", "=", "pending")
+          deliveryQueueEntriesQuery(database, queueNames, "unfinished")
             .orderBy("enqueued_at", "asc")
             .orderBy("id", "asc"),
         ).rows as DeliveryQueueSqliteRow[];
       return {
-        entryRows: selectPending(params.queueNames),
-        stagingRows: selectPending([params.stagingQueueName]),
+        entryRows: read(params.queueNames),
+        stagingRows: read([params.stagingQueueName]),
       };
     },
     {
@@ -210,37 +130,9 @@ export function loadDeliveryQueueEntry(
   queueName: string,
   id: string,
   stateDir?: string,
+  mode: DeliveryQueueReadMode = "pending",
 ): DeliveryQueueEntryState | null {
-  const database = openStateDatabase(stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    queueDb
-      .selectFrom("delivery_queue_entries")
-      .select([
-        "id",
-        "entry_json",
-        "enqueued_at",
-        "retry_count",
-        "last_attempt_at",
-        "last_error",
-        "platform_send_started_at",
-        "recovery_state",
-      ])
-      .where("queue_name", "=", queueName)
-      .where("id", "=", id)
-      .where("status", "=", "pending"),
-  ) as DeliveryQueueSqliteRow | undefined;
-  return row ? inflateDeliveryQueueRow(row) : null;
-}
-
-/** Load a queue entry regardless of pending/failed/completed status. */
-export function loadDeliveryQueueEntryAnyStatus(
-  queueName: string,
-  id: string,
-  stateDir?: string,
-): DeliveryQueueEntryState | null {
-  return loadDeliveryQueueEntryInDatabase(openStateDatabase(stateDir), queueName, id);
+  return loadDeliveryQueueEntryInDatabase(openStateDatabase(stateDir), queueName, id, mode);
 }
 
 /** Read row status without hiding dead-lettered entries. */
@@ -249,80 +141,86 @@ export function getDeliveryQueueEntryStatus(
   id: string,
   stateDir?: string,
 ): QueueStatus | undefined {
+  return getDeliveryQueueEntryOwners([queueName], id, stateDir).get(queueName)?.status;
+}
+
+/** Read one exact ID across physical namespaces from a single ownership snapshot. */
+export function getDeliveryQueueEntryOwners(
+  queueNames: readonly string[],
+  id: string,
+  stateDir?: string,
+): Map<string, { status: QueueStatus; settlementPending?: true }> {
+  if (queueNames.length === 0) {
+    return new Map();
+  }
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
+  return runSqliteImmediateTransactionSync(
     database.db,
-    queueDb
-      .selectFrom("delivery_queue_entries")
-      .select(["status", "entry_json", "enqueued_at", "recovery_state"])
-      .where("queue_name", "=", queueName)
-      .where("id", "=", id),
-  ) as
-    | {
-        status?: QueueStatus;
-        entry_json: string;
-        enqueued_at: number | bigint;
-        recovery_state: string | null;
+    () => {
+      const readExact = () =>
+        executeSqliteQuerySync(
+          database.db,
+          queueDb
+            .selectFrom("delivery_queue_entries")
+            .select(["queue_name", "status", "entry_json", "recovery_state"])
+            .where("queue_name", "in", queueNames)
+            .where("id", "=", id),
+        ).rows as DeliveryQueueStatusRow[];
+      let rows = readExact();
+      let pruned = false;
+      for (const row of rows) {
+        if (row.recovery_state !== "completed_bounded") {
+          continue;
+        }
+        const entry = safeParseJsonRecord(row.entry_json);
+        const retention = parseDeliveryQueueCompletionRetention(entry?.completionRetention, id);
+        if (typeof retention === "object") {
+          pruneDeliveryQueueTombstones(database.db, Date.now(), {
+            queueName: row.queue_name,
+            idPrefix: retention.idPrefix,
+          });
+          pruned = true;
+        }
       }
-    | undefined;
-  if (row?.status === "completed" && row.recovery_state === BOUNDED_COMPLETION_RECOVERY_STATE) {
-    let retention: DeliveryQueueCompletionRetention | undefined;
-    try {
-      retention = (JSON.parse(row.entry_json) as DeliveryQueueEntryState).completionRetention;
-    } catch {
-      // An unreadable terminal receipt stays fail-closed rather than authorizing
-      // a second recipient-visible send without producer ownership proof.
-      return row.status;
-    }
-    if (
-      typeof retention === "object" &&
-      id.startsWith(retention.idPrefix) &&
-      Number.isSafeInteger(retention.maxAgeMs) &&
-      retention.maxAgeMs > 0 &&
-      Number(row.enqueued_at) < Date.now() - retention.maxAgeMs
-    ) {
-      const expired = executeSqliteQuerySync(
-        database.db,
-        queueDb
-          .deleteFrom("delivery_queue_entries")
-          .where("queue_name", "=", queueName)
-          .where("id", "=", id)
-          .where("status", "=", "completed")
-          .where("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE)
-          .where("enqueued_at", "<", Date.now() - retention.maxAgeMs),
+      if (pruned) {
+        rows = readExact();
+      }
+      return new Map(
+        rows.flatMap((row) =>
+          row.status
+            ? [
+                [
+                  row.queue_name,
+                  {
+                    status: row.status,
+                    ...(row.status === "failed" && row.recovery_state === "settlement_pending"
+                      ? { settlementPending: true as const }
+                      : {}),
+                  },
+                ],
+              ]
+            : [],
+        ),
       );
-      if (expired.numAffectedRows === 1n) {
-        return undefined;
-      }
-    }
-  }
-  return row?.status;
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: "read delivery queue status",
+    },
+  );
 }
 
 /** Load all pending entries for a queue namespace in database order. */
 export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
+  mode: DeliveryQueueReadMode = "pending",
 ): DeliveryQueueEntryState[] {
   const database = openStateDatabase(stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    queueDb
-      .selectFrom("delivery_queue_entries")
-      .select([
-        "id",
-        "entry_json",
-        "enqueued_at",
-        "retry_count",
-        "last_attempt_at",
-        "last_error",
-        "platform_send_started_at",
-        "recovery_state",
-      ])
-      .where("queue_name", "=", queueName)
-      .where("status", "=", "pending")
+    deliveryQueueEntriesQuery(database, [queueName], mode)
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows as DeliveryQueueSqliteRow[];
@@ -349,38 +247,17 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
 export function completeDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
   const now = Date.now();
   const current = loadDeliveryQueueEntry(queueName, id, stateDir);
-  const retainPermanently = current?.completionRetention === "permanent";
-  const boundedRetention =
-    typeof current?.completionRetention === "object" ? current.completionRetention : undefined;
-  if (
-    boundedRetention &&
-    (!boundedRetention.idPrefix ||
-      !id.startsWith(boundedRetention.idPrefix) ||
-      !Number.isSafeInteger(boundedRetention.maxAgeMs) ||
-      boundedRetention.maxAgeMs <= 0 ||
-      !Number.isSafeInteger(boundedRetention.maxEntries) ||
-      boundedRetention.maxEntries <= 0)
-  ) {
+  const requestedRetention = current?.completionRetention;
+  const retention = parseDeliveryQueueCompletionRetention(requestedRetention, id);
+  if (requestedRetention && !retention) {
     throw new Error(`Invalid bounded delivery completion retention: ${queueName}/${id}`);
   }
-  const tombstone = {
-    id,
-    enqueuedAt: now,
-    retryCount: 0,
-    acknowledgedAt: now,
-    ...(retainPermanently
-      ? {
-          completionRetention: "permanent" as const,
-          recoveryState: PERMANENT_COMPLETION_RECOVERY_STATE,
-        }
-      : {}),
-    ...(boundedRetention
-      ? {
-          completionRetention: boundedRetention,
-          recoveryState: BOUNDED_COMPLETION_RECOVERY_STATE,
-        }
-      : {}),
-  };
+  const tombstone = projectDeliveryQueueTerminalEntry(
+    { id, retryCount: 0 },
+    now,
+    "completed",
+    retention,
+  );
   const completed = upsertDeliveryQueueEntry({
     queueName,
     entry: tombstone,
@@ -395,71 +272,9 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
     }
     throw enoent(queueName, id);
   }
-  // Ordinary receipts expire after thirty days. Permanent producer receipts
-  // survive because their source intent can outlive any bounded retry window.
-  const database = openStateDatabase(stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const lastRetained = boundedRetention
-    ? (executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select(["id", "enqueued_at"])
-          .where("queue_name", "=", queueName)
-          .where("status", "=", "completed")
-          .where("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE)
-          .where("id", ">=", boundedRetention.idPrefix)
-          .where("id", "<", `${boundedRetention.idPrefix}\uffff`)
-          .orderBy("enqueued_at", "desc")
-          .orderBy("id", "desc")
-          .limit(1)
-          .offset(boundedRetention.maxEntries - 1),
-      ) as { id: string; enqueued_at: number | bigint } | undefined)
-    : undefined;
-  // One indexed sweep owns ordinary expiry and producer-local age/count
-  // limits; pending rows, sibling prefixes, and permanent receipts survive.
-  executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .deleteFrom("delivery_queue_entries")
-      .where("queue_name", "=", queueName)
-      .where("status", "=", "completed")
-      .where((eb) =>
-        eb.or([
-          eb.and([
-            eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
-            eb.or([
-              eb("recovery_state", "is", null),
-              eb("recovery_state", "not in", [
-                PERMANENT_COMPLETION_RECOVERY_STATE,
-                BOUNDED_COMPLETION_RECOVERY_STATE,
-              ]),
-            ]),
-          ]),
-          ...(boundedRetention
-            ? [
-                eb.and([
-                  eb("recovery_state", "=", BOUNDED_COMPLETION_RECOVERY_STATE),
-                  eb("id", ">=", boundedRetention.idPrefix),
-                  eb("id", "<", `${boundedRetention.idPrefix}\uffff`),
-                  eb.or([
-                    eb("enqueued_at", "<", now - boundedRetention.maxAgeMs),
-                    ...(lastRetained
-                      ? [
-                          eb("enqueued_at", "<", Number(lastRetained.enqueued_at)),
-                          eb.and([
-                            eb("enqueued_at", "=", Number(lastRetained.enqueued_at)),
-                            eb("id", "<", lastRetained.id),
-                          ]),
-                        ]
-                      : []),
-                  ]),
-                ]),
-              ]
-            : []),
-        ]),
-      ),
-  );
+  if (typeof retention === "object") {
+    getDeliveryQueueEntryStatus(queueName, id, stateDir);
+  }
 }
 
 /** Load, transform, and persist a pending delivery queue entry. */
@@ -501,8 +316,7 @@ export function reserveDeliveryQueueEntryAttempt(params: {
       }
       if (
         params.expectedPlatformSendAttemptId &&
-        current.platformSendAttemptId !== params.expectedPlatformSendAttemptId &&
-        current.producerClaimId !== params.expectedPlatformSendAttemptId
+        !hasLiveDeliveryQueueClaim(current, params.expectedPlatformSendAttemptId, Date.now())
       ) {
         throw new Error(`Delivery platform claim was lost: ${params.id}`);
       }
@@ -537,15 +351,12 @@ export function reserveDeliveryQueueEntryAttempt(params: {
   );
 }
 
-/** Dead-lettered entry counts for one queue namespace. */
-type FailedDeliveryQueueCount = {
+/** Count dead-lettered entries per queue namespace for coarse health reporting. */
+export function countFailedDeliveryQueueEntries(stateDir?: string): Array<{
   queueName: string;
   count: number;
   oldestFailedAt?: number;
-};
-
-/** Count dead-lettered (failed) entries per queue namespace for health reporting. */
-export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDeliveryQueueCount[] {
+}> {
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const rows = executeSqliteQuerySync(
@@ -566,7 +377,38 @@ export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDelive
   );
 }
 
-/** Mark a pending delivery queue entry as failed for later diagnostics. */
+/** Count pending entries across an exact set of queue namespaces. */
+export function countPendingDeliveryQueueEntries(
+  queueNames: readonly string[],
+  stateDir?: string,
+): number {
+  if (queueNames.length === 0) {
+    return 0;
+  }
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const [row] = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("queue_name", "in", queueNames)
+      .where("status", "=", "pending"),
+  ).rows;
+  return row?.count ?? 0;
+}
+
+/** Physically expire age-bounded delivery queue tombstones. */
+export function pruneExpiredDeliveryQueueTombstones(stateDir?: string): void {
+  const database = openStateDatabase(stateDir);
+  runSqliteImmediateTransactionSync(
+    database.db,
+    () => pruneDeliveryQueueTombstoneAges(database.db, Date.now()),
+    { databaseLabel: "openclaw-state", operationLabel: "expire delivery queue tombstones" },
+  );
+}
+
+/** Terminalize one pending row using its failure-retention ownership fact. */
 export function moveDeliveryQueueEntryToFailed(
   queueName: string,
   id: string,
@@ -576,46 +418,50 @@ export function moveDeliveryQueueEntryToFailed(
   if (!current) {
     throw enoent(queueName, id);
   }
-  upsertDeliveryQueueEntry({ queueName, entry: current, status: "failed", stateDir });
+  const result = terminalizePendingDeliveryQueueEntry({
+    queueName,
+    id,
+    entry: current,
+    stateDir,
+  });
+  if (result.status !== "terminalized") {
+    throw enoent(queueName, id);
+  }
 }
 
-/** Atomically fail a queue row only while its pending value is unchanged. */
-export function failPendingDeliveryQueueEntry(params: {
+/** Atomically delete or tombstone a pending row only while its value is unchanged. */
+export function terminalizePendingDeliveryQueueEntry(params: {
   queueName: string;
   id: string;
-  expectedStatus: "pending";
-  lastError: string;
   entry: DeliveryQueueEntryState;
-  failedEntry?: DeliveryQueueEntryState;
   stateDir?: string;
-}): FailPendingDeliveryQueueEntryResult {
+  expectedStatus?: "pending" | "failed";
+}): TerminalizePendingDeliveryQueueEntryResult {
   if (params.entry.id !== params.id) {
     throw new Error(`Delivery queue entry id mismatch: ${params.entry.id} != ${params.id}`);
   }
-  if (params.failedEntry && params.failedEntry.id !== params.id) {
-    throw new Error(
-      `Failed delivery queue entry id mismatch: ${params.failedEntry.id} != ${params.id}`,
-    );
-  }
   const now = Date.now();
-  const failedEntry = { ...(params.failedEntry ?? params.entry), lastError: params.lastError };
   const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  const result = executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .updateTable("delivery_queue_entries")
-      .set({
-        status: "failed",
-        last_error: params.lastError,
-        entry_json: JSON.stringify(failedEntry),
-        updated_at: now,
-        failed_at: now,
-      })
-      .where("queue_name", "=", params.queueName)
-      .where("id", "=", params.id)
-      .where("status", "=", params.expectedStatus)
-      .where("entry_json", "=", JSON.stringify(params.entry)),
-  );
-  return result.numAffectedRows === 1n ? { status: "failed" } : { status: "not_pending" };
+  const expectedJson = JSON.stringify(params.entry);
+  const retention = inferDeliveryQueueFailureRetention(params.entry, params.id, params.queueName);
+  const failedEntry = retention
+    ? projectDeliveryQueueTerminalEntry(params.entry, now, "failed", retention)
+    : undefined;
+  if (
+    !terminalizeBoundDeliveryQueueEntry(
+      database.db,
+      params.queueName,
+      params.id,
+      expectedJson,
+      failedEntry,
+      now,
+      params.expectedStatus,
+    )
+  ) {
+    return { status: "not_pending" };
+  }
+  if (typeof retention === "object") {
+    getDeliveryQueueEntryStatus(params.queueName, params.id, params.stateDir);
+  }
+  return { status: "terminalized", retained: retention !== undefined };
 }

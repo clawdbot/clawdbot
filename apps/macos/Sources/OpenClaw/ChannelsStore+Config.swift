@@ -69,13 +69,14 @@ extension ChannelsStore {
         }
     }
 
-    func loadConfig(force: Bool = true) async {
+    func loadConfig(force: Bool = true, refresh: Bool = false) async {
         let sourceKey = self.currentConfigCacheSourceKey()
         self.resetConfigCacheIfSourceChanged(sourceKey)
-        if !force, self.configLoaded {
+        if !force, !refresh, self.configLoaded {
             return
         }
-        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force) else { return }
+        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force, refresh: refresh)
+        else { return }
         self.configLoading = true
         self.configLoadingSourceKey = sourceKey
         defer {
@@ -98,9 +99,9 @@ extension ChannelsStore {
                 self.configStatus = error.localizedDescription
             }
 
-            guard self.configForceReloadPending else { break }
-            self.configForceReloadPending = false
-            requestForce = true
+            guard self.configReloadPending != .none else { break }
+            requestForce = self.configReloadPending == .force
+            self.configReloadPending = .none
             requestSourceKey = self.currentConfigCacheSourceKey()
             self.resetConfigCacheIfSourceChanged(requestSourceKey)
         }
@@ -172,8 +173,17 @@ extension ChannelsStore {
 
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?["ui"]?.dictionaryValue
-        let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+        AppStateStore.shared.seamColorHex = Self.uiAccent(
+            userAccent: ui?["prefs"]?.dictionaryValue?["accent"]?.stringValue,
+            seamColor: ui?["seamColor"]?.stringValue)
+    }
+
+    /// User accent wins over the operator seam color, mirroring the gateway's
+    /// talk.config precedence (ui.prefs.accent -> ui.seamColor -> theme default).
+    static func uiAccent(userAccent: String?, seamColor: String?) -> String? {
+        [userAccent, seamColor]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 
     func channelConfigSchema(for channelId: String) -> ConfigSchemaNode? {
@@ -244,10 +254,12 @@ extension ChannelsStore {
         self.configSourceKey = sourceKey
     }
 
-    func queueConfigReloadIfLoading(sourceKey: String, force: Bool) -> Bool {
+    func queueConfigReloadIfLoading(sourceKey: String, force: Bool, refresh: Bool = false) -> Bool {
         guard self.configLoading else { return false }
         if force || self.configLoadingSourceKey != sourceKey {
-            self.configForceReloadPending = true
+            self.configReloadPending = .force
+        } else if refresh, self.configReloadPending == .none {
+            self.configReloadPending = .refresh
         }
         return true
     }

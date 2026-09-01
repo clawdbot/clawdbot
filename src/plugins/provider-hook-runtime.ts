@@ -4,9 +4,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelCatalogScope } from "../agents/model-discovery-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  registryContainsRuntimePluginIds,
+} from "./active-runtime-registry.js";
 import {
   PluginLruCache,
   resolveConfigScopedRuntimeCacheValue,
@@ -14,7 +16,10 @@ import {
 } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
+import {
+  resolveModelCatalogScope,
+  resolveProviderConfigApiOwnerHint,
+} from "./provider-config-owner.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -34,7 +39,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
-let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
+const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
 
 type ProviderRuntimePluginLookupParams = {
@@ -81,11 +86,6 @@ export function getModelProviderRuntimePluginHandle(
   return model
     ? (model as ModelWithProviderRuntimePluginHandle)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]
     : undefined;
-}
-
-export function clearProviderRuntimePluginCacheForTest(): void {
-  providerRuntimePluginCache = new WeakMap();
-  defaultProviderRuntimePluginCache.clear();
 }
 
 function resolveProviderRuntimePluginCacheKey(
@@ -222,7 +222,7 @@ function hasConfiguredModelProvider(params: {
   );
 }
 
-export function resolveProviderPluginsForHooks(params: {
+export function resolveLoadedProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -231,24 +231,50 @@ export function resolveProviderPluginsForHooks(params: {
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderPlugin[] {
-  const generationRegistry = getPluginRuntimeGenerationRegistry();
-  if (generationRegistry) {
-    const plugins = listProviderRuntimePluginsInRegistry(generationRegistry);
+}): ProviderPlugin[] | undefined {
+  const filterRegistryPlugins = (registry: PluginRegistry) => {
     const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
-    return plugins.filter(
+    return listProviderRuntimePluginsInRegistry(registry).filter(
       (plugin) =>
         (!onlyPluginIds || onlyPluginIds.has(plugin.pluginId)) &&
         (!params.providerRefs?.length ||
           params.providerRefs.some((providerRef) => matchesProviderPluginRef(plugin, providerRef))),
     );
+  };
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return filterRegistryPlugins(generationRegistry);
   }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  // An empty generation is authoritative. Outside a generation, only a loaded
+  // hit proves the registry serves this query; preparation may discover on a miss.
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  for (const registry of [
+    scopedRegistry,
+    getLoadedRuntimePluginRegistry({ env, workspaceDir, requiredPluginIds: params.onlyPluginIds }),
+  ]) {
+    if (registry && registryContainsRuntimePluginIds(registry, params.onlyPluginIds)) {
+      const plugins = filterRegistryPlugins(registry);
+      if (plugins.length > 0) {
+        return plugins;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function resolveProviderPluginsForHooks(
+  params: Parameters<typeof resolveLoadedProviderPluginsForHooks>[0],
+): ProviderPlugin[] {
+  const loaded = resolveLoadedProviderPluginsForHooks(params);
+  if (loaded) {
+    return loaded;
+  }
   return resolvePluginProvidersCore({
     ...params,
-    workspaceDir,
-    env,
+    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+    env: params.env ?? process.env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
     skipIfLoadInFlight: true,

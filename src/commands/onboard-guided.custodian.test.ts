@@ -7,7 +7,13 @@ import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
+
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
@@ -126,6 +132,7 @@ vi.mock("./onboard-agent.js", () => ({
     agentId: "main",
     bootstrapPending: true,
   }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -340,6 +347,29 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(localOnboarding.complete.mock.invocationCallOrder[0]).toBeLessThan(
       runSetupMemoryImportStep.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it.each([
+    ["enables default hooks", {}, true],
+    ["preserves --skip-hooks", { skipHooks: true }, undefined],
+  ] as const)("%s in the persisted setup config", async (_label, opts, expectedEnabled) => {
+    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (params) => {
+      const sourceConfig = localOnboarding.persisted.config ?? {};
+      localOnboarding.persisted.config =
+        params.finalizeConfig?.(sourceConfig, sourceConfig) ?? sourceConfig;
+      return setupApplyResult();
+    });
+    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", ...opts },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(
+      localOnboarding.persisted.config?.hooks?.internal?.entries?.["session-memory"]?.enabled,
+    ).toBe(expectedEnabled);
   });
 
   it("resumes an interrupted gateway install using its approved workspace", async () => {
@@ -967,8 +997,7 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    expect(prompter.select).toHaveBeenNthCalledWith(
-      2,
+    expect(prompter.select).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Use Current model (acme/workspace-model)?",
         options: expect.arrayContaining([
@@ -1084,7 +1113,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true, "main");
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("config write raced");
   });

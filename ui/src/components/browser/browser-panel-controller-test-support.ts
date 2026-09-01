@@ -13,6 +13,9 @@ const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 export type BrowserRequestEnvelope = {
   method: string;
   path: string;
+  target?: "host" | "node";
+  node?: string;
+  query?: Record<string, unknown>;
   body?: Record<string, unknown>;
 };
 
@@ -54,7 +57,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
-  readonly basePath = "";
+  readonly resourceBasePath = "";
   readonly authToken = null;
   available = true;
   isConnected = true;

@@ -2,9 +2,13 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type {
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
@@ -16,7 +20,11 @@ import {
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply-dispatcher.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type {
+  ReplyDispatchKind,
+  ReplyDispatchSettledCounts,
+  ReplyDispatcher,
+} from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = {
@@ -59,7 +67,7 @@ const globalMocks = vi.hoisted(() => ({
   logVerbose: vi.fn(),
 }));
 const askUserMocks = vi.hoisted(() => ({
-  isAskUserPromptPending: vi.fn(async () => true),
+  isAskUserPromptPending: vi.fn(async (_questionId: string) => true),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
@@ -81,7 +89,9 @@ const hookMocks = vi.hoisted(() => ({
     }>,
   },
   runner: {
-    hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
+    hasHooks: vi.fn<(hookName?: string, scope?: { dispatchKind?: "agent" | "acp" }) => boolean>(
+      () => false,
+    ),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
     runInboundClaimForPluginOutcome: vi.fn<
@@ -96,7 +106,10 @@ const hookMocks = vi.hoisted(() => ({
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
     runReplyDispatch: vi.fn<
-      (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
+      (
+        eventValue: PluginHookReplyDispatchEvent,
+        _ctx: unknown,
+      ) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
@@ -107,12 +120,12 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
-  readAcpSessionEntry: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
-  readAcpSessionMeta: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
+  readAcpSessionEntry: vi.fn<
+    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+  >(() => null),
+  readAcpSessionMeta: vi.fn<
+    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+  >(() => null),
   getAcpRuntimeBackend: vi.fn<() => unknown>(() => null),
   upsertAcpSessionMeta: vi.fn<
     (params: {
@@ -194,6 +207,19 @@ const sessionStoreMocks = vi.hoisted(() => ({
     },
   ),
 }));
+const placementContextMocks = vi.hoisted(() => {
+  const getMany = vi.fn<
+    (sessionIds: readonly string[]) => Map<string, WorkerSessionPlacementRecord>
+  >(() => new Map());
+  const context = {
+    workerSessionPlacementService: { getMany },
+  } satisfies SessionWorkerPlacementContext;
+  return {
+    context,
+    getMany,
+    resolveSessionWorkerPlacementContext: vi.fn(() => context),
+  };
+});
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
 }));
@@ -413,6 +439,7 @@ export {
   internalHookMocks,
   messageAuditMocks,
   mocks,
+  placementContextMocks,
   replyMediaPathMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -485,6 +512,7 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
   logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
   logMessageQueued: diagnosticMocks.logMessageQueued,
@@ -519,10 +547,15 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
     loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    patchSessionEntryCore: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
+      sessionStoreMocks.updateSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
   };
 });
+vi.mock("../../gateway/session-worker-placement-context.js", () => ({
+  resolveSessionWorkerPlacementContext: placementContextMocks.resolveSessionWorkerPlacementContext,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: vi.fn(),
@@ -558,16 +591,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
     unbind: vi.fn(async () => []),
   }),
 }));
-vi.mock("../../bindings/records.js", () => ({
-  resolveConversationBindingRecord: (conversation: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) => sessionBindingMocks.resolveByConversation(conversation),
-  touchConversationBindingRecord: (...args: [bindingId: string, at?: number]) =>
-    sessionBindingMocks.touch(...args),
-}));
 vi.mock("../../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: vi.fn(),
   captureAgentRunLifecycleGeneration: () => "test-generation",
@@ -576,6 +599,10 @@ vi.mock("../../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
+  // Plain stub, not a spy like onAgentEvent above: no test asserts per-run subscription,
+  // and staying out of agentEventMocks keeps the sibling mockReset() calls from clearing
+  // this implementation and handing the CLI bridges an undefined unsubscribe.
+  onAgentEventForRun: () => () => {},
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   runOncePerAgentRun: <T>(_runId: string, _operation: string, run: () => Promise<T>) => run(),
   withAgentRunLifecycleGeneration: <T>(_generation: string, run: () => T) => run(),
@@ -585,29 +612,31 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingErrorText: () => "Plugin binding request failed.",
   buildPluginBindingUnavailableText: (binding: { pluginName?: string; pluginId: string }) =>
     `${binding.pluginName ?? binding.pluginId} is not currently loaded.`,
-  hasShownPluginBindingFallbackNotice: (bindingId: string) =>
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(bindingId),
-  isPluginOwnedSessionBindingRecord: (
-    record: SessionBindingRecord | null | undefined,
-  ): record is SessionBindingRecord =>
-    record?.metadata != null &&
-    typeof record.metadata === "object" &&
-    (record.metadata as { pluginBindingOwner?: string }).pluginBindingOwner === "plugin",
-  markPluginBindingFallbackNoticeShown: (bindingId: string) => {
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(bindingId);
+  hasShownPluginBindingFallbackNotice: (
+    bindingId: string,
+    scope?: { channel: string; accountId: string },
+  ) =>
+    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
+      JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
+    ),
+  markPluginBindingFallbackNoticeShown: (
+    bindingId: string,
+    scope?: { channel: string; accountId: string },
+  ) => {
+    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(
+      JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
+    );
   },
-  toPluginConversationBinding: (record: SessionBindingRecord) => {
-    const metadata = (record.metadata ?? {}) as {
-      pluginId?: string;
-      pluginName?: string;
-      pluginRoot?: string;
-      data?: Record<string, unknown>;
-    };
+  toPluginConversationBinding: (record: SessionBindingRecord | null | undefined) => {
+    if (!record || !isPluginOwnedBindingMetadata(record.metadata)) {
+      return null;
+    }
+    const metadata = record.metadata;
     return {
       bindingId: record.bindingId,
-      pluginId: metadata.pluginId ?? "unknown-plugin",
+      pluginId: metadata.pluginId,
       pluginName: metadata.pluginName,
-      pluginRoot: metadata.pluginRoot ?? "",
+      pluginRoot: metadata.pluginRoot,
       channel: record.conversation.channel,
       accountId: record.conversation.accountId,
       conversationId: record.conversation.conversationId,
@@ -618,7 +647,7 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 }));
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+  readAcpSessionEntry: (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>
@@ -684,25 +713,51 @@ export const emptyConfig = {} as OpenClawConfig;
 export function createDispatcher(): ReplyDispatcher {
   let beforeDeliver: ReplyDispatchBeforeDeliver | undefined;
   const beforeDeliverTasks: Promise<unknown>[] = [];
-  const runBeforeDeliver = (kind: "tool" | "block" | "final", payload: ReplyPayload): void => {
+  const settled = {
+    tool: { cancelled: 0, failedBeforeSend: 0 },
+    block: { cancelled: 0, failedBeforeSend: 0 },
+    final: { cancelled: 0, failedBeforeSend: 0 },
+  };
+  const runBeforeDeliver = (kind: ReplyDispatchKind, payload: ReplyPayload): void => {
     if (!beforeDeliver) {
       return;
     }
-    beforeDeliverTasks.push(Promise.resolve(beforeDeliver(payload, { kind })));
+    beforeDeliverTasks.push(
+      Promise.resolve(beforeDeliver(payload, { kind })).then(
+        (result) => {
+          if (!result) {
+            settled[kind].cancelled += 1;
+          }
+        },
+        () => {
+          settled[kind].failedBeforeSend += 1;
+        },
+      ),
+    );
   };
+  const sendToolResult = vi.fn((payload: ReplyPayload) => {
+    runBeforeDeliver("tool", payload);
+    return true;
+  });
+  const sendBlockReply = vi.fn((payload: ReplyPayload) => {
+    runBeforeDeliver("block", payload);
+    return true;
+  });
+  const sendFinalReply = vi.fn((payload: ReplyPayload) => {
+    runBeforeDeliver("final", payload);
+    return true;
+  });
+  const counts = (kind: ReplyDispatchKind, delivered: number): ReplyDispatchSettledCounts => ({
+    delivered: Math.max(0, delivered - settled[kind].cancelled - settled[kind].failedBeforeSend),
+    deliveredNotVisible: 0,
+    cancelled: settled[kind].cancelled,
+    failedBeforeSend: settled[kind].failedBeforeSend,
+    failedAfterSend: 0,
+  });
   return {
-    sendToolResult: vi.fn((payload) => {
-      runBeforeDeliver("tool", payload);
-      return true;
-    }),
-    sendBlockReply: vi.fn((payload) => {
-      runBeforeDeliver("block", payload);
-      return true;
-    }),
-    sendFinalReply: vi.fn((payload) => {
-      runBeforeDeliver("final", payload);
-      return true;
-    }),
+    sendToolResult,
+    sendBlockReply,
+    sendFinalReply,
     appendBeforeDeliver: vi.fn((hook) => {
       const previousBeforeDeliver = beforeDeliver;
       beforeDeliver = previousBeforeDeliver
@@ -714,8 +769,18 @@ export function createDispatcher(): ReplyDispatcher {
           }
         : hook;
     }),
+    supportsSettledReceipt: true,
     waitForIdle: vi.fn(async () => {
       await Promise.all(beforeDeliverTasks);
+      const receipt = {
+        tool: counts("tool", sendToolResult.mock.calls.length),
+        block: counts("block", sendBlockReply.mock.calls.length),
+        final: counts("final", sendFinalReply.mock.calls.length),
+      };
+      return {
+        counts: receipt,
+        anyVisibleDelivered: Object.values(receipt).some((entry) => entry.delivered > 0),
+      };
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),

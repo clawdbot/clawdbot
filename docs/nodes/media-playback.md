@@ -58,6 +58,10 @@ Playback conversion is lazy:
    route falls back to the original bytes. The client can then show its
    unplayable-media fallback and keep the download action available.
 
+The Control UI checks rendition readiness with `HEAD` before loading the inline
+player. It shows **Preparing playback** while conversion is pending and keeps
+the download action available when playback is unavailable.
+
 Transcoding accepts sources up to 20 minutes and never raises the normal audio
 or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
@@ -70,6 +74,11 @@ keep their separate managed-image artifact family. Native clients resolve the
 artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
+
+Native clients resolve ticketed media against the connected Gateway URL,
+preserving its reverse-proxy path prefix. A Gateway reached at
+`wss://gateway.example/openclaw` loads managed media beneath
+`https://gateway.example/openclaw/api/chat/media/outgoing/`, not the server root.
 
 The ticketed byte routes support:
 

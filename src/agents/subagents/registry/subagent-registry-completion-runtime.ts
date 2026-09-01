@@ -1,6 +1,6 @@
 import {
   isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
@@ -105,9 +105,9 @@ export function createSubagentRegistryCompletionRuntime(config: {
     // Each controller attempt owns its terminal transition, while this outer
     // lease closes the gap between failed attempts and fallback cleanup.
     try {
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
+      await runWithGatewayIndependentRootWorkContinuation(async () => {
         await completeSubagentRunWithRecoveryAttempt(params, source);
-      });
+      }, "subagents:completion");
     } catch (error) {
       if (!isGatewayRestartDraining()) {
         throw error;

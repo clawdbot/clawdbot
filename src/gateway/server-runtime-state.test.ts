@@ -1,8 +1,10 @@
 /**
  * Gateway runtime state construction tests.
  */
+import { once } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { connect } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -11,7 +13,13 @@ import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-
 
 const mocks = vi.hoisted(() => ({
   listenGatewayHttpServer: vi.fn(
-    async (_params: { bindHost: string; port?: number; retryEaddrinuse?: boolean }) => {},
+    async (_params: {
+      httpServer: { address: () => unknown };
+      bindHost: string;
+      port?: number;
+      retryEaddrinuse?: boolean;
+      serviceName?: string;
+    }) => {},
   ),
   resolveGatewayListenHosts: vi.fn(async (_bindHost: string) => ["127.0.0.1"]),
   pluginsHttpModuleLoaded: vi.fn(),
@@ -63,9 +71,26 @@ async function requestPluginUpgrade(port: number, path: string): Promise<string>
 }
 
 describe("createGatewayRuntimeState", () => {
+  const mockEphemeralAddress = (params: {
+    httpServer: { address: () => unknown };
+    port?: number;
+    serviceName?: string;
+  }) => {
+    if (params.port !== 0) {
+      return;
+    }
+    vi.spyOn(params.httpServer, "address").mockReturnValue({
+      address: "127.0.0.1",
+      family: "IPv4",
+      port: params.serviceName === "Tailscale gateway ingress" ? 19_000 : 19_001,
+    });
+  };
+
   beforeEach(() => {
     mocks.listenGatewayHttpServer.mockReset();
-    mocks.listenGatewayHttpServer.mockResolvedValue(undefined);
+    mocks.listenGatewayHttpServer.mockImplementation(async (params) => {
+      mockEphemeralAddress(params);
+    });
     mocks.resolveGatewayListenHosts.mockReset();
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1"]);
     mocks.pluginsHttpModuleLoaded.mockClear();
@@ -73,6 +98,61 @@ describe("createGatewayRuntimeState", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+  });
+
+  it("yields between buffered WebSocket messages without reordering them", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest();
+    const server = runtimeState.httpServers[0]!;
+    const events: string[] = [];
+    let sentinel: ReturnType<typeof setImmediate> | undefined;
+    const received = new Promise<void>((resolve, reject) => {
+      runtimeState.wss.once("connection", (socket, req) => {
+        socket.once("error", reject);
+        socket.on("message", (data) => {
+          const message = rawDataToString(data);
+          events.push(message);
+          if (message === "a") {
+            sentinel = setImmediate(() => events.push("yield"));
+          } else {
+            resolve();
+          }
+        });
+        // Feed both masked text frames as one receive chunk through the real
+        // upgraded socket, independent of TCP packet splitting/coalescing.
+        req.socket.pause();
+        req.socket.unshift(
+          Buffer.from([0x81, 0x81, 1, 2, 3, 4, 0x60, 0x81, 0x81, 1, 2, 3, 4, 0x63]),
+        );
+        req.socket.resume();
+      });
+    });
+    let client: WebSocket | undefined;
+    try {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP gateway address");
+      }
+      client = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
+        handshakeTimeout: 2_000,
+      });
+      await once(client, "open");
+      await received;
+      expect(events).toEqual(["a", "yield", "b"]);
+    } finally {
+      clearImmediate(sentinel);
+      client?.terminate();
+      for (const socket of runtimeState.wss.clients) {
+        socket.terminate();
+      }
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+      runtimeState.wss.close();
+    }
   });
 
   it("keeps unrelated plugin HTTP routes cold for core HTTP and WebSocket requests", async () => {
@@ -381,6 +461,89 @@ describe("createGatewayRuntimeState", () => {
     await expect(runtimeState.startListening()).resolves.toBeUndefined();
     expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to bind loopback alias ::1"));
+  });
+
+  it("claims managed Tailscale routing before ordinary ingress starts listening", async () => {
+    const events: string[] = [];
+    mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
+    mocks.listenGatewayHttpServer.mockImplementation(async (params) => {
+      mockEphemeralAddress(params);
+      events.push(
+        params.serviceName === "Tailscale gateway ingress"
+          ? "private-listener"
+          : "ordinary-listener",
+      );
+    });
+    const prepareManagedTailscaleIngress = vi.fn(async () => {
+      events.push("tailscale-route");
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+      tailscaleMode: "serve",
+      prepareManagedTailscaleIngress,
+    });
+
+    await runtimeState.startListening();
+
+    expect(events).toEqual([
+      "private-listener",
+      "tailscale-route",
+      "ordinary-listener",
+      "ordinary-listener",
+    ]);
+    expect(prepareManagedTailscaleIngress).toHaveBeenCalledWith({
+      host: "127.0.0.1",
+      port: 19_000,
+    });
+    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        bindHost: "127.0.0.1",
+        port: 0,
+        retryEaddrinuse: false,
+      }),
+    );
+    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1", "::1"]);
+  });
+
+  it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
+    const routeFailure = new Error("route claim failed");
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+      tailscaleMode: "serve",
+      prepareManagedTailscaleIngress: async () => {
+        throw routeFailure;
+      },
+    });
+
+    await expect(runtimeState.startListening()).rejects.toBe(routeFailure);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindHost: "127.0.0.1",
+        port: 0,
+        serviceName: "Tailscale gateway ingress",
+      }),
+    );
+    expect(runtimeState.httpBindHosts).toEqual([]);
+  });
+
+  it("does not publish managed ingress when Tailscale mode is off", async () => {
+    const prepareManagedTailscaleIngress = vi.fn();
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+      tailscaleMode: "off",
+      prepareManagedTailscaleIngress,
+    });
+
+    await runtimeState.startListening();
+
+    expect(runtimeState.getTailscaleIngressEndpoint()).toBeUndefined();
+    expect(prepareManagedTailscaleIngress).not.toHaveBeenCalled();
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
+    );
   });
 
   it("starts the shared sandbox host on a dedicated adjacent-port origin", async () => {

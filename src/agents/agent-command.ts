@@ -1,12 +1,14 @@
-/** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  resolveSessionWorkStartError,
+} from "../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -15,6 +17,7 @@ import {
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
@@ -42,7 +45,10 @@ import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
-import { prepareAgentCommandExecution } from "./command/prepare.js";
+import {
+  prepareAgentCommandExecution,
+  type PreparedAgentCommandRuntimeContext,
+} from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
@@ -53,13 +59,10 @@ import type {
   AgentCommandIngressOpts,
   AgentCommandOpts,
 } from "./command/types.js";
-import {
-  removeInternalSessionEffectsSession,
-  resolveInternalSessionEffectsTarget,
-} from "./internal-session-effects.js";
+import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery/main-session-recovery-clear.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
-import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
@@ -72,6 +75,7 @@ async function agentCommandInternal(
   admissionIngress: AgentCommandAdmissionIngress,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  watchSkills = false,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
@@ -161,24 +165,19 @@ async function agentCommandInternal(
     | RestartRecoveryTerminalDeliveryEvidenceResult
     | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
-  const internalModelRunTargets =
-    initialOpts.modelRun === true && suppressVisibleSessionEffects
-      ? new Map<string, AgentRunSessionTarget>()
-      : undefined;
-  const trackInternalModelRunTarget = (target: AgentRunSessionTarget | undefined) => {
-    if (!internalModelRunTargets || !target?.sessionKey || !target.storePath) {
-      return;
-    }
-    internalModelRunTargets.set(`${target.storePath}\n${target.sessionKey}`, target);
-  };
-  if (internalModelRunTargets && storePath) {
-    trackInternalModelRunTarget(
-      resolveInternalSessionEffectsTarget({ agentId: sessionAgentId, runId, storePath }),
-    );
-  }
+  const { track: trackInternalModelRunTarget, cleanup: cleanupInternalModelRunTargets } =
+    createInternalSessionEffectsCleanup({
+      enabled: initialOpts.modelRun === true && suppressVisibleSessionEffects,
+      agentId: sessionAgentId,
+      runId,
+      storePath,
+      onError: (error) => {
+        log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
+      },
+    });
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
-  let preparedRunAdmission: ReturnType<typeof executionIdentity.prepare> | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     const sessionStoreRuntime =
@@ -277,7 +276,7 @@ async function agentCommandInternal(
       }
 
       let currentRunDeliveryPrepared = false;
-      const prepareDeliveryForRun = async (candidateSessionEntry?: SessionEntry) => {
+      const prepareDeliveryForRun = async (candidateSessionEntry?: typeof sessionEntry) => {
         if (currentRunDeliveryPrepared || opts.deliver !== true) {
           return;
         }
@@ -335,7 +334,7 @@ async function agentCommandInternal(
             ? runId
             : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const next: SessionEntry = {
+        const next = {
           ...entry,
           sessionId,
           updatedAt: now,
@@ -386,6 +385,9 @@ async function agentCommandInternal(
             sessionStore[sessionKey] = sessionEntry;
           }
         } catch (error) {
+          if (isSessionWorkStartInvalidatedError(error)) {
+            throw error;
+          }
           log.warn(
             `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
           );
@@ -436,6 +438,11 @@ async function agentCommandInternal(
             lifecycleGeneration,
             runId,
             workspaceDir,
+            executionSkillsDir: path.join(
+              sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
+              "skills",
+            ),
+            watchSkills,
             isNewSession,
             isSubagentLaneTurn,
             suppressVisibleSessionEffects,
@@ -446,6 +453,9 @@ async function agentCommandInternal(
             persistedVerbose,
             verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
             sessionStateActor,
+            ...(manifestMetadataSnapshot
+              ? { pluginMetadataSnapshot: manifestMetadataSnapshot }
+              : {}),
           }),
         { config: cfg },
       );
@@ -487,6 +497,11 @@ async function agentCommandInternal(
         onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
           lifecycleGeneration = nextLifecycleGeneration;
         },
+        onCompactionAccounting: (fact) => {
+          if (fact.kind === "durable") {
+            runOwnedSessionId = fact.target.sessionId;
+          }
+        },
         suppressVisibleSessionEffects,
         preserveUserFacingSessionModelState,
         modelSelection,
@@ -526,21 +541,9 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
-    preparedRunAdmission?.close();
+    await preparedRunAdmission?.finish();
     sessionWorkAdmission?.release();
-    if (internalModelRunTargets) {
-      // Compaction may rotate a private session identity. Remove every owned
-      // SQLite row only after delivery; transcript and trajectory rows cascade.
-      for (const target of internalModelRunTargets.values()) {
-        try {
-          await removeInternalSessionEffectsSession(target);
-        } catch (error) {
-          // Cleanup remains best-effort so a terminal SQLite write failure does
-          // not replace the completed model-run result; the DB layer warns too.
-          log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
-        }
-      }
-    }
+    await cleanupInternalModelRunTargets();
     if (
       !sessionReboundDuringRun &&
       trackedRestartRecoveryDeliveryClaim &&
@@ -550,22 +553,22 @@ async function agentCommandInternal(
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryRunId === runId) {
-          const next: SessionEntry = {
-            ...entry,
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry,
-              recordTerminalSource: true,
-              terminalRunId: runId,
-              terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
-            }),
-            updatedAt: Date.now(),
-          };
           const persisted = await persistAgentSession({
             sessionStore,
             sessionKey,
             storePath,
             initialEntry: entry,
-            entry: next,
+            entry: {
+              ...entry,
+              ...buildRestartRecoveryClaimCleanupPatch({
+                entry,
+                recordTerminalSource: true,
+                terminalRunId: runId,
+                terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
+              }),
+              ...buildMainSessionRecoveryClearPatch(entry),
+              updatedAt: Date.now(),
+            },
             shouldPersist: (current) =>
               shouldPersistRestartRecoveryCleanup(current, runOwnedSessionId, runId),
           });
@@ -591,6 +594,7 @@ async function agentCommandWithAdmissionIngress(
     opts,
     runtime,
     deps,
+    operatorAuthority: admissionIngress.kind === "local-cli",
     run: async (prepared, resolvedDeps) =>
       await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
   });
@@ -622,47 +626,64 @@ async function agentCommandFromIngressInternal(
   recovery?: {
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   },
+  runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    let preparedAgentDir: string | undefined;
-    const result = await runWithAgentCommandRecoveryOwner({
-      lifecycleGeneration,
-      mode: "claim",
-      opts: {
-        ...opts,
+  const generation = runtimeContext?.pluginGeneration;
+  const executeIngress = () =>
+    withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+      let preparedAgentDir: string | undefined;
+      const result = await runWithAgentCommandRecoveryOwner({
         lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
-      },
-      prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
-      restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
-      run: async (prepared) => {
-        preparedAgentDir = prepared.agentDir;
-        return await withAgentPluginRegistry({
-          config: prepared.cfg,
-          workspaceDir: prepared.workspaceDir,
-          run: async () =>
+        mode: "claim",
+        opts: {
+          ...opts,
+          lifecycleGeneration,
+          senderIsOwner: opts.senderIsOwner === true,
+        },
+        prepare: async (preparedOpts) =>
+          await prepareAgentCommandExecution(preparedOpts, runtime, runtimeContext),
+        restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
+        run: async (prepared) => {
+          preparedAgentDir = prepared.agentDir;
+          const run = async () =>
             await agentCommandInternal(
               prepared,
               prepared.opts,
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
               runtime,
               deps,
-            ),
-        });
-      },
+              true,
+            );
+          return generation
+            ? await run()
+            : await withAgentPluginRegistry({
+                config: prepared.cfg,
+                workspaceDir: prepared.workspaceDir,
+                run,
+              });
+        },
+      });
+
+      if (result && preparedAgentDir) {
+        emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+      }
+
+      return result;
     });
-
-    if (result && preparedAgentDir) {
-      emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
-    }
-
-    return result;
-  });
+  return generation && runtimeContext
+    ? await withPluginRuntimeGenerationScope(
+        {
+          metadataSnapshot: generation.pluginMetadataSnapshot,
+          pluginRegistry: generation.pluginRegistry,
+        },
+        executeIngress,
+      )
+    : await executeIngress();
 }
 
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
@@ -671,8 +692,7 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
-  // boundary at runtime so extra or inherited properties cannot author audit identity.
+  // Enforce the private recovery boundary for JavaScript Plugin SDK callers.
   return await agentCommandFromIngressInternal(
     sanitizePublicAgentCommandIngressOpts(opts),
     runtime,
@@ -688,6 +708,7 @@ export async function agentCommandFromGatewayIngress(
   recovery: {
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   },
+  runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
-  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
+  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery, runtimeContext);
 }

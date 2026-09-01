@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
@@ -22,14 +25,18 @@ import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
-  changedEntryPaths,
-  changedPaths,
   inspectAcceptedWorkerWorkspace,
   manifestNodes,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
+import {
+  requireWorkspaceResultGit as requireGit,
+  updateWorkspaceResultRefs,
+  withWorkspaceResultRefMutation,
+  workspaceResultGitCommand as gitCommand,
+  WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
+} from "./workspace-result-git.js";
 
-const PATCH_TIMEOUT_MS = 10 * 60_000;
 // Match managed-worktree refs/openclaw/snapshots: deleting the owning ref is
 // sufficient; unreachable objects may remain until normal Git GC.
 const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
@@ -38,41 +45,39 @@ const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
-// Git documents the platform null device as the per-command way to disable
-// hooks. An unowned path under a shared temp dir could be populated by another user.
-const DISABLED_GIT_HOOKS_PATH = os.devNull;
-
-function gitCommand(cwd: string, args: string[]): string[] {
-  return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
-}
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 export function workerWorkspaceTransferPaths(
   current: WorkerWorkspaceManifest,
   base: WorkerWorkspaceManifest,
 ): string[] {
   // Staging is directory-agnostic because it transfers file and symlink bytes only.
-  return parseV2ChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
-}
-
-function workspaceReconciliationRecordCount(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-): number {
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
-  let records = 0;
-  for (const entryPath of changedPaths(base, current)) {
-    records += Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath));
-  }
-  return records;
+  return parseChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
 }
 
 function parseChangedWorkspaceResult(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
+  enforceRecordLimit = true,
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  const recordCount = workspaceReconciliationRecordCount(base, current);
-  const changed = changedEntryPaths(base, current);
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  const changed = new Set(
+    [...new Set([...baseNodes.keys(), ...currentNodes.keys()])].filter(
+      (entryPath) =>
+        JSON.stringify(baseNodes.get(entryPath)) !== JSON.stringify(currentNodes.get(entryPath)),
+    ),
+  );
+  const recordCount = [...changed].reduce(
+    (count, entryPath) =>
+      count + Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath)),
+    0,
+  );
+  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
+    throw new Error(
+      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+    );
+  }
   let totalBytes = 0;
   const entries = reconciliationEntries(current.entries).filter((entry) => changed.has(entry.path));
   for (const entry of entries) {
@@ -85,29 +90,6 @@ function parseChangedWorkspaceResult(
     }
   }
   return { changed: recordCount > 0, entries };
-}
-
-function parseV2ChangedWorkspaceResult(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  if (workspaceReconciliationRecordCount(base, current) > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  return parseChangedWorkspaceResult(base, current);
-}
-
-async function requireGit(cwd: string, args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(gitCommand(cwd, args), {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: 1024 * 1024,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
-  }
-  return result.stdout.trim();
 }
 
 function requireWorkerResultStorageRef(ref: string): string {
@@ -284,7 +266,7 @@ async function stageWorkerWorkspaceResult(params: {
   );
   // The authenticated manifests define the complete result. The durable tree
   // stores only changed resulting blobs; deletions intentionally have no blob.
-  const entries = parseV2ChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
+  const entries = parseChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   );
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
@@ -327,11 +309,13 @@ async function stageWorkerWorkspaceResult(params: {
     chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
   }
   chunks.push(Buffer.from("done\n"));
-  const imported = await runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
-    input: Buffer.concat(chunks),
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-  });
+  const imported = await withWorkspaceResultRefMutation(root, () =>
+    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
+      input: Buffer.concat(chunks),
+      timeoutMs: PATCH_TIMEOUT_MS,
+      maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
+    }),
+  );
   if (imported.termination !== "exit" || imported.code !== 0) {
     throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
   }
@@ -404,10 +388,7 @@ async function loadStagedWorkerWorkspace(
   // Shipped v1 refs carry a complete current tree and predate the conservative
   // manifest worst-case record gate. Recovery still validates their manifests,
   // tree shape, and changed payload bytes; the apply owner caps actual records.
-  const changedResult =
-    version === 1
-      ? parseChangedWorkspaceResult(base, current)
-      : parseV2ChangedWorkspaceResult(base, current);
+  const changedResult = parseChangedWorkspaceResult(base, current, version !== 1);
   const changedEntries = changedResult.entries;
   const treeEntries = version === 1 ? reconciliationEntries(current.entries) : changedEntries;
   const tree = await runCommandBuffered(
@@ -542,7 +523,11 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
     });
     return { ...applied, changed: staged.changed };
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
   }
 }
 
@@ -608,8 +593,10 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     publishStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
       const commit = await requireGit(root, ["rev-parse", `${candidateRef}^{commit}`]);
-      await requireGit(root, ["update-ref", stagedResult.ref, commit]);
-      await requireGit(root, ["update-ref", "-d", candidateRef]);
+      await updateWorkspaceResultRefs(root, [
+        { ref: stagedResult.ref, objectId: commit },
+        { ref: candidateRef },
+      ]);
       // Final fences precede publishing. Preserve the canonical ref on any
       // SQLite failure so restart recovery can discover the verified result.
       stagedResult.record(stagedResult.ref);
@@ -629,10 +616,12 @@ export async function deleteStagedWorkerWorkspaceResult(params: {
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
-  await requireGit(root, ["update-ref", "-d", stagedResultRef]);
-  if (stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)) {
-    await requireGit(root, ["update-ref", "-d", preparedWorkerWorkspaceResultRef(stagedResultRef)]);
-  }
+  await updateWorkspaceResultRefs(root, [
+    { ref: stagedResultRef },
+    ...(stagedResultRef.startsWith(`${WORKER_RESULT_REF_PREFIX}/`)
+      ? [{ ref: preparedWorkerWorkspaceResultRef(stagedResultRef) }]
+      : []),
+  ]);
 }
 
 export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
@@ -643,10 +632,13 @@ export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
   const cleanupRef = cleanupWorkerWorkspaceResultRef(stagedResultRef);
   const commit = await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
-  // The temporary cleanup namespace survives the SQLite fence removal. Either
-  // side of this two-step move is therefore discoverable after a crash.
-  await requireGit(root, ["update-ref", cleanupRef, commit]);
-  await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
+  // Complete the ref move before removing the SQLite fence, keeping an
+  // inspectable result on either side of a crash.
+  await updateWorkspaceResultRefs(root, [
+    { ref: cleanupRef, objectId: commit },
+    { ref: stagedResultRef },
+    { ref: preparedWorkerWorkspaceResultRef(stagedResultRef) },
+  ]);
   return cleanupRef;
 }
 
@@ -662,13 +654,15 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
   }
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
   const commit = await requireGit(root, ["rev-parse", `${cleanupRef}^{commit}`]);
-  await requireGit(root, ["update-ref", stagedResultRef, commit]);
-  await requireGit(root, ["update-ref", "-d", cleanupRef]);
+  await updateWorkspaceResultRefs(root, [
+    { ref: stagedResultRef, objectId: commit },
+    { ref: cleanupRef },
+  ]);
 }
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -676,11 +670,17 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
     "--format=%(refname)",
     `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
   ]);
-  for (const cleanupRef of output.split("\n").filter(Boolean)) {
-    requireWorkerResultStorageRef(cleanupRef);
-    if (!params.retainedRefs?.has(cleanupRef)) {
-      await requireGit(root, ["update-ref", "-d", cleanupRef]);
-    }
+  const cleanupRefs = output.split("\n").filter(Boolean);
+  if (cleanupRefs.length > 0) {
+    await updateWorkspaceResultRefs(root, () => {
+      // Read fences after inventory and the shared ref queue wait. Later
+      // claims cannot appear in these immutable claim refs.
+      const retainedRefs = params.retainedRefs?.();
+      return cleanupRefs
+        .map(requireWorkerResultStorageRef)
+        .filter((ref) => !retainedRefs?.has(ref))
+        .map((ref) => ({ ref }));
+    });
   }
 }
 

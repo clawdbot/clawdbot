@@ -8,6 +8,23 @@ afterEach(async () => {
 });
 
 describe("findSettingsSearchBlocks", () => {
+  it("finds the task progress disclosure preference in Chat settings", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "task progress",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+    ]);
+  });
+
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
     const matches = findSettingsSearchBlocks({
       query: "cp",
@@ -30,6 +47,59 @@ describe("findSettingsSearchBlocks", () => {
       }),
     ]);
   });
+
+  it("routes setup consent to Advanced with its disclosure open", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "discovery access",
+        schema: {
+          type: "object",
+          properties: {
+            wizard: {
+              type: "object",
+              properties: {
+                accessMode: { type: "string", title: "Setup Discovery Access" },
+              },
+            },
+          },
+        },
+        value: {},
+        uiHints: { "wizard.accessMode": { advanced: false } },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "advanced",
+        label: "Setup",
+        search: "?section=wizard&advanced=1",
+        hash: "#config-section-wizard",
+      }),
+    ]);
+  });
+
+  it.each(["localModelLeanAutoModel", "securityAcknowledgedAt"])(
+    "does not offer machine-owned %s in search",
+    (key) => {
+      expect(
+        findSettingsSearchBlocks({
+          query: "internal bookkeeping",
+          schema: {
+            type: "object",
+            properties: {
+              wizard: {
+                type: "object",
+                properties: {
+                  [key]: { type: "string", title: "Internal Bookkeeping" },
+                  accessMode: { type: "string" },
+                },
+              },
+            },
+          },
+          value: { wizard: { [key]: "internal bookkeeping" } },
+          uiHints: {},
+        }),
+      ).toEqual([]);
+    },
+  );
 
   it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
@@ -107,6 +177,55 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("finds existing update checks and channel controls on the curated Updates page", () => {
+    const updateSchema = {
+      type: "object",
+      properties: {
+        update: {
+          type: "object",
+          properties: {
+            channel: { type: "string", title: "Update Channel" },
+            checkOnStart: { type: "boolean", title: "Update Check on Start" },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "update.channel": { advanced: false },
+      "update.checkOnStart": { advanced: false },
+    };
+
+    expect(
+      findSettingsSearchBlocks({
+        query: "check on start",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "check for updates",
+        schema: null,
+        value: null,
+        uiHints: {},
+      }),
+    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "update channel",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "updates",
+        search: "?section=update",
+      }),
+    ]);
+  });
+
   it("routes moved static blocks to their dedicated pages", () => {
     const security = findSettingsSearchBlocks({
       query: "exec policy",
@@ -128,6 +247,21 @@ describe("findSettingsSearchBlocks", () => {
         hash: "#settings-communications-notifications",
       }),
     ]);
+  });
+
+  it("omits admin-only static and schema results for non-admin viewers", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "security",
+        schema: {
+          type: "object",
+          properties: { security: { type: "object", title: "Security" } },
+        },
+        value: {},
+        uiHints: {},
+        canAdmin: false,
+      }),
+    ).toEqual([]);
   });
 
   it("routes uncurated schema sections to the Advanced page", () => {

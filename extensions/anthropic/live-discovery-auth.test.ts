@@ -75,6 +75,22 @@ describe("anthropic live model discovery auth", () => {
     expect(headers.get("x-api-key")).toBeNull();
   });
 
+  it("does not resolve Anthropic credentials for Claude CLI-only catalog scope", async () => {
+    const resolveProviderApiKey = vi.fn(() => {
+      throw new Error("unselected Anthropic credential read");
+    });
+
+    await expect(
+      buildAnthropicProvider().catalog?.run?.({
+        ...buildCatalogContext("unused"),
+        providerIds: ["claude-cli"],
+        resolveProviderApiKey,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(guardedFetchCalls).toEqual([]);
+  });
+
   it("keeps shipped models Anthropic does not publish while adding discovered ones", async () => {
     // Discovery replaces the seed catalog, so a shipped model with no live row
     // would silently vanish from the provider listing once discovery succeeds.

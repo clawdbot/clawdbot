@@ -24,15 +24,19 @@ const sessionPromptStates = resolveGlobalSingleton(
   () => new Map<string, EmbeddedSessionPromptState>(),
 );
 
+export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
+  return {
+    replacements: new Map<string, AgentMessage>(),
+    frozen: new Set<string>(),
+    ambiguousBaseKeys: new Set<string>(),
+    sourceTextByKey: new Map<string, string[]>(),
+  };
+}
+
 function createSessionPromptState(): EmbeddedSessionPromptState {
   return {
     activeProjectKeys: [],
-    toolResults: {
-      replacements: new Map<string, AgentMessage>(),
-      frozen: new Set<string>(),
-      ambiguousBaseKeys: new Set<string>(),
-      sourceTextByKey: new Map<string, string[]>(),
-    },
+    toolResults: createToolResultPromptProjectionState(),
     sentUserTurnIds: new Set<string>(),
   };
 }

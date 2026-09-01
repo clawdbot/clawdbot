@@ -103,11 +103,12 @@ export {
   type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
-  startQaGatewayChild,
+  createQaGatewayChild,
+  type QaGatewayChild,
+  type QaGatewayStopResult,
 } from "./src/gateway-child.js";
 export {
   buildQaSuiteSummaryJson,
-  qaSuiteProgressTesting,
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,

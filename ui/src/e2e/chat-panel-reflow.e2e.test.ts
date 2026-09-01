@@ -1,7 +1,11 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  activateChatHeaderPanelAction,
+  openChatSidePanelType,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -10,7 +14,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-panel-reflow");
 const chatSessionKey = "agent:main:main";
 
 const longReply =
@@ -61,8 +64,7 @@ async function expectMessagesNotToOverlap(page: import("playwright").Page): Prom
 
 suite.define(() => {
   it("keeps transcript rows separate across background-task, file, and diff panel toggles", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("chat-panel-reflow");
     await suite.withPage(
       {
         locale: "en-US",
@@ -144,17 +146,17 @@ suite.define(() => {
         await expectMessagesNotToOverlap(page);
         await page.screenshot({ path: path.join(artifactDir, "00-closed.png") });
 
-        await page.getByRole("button", { name: "Show background tasks" }).click();
+        await openChatSidePanelType(page, "Tasks");
         await page.locator(".chat-tasks-rail").waitFor({ state: "visible" });
         await expectMessagesNotToOverlap(page);
         await page.screenshot({ path: path.join(artifactDir, "01-background-tasks.png") });
 
-        await page.getByRole("button", { name: "Show session files", exact: true }).click();
+        await openChatSidePanelType(page, "Files");
         await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });
         await expectMessagesNotToOverlap(page);
         await page.screenshot({ path: path.join(artifactDir, "02-thread-files.png") });
 
-        await page.locator(".chat-session-diff-toggle").first().click();
+        await activateChatHeaderPanelAction(page, "Show session changes");
         await page.locator(".session-diff").waitFor({ state: "visible" });
         await expectMessagesNotToOverlap(page);
         await page.screenshot({ path: path.join(artifactDir, "03-thread-changes.png") });

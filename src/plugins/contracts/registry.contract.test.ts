@@ -129,6 +129,19 @@ describe("plugin contract registry", () => {
     expectUniqueIds(pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds));
   });
 
+  it.each([
+    ["azure-speech", "speechProviderIds", ["azure-speech", "azure"]],
+    ["microsoft", "speechProviderIds", ["microsoft", "edge"]],
+    ["tts-local-cli", "speechProviderIds", ["tts-local-cli", "cli"]],
+    ["volcengine", "speechProviderIds", ["volcengine", "bytedance", "doubao"]],
+    ["xiaomi", "speechProviderIds", ["xiaomi", "mimo"]],
+    ["xai", "realtimeVoiceProviderIds", ["xai", "grok-voice", "xai-realtime-voice"]],
+  ] as const)("declares canonical-first %s %s aliases", (pluginId, contract, providerIds) => {
+    expect(
+      pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)?.[contract],
+    ).toEqual(providerIds);
+  });
+
   it("covers every bundled worker provider plugin discovered from manifests", () => {
     expectRegistryPluginIds({
       actualPluginIds: pluginRegistrationContractRegistry

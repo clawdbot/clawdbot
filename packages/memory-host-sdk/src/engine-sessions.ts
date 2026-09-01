@@ -24,6 +24,8 @@ export {
   type SessionTranscriptCorpusOptions,
 } from "./host/session-files.js";
 export {
+  isCronRunSessionKey,
+  isDreamingNarrativeSessionStoreKey,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseSqliteSessionFileMarker,

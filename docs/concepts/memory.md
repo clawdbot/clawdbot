@@ -219,6 +219,10 @@ OpenClaw runs a silent turn that reminds the agent to save important context
 to memory files. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
 
+Memory flushing requires writable workspace access. Sessions whose sandbox
+requires read-only or no workspace access skip the flush, including sessions
+with a persisted sandbox requirement that overrides the agent's configuration.
+
 To keep that housekeeping turn on a local model, set an exact override that
 applies only to the memory-flush turn (it does not inherit the active
 session's model fallback chain):
@@ -319,6 +323,7 @@ openclaw memory index --force   # Rebuild the index
 - [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
 - [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
 - [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
+- [Memory provenance and deletion](/concepts/memory-provenance): session lineage, admission policy, and `memory forget`.
 - [Memory configuration reference](/reference/memory-config): all config knobs.
 - [Compaction](/concepts/compaction): how compaction interacts with memory.
 - [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.

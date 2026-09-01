@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isSharedAuthStoreOwner } from "./agent-delete-safety.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { findOverlappingWorkspaceAgentIds, isSharedAuthStoreOwner } from "./agent-delete-safety.js";
 
 describe("shared auth store deletion safety", () => {
   const sharedAuthDbPath = path.join(os.tmpdir(), "shared-auth", "openclaw-agent.sqlite");
@@ -28,5 +30,34 @@ describe("shared auth store deletion safety", () => {
     },
   ])("$name", ({ ownership, agentAuthDbPath, expected }) => {
     expect(isSharedAuthStoreOwner({ ownership, agentAuthDbPath, sharedAuthDbPath })).toBe(expected);
+  });
+});
+
+describe("shared workspace deletion safety", () => {
+  it("detects another agent behind a dangling workspace symlink", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-delete-alias-"));
+    const workspaceDir = path.join(rootDir, "vanished-workspace");
+    const workspaceAliasDir = path.join(rootDir, "workspace-alias");
+    try {
+      fs.symlinkSync(
+        workspaceDir,
+        workspaceAliasDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const config: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "alpha", workspace: workspaceAliasDir },
+            { id: "beta", workspace: workspaceDir },
+          ],
+        },
+      };
+
+      expect(findOverlappingWorkspaceAgentIds(config, "alpha", workspaceAliasDir)).toEqual([
+        "beta",
+      ]);
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });

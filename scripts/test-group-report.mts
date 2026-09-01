@@ -1,12 +1,18 @@
 // Builds grouped Vitest duration reports or compares two grouped reports.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pMap from "p-map";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
@@ -17,7 +23,6 @@ import {
   renderGroupedTestReport,
 } from "./lib/test-group-report.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mts";
 import {
   applyParallelVitestCachePaths,
@@ -31,7 +36,6 @@ const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
 const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
 const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
 const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -97,12 +101,6 @@ type RunVitestParams = TestGroupRunSpec &
     reportPath: string;
   };
 
-type TaskkillRunner = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
-
 function usage() {
   return [
     "Usage: node --import tsx scripts/test-group-report.mts [options] [-- <vitest args>]",
@@ -135,16 +133,8 @@ function usage() {
   ].join("\n");
 }
 
-function readRequiredValue(argv: string[], index: number, flag: string) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 function readPositiveIntValue(argv: string[], index: number, flag: string) {
-  return parsePositiveInt(readRequiredValue(argv, index, flag), flag);
+  return parsePositiveInt(requireOptionArgument(argv, index, flag), flag);
 }
 
 /**
@@ -200,13 +190,13 @@ export function parseTestGroupReportArgs(argv: string[]) {
       continue;
     }
     if (arg === "--config") {
-      args.configs.push(readRequiredValue(argv, index, "--config"));
+      args.configs.push(requireOptionArgument(argv, index, "--config"));
       index += 1;
       continue;
     }
     if (arg === "--compare") {
-      const before = readRequiredValue(argv, index, "--compare");
-      const after = readRequiredValue(argv, index + 1, "--compare");
+      const before = requireOptionArgument(argv, index, "--compare");
+      const after = requireOptionArgument(argv, index + 1, "--compare");
       setSingleValueFlag(arg, () => {
         args.compare = { before, after };
       });
@@ -214,12 +204,12 @@ export function parseTestGroupReportArgs(argv: string[]) {
       continue;
     }
     if (arg === "--report") {
-      args.reports.push(readRequiredValue(argv, index, "--report"));
+      args.reports.push(requireOptionArgument(argv, index, "--report"));
       index += 1;
       continue;
     }
     if (arg === "--group-by") {
-      const value = readRequiredValue(argv, index, "--group-by");
+      const value = requireOptionArgument(argv, index, "--group-by");
       setSingleValueFlag(arg, () => {
         args.groupBy = value;
       });
@@ -227,7 +217,7 @@ export function parseTestGroupReportArgs(argv: string[]) {
       continue;
     }
     if (arg === "--output") {
-      const value = readRequiredValue(argv, index, "--output");
+      const value = requireOptionArgument(argv, index, "--output");
       setSingleValueFlag(arg, () => {
         args.output = value;
       });
@@ -335,57 +325,6 @@ function parseMaxRssBytes(output: string) {
   return null;
 }
 
-function hasErrorCode(error: unknown, code: string) {
-  return isRecord(error) && error.code === code;
-}
-
-export function signalTestGroupReportChild(
-  child: Pick<ChildProcess, "kill" | "pid">,
-  signal: ProcessSignal,
-  {
-    appendDiagnostic = () => {},
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    appendDiagnostic?: (message: string) => void;
-    platform?: typeof process.platform;
-    runTaskkill?: TaskkillRunner;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal as NodeJS.Signals);
-      return;
-    } catch (error) {
-      if (error && !hasErrorCode(error, "ESRCH")) {
-        appendDiagnostic(
-          `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
-        );
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal as NodeJS.Signals);
-}
-
 /**
  * Runs a command, captures text output, and terminates timed-out process groups.
  */
@@ -422,7 +361,17 @@ export function spawnText(command: string, args: readonly string[], options: Spa
     let childClosedResult: SpawnTextResult | null = null;
     let waitingForKillGrace = false;
     const signalChild = (signal: ProcessSignal) =>
-      signalTestGroupReportChild(child, signal, { appendDiagnostic, useProcessGroup });
+      terminateManagedChild(child, signal as NodeJS.Signals, {
+        onChildSignalError(error) {
+          throw error;
+        },
+        onProcessGroupSignalError(error) {
+          appendDiagnostic(
+            `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
+          );
+        },
+        taskkillTimeoutMs: null,
+      });
     const parentSignalHandlers: { signal: ProcessSignal; handler: () => void }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -448,34 +397,15 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       relayParentSignal("SIGINT");
       relayParentSignal("SIGTERM");
     }
-    const processGroupIsAlive = () => {
-      if (!useProcessGroup || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(error && hasErrorCode(error, "EPERM"));
-      }
-    };
-    const waitForProcessGroupExit = async (timeoutMsToWait: number) => {
-      const deadlineAt = Date.now() + timeoutMsToWait;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupIsAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-        });
-      }
-      return !processGroupIsAlive();
-    };
+    const processGroupIsAlive = () =>
+      inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
     const finishAfterProcessGroupCleanup = async (result: SpawnTextResult) => {
       const graceRemainingMs =
         killGraceDeadline === null ? killGraceMs : Math.max(0, killGraceDeadline - Date.now());
       if (graceRemainingMs > 0) {
-        await waitForProcessGroupExit(graceRemainingMs);
+        await waitForManagedProcessGroupExit(child, graceRemainingMs, {
+          errorPolicy: "alive-on-eperm",
+        });
       }
       if (settled) {
         return;

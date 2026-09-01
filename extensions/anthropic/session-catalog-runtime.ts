@@ -47,11 +47,13 @@ function boundClaudeSource(
 
 export function listBoundClaudeSessions(
   api: OpenClawPluginApi,
+  agentId?: string,
   sessionEntries?: SessionCatalogEntrySnapshot,
 ): Map<string, string> {
   const config = currentClaudeSessionCatalogConfig(api);
   const bound = new Map<string, string>();
   for (const { sessionKey, entry } of listSessionCatalogEntries({
+    agentId,
     config,
     runtime: api.runtime,
     sessionEntries,

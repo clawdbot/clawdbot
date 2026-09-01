@@ -75,11 +75,16 @@ describe("worktrees gateway methods", () => {
       undefined,
     ]);
     expect(
-      await call(handlers, "worktrees.create", {
-        repoRoot: "/repo",
-        name: "task-one",
-        baseRef: "main",
-      }),
+      await call(
+        handlers,
+        "worktrees.create",
+        {
+          repoRoot: "/repo",
+          name: "task-one",
+          baseRef: "main",
+        },
+        { client: adminClient, context: emptyConfigContext },
+      ),
     ).toEqual([true, record, undefined]);
     expect(await call(handlers, "worktrees.remove", { id: record.id, force: true })).toEqual([
       true,
@@ -97,8 +102,9 @@ describe("worktrees gateway methods", () => {
       undefined,
     ]);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 30 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
 
     expect(service.create).toHaveBeenCalledWith({
@@ -106,11 +112,12 @@ describe("worktrees gateway methods", () => {
       name: "task-one",
       baseRef: "main",
       ownerKind: "manual",
+      runSetupScript: true,
     });
     expect(service.remove).toHaveBeenCalledWith({
       id: record.id,
       reason: "manual-delete",
-      force: true,
+      allowSnapshotLoss: true,
     });
   });
 
@@ -195,6 +202,7 @@ describe("worktrees gateway methods", () => {
     await fs.mkdir(outside);
     const project = await registerProjectRegistry({ path: repoRoot, name: "Registered" });
     const service = {
+      create: vi.fn(async () => record),
       listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
     };
     const handlers = createWorktreesHandlers(service as never);
@@ -207,6 +215,21 @@ describe("worktrees gateway methods", () => {
       );
       expect(allowed?.[0]).toBe(true);
       expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
+
+      const created = await call(
+        handlers,
+        "worktrees.create",
+        { repoRoot: alias, name: "registered-task" },
+        { client: writeClient, context: emptyConfigContext },
+      );
+      expect(created?.[0]).toBe(true);
+      expect(service.create).toHaveBeenCalledWith({
+        repoRoot,
+        name: "registered-task",
+        baseRef: undefined,
+        ownerKind: "manual",
+        runSetupScript: false,
+      });
 
       const denied = await call(
         handlers,
@@ -230,8 +253,9 @@ describe("worktrees gateway methods", () => {
     const response = await call(handlers, "worktrees.gc", {}, { context });
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 30 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
   });
 

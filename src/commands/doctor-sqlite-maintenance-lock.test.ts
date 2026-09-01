@@ -171,6 +171,26 @@ describe("doctor SQLite maintenance lock", () => {
     await gatewayLock.release();
   });
 
+  it("revokes retained maintenance authority before releasing the state lock", async () => {
+    const fixture = await createLockFixture();
+    let retained: { assertCurrent(): void } | undefined;
+
+    await withDoctorSqliteMaintenanceLock(
+      {
+        env: fixture.env,
+        operation: "session SQLite import",
+        run(authority) {
+          retained = authority;
+          expect(() => authority.assertCurrent()).not.toThrow();
+        },
+      },
+      { lockOptions: fixture.lockOptions },
+    );
+
+    expect(retained).toBeDefined();
+    expect(() => retained?.assertCurrent()).toThrow(/maintenance authority has expired/);
+  });
+
   it("blocks maintenance when the Gateway used the multi-Gateway override", async () => {
     const fixture = await createLockFixture();
     const run = vi.fn();

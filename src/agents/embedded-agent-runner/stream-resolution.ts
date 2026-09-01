@@ -2,6 +2,7 @@
  * Resolves provider stream functions and API keys for embedded agents.
  */
 import type { LlmRuntime } from "@openclaw/ai";
+import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
@@ -257,6 +258,19 @@ export function resolveEmbeddedAgentStreamFn(
   });
 }
 
+/** Preserve request activity across cancellation composition without retaining completed turns. */
+function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): AbortSignal {
+  const composedSignal = AbortSignal.any([callerSignal, runSignal]);
+  // The activity registry owns this bridge weakly; an abort listener on either
+  // reusable source would retain its composite after a successful request.
+  onLlmRequestActivity(composedSignal, () => {
+    if (!composedSignal.aborted) {
+      notifyLlmRequestActivity(callerSignal);
+    }
+  });
+  return composedSignal;
+}
+
 function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
@@ -277,7 +291,7 @@ function wrapEmbeddedAgentStreamFn(
     const callerSignal = embeddedOptions?.signal;
     const signal =
       callerSignal && params.runSignal && callerSignal !== params.runSignal
-        ? AbortSignal.any([callerSignal, params.runSignal])
+        ? composeRunSignal(callerSignal, params.runSignal)
         : (callerSignal ?? params.runSignal);
     let merged =
       params.sessionId && !embeddedOptions?.sessionId

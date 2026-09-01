@@ -19,7 +19,14 @@ import type {
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
   PluginManifestToolMetadata,
+  PluginManifestToolProfile,
 } from "./manifest-types.js";
+
+function isPluginToolProfile(profile: string): profile is PluginManifestToolProfile {
+  return (
+    profile === "minimal" || profile === "coding" || profile === "messaging" || profile === "full"
+  );
+}
 
 export function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
@@ -315,10 +322,13 @@ export function normalizePluginToolMetadata(
 ): Record<string, PluginManifestToolMetadata> | undefined {
   return normalizeNamedMetadataRecord(value, (rawMetadata) => {
     const providerMetadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    const profiles = normalizeTrimmedStringList(rawMetadata.profiles).filter(isPluginToolProfile);
     const metadata = {
       ...providerMetadata,
       ...(rawMetadata.optional === true ? { optional: true } : {}),
+      ...(profiles.length > 0 ? { profiles } : {}),
       ...(rawMetadata.replaySafe === true ? { replaySafe: true } : {}),
+      ...(rawMetadata.sideEffecting === true ? { sideEffecting: true } : {}),
     } satisfies PluginManifestToolMetadata;
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   });
@@ -346,7 +356,6 @@ const MANIFEST_CONTRACT_KEYS = [
   "trustedToolPolicies",
   "externalAuthProviders",
   "embeddingProviders",
-  "memoryEmbeddingProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",
@@ -425,7 +434,8 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
-    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
+    const ownerKind =
+      entry.ownerKind === "capability" || entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),

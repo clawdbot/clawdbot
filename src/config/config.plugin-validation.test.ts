@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
@@ -131,6 +132,7 @@ describe("config plugin validation", () => {
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
   let blockedPluginDir = "";
+  let malformedSchemaPluginDir = "";
   const suiteEnv = () =>
     ({
       HOME: suiteHome,
@@ -257,6 +259,15 @@ describe("config plugin validation", () => {
       id: "blocked-plugin",
       schema: { type: "object" },
     });
+    malformedSchemaPluginDir = path.join(suiteHome, "malformed-schema-plugin");
+    await writePluginFixture({
+      dir: malformedSchemaPluginDir,
+      id: "malformed-schema-plugin",
+      schema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+    });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
       process.cwd(),
@@ -279,6 +290,60 @@ describe("config plugin validation", () => {
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("reports a malformed plugin configSchema as an issue instead of throwing", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [malformedSchemaPluginDir] },
+        entries: { "malformed-schema-plugin": { enabled: true } },
+        allow: ["malformed-schema-plugin"],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.malformed-schema-plugin.config",
+        "invalid schema",
+      );
+    }
+  });
+
+  it("keeps malformed bundled plugin schemas on the throwing path", () => {
+    const bundledRecord = {
+      id: "bundled-schema-plugin",
+      channels: [],
+      cliBackends: [],
+      configSchema: {
+        type: "object",
+        properties: { mode: { $ref: "#/$defs/Mode" } },
+      },
+      hooks: [],
+      manifestPath: "/bundled/schema/openclaw.plugin.json",
+      origin: "bundled",
+      providers: [],
+      rootDir: "/bundled/schema",
+      skills: [],
+      source: "/bundled/schema/index.js",
+    } satisfies PluginManifestRecord;
+
+    expect(() =>
+      validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          plugins: { entries: { "bundled-schema-plugin": { enabled: true } } },
+        },
+        {
+          pluginMetadataSnapshot: {
+            manifestRegistry: { diagnostics: [], plugins: [bundledRecord] },
+          },
+        },
+      ),
+    ).toThrow("invalid schema");
   });
 
   it("reports missing plugin refs across entries and allowlist surfaces", () => {
@@ -1328,7 +1393,7 @@ describe("config plugin validation", () => {
 
     expect(res.ok).toBe(true);
     const message =
-      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.15.0";
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.18.2";
     expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
     expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
   });
@@ -1883,6 +1948,28 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("uses manifest defaults when warning about configured bundled plugins (#122746)", () => {
+    const res = validateInSuite({
+      plugins: {
+        entries: {
+          canvas: { config: { host: { enabled: false } } },
+          diffs: { config: { defaults: { fontSize: 15 } } },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectNoPath(res.warnings, "plugins.entries.canvas");
+    expectPathMessage(
+      res.warnings,
+      "plugins.entries.diffs",
+      "plugin disabled (bundled (disabled by default)) but config is present",
+    );
+  });
+
   it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
     const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
     await mkdirSafe(path.dirname(helperPath));
@@ -2004,6 +2091,42 @@ describe("config plugin validation", () => {
         "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
         "invalid config",
       );
+    }
+  });
+
+  it("admits the beta.2 Codex untrusted policy for doctor migration", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  mode: "guardian",
+                  approvalPolicy: "untrusted",
+                  sandbox: "workspace-write",
+                  approvalsReviewer: "user",
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.plugins?.entries?.codex?.config).toMatchObject({
+        appServer: { approvalPolicy: "untrusted" },
+      });
     }
   });
 

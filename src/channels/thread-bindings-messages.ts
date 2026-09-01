@@ -1,5 +1,5 @@
 /**
- * Channel-neutral thread-binding message builders shared by plugins, ACP focus, and subagent flows.
+ * Channel-neutral thread-binding message builders shared by plugins, ACP, and subagent flows.
  * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,7 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
-  "Session ended. Messages here will no longer be routed.";
+  "This conversation is no longer bound to that session.";
 
 function normalizeThreadBindingDurationMs(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -35,7 +35,7 @@ export function formatThreadBindingDurationLabel(durationMs: number): string {
   return `${totalMinutes}m`;
 }
 
-/** Builds the native thread name for a focused thread-bound session. */
+/** Builds the native thread name for a thread-bound session. */
 export function resolveThreadBindingThreadName(params: {
   agentId?: string;
   label?: string;
@@ -72,7 +72,7 @@ export function resolveThreadBindingIntroText(params: {
   const lifecycle: string[] = [];
   if (idleTimeoutMs > 0) {
     lifecycle.push(
-      `idle auto-unfocus after ${formatThreadBindingDurationLabel(idleTimeoutMs)} inactivity`,
+      `idle expiry after ${formatThreadBindingDurationLabel(idleTimeoutMs)} inactivity`,
     );
   }
   if (maxAgeMs > 0) {
@@ -107,7 +107,7 @@ export function resolveThreadBindingFarewellText(params: {
       normalizeThreadBindingDurationMs(params.idleTimeoutMs),
     );
     return prefixSystemMessage(
-      `Session ended automatically after ${label} of inactivity. Messages here will no longer be routed.`,
+      `Conversation binding expired after ${label} of inactivity. Messages here will no longer go to that session.`,
     );
   }
 
@@ -116,7 +116,7 @@ export function resolveThreadBindingFarewellText(params: {
       normalizeThreadBindingDurationMs(params.maxAgeMs),
     );
     return prefixSystemMessage(
-      `Session ended automatically at max age of ${label}. Messages here will no longer be routed.`,
+      `Conversation binding expired at max age of ${label}. Messages here will no longer go to that session.`,
     );
   }
 

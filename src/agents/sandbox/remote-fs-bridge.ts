@@ -9,10 +9,9 @@ import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
-import {
-  SANDBOX_CREATE_EXISTS_EXIT_CODE,
-  SANDBOX_PINNED_MUTATION_PYTHON,
-} from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
+import { SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL } from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import {
   hasMultipleHardlinks,
@@ -63,6 +62,21 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       relativePath: target.relativePath,
       containerPath: target.containerPath,
     };
+  }
+
+  async [SANDBOX_FILE_IDENTITY](params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const target = this.resolveTarget(params);
+    const { canonicalPath } = await this.resolveCanonicalPath({
+      containerPath: target.containerPath,
+      mountRootPath: target.mountRootPath,
+      action: "identify files",
+      signal: params.signal,
+    });
+    return canonicalPath;
   }
 
   async readFile(params: {
@@ -681,9 +695,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return await this.runtime.runRemoteShellScript({
       script: [
         "set -eu",
-        "python3 /dev/fd/3 \"$@\" 3<<'PY'",
-        SANDBOX_PINNED_MUTATION_PYTHON,
-        "PY",
+        `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
+        'python3 -c "$python_script" "$@"',
       ].join("\n"),
       args: params.args,
       stdin: params.stdin,

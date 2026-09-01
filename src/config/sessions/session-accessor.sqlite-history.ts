@@ -1,43 +1,60 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
-import type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionAccessScope,
+  SessionTranscriptInstance,
+  SessionTranscriptInstanceListOptions,
+} from "./session-accessor.sqlite-contract.js";
+import {
+  getSessionKysely,
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
 export function listTranscriptInstancesFromDatabase(params: {
-  agentId: string;
-  currentEntries: ReadonlyMap<string, SessionEntry>;
-  database: OpenClawAgentDatabase;
-  databasePath: string;
+  currentEntries: Pick<ReadonlyMap<string, SessionEntry>, "get">;
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">;
+  options: SessionTranscriptInstanceListOptions;
 }): SessionTranscriptInstance[] {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
+  const db = getSessionKysely(params.database.db);
+  let query = db
+    .selectFrom("session_windows")
+    .select([
+      "session_id",
+      "session_key",
+      "created_at",
+      "updated_at",
+      "channel",
+      "account_id",
+      "transcript_updated_at",
+      "session_entry_provenance",
+      "acp_owned",
+      "plugin_owner_id",
+      "hook_external_content_source",
+      "parent_session_key",
+      "spawned_by",
+      "chat_type",
+    ]);
+  if (!params.options.includeAllWindows) {
+    query = query.where("transcript_updated_at", "is not", null);
+  }
+  if (params.options.sessionId !== undefined) {
+    query = query.where("session_id", "=", params.options.sessionId);
+  }
   const rows = executeSqliteQuerySync(
     params.database.db,
-    db
-      .selectFrom("session_windows")
-      .select([
-        "session_id",
-        "session_key",
-        "transcript_updated_at",
-        "session_entry_provenance",
-        "acp_owned",
-        "plugin_owner_id",
-        "hook_external_content_source",
-        "parent_session_key",
-        "spawned_by",
-        "chat_type",
-      ])
-      .where("transcript_updated_at", "is not", null)
-      .orderBy("transcript_updated_at", "desc")
-      .orderBy("session_id", "asc"),
+    query.orderBy("transcript_updated_at", "desc").orderBy("session_id", "asc"),
   ).rows;
   return rows
     .map((row): SessionTranscriptInstance | undefined => {
-      if (isInternalSessionEffectsKey(row.session_key) || row.transcript_updated_at === null) {
+      if (!params.options.includeAllWindows && isInternalSessionEffectsKey(row.session_key)) {
         return undefined;
       }
-      const updatedAtMs = row.transcript_updated_at;
+      const updatedAtMs = row.transcript_updated_at ?? row.updated_at;
       const current = params.currentEntries.get(row.session_key);
       // Matching identities cannot classify transcript content written before provenance existed.
       const currentIsExact = current?.sessionId === row.session_id;
@@ -51,6 +68,11 @@ export function listTranscriptInstancesFromDatabase(params: {
         row.chat_type === "direct" || row.chat_type === "group" || row.chat_type === "channel"
           ? row.chat_type
           : undefined;
+      // The legacy window class conflates email and webhook. Keep it for trust
+      // gating, but report an exact source only from its bound entry or unchanged Gmail class.
+      const exactHookSource =
+        (currentIsExact ? current?.hookExternalContentSource : undefined) ??
+        (provenanceKnown && hookExternalContentSource === "gmail" ? "gmail" : null);
       const entry: SessionEntry = {
         ...(currentIsExact && current ? structuredClone(current) : {}),
         sessionId: row.session_id,
@@ -62,13 +84,59 @@ export function listTranscriptInstancesFromDatabase(params: {
         ...(provenanceKnown && hookExternalContentSource ? { hookExternalContentSource } : {}),
       };
       return {
+        agentId: resolveAgentIdFromSessionKey(row.session_key, params.database.agentId),
         acpOwned: row.acp_owned === 1 || Boolean(currentIsExact && current?.acp),
         entry,
         provenanceKnown,
         sessionId: row.session_id,
         sessionKey: row.session_key,
         updatedAtMs,
+        sourceMetadata: {
+          createdAt: row.created_at,
+          channel: row.channel,
+          accountId: row.account_id,
+          chatType: chatType ?? null,
+          hookExternalContentSource: exactHookSource,
+        },
       };
     })
     .filter((entry): entry is SessionTranscriptInstance => entry !== undefined);
+}
+
+/** Read retained archive identities through the same physical and logical session owner. */
+export function listSessionTranscriptArchivesReadOnly(
+  scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
+    sessionIds: readonly string[];
+  },
+) {
+  const selectors = [...new Set(scope.sessionIds)];
+  if (selectors.length === 0) {
+    return [];
+  }
+  const resolved = resolveSqliteReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(({ db, agentId }) => {
+    const rows = executeSqliteQuerySync(
+      db,
+      getSessionKysely(db)
+        .selectFrom("session_transcript_archives")
+        .select([
+          "archive_name as archiveName",
+          "session_id as sessionId",
+          "session_key as sessionKey",
+          "created_at as createdAt",
+        ])
+        .where((expression) =>
+          expression.or([
+            expression("session_id", "in", selectors),
+            expression("session_key", "in", selectors),
+          ]),
+        )
+        .orderBy("created_at")
+        .orderBy("session_id"),
+    ).rows;
+    return rows.filter(
+      (row) => resolveAgentIdFromSessionKey(row.sessionKey, agentId) === resolved.agentId,
+    );
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : [];
 }

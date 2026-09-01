@@ -17,5 +17,8 @@ export function describeBinding(binding: AgentRouteBinding): string {
   if (match.teamId) {
     parts.push(`team=${match.teamId}`);
   }
+  if (match.roles?.length) {
+    parts.push(`roles=${match.roles.join(",")}`);
+  }
   return parts.join(" ");
 }

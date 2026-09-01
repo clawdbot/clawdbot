@@ -5,10 +5,12 @@ import {
   errorShape,
   type AuditActivityEventV1,
   type AuditEvent,
+  type AuditRunInspectResult,
   validateAuditActivityListParams,
   validateAuditListParams,
   validateAuditRunInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { findAuditActivityFilterConflict } from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { parsePositiveAuditCursor } from "../../audit/audit-cursor.js";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
@@ -19,6 +21,7 @@ import type {
 import {
   ExecutionDecisionCursorError,
   isExecutionDecisionCursor,
+  type InternalAuditRunInspectResult,
 } from "../../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -26,6 +29,29 @@ import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
+
+function serializeAuditRunInspectResult(
+  inspected: InternalAuditRunInspectResult,
+): AuditRunInspectResult {
+  const result: AuditRunInspectResult = {
+    schemaVersion: inspected.schemaVersion,
+    run: inspected.run,
+    identity: inspected.identity,
+    decisionDisplays: inspected.decisionDisplays,
+    coverage: inspected.coverage,
+  };
+  if (inspected.nextDecisionCursor !== undefined) {
+    result.nextDecisionCursor = inspected.nextDecisionCursor;
+  }
+  if (inspected.nextExecutionCursor !== undefined) {
+    result.nextExecutionCursor = inspected.nextExecutionCursor;
+  }
+  return result;
+}
+
+function isOwnerDecisionCursor(value: string): boolean {
+  return parsePositiveAuditCursor(value) === null && isExecutionDecisionCursor(value);
+}
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
@@ -54,6 +80,9 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
         ? { type: "channel_sender" as const, id: actorId }
         : { type: "system" as const, id: actorId };
     return { ...activity, eventType: "inbound_message", actor };
+  }
+  if (event.action !== "message.outbound.finished") {
+    throw new Error("nonterminal outbound messages are not audit activity records");
   }
   const { actorType, actorId, ...activity } = event;
   return { ...activity, eventType: "outbound_message", actor: { type: actorType, id: actorId } };
@@ -118,6 +147,19 @@ export const auditHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const filterConflict = findAuditActivityFilterConflict(params);
+    if (filterConflict) {
+      const detail =
+        filterConflict.type === "kind"
+          ? `${filterConflict.field} only applies to kind ${filterConflict.supportedKinds.join(" or ")}`
+          : `${filterConflict.field} cannot be combined with ${filterConflict.conflictingField}`;
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `invalid audit.activity.list filters: ${detail}`),
+      );
+      return;
+    }
     const parsed = invalidRangeOrCursor(params);
     if (parsed.invalid) {
       respond(
@@ -160,7 +202,7 @@ export const auditHandlers: GatewayRequestHandlers = {
       typeof params.runId !== "string" ||
       (params.executionCursor === decisionCursor &&
         decisionCursor !== undefined &&
-        (decisionCursor.startsWith("a:") || decisionCursor.startsWith("g:")))
+        isOwnerDecisionCursor(decisionCursor))
         ? undefined
         : parsePositiveAuditCursor(params.executionCursor);
     if (
@@ -177,17 +219,19 @@ export const auditHandlers: GatewayRequestHandlers = {
     try {
       respond(
         true,
-        inspectExecutionIdentityRun({
-          ...(typeof params.runId === "string"
-            ? {
-                runId: params.runId,
-                ...(executionOffset !== undefined ? { executionOffset } : {}),
-                executionLimit: params.executionLimit ?? 50,
-              }
-            : { executionId: params.executionId! }),
-          ...(decisionCursor !== undefined ? { decisionCursor } : {}),
-          decisionLimit: params.decisionLimit ?? 50,
-        }),
+        serializeAuditRunInspectResult(
+          inspectExecutionIdentityRun({
+            ...(typeof params.runId === "string"
+              ? {
+                  runId: params.runId,
+                  ...(executionOffset !== undefined ? { executionOffset } : {}),
+                  executionLimit: params.executionLimit ?? 50,
+                }
+              : { executionId: params.executionId! }),
+            ...(decisionCursor !== undefined ? { decisionCursor } : {}),
+            decisionLimit: params.decisionLimit ?? 50,
+          }),
+        ),
       );
     } catch (error) {
       if (error instanceof ExecutionDecisionCursorError) {

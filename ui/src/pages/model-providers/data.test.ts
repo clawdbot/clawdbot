@@ -174,6 +174,51 @@ describe("buildModelProviderCards", () => {
     ]);
   });
 
+  it("keeps a credential-less missing route visible beside CLI OAuth", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "missing",
+          profiles: [],
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "expiring",
+          profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+  });
+
+  it("preserves missing MiniMax OAuth beside a separate API key", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "MINIMAX_API_KEY" },
+        },
+        {
+          provider: "minimax-portal",
+          displayName: "MiniMax",
+          status: "missing",
+          profiles: [],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
+  });
+
   it("prefers usage.status snapshots over the auth-status embed", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -313,6 +358,16 @@ describe("model provider configuration data", () => {
       "openai/gpt-saved",
     ]);
   });
+
+  it.each(["openai/gpt-saved", "saved-model"])(
+    "keeps saved %s available when the catalog is unknown, but not when it is empty",
+    (primary) => {
+      const selection = { primary, fallbacks: [], utilityModel: null };
+
+      expect(buildSelectableDefaultModels(null, selection)[0]).not.toHaveProperty("available");
+      expect(buildSelectableDefaultModels([], selection)[0]).toMatchObject({ available: false });
+    },
+  );
 
   it("preserves alias-valued and bare model defaults as picker options", () => {
     const selectable = buildSelectableDefaultModels(

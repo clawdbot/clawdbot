@@ -121,7 +121,7 @@ describe("formatMSTeamsMarkdown", () => {
     {
       name: "preserves inline code semantics while normalizing boundary spaces",
       before: "`  foo  `",
-      after: "` foo`",
+      after: "`  foo  `",
     },
     {
       name: "serializes link destinations with angle brackets",

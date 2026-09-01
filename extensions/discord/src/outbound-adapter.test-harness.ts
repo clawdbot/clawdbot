@@ -45,7 +45,7 @@ export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
 const DEFAULT_DISCORD_SEND_RESULT = {
   channel: "discord",
   messageId: "msg-1",
-  channelId: "ch-1",
+  target: { kind: "channel", id: "ch-1" },
 } as const;
 
 async function createDiscordSendModuleMock(

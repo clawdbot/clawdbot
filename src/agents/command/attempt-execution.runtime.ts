@@ -14,6 +14,6 @@ export {
   persistCliTurnTranscript,
   resolveCliTranscriptReplyText,
   runAgentAttempt,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.js";
 export type { AcpToolLifecycleTracker } from "./attempt-execution.js";

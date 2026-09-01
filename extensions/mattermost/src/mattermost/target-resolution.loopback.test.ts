@@ -1,8 +1,8 @@
 // Prove authoritative Mattermost channel kinds over the real Bot API transport.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMattermostOutboundSessionRoute } from "../session-route.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 const PUBLIC_CHANNEL_ID = "abcdefghijklmnopqrstuvwxyz";

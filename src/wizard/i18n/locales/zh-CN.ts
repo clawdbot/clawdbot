@@ -91,10 +91,17 @@ export const zh_CN = {
       remotePasswordMode: "你想如何提供这个 Gateway 密码？",
       remoteTokenMode: "你想如何提供这个 Gateway 令牌？",
       tailscaleExposure: "Tailscale 暴露方式",
-      tailscaleReset: "退出时重置 Tailscale serve/funnel？",
       tokenPlaceholder: "多机器或非 loopback 访问需要使用",
       tokenPrompt: "Gateway 令牌",
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",
+      tokenStoreProvisioned:
+        "已生成 Gateway 令牌并以 {name} 存入 OpenClaw 密钥存储。配置中只保留引用；可用 `openclaw secrets store list` 查看。",
+      trustedProxyAllowLoopback: "允许回环可信代理身份验证？",
+      trustedProxyLoopbackTitle: "回环代理安全警告",
+      trustedProxyLoopbackWarning:
+        "任何本地进程都可以向 Gateway 发送身份标头，冒充回环反向代理。\n仅当反向代理是接收用户流量的唯一本地监听服务、Gateway 的直接访问已受限且你信任本地进程时，才启用此选项。\n代理必须验证用户身份，并移除或覆盖客户端提供的身份标头。",
+      trustedProxyLoopbackRefused:
+        "回环代理请求在运行时将被拒绝（trusted_proxy_loopback_source）。\n请使用非回环代理地址，或重新运行 Gateway 配置，在阅读安全警告后明确允许回环。\n文档：https://docs.openclaw.ai/gateway/trusted-proxy-auth",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -113,6 +120,8 @@ export const zh_CN = {
       cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
+      profileNotWritable:
+        "Shell completion 未更改：{profile} 不可写。请对可写的 profile 文件运行 `{command}`。",
       reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",
@@ -124,6 +133,7 @@ export const zh_CN = {
       complete: "迁移完成。下一步运行 `openclaw doctor`。",
       continuing: "迁移完成。继续设置。",
       importFrom: "从 {source} 导入",
+      importFromAnotherAgent: "从其他 agent 导入",
       includeCredentials: "同时导入支持的认证凭据？",
       previewTitle: "迁移预览",
       setupModelSeparately: "单独设置模型",
@@ -246,7 +256,7 @@ export const zh_CN = {
       directAccessTitle: "直接远程访问",
       enterUrlManually: "手动输入 URL",
       foundGateways: "找到 {count} 个 Gateway",
-      fingerprintMissing: "未公布（连接不会固定指纹）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "这个 Gateway 密码存在哪里？",
       gatewayTokenStoredMessage: "这个 Gateway 令牌存在哪里？",
       insecureRemoteUrl:
@@ -445,6 +455,13 @@ export const zh_CN = {
         "如果多个用户能向同一个启用工具的 agent 发消息，他们都能影响它如何使用工具。",
       title: "安全免责声明",
       toolAccess: "如果启用了工具，这个 bot 可以读取文件并执行操作。",
+    },
+    telemetry: {
+      accept: "是，分享功能使用统计",
+      decline: "不用，谢谢",
+      description:
+        "在每日更新检查中分享你使用的功能（频道、提供商、插件数量）。绝不包含消息或标识符。查看实际发送的内容：`openclaw telemetry show`。随时更改：`openclaw telemetry on|off`。",
+      title: "帮助 OpenClaw 变得更好？",
     },
     skills: {
       configure: "现在配置技能？（推荐）",
@@ -900,6 +917,12 @@ export const zh_CN = {
       outgoingWebhookPathKeep: "Outgoing webhook path 已设置（{value}）。保留？",
       outgoingWebhookPathPrompt: "Outgoing webhook path（可选）",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "使用在 Synology Chat 中配置的、可从外部访问的确切 HTTPS outgoing webhook 回调 URL。",
+      publicWebhookUrlKeep: "已配置公开附件 webhook URL。保留当前值？",
+      publicWebhookUrlPrompt: "公开附件 webhook URL（可选）",
+      publicWebhookUrlScope: "仅公开此 webhook 路由；OpenClaw 使用它提供短期附件下载。",
+      publicWebhookUrlTitle: "Synology Chat 公开附件路由",
       setupTitle: "Synology Chat webhook 设置",
       tokenEnvPrompt: "检测到 SYNOLOGY_CHAT_TOKEN。使用环境变量？",
       tokenInput: "输入 Synology Chat outgoing webhook token",
@@ -1060,18 +1083,15 @@ export const zh_CN = {
       controlUiTitle: "Control UI",
       controlUiDocs: "文档：https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "在本机浏览器中复制/粘贴这个 URL 来控制 OpenClaw。",
-      dashboardLinkWithToken: "Dashboard 链接（含令牌）：{url}",
       dashboardOpened: "已在浏览器中打开。保留该标签页以控制 OpenClaw。",
       dashboardOpenAnytime: "随时打开 dashboard：{command}",
       dashboardReady: "Dashboard 已就绪",
-      dashboardTokenMemory:
-        "Web UI 会把 dashboard URL 中的令牌保存在当前标签页内存中，并在加载后从 URL 中移除。",
-      dashboardTokenPrompt:
-        "如果被提示：把令牌粘贴到 Control UI 设置中（或使用带令牌的 dashboard URL）。",
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
+      daemonRuntimeNodeHint: "托管服务的首选和推荐运行时。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',
@@ -1089,8 +1109,6 @@ export const zh_CN = {
       gatewayServiceRestarted: "Gateway 服务已重启。",
       gatewayServiceRestarting: "正在重启 Gateway 服务...",
       gatewayServiceRestartScheduled: "Gateway 服务重启已排队。",
-      gatewayServiceUninstalled: "Gateway 服务已卸载。",
-      gatewayServiceUninstalling: "正在卸载 Gateway 服务...",
       gatewayTokenGenerate: "生成令牌：{command}",
       gatewayTokenShared: "Gateway 令牌：Gateway 和 Control UI 的共享认证。",
       gatewayTokenStored:
@@ -1103,6 +1121,10 @@ export const zh_CN = {
       healthCheckHelp: "健康检查帮助",
       installGateway: "安装 Gateway 服务（推荐）",
       laterTitle: "稍后",
+      managedGatewaySetupFailed:
+        "托管的 {service} 设置失败：{error}\n检查服务状态和日志：{statusCommand}\n重试托管服务安装：{recoveryCommand}",
+      managedGatewayUnreachable:
+        "托管的 {service} 在设置后仍无法访问。\n检查服务状态和日志：{statusCommand}\n重试托管服务：{recoveryCommand}",
       managedWebSearchSkipped: "已跳过托管 web search provider。",
       noBackgroundGatewayExpected: "本次设置未安装 Gateway 服务，因此不会有后台 Gateway。",
       noModelAuth: "提供商 “{provider}” 尚未配置凭据，聊天将失败，直到添加认证。",
@@ -1114,6 +1136,8 @@ export const zh_CN = {
       optionalApps: "可选应用",
       outroDashboardLink: "Onboarding 完成。使用上面的 dashboard 链接控制 OpenClaw。",
       outroDashboardOpened: "Onboarding 完成。Dashboard 已打开；保留该标签页以控制 OpenClaw。",
+      outroHealthCheckFailed:
+        "Onboarding 完成，但网关健康检查失败。请先解决上面的问题，然后用 {command} 验证。",
       outroSeeded: "Onboarding 完成。Web UI 已在后台初始化，可随时用上面的 dashboard 链接打开。",
       quickstartNodeRuntime: "QuickStart 使用 Node 运行 Gateway 服务（稳定且受支持）。",
       reinstall: "重新安装",
@@ -1159,7 +1183,6 @@ export const zh_CN = {
       webSearchUnavailableAction:
         "重新启用该 provider 或选择其他 provider 前，web_search 无法工作。",
       webUiUrl: "Web UI：{url}",
-      webUiWithTokenUrl: "Web UI（含令牌）：{url}",
       whatNow: '下一步：https://openclaw.ai/showcase（"What People Are Building"）。',
       whatNowTitle: "下一步",
       workspaceBackupTitle: "工作区备份",

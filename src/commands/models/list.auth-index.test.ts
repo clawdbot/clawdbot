@@ -12,6 +12,7 @@ const externalCliMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => ["openai"],
   resolveExternalCliAuthProfiles: externalCliMocks.resolveExternalCliAuthProfiles,
 }));
 

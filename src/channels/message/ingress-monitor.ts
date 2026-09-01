@@ -1,5 +1,6 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { isGatewayRestartDraining } from "../../process/gateway-work-admission.js";
 import { sleep } from "../../utils/sleep.js";
 import {
   createChannelIngressDrain,
@@ -15,42 +16,6 @@ import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
-type ChannelIngressErrorClass<TError extends Error, TArgs extends unknown[]> = {
-  new (...args: TArgs): TError;
-  readonly name: string;
-  readonly prototype: TError;
-};
-
-export function createChannelIngressError(
-  name: string,
-): ChannelIngressErrorClass<Error, [message: string, options?: ErrorOptions]>;
-export function createChannelIngressError<TReason extends string>(
-  name: string,
-  options: { withReason: true },
-): ChannelIngressErrorClass<
-  Error & { readonly reason: TReason },
-  [reason: TReason, message: string, errorOptions?: ErrorOptions]
->;
-export function createChannelIngressError(
-  name: string,
-  options?: { withReason?: boolean },
-): unknown {
-  const IngressError = class extends Error {
-    declare readonly reason?: string;
-
-    constructor(first: string, second?: string | ErrorOptions, third?: ErrorOptions) {
-      const reasoned = options?.withReason === true;
-      super(reasoned ? (second as string) : first, reasoned ? third : (second as ErrorOptions));
-      this.name = name;
-      if (reasoned) {
-        this.reason = first;
-      }
-    }
-  };
-  Object.defineProperty(IngressError, "name", { configurable: true, value: name });
-  return IngressError;
-}
-
 /** Stable identity and serialization lane extracted before durable admission. */
 export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 
@@ -63,6 +28,7 @@ export type ChannelIngressMonitorLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;
+  onDeferredHeartbeat?: () => void;
   onAdoptionFinalizing: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
   onCancelled?: () => void | Promise<void>;
@@ -155,9 +121,13 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
   pollIntervalMs: number;
   retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];
+  /**
+   * Runs after every durable enqueue. `isNew` means this admission inserted the queue
+   * row; a pruned event can become new again. It does not imply claim or delivery.
+   */
   onDurableAdmission?: (
     raw: TRaw,
-    context: { facts: ChannelIngressMonitorFacts; receivedAt: number },
+    context: { facts: ChannelIngressMonitorFacts; receivedAt: number; isNew: boolean },
   ) => void | Promise<void>;
   onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
   /** False lets repeated requests fill drain capacity while earlier claims remain active. */
@@ -431,10 +401,19 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (result?.kind === "failed-retryable") {
           return result;
         }
-        if (isAborted() || lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: createStoppedError() };
-        }
+        // Terminal and handoff outcomes must reach the drain even when stop
+        // races the return: the drain settles terminal results under abort and
+        // keeps deferred claims for their owner. Rewriting them to
+        // failed-retryable here would release claims whose side effects already
+        // ran, replaying delivered work on restart.
         if (result?.kind === "completed") {
+          // A deferred handoff recorded during delivery stays authoritative:
+          // the drain already placed the claim in deferred and only settles a
+          // completed result from dispatching, so a conflicting terminal return
+          // would strand the claim until later recovery.
+          if (deferredHandoff) {
+            return { kind: "deferred" };
+          }
           return result;
         }
         if (result?.kind === "deferred") {
@@ -443,19 +422,29 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           return { kind: "deferred" };
         }
+        if (deferredHandoff) {
+          return { kind: "deferred" };
+        }
+        if (isAborted() || lifecycle.abortSignal.aborted) {
+          return { kind: "failed-retryable", error: createStoppedError() };
+        }
         if (!handedOff) {
           // A policy gate or deliberate no-dispatch is terminal for transport replay.
           await wrappedLifecycle.onAdopted();
         }
-        return deferredHandoff ? { kind: "deferred" } : { kind: "completed" };
+        return { kind: "completed" };
       },
     });
     return drain;
   };
 
-  const pruneIfDue = async (): Promise<void> => {
+  const pruneIfDue = async (owner: "admission" | "pump"): Promise<void> => {
+    // Zero preserves admission-owned compatibility: prune once per admission, never from a pump.
+    if ((owner === "admission") !== pruneIntervalMs <= 0) {
+      return;
+    }
     const currentTime = now();
-    if (currentTime - lastPrunedAt < pruneIntervalMs) {
+    if (owner === "pump" && currentTime - lastPrunedAt < pruneIntervalMs) {
       return;
     }
     await getQueue().prune({ ...pruneOptions, now: currentTime });
@@ -497,7 +486,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     try {
       for (;;) {
         requested = false;
-        await pruneIfDue();
+        await pruneIfDue("pump");
         // Stop may win the async prune race; keep lazy drain creation behind this fence.
         if (!running || isAborted()) {
           break;
@@ -544,7 +533,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   const requestDrain = (): void => {
-    if (!running || isAborted()) {
+    if (!running || isAborted() || isGatewayRestartDraining()) {
       publishActivity();
       return;
     }
@@ -618,6 +607,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       receivedAt: number;
       facts?: ChannelIngressMonitorFacts;
       onDurablyAdmitted: () => void;
+      pruneTask?: Promise<void>;
     },
   ) => {
     try {
@@ -625,18 +615,21 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       if (!facts) {
         return { kind: "ignored" } as const;
       }
-      const body = options.payload.serialize(raw, { facts, receivedAt: admitOptions.receivedAt });
+      admitOptions.pruneTask ??= pruneIfDue("admission");
+      await admitOptions.pruneTask;
+      const { receivedAt } = admitOptions;
+      const body = options.payload.serialize(raw, { facts, receivedAt });
       const payload =
         options.payload.storage === "raw-event"
           ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
           : options.payload.encode({ version: options.payload.version, body });
-      const queueResult = await admitOnce({
-        facts,
-        payload,
-        receivedAt: admitOptions.receivedAt,
-      });
+      const queueResult = await admitOnce({ facts, payload, receivedAt });
       admitOptions.onDurablyAdmitted();
-      await options.onDurableAdmission?.(raw, { facts, receivedAt: admitOptions.receivedAt });
+      await options.onDurableAdmission?.(raw, {
+        facts,
+        receivedAt,
+        isNew: queueResult.kind === "accepted",
+      });
       return { kind: "durable", queueResult } as const;
     } catch (error) {
       await options.onAdmissionFailure?.(raw, error);
@@ -683,18 +676,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       assertAdmissionOpen();
       const receivedAt = admitOptions?.receivedAt ?? now();
       let durablyAdmitted = false;
+      const sharedOptions = {
+        receivedAt,
+        onDurablyAdmitted: () => {
+          durablyAdmitted = true;
+        },
+      };
       try {
         return await scheduleAdmission(async () => {
           const results = [];
           for (const raw of rawEvents) {
-            results.push(
-              await admitRaw(raw, {
-                receivedAt,
-                onDurablyAdmitted: () => {
-                  durablyAdmitted = true;
-                },
-              }),
-            );
+            results.push(await admitRaw(raw, sharedOptions));
           }
           return results;
         });

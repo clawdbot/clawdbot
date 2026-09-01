@@ -6,13 +6,15 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -24,7 +26,6 @@ import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createGatewayResidentRegistry } from "./server-resident-registry.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
@@ -104,6 +105,7 @@ export async function prepareGatewayKernelState(params: {
     startupTailscaleOverride,
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
+    pluginGatewayContext,
   } = bootstrap;
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
@@ -122,21 +124,22 @@ export async function prepareGatewayKernelState(params: {
     !(nodeCommandConfig?.deny ?? []).some(
       (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
     );
-  const workerGatewayEndpoint = {
-    resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
-  };
+  const workerDesktopObserveAvailable =
+    shouldStartWorkerEnvironmentService &&
+    gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const desktopSessionRegistry =
     shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
       ? createDesktopSessionRegistry()
       : undefined;
-  const nodeDesktopStreamBroker = nodeDesktopObserveAvailable
-    ? (
-        await startupTrace.measure(
-          "node-desktop.runtime-import",
-          () => import("./desktop/node-stream-broker.js"),
-        )
-      ).createNodeDesktopStreamBroker()
-    : undefined;
+  const nodeDesktopStreamBroker =
+    nodeDesktopObserveAvailable || shouldStartWorkerEnvironmentService
+      ? (
+          await startupTrace.measure(
+            "node-desktop.runtime-import",
+            () => import("./desktop/node-stream-broker.js"),
+          )
+        ).createNodeDesktopStreamBroker()
+      : undefined;
   const hostDesktopService =
     hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
       ? (
@@ -155,8 +158,10 @@ export async function prepareGatewayKernelState(params: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
-            resolveWorkerGateway: () => workerGatewayEndpoint.resolve(),
+            getPortalRuntime: () => pluginGatewayContext.current,
+            resolveGatewayContext: () => pluginGatewayContext.current,
             desktopSessionRegistry,
+            ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,
             log,
           });
@@ -165,8 +170,14 @@ export async function prepareGatewayKernelState(params: {
   const {
     workerEnvironmentService,
     workerLiveEvents,
+    nodeWorkerGatewayNamespace,
     bindDeviceNodeControl,
+    bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
+    bindGitHubPublication,
+    handleNodeWorkerBundleTransferRequest,
+    handleWorkerBootstrapArtifactTransferRequest,
+    handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
@@ -174,18 +185,67 @@ export async function prepareGatewayKernelState(params: {
       throw new Error("Worker dispatch authority revocation is not ready");
     },
   };
+  const workerPlacementModule = workerEnvironmentStartup
+    ? await startupTrace.measure(
+        "worker-environments.placement-module",
+        loadWorkerPlacementStartupModule,
+      )
+    : undefined;
+  const githubPublicationRuntime =
+    workerEnvironmentStartup && workerPlacementModule
+      ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
+          placements: workerEnvironmentStartup.placementStore,
+          warn: (message) => log.warn(message),
+        })
+      : undefined;
   const workerPlacementRuntime =
-    workerEnvironmentService && workerEnvironmentStartup
-      ? await startupTrace.measure("worker-environments.placement-runtime", async () => {
-          const placementModule = await loadWorkerPlacementStartupModule();
-          return placementModule.createGatewayWorkerPlacementRuntime({
+    workerEnvironmentService &&
+    workerEnvironmentStartup &&
+    nodeWorkerGatewayNamespace &&
+    workerPlacementModule
+      ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
+          workerPlacementModule.createGatewayWorkerPlacementRuntime({
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
-            admitNewPlacements: true,
+            gatewayNamespace: nodeWorkerGatewayNamespace,
+            getSessionChangeContext: () => pluginGatewayContext.current,
+            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
+              // Placement runtime starts before chat state exists; moves invoke this only after startup.
+              const text = connectionState.chatRunState.resolveBuffer(runId, { final: true }).text;
+              if (!text.trim()) {
+                return;
+              }
+              const { captureAbortedPartial, persistAbortedPartials } =
+                await import("./server-methods/chat-transcript-persistence.runtime.js");
+              await persistAbortedPartials({
+                context: { logGateway: log },
+                snapshots: [
+                  captureAbortedPartial({
+                    sessionKey,
+                    sessionId,
+                    agentId,
+                    runId,
+                    text,
+                    abortOrigin: "placement-abandon",
+                  }),
+                ],
+              });
+            },
+            cancelSessionWork: async (request) => {
+              const context = pluginGatewayContext.current;
+              if (!context) {
+                throw new Error("Worker session cancellation is not ready");
+              }
+              const { cancelGatewayWorkerSessionWork } =
+                await import("./server-worker-placement-cancel.js");
+              await cancelGatewayWorkerSessionWork(context, request);
+            },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
+            info: (message) => log.info(message),
             warn: (message) => log.warn(message),
-          });
-        })
+            ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),
+          }),
+        )
       : undefined;
   if (workerPlacementRuntime) {
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
@@ -193,18 +253,25 @@ export async function prepareGatewayKernelState(params: {
       workerPlacementRuntime.dispatchService.dispatch,
     );
   }
+  if (githubPublicationRuntime) {
+    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
+  }
+  const bindDeviceNodeRuntime = bindDeviceNodeControl
+    ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
+        bindDeviceNodeControl(transport);
+        workerPlacementRuntime?.bindNodeWorkerSupervisorTransport(transport);
+      }
+    : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
-  const workerDesktopObserveAvailable =
-    Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const desktopObserveAvailable =
     workerDesktopObserveAvailable || nodeDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
-  const channelRuntimeEnvs = Object.fromEntries(
+  const channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>> = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-  ) as unknown as Record<ChannelId, RuntimeEnv>;
+  );
   const listStartupChannelGatewayMethods = () => {
     const methods: string[] = [];
     for (const plugin of listGatewayStartupChannelPlugins()) {
@@ -219,7 +286,8 @@ export async function prepareGatewayKernelState(params: {
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (method !== "sessions.reclaim" && method !== "sessions.move")) &&
         (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (method !== "desktop.launch" &&
@@ -255,7 +323,10 @@ export async function prepareGatewayKernelState(params: {
     tailscaleMode,
   } = runtimeConfig;
   if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
-    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
+    const { ensureStartupLocalCliPairing } = await startupTrace.measure(
+      "runtime.local-cli-pairing-import",
+      () => import("./startup-local-cli-pairing.js"),
+    );
     const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
       ensureStartupLocalCliPairing(),
     );
@@ -323,41 +394,35 @@ export async function prepareGatewayKernelState(params: {
       log,
     }),
   );
-  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const { createTerminalLaunchPolicy } = await startupTrace.measure(
+    "terminal.launch-import",
+    () => import("./terminal/launch.js"),
+  );
   const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
-  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } =
-    await import("./server-methods/wizard.js");
+  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } = await startupTrace.measure(
+    "gateway.wizard-imports",
+    () => import("./server-methods/wizard.js"),
+  );
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
   const systemAgentSessions: GatewayRequestContext["systemAgentSessions"] = new Map();
 
   const deps = createDefaultDeps();
-  const residentRegistry = createGatewayResidentRegistry();
   const runtimeStateRef: { current: GatewayServerLiveState | null } = { current: null };
   const cronStartState = { handled: false };
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
-    loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
+    loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const eventLoopHealthState: {
-    current?: ReturnType<typeof createGatewayEventLoopHealthMonitor>;
-  } = {};
-  const eventLoopHealthResident = residentRegistry.register({
-    name: "event-loop-health",
-    start: () => {
-      eventLoopHealthState.current ??= createGatewayEventLoopHealthMonitor();
-      return eventLoopHealthState.current;
-    },
-    stop: () => eventLoopHealthState.current?.stop(),
-  });
-  const readinessEventLoopHealth = eventLoopHealthResident.start();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
     dispatchReady: false,
   };
+  const lifecycle = { closePreludeStarted: false };
   let releaseStartupAccountStarts = () => {};
   const startupAccountStartsReady = new Promise<void>((resolve) => {
     releaseStartupAccountStarts = resolve;
@@ -368,7 +433,10 @@ export async function prepareGatewayKernelState(params: {
   // Internal principals belong to this server generation and become usable only after bind.
   // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
 
-  const { createChannelManager } = await import("./server-channels.js");
+  const { createChannelManager } = await startupTrace.measure(
+    "gateway.channel-manager-import",
+    () => import("./server-channels.js"),
+  );
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
       const runtimeConfigLocal = getRuntimeConfig();
@@ -387,28 +455,29 @@ export async function prepareGatewayKernelState(params: {
     ...(opts.tryRecoverChannelAutostartSuppression
       ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
       : {}),
+    isClosing: () => lifecycle.closePreludeStarted,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
+  const isGatewayStartupPending = () =>
+    !startupState.sidecarsReady && !lifecycle.closePreludeStarted;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupState.pendingReason,
-    getGatewayDraining: isGatewayDraining,
+    getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
   const getReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    getStateDatabaseFailure: () =>
+      openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
-  const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
-    current: undefined,
-  };
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
@@ -453,12 +522,17 @@ export async function prepareGatewayKernelState(params: {
     logPlugins,
     getReadiness,
     getStartup,
+    isStartupPending: isGatewayStartupPending,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+    handleNodeWorkerBundleTransferRequest,
+    handleWorkerBootstrapArtifactTransferRequest,
+    handleNodeWorkspaceTransferRequest,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     clients: connectionState.clients,
+    tailscaleMode,
   });
   const {
     clients,
@@ -476,6 +550,7 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    isConnectionActive,
   } = connectionState;
 
   return {
@@ -483,9 +558,12 @@ export async function prepareGatewayKernelState(params: {
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
-    bindDeviceNodeControl,
+    bindDeviceNodeControl: bindDeviceNodeRuntime,
+    bindWorkerNodeDesktopControl,
     workerDispatchAuthority,
     workerPlacementRuntime,
+    githubPublicationRuntime,
+    githubPublicationService: githubPublicationRuntime?.coordinator,
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
     workerDesktopObserveAvailable,
@@ -528,12 +606,12 @@ export async function prepareGatewayKernelState(params: {
     purgeWizardSession,
     systemAgentSessions,
     deps,
-    residentRegistry,
     runtimeStateRef,
     cronStartState,
     gatewayTls,
     readinessEventLoopHealth,
     startupState,
+    lifecycle,
     releaseStartupAccountStarts,
     gatewayInstanceRuntimeRef,
     channelManager,
@@ -558,10 +636,10 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
-    getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
+    isConnectionActive,
+    getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
     getPortalService: transportBridge.getPortalService,
-    workerGatewayEndpoint,
   };
 }

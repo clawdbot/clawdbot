@@ -32,6 +32,13 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
 }));
 
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (params: { workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  }),
+}));
+
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   const options = loadOpenClawPluginsMock.mock.calls[0]?.[0];

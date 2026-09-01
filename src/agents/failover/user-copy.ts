@@ -2,6 +2,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
+  extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
@@ -37,6 +38,13 @@ export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Authentication failed (provider returned HTTP 401). " +
   "Your provider token may have expired — try the request again in a moment. " +
   "If the failure persists, re-authenticate this provider.";
+const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
+  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
+  code === "selected_auth_profile_unavailable"
+    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+    : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
@@ -52,6 +60,10 @@ const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "LLM request failed: provider rejected the request schema or tool payload.";
+const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
+  /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 
 /** Format billing copy with optional provider/model and credential context. */
 export function formatBillingErrorMessage(
@@ -74,7 +86,21 @@ export function formatBillingErrorMessage(
     : "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
 }
 
-export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+
+/** Surface only bounded numeric limit facts, never arbitrary provider-controlled error text. */
+export function renderFormatErrorCopy(raw: string): string {
+  const trimmed = raw.trim();
+  const normalized =
+    extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
+  const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
+  const [, value, maximum] = match ?? [];
+  if (!value || !maximum) {
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+  }
+  return `LLM request rejected: configured maxTokens is ${value}, above the provider maximum of ${maximum}. Lower maxTokens and try again.`;
+}
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -109,7 +135,7 @@ function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
 const FAILOVER_REASON_BASE_COPY = {
   auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
   auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  format: () => "LLM request failed: provider rejected the request schema or tool payload.",
+  format: (context) => renderFormatErrorCopy(context.raw ?? ""),
   rate_limit: renderRateLimitBaseCopy,
   overloaded: (context) =>
     MODEL_CAPACITY_ERROR_RE.test(context.raw ?? "")
@@ -240,21 +266,8 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return Boolean(
     status &&
     status.code >= 400 &&
-    (classifyFailoverReason(raw) !== null ||
+    (classifyFailoverReason(raw, { providerPlugin: null }) !== null ||
       classifyProviderRequestFacets({ status: status.code, message: raw }) !== null),
-  );
-}
-
-function shouldRewriteContextOverflowText(raw: string): boolean {
-  if (classifyFailoverReason(raw) !== "context_overflow") {
-    return false;
-  }
-  const status = extractLeadingHttpStatus(raw);
-  return (
-    isRawApiErrorPayload(raw) ||
-    Boolean(status && status.code >= 400) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -299,10 +312,18 @@ export function renderSanitizedUserFacingText(
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
   }
-  if (shouldRewriteContextOverflowText(trimmed)) {
+  const reason = classifyFailoverReason(trimmed, { providerPlugin: null });
+  const status = extractLeadingHttpStatus(trimmed);
+  const rawPayload = isRawApiErrorPayload(trimmed);
+  if (
+    reason === "context_overflow" &&
+    (rawPayload ||
+      (status && status.code >= 400) ||
+      ERROR_PREFIX_RE.test(trimmed) ||
+      CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
+  ) {
     return renderFailoverBaseCopy("context_overflow") ?? trimmed;
   }
-  const reason = classifyFailoverReason(trimmed);
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
   }
@@ -312,8 +333,7 @@ export function renderSanitizedUserFacingText(
   if (isInvalidStreamingEventOrderError(trimmed)) {
     return "LLM request failed: provider returned an invalid streaming response. Please try again.";
   }
-  const status = extractLeadingHttpStatus(trimmed);
-  if (isRawApiErrorPayload(trimmed) || (status && status.code >= 400 && reason)) {
+  if (rawPayload || (status && status.code >= 400 && reason)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
   if (isStreamingJsonParseError(trimmed)) {
@@ -405,7 +425,6 @@ export function resolveProviderRequestFailureCopy(params: {
     code,
     userMessage,
     technicalMessage: params.technicalMessage,
-    ...(params.facet === "provider-internal-503" ? { allowTransientHttpRetry: true as const } : {}),
   };
 }
 

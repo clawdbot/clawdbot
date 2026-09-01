@@ -12,7 +12,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesReadOnly: () => [],
+  readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
 }));
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
@@ -53,7 +53,7 @@ describe("queue health collector", () => {
 
       upsertDeliveryQueueEntry({
         queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");

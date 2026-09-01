@@ -36,7 +36,7 @@ function resolveDraftPartialText(
   return nextText === previous ? undefined : nextText;
 }
 
-export function renderStreamText(
+function renderStreamText(
   turn: Pick<Turn, "tableMode" | "telegramCfg">,
   text: string,
 ): TelegramDraftPreview {

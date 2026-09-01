@@ -24,16 +24,13 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { getFeishuRuntime } from "./runtime.js";
-import {
-  assertFeishuMessageApiSuccess,
-  resolveFeishuReceiptKind,
-  toFeishuSendResult,
-} from "./send-result.js";
+import { toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import { sendReplyOrFallbackDirect } from "./send.js";
 
@@ -600,7 +597,7 @@ async function sendImageFeishu(params: {
     "Feishu image send failed",
     { includeNestedErrorLogId: true },
   );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  assertFeishuApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId, "media", "Feishu image send failed");
 }
 
@@ -611,8 +608,7 @@ async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
-  msgType?: "file" | "audio" | "media";
+  msgType?: "file" | "audio" | "media" | "sticker";
   replyToMessageId?: string;
   replyInThread?: boolean;
   allowTopLevelReplyFallback?: boolean;
@@ -635,44 +631,28 @@ async function sendFileFeishu(params: {
   });
   const content = JSON.stringify({ file_key: fileKey });
 
-  if (replyToMessageId) {
-    return sendReplyOrFallbackDirect(client, {
-      replyToMessageId,
-      replyInThread,
-      allowTopLevelReplyFallback,
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    content,
+    msgType,
+    directParams: {
+      receiveId,
+      receiveIdType,
       content,
       msgType,
-      directParams: {
-        receiveId,
-        receiveIdType,
-        content,
-        msgType,
-      },
-      directErrorPrefix: "Feishu file send failed",
-      replyErrorPrefix: "Feishu file reply failed",
-    });
-  }
+    },
+    directErrorPrefix: "Feishu file send failed",
+    replyErrorPrefix: "Feishu file reply failed",
+  });
+}
 
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: msgType,
-        },
-      }),
-    "Feishu file send failed",
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(
-    response,
-    receiveId,
-    resolveFeishuReceiptKind(msgType),
-    "Feishu file send failed",
-  );
+// Feishu only permits reusing sticker file_keys already received by this bot.
+export function sendStickerFeishu(
+  params: Omit<Parameters<typeof sendFileFeishu>[0], "msgType">,
+): Promise<SendMediaResult> {
+  return sendFileFeishu({ ...params, msgType: "sticker" });
 }
 
 /**
@@ -1057,7 +1037,9 @@ export async function sendMediaFeishu(params: {
       : await runBeforeFeishuMessageDispatch(() =>
           resolveFeishuOutboundMediaKind({ buffer, fileName: name, contentType }),
         );
-  const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
+  const voiceIntentDegradedToFile =
+    routing.msgType !== "audio" &&
+    shouldSuppressFeishuTextForVoiceMedia({ mediaUrl, audioAsVoice });
 
   await runBeforeFeishuMessageDispatch(() =>
     assertFeishuUploadWithinEnvelope({ buffer, mediaMaxBytes, msgType: routing.msgType }),

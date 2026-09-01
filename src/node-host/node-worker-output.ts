@@ -1,7 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
-import { finalizeCapturedOutput, type CapturedOutputBuffers } from "../process/exec-output.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export const NODE_WORKER_STDOUT_MAX_BYTES = 64 * 1024;
@@ -13,13 +12,16 @@ export type NodeWorkerCredentialScrubber = {
 };
 
 export function createNodeWorkerCredentialScrubber(
-  credential: string,
+  credentials: string | readonly string[],
 ): NodeWorkerCredentialScrubber {
-  const representations = new Set([
-    credential,
-    encodeURIComponent(credential),
-    JSON.stringify(credential).slice(1, -1),
-  ]);
+  const values = typeof credentials === "string" ? [credentials] : credentials;
+  const representations = new Set(
+    values.flatMap((credential) => [
+      credential,
+      encodeURIComponent(credential),
+      JSON.stringify(credential).slice(1, -1),
+    ]),
+  );
   const ordered = [...representations].toSorted((left, right) => right.length - left.length);
   return {
     maxRepresentationBytes: Math.max(
@@ -52,14 +54,10 @@ export function sanitizeNodeWorkerDiagnostic(
   return truncateUtf8Suffix(oneLine || fallback, STDERR_MAX_BYTES);
 }
 
-export function parseNodeWorkerSuccessfulResult(
-  stdout: CapturedOutputBuffers,
+export function parseNodeWorkerOutputJson(
+  raw: string,
   scrubCredential: (text: string) => string,
 ): string {
-  if (stdout.truncatedBytes > 0) {
-    throw new Error(`worker stdout exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`);
-  }
-  const raw = finalizeCapturedOutput(stdout, "head", true).toString("utf8").trim();
   const redacted = redactLaunchText(raw, scrubCredential);
   let parsed: unknown;
   try {

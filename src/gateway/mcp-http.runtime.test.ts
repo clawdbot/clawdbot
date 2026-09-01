@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -83,6 +83,26 @@ describe("resolveMcpLoopbackScopedTools", () => {
   it("fails closed on an empty grant allowlist", () => {
     const scoped = resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: [] }));
     expect(scoped.tools).toEqual([]);
+  });
+
+  it("forwards the exact Skill Workshop revision into loopback tool construction", () => {
+    const proposalRevision = {
+      agentId: "proposal-owner",
+      workspaceDir: "/proposal-workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["skill_workshop"],
+        skillWorkshop: { proposalRevision },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledWith(
+      expect.objectContaining({ skillWorkshop: { proposalRevision } }),
+    );
   });
 
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
@@ -212,6 +232,36 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 
+  it("does not share loopback tools across prepared vision capabilities", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, modelHasVision: true }));
+    cache.resolve(scopeParams({ cfg, modelHasVision: false }));
+    cache.resolve(scopeParams({ cfg, modelHasVision: true }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
+      modelHasVision: true,
+    });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
+      modelHasVision: false,
+    });
+  });
+
+  it("does not share loopback message tools across prepared reply modes", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "off" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
+  });
+
   it("evicts only the revoked grant's cached tool closures", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;
@@ -267,5 +317,23 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
+  });
+
+  it("does not share cache rows across delegation capabilities", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg }));
+    cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
+
+    // A restricted attempt must neither read nor seed the full-capability row
+    // for the same session context.
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
+      delegationCapability: "report_only",
+    });
+
+    cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
   });
 });

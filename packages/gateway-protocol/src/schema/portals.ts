@@ -13,6 +13,7 @@ const PortalSummaryMetadataFields = {
   publicUrl: NonEmptyString,
   path: Type.Optional(Type.String({ pattern: "^/" })),
   description: Type.Optional(Type.String()),
+  origin: Type.Optional(Type.String()),
   createdAtMs: Type.Integer({ minimum: 0 }),
 };
 

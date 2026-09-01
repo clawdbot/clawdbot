@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-type MockIngressInput = { message?: string; sessionKey?: string; runId?: string };
+type MockIngressInput = {
+  accountId?: string;
+  message?: string;
+  sessionKey?: string;
+  runId?: string;
+};
 
 const mocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn(async (_input: MockIngressInput) => ({
@@ -8,8 +13,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  agentCommandFromIngress: mocks.agentCommandFromIngress,
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => ({
+    agent: { runCommandFromIngress: mocks.agentCommandFromIngress },
+  }),
 }));
 
 import { runDiscordVoiceAgentTurn } from "./ingress.js";
@@ -23,6 +30,7 @@ describe("Discord voice ingress execution correlation", () => {
     };
     const shared = {
       entry: entry as never,
+      accountId: "work",
       userId: "user-1",
       cfg: {} as never,
       discordConfig: {} as never,
@@ -42,8 +50,33 @@ describe("Discord voice ingress execution correlation", () => {
       "agent:main:discord:channel:channel-1",
       "agent:main:discord:channel:channel-1",
     ]);
+    expect(inputs.map((input) => input.accountId)).toEqual(["work", "work"]);
     for (const input of inputs) {
       expect(input).not.toHaveProperty("runId");
     }
+  });
+
+  it.each([true, false])("preserves authenticated Discord speaker owner=%s", async (owner) => {
+    await runDiscordVoiceAgentTurn({
+      entry: {
+        guildId: "guild-1",
+        channelId: "channel-1",
+        route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
+      } as never,
+      accountId: "work",
+      userId: owner ? "owner-1" : "guest-1",
+      message: "run the tool",
+      cfg: {} as never,
+      discordConfig: {} as never,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
+      fetchGuildName: vi.fn(async () => "Guild"),
+      speakerContext: {} as never,
+    });
+
+    expect(mocks.agentCommandFromIngress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageChannel: "discord", senderIsOwner: owner }),
+      expect.anything(),
+    );
   });
 });

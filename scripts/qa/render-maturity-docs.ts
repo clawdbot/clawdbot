@@ -445,13 +445,15 @@ function renderSurfaceRows({
   for (const surface of surfaces) {
     const scoreSurface = scoreSurfaces.get(surface.id);
     rows.push(
-      '  <div className="maturity-surface-row">',
-      `    <a className="maturity-surface-name" href="/maturity/taxonomy#${markdownSlug(surface.name)}"><span className="maturity-surface-title">${markdownEscape(surface.name)}</span><span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas</span></span></a>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span>${scoreMeter(coverage.surfaces.get(surface.id))}</div>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span>${scoreMeter(scoreSurface?.scores?.quality)}</div>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span>${scoreMeter(scoreSurface?.scores?.completeness)}</div>`,
-      `    <div className="maturity-surface-support">${maturityLtsBadge(scoreSurface?.lts)}</div>`,
-      "  </div>",
+      [
+        '  <div className="maturity-surface-row">',
+        `<a className="maturity-surface-name" href="/maturity/taxonomy#${markdownSlug(surface.name)}"><span className="maturity-surface-title">${markdownEscape(surface.name)}</span><span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas</span></span></a>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span>${scoreMeter(coverage.surfaces.get(surface.id))}</div>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span>${scoreMeter(scoreSurface?.scores?.quality)}</div>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span>${scoreMeter(scoreSurface?.scores?.completeness)}</div>`,
+        `<div className="maturity-surface-support">${maturityLtsBadge(scoreSurface?.lts)}</div>`,
+        "</div>",
+      ].join(""),
     );
   }
   rows.push("</div>");

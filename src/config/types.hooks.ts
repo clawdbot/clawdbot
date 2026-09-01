@@ -1,4 +1,5 @@
 // Defines hook configuration matching and command types.
+import type { InstallRecordBase } from "./types.installs.js";
 export type HookMappingMatch = {
   path?: string;
   source?: string;
@@ -24,6 +25,13 @@ export type HookMappingConfig = {
   sessionMode?: HookSessionMode;
   messageTemplate?: string;
   textTemplate?: string;
+  /**
+   * Fan the mapping out over a top-level payload array: one action per element,
+   * with templates/transforms seeing a payload whose array holds only that
+   * element. Example: the gmail preset uses `forEach: "messages"` so batched
+   * pushes dispatch one isolated run per email.
+   */
+  forEach?: string;
   deliver?: boolean;
   /** DANGEROUS: Disable external content safety wrapping for this hook. */
   allowUnsafeExternalContent?: boolean;
@@ -103,7 +111,7 @@ export type HooksConfig = {
    */
   defaultSessionKey?: string;
   /**
-   * Allow `sessionKey` from external `/hooks/agent` request payloads.
+   * Allow `sessionKey` from external `/hooks/agent` and `/hooks/wake` request payloads.
    * Default: false.
    */
   allowRequestSessionKey?: boolean;
@@ -125,4 +133,3 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
-import type { InstallRecordBase } from "./types.installs.js";

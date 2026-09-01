@@ -29,6 +29,7 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   getSocket: () => OpenAIQuicksilverSocket | undefined;
   isCanceledError?: (error: unknown) => boolean;
   logger: Pick<PluginLogger, "debug" | "warn">;
+  onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
@@ -54,12 +55,22 @@ function readWireEventType(payload: string): string | undefined {
 export class OpenAIQuicksilverDelegationController {
   private activeDelegationId: string | undefined;
   private consultController: AbortController | undefined;
+  private readonly onSessionAbort = () => {
+    const reason = this.options.signal.reason;
+    this.stop(reason instanceof Error ? reason : new Error("GPT-Live session stopped"));
+  };
   private partialTranscriptRole: "user" | "assistant" | undefined;
   private pendingDelegation: PendingDelegation | undefined;
   private stopped = false;
   private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
 
-  constructor(private readonly options: OpenAIQuicksilverDelegationControllerOptions) {}
+  constructor(private readonly options: OpenAIQuicksilverDelegationControllerOptions) {
+    if (options.signal.aborted) {
+      this.onSessionAbort();
+    } else {
+      options.signal.addEventListener("abort", this.onSessionAbort, { once: true });
+    }
+  }
 
   handleFrame(data: RawData, isBinary: boolean): void {
     if (isBinary) {
@@ -101,6 +112,8 @@ export class OpenAIQuicksilverDelegationController {
       this.options.logger.warn(error.message);
       if (event.fatalAuth) {
         this.options.onFatalError(error);
+      } else {
+        this.options.onError?.(error);
       }
       return;
     }
@@ -122,11 +135,17 @@ export class OpenAIQuicksilverDelegationController {
     if (this.stopped) {
       return;
     }
-    this.stopped = true;
-    this.pendingDelegation = undefined;
-    this.activeDelegationId = undefined;
+    this.markStopped();
     this.consultController?.abort(reason);
     this.consultController = undefined;
+  }
+
+  /** Releases sideband ownership without canceling work already accepted by the host. */
+  detach(): void {
+    if (this.stopped) {
+      return;
+    }
+    this.markStopped();
   }
 
   private appendTranscript(
@@ -180,8 +199,7 @@ export class OpenAIQuicksilverDelegationController {
     const controller = new AbortController();
     this.consultController = controller;
     this.activeDelegationId = delegation.id;
-    const signal = AbortSignal.any([this.options.signal, controller.signal]);
-    void this.runDelegation(delegation, signal)
+    void this.runDelegation(delegation, controller.signal)
       .catch((error: unknown) =>
         this.fail(toErrorObject(error, "OpenAI GPT-Live delegation failed")),
       )
@@ -198,6 +216,15 @@ export class OpenAIQuicksilverDelegationController {
           this.activeDelegationId = undefined;
         }
       });
+  }
+
+  private markStopped(): void {
+    this.stopped = true;
+    this.options.signal.removeEventListener("abort", this.onSessionAbort);
+    this.pendingDelegation = undefined;
+    this.activeDelegationId = undefined;
+    this.partialTranscriptRole = undefined;
+    this.transcript = [];
   }
 
   private async runDelegation(delegation: PendingDelegation, signal: AbortSignal): Promise<void> {

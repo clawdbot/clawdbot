@@ -9,20 +9,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
-  resolveScopes: vi.fn(),
-  authorizeScopes: vi.fn(),
-  resolveIsOwner: vi.fn(),
   resolveLocalSessionWorkspaceRoot: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
-  resolveOpenAiCompatibleHttpOperatorScopes: (...args: unknown[]) => mocks.resolveScopes(...args),
-  resolveOpenAiCompatibleHttpSenderIsOwner: (...args: unknown[]) => mocks.resolveIsOwner(...args),
-}));
-
-vi.mock("./method-scopes.js", () => ({
-  authorizeOperatorScopesForMethod: (...args: unknown[]) => mocks.authorizeScopes(...args),
+  authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
+    mocks.authorize(...args),
 }));
 
 vi.mock("./server-methods/sessions-files.js", () => ({
@@ -214,10 +206,10 @@ describe("handleWorkspaceIconHttpRequest", () => {
   });
 
   beforeEach(() => {
-    mocks.authorize.mockReset().mockResolvedValue({ ok: true });
-    mocks.resolveScopes.mockReset().mockReturnValue(["operator.read"]);
-    mocks.authorizeScopes.mockReset().mockReturnValue({ allowed: true });
-    mocks.resolveIsOwner.mockReset().mockReturnValue(true);
+    mocks.authorize.mockReset().mockResolvedValue({
+      authMethod: "token",
+      operatorScopes: ["operator.admin", "operator.read"],
+    });
     mocks.resolveLocalSessionWorkspaceRoot.mockReset().mockReturnValue(undefined);
   });
 
@@ -386,11 +378,17 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 
-  it("never reads a workspace for a caller without owner access", async () => {
+  it("never reads a workspace when the owner-read authorizer denies access", async () => {
     // `sessions.list` hides incognito and non-owner draft sessions per client.
     // Without that filter here, the read scope alone would let a caller who
     // knows such a key pull bytes derived from a session it cannot list.
-    mocks.resolveIsOwner.mockReturnValue(false);
+    mocks.authorize.mockImplementation(
+      async (params: { res: { statusCode: number; end: () => void } }) => {
+        params.res.statusCode = 403;
+        params.res.end();
+        return null;
+      },
+    );
     const response = await fetch(iconRoute("agent:main:hidden"));
     expect(response.status).toBe(403);
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
@@ -404,13 +402,5 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const response = await fetch(iconRoute("agent:main:remote"));
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("never reads a workspace for a caller missing the session read scope", async () => {
-    mocks.authorizeScopes.mockReturnValue({ allowed: false, missingScope: "operator.read" });
-    const response = await fetch(iconRoute("agent:main:one"));
-    expect(response.status).toBe(403);
-    expect(mocks.authorizeScopes).toHaveBeenCalledWith("sessions.list", ["operator.read"]);
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 });

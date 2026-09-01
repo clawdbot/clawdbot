@@ -4,15 +4,25 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it } from "vitest";
 import { lineSetupAdapter, patchLineAccountConfig } from "./setup-core.js";
 
-type LineChannelConfig = { channelAccessToken?: string };
+type LineChannelConfig = {
+  channelAccessToken?: string;
+  channelSecret?: string;
+  tokenFile?: string;
+  secretFile?: string;
+};
 
-function appliedLineConfig(input: Record<string, unknown>): LineChannelConfig {
-  const cfg = lineSetupAdapter.applyAccountConfig({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
-    input,
-  });
-  return (cfg.channels?.line ?? {}) as LineChannelConfig;
+function applyLineSetup(
+  input: Record<string, unknown>,
+  cfg: OpenClawConfig = {} as OpenClawConfig,
+): OpenClawConfig {
+  return lineSetupAdapter.applyAccountConfig({ cfg, accountId: "default", input });
+}
+
+function appliedLineConfig(
+  input: Record<string, unknown>,
+  cfg?: OpenClawConfig,
+): LineChannelConfig {
+  return (applyLineSetup(input, cfg).channels?.line ?? {}) as LineChannelConfig;
 }
 
 describe("line setup token alias", () => {
@@ -83,5 +93,49 @@ describe("LINE scoped setup config", () => {
       enabled: true,
       channelAccessToken: "new-token",
     });
+  });
+});
+
+describe("LINE credential rotation", () => {
+  // The inline value wins over its file at resolution time, so a rotation that
+  // leaves it behind silently keeps using the credential it was meant to replace.
+  const inlineFirst = () =>
+    applyLineSetup({ channelAccessToken: "inline-token", channelSecret: "inline-secret" });
+
+  it("retires an inline credential when its file replaces it", () => {
+    const rotated = appliedLineConfig(
+      { tokenFile: "/run/secrets/line-token", secretFile: "/run/secrets/line-secret" },
+      inlineFirst(),
+    );
+
+    expect(rotated.tokenFile).toBe("/run/secrets/line-token");
+    expect(rotated.secretFile).toBe("/run/secrets/line-secret");
+    expect(rotated.channelAccessToken).toBeUndefined();
+    expect(rotated.channelSecret).toBeUndefined();
+  });
+
+  it("retires a credential file when an inline value replaces it", () => {
+    const fromFiles = applyLineSetup({
+      tokenFile: "/run/secrets/line-token",
+      secretFile: "/run/secrets/line-secret",
+    });
+
+    const rotated = appliedLineConfig(
+      { channelAccessToken: "inline-token", channelSecret: "inline-secret" },
+      fromFiles,
+    );
+
+    expect(rotated.channelAccessToken).toBe("inline-token");
+    expect(rotated.channelSecret).toBe("inline-secret");
+    expect(rotated.tokenFile).toBeUndefined();
+    expect(rotated.secretFile).toBeUndefined();
+  });
+
+  it("leaves the credential that was not replaced alone", () => {
+    const rotated = appliedLineConfig({ tokenFile: "/run/secrets/line-token" }, inlineFirst());
+
+    expect(rotated.tokenFile).toBe("/run/secrets/line-token");
+    expect(rotated.channelSecret).toBe("inline-secret");
+    expect(rotated.channelAccessToken).toBeUndefined();
   });
 });

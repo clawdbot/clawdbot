@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   hasAssistantVisibleReply,
+  resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   buildAssistantStreamData,
@@ -28,6 +29,7 @@ describe("buildAssistantStreamData", () => {
         delta: "he",
         replace: true,
         mediaUrl: "https://example.com/a.png",
+        managedMediaUrls: ["https://example.com/a.png"],
         phase: "final_answer",
       }),
     ).toEqual({
@@ -35,8 +37,22 @@ describe("buildAssistantStreamData", () => {
       delta: "he",
       replace: true,
       mediaUrls: ["https://example.com/a.png"],
+      managedMediaUrls: ["https://example.com/a.png"],
       phase: "final_answer",
     });
+  });
+
+  it("keeps generic directive URLs separate from tool-owned managed media", () => {
+    const state = {
+      pendingToolMediaTrustByUrl: new Map([
+        ["./managed.png", true],
+        ["./ordinary.png", false],
+      ]),
+    };
+
+    expect(
+      resolveManagedStreamMediaUrls(state, ["./ordinary.png", "./managed.png", "./unknown.png"]),
+    ).toEqual(["./managed.png"]);
   });
 });
 

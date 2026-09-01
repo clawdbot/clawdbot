@@ -8,7 +8,7 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { runGit } from "../agents/worktrees/git.js";
+import { gitEnvironment, runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
@@ -46,6 +46,37 @@ async function gitOut(
     return okCodes.includes(result.code ?? -1) ? result.stdout : null;
   } catch {
     return null;
+  }
+}
+
+async function loadCheckoutRevision(
+  cwd: string,
+): Promise<{ root: string; head?: string; branch?: string } | undefined> {
+  try {
+    // Git emits the root before verifying HEAD; exit 1 keeps an unborn checkout's root.
+    // Split only the final OID on success so embedded newlines in paths remain intact.
+    const result = await runGit(cwd, [
+      "rev-parse",
+      "--show-toplevel",
+      "--verify",
+      "--quiet",
+      "HEAD",
+    ]);
+    if (result.termination !== "exit" || (result.code !== 0 && result.code !== 1)) {
+      return undefined;
+    }
+    const lines = result.stdout.replace(/\n$/, "").split("\n");
+    const head = result.code === 0 ? lines.pop() : undefined;
+    const root = lines.join("\n");
+    if (!root) {
+      return undefined;
+    }
+    const branchOut = head
+      ? (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim()
+      : undefined;
+    return { root, head, branch: branchOut && branchOut !== "HEAD" ? branchOut : undefined };
+  } catch {
+    return undefined;
   }
 }
 
@@ -372,16 +403,14 @@ export async function loadCheckoutDiff(params: CheckoutDiffParams): Promise<Sess
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const root = (await gitOut(params.cwd, ["rev-parse", "--show-toplevel"]))?.trim();
-  if (!root) {
+  const checkout = await loadCheckoutRevision(params.cwd);
+  if (!checkout) {
     return empty("not_git");
   }
+  const { root, head, branch } = checkout;
   // Canonical root for the hardlink/escape guard: show-toplevel can contain
   // symlinked path segments, and containment is compared against realpaths.
   const realRoot = await fs.realpath(root).catch(() => root);
-  const branchOut = (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim();
-  const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
-  const head = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"]))?.trim();
   const branchBase = head
     ? await resolveSessionDiffBase({ branch, gitOut, root })
     : await resolveSessionDiffEmptyTree(root);
@@ -587,6 +616,7 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
     ["git", "-C", cwd, "-c", "core.quotePath=false", ...args],
     {
       timeoutMs: 30_000,
+      env: gitEnvironment(),
       maxOutputBytes: {
         stdout: MAX_BASELINE_GIT_OUTPUT_BYTES,
         stderr: 32 * 1024,
@@ -602,14 +632,12 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
 async function collectBaselineCandidates(params: {
   cwd: string;
 }): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean } | undefined> {
-  const root = (await gitOut(params.cwd, ["rev-parse", "--show-toplevel"]))?.trim();
-  if (!root) {
+  const checkout = await loadCheckoutRevision(params.cwd);
+  if (!checkout) {
     return undefined;
   }
-  const branchOut = (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim();
-  const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
-  const hasHead = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"])) !== null;
-  const baseInfo = hasHead
+  const { root, head, branch } = checkout;
+  const baseInfo = head
     ? await resolveSessionDiffBase({ branch, gitOut, root })
     : await resolveSessionDiffEmptyTree(root);
   const trackedText = baseInfo

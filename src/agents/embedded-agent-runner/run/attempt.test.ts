@@ -3424,6 +3424,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     const runtimeContext = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:locked",
+        sandboxSessionKey: "global",
+        sandboxAgentId: "main",
         config: {
           agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
         } as OpenClawConfig,
@@ -3439,6 +3441,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
 
     expect(runtimeContext.modelSelectionLocked).toBe(true);
+    expect(runtimeContext.sandboxSessionKey).toBe("global");
+    expect(runtimeContext.sandboxAgentId).toBe("main");
     expect(runtimeContext.provider).toBe("openai");
     expect(runtimeContext.model).toBe("gpt-5.5");
   });

@@ -1,4 +1,7 @@
-import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveMemoryIndexIdentityReason,
+  type MemoryEmbeddingProbeResult,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -7,11 +10,11 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
   formatExtraPaths,
+  formatMemoryIndexOutcome,
   resolveMemoryPluginConfig,
-  scanMemorySources,
+  scanMemoryManagerSources,
   withMemoryCommand,
   type MemoryManager,
-  type MemorySourceName,
   type MemorySourceScan,
 } from "./cli-runtime-common.js";
 import {
@@ -62,12 +65,7 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
-  const reason =
-    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
-    typeof indexIdentity.reason === "string"
-      ? indexIdentity.reason
-      : undefined;
+  const reason = resolveMemoryIndexIdentityReason(status);
   if (!reason) {
     return null;
   }
@@ -165,6 +163,7 @@ export async function runMemoryStatus(
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
     purpose: opts.index ? "cli" : "status",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
       const deep = Boolean(opts.deep || opts.index);
@@ -231,16 +230,8 @@ export async function runMemoryStatus(
         }
       }
       const status = manager.status();
-      const sources = (status.sources?.length ? status.sources : ["memory"]) as MemorySourceName[];
+      const scan = await scanMemoryManagerSources(status);
       const workspaceDir = status.workspaceDir;
-      const scan = workspaceDir
-        ? await scanMemorySources({
-            workspaceDir,
-            agentId,
-            sources,
-            extraPaths: status.extraPaths,
-          })
-        : undefined;
       let audit: ShortTermAuditSummary | undefined;
       let repair: RepairShortTermPromotionArtifactsResult | undefined;
       let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
@@ -294,7 +285,9 @@ export async function runMemoryStatus(
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
         : `${filesIndexed}/${totalFiles} files · ${chunksIndexed} chunks`;
     if (opts.index) {
-      const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
+      const line = indexError
+        ? `Memory index failed: ${indexError}`
+        : formatMemoryIndexOutcome(status, scan, agentId);
       defaultRuntime.log(line);
     }
     const requestedProvider = status.requestedProvider ?? status.provider;

@@ -70,6 +70,7 @@ export function resolvePluginInstallSourcePlan(params: {
         path: resolved,
         recordSource,
         mode: params.mode,
+        ...(bundled ? { bundledOrigin: true } : {}),
         ...(params.link ? { link: true } : {}),
       },
       params.raw,

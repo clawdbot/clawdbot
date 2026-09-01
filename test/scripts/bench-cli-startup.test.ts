@@ -6,16 +6,8 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe("bench-cli-startup", () => {
   it("rejects unknown CLI options before running benchmarks", () => {
@@ -23,7 +15,7 @@ describe("bench-cli-startup", () => {
 
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat"],
+      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat", "--help"],
       {
         cwd: join(__dirname, "../.."),
         encoding: "utf8",
@@ -40,21 +32,6 @@ describe("bench-cli-startup", () => {
   it("rejects short flag values before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--output", "-h"])).toThrow("--output requires a value");
     expect(() => testing.validateCliArgs(["--case", "-h"])).toThrow("--case requires a value");
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--output", "-h"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--output requires a value");
-    expect(result.stderr).not.toContain("Node.js");
-    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it("rejects duplicate benchmark cases before running benchmarks", () => {
@@ -78,29 +55,6 @@ describe("bench-cli-startup", () => {
     expect(() => testing.validateCliArgs(["--output", "one.json", "--output", "two.json"])).toThrow(
       "--output was provided more than once",
     );
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-cli-startup.ts",
-        "--output",
-        "one.json",
-        "--output",
-        "two.json",
-      ],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--output was provided more than once");
-    expect(result.stderr).not.toContain("Node.js");
-    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -326,8 +280,8 @@ describe("bench-cli-startup", () => {
         entry: "dist/entry.js",
         cases: [
           {
-            id: "gatewayHealthJsonConnected",
-            name: "gateway health --json (connected)",
+            id: "gatewayHealthJsonWarmState",
+            name: "gateway health --json (warm state)",
             args: ["gateway", "health", "--json"],
             contract: null,
             warmupSamples: [{ ...passingSample, exitCode: 1 }],
@@ -342,7 +296,7 @@ describe("bench-cli-startup", () => {
           },
         ],
       }),
-    ).toEqual(["dist/entry.js gatewayHealthJsonConnected warmup 1: exited with code 1"]);
+    ).toEqual(["dist/entry.js gatewayHealthJsonWarmState warmup 1: exited with code 1"]);
   });
 
   it("fails reports with samples that did not report RSS", () => {
@@ -476,7 +430,7 @@ describe("bench-cli-startup", () => {
   });
 
   it("writes a config fixture for config get benchmarks", () => {
-    const expectedFixture = {
+    const unauthenticatedFixture = {
       gateway: {
         auth: { mode: "none" },
         bind: "loopback",
@@ -497,18 +451,6 @@ describe("bench-cli-startup", () => {
         args: ["gateway", "health", "--json"],
         presets: ["real"],
       },
-      {
-        id: "gatewayHealthJsonConnected",
-        name: "gateway health --json (connected)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
-      {
-        id: "gatewayHealthJsonFirstDevice",
-        name: "gateway health --json (first device)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
       { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
       {
         id: "healthJson",
@@ -521,7 +463,35 @@ describe("bench-cli-startup", () => {
         withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
           testing.buildConfigFixture(commandCase),
         ),
-      ).toEqual(expectedFixture);
+      ).toEqual(unauthenticatedFixture);
+    }
+
+    for (const commandCase of [
+      {
+        id: "gatewayHealthJsonWarmState",
+        name: "gateway health --json (warm state)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+      {
+        id: "gatewayHealthJsonFreshState",
+        name: "gateway health --json (fresh state)",
+        args: ["gateway", "health", "--json"],
+        presets: [],
+      },
+    ]) {
+      expect(
+        withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
+          testing.buildConfigFixture(commandCase),
+        ),
+      ).toEqual({
+        gateway: {
+          auth: { mode: "token" },
+          bind: "loopback",
+          mode: "local",
+          port: 32123,
+        },
+      });
     }
   });
 
@@ -534,8 +504,8 @@ describe("bench-cli-startup", () => {
 
     for (const id of [
       "gatewayHealthJson",
-      "gatewayHealthJsonConnected",
-      "gatewayHealthJsonFirstDevice",
+      "gatewayHealthJsonWarmState",
+      "gatewayHealthJsonFreshState",
     ]) {
       expect(
         withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>

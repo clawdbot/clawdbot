@@ -83,14 +83,77 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
-### Channel state migration declarations
+### Retained helper contracts
 
-Channel plugins should declare `doctorContract.stateMigrations: true` in
+Retained compatibility entrypoints keep their shipped caller names:
+`inbound-envelope` uses `resolveStorePath`, `provider-catalog-runtime` exports
+`resolvePluginProviders`, and `agent-runtime`'s
+`resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
+
+### Harness attempt result migration
+
+In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
+`openclaw/plugin-sdk/agent-harness-runtime` requires the canonical `terminal`
+field. Source written against the 2026.7 direct alias must migrate when it
+constructs results with legacy fields such as `aborted`, `timedOut`, and
+`promptError`; retaining the alias name does not make those old constructors
+source-compatible.
+
+Use `AgentHarnessAttemptResult` from the same subpath while migrating a
+legacy result producer. That union accepts both the legacy fields and the
+canonical result, and the host lifecycle normalizes legacy results before
+core consumes them. New producers should construct `terminal`; consumers of
+the union must narrow the result before reading it. The current
+`EmbeddedRunAttemptResult` contract keeps `terminal` required.
+
+### Model-provider result compatibility
+
+`openclaw/plugin-sdk/models-provider-runtime` preserves the `ModelsProviderData`
+construction shape and `buildModelsProviderData` return signature published in
+`v2026.7.1-2`, including typed adapters that return that shape. These contracts
+remain supported until an explicitly approved SDK-breaking boundary.
+
+Call `buildPreparedModelsProviderData` when forwarding model selections. Its
+result includes the required `modelCatalog` with
+the selected physical-route metadata. Both builders use one metadata producer;
+callers must carry prepared rows forward rather than reconstructing them from IDs.
+
+### Memory read missing results
+
+Memory managers now return `status: "ok"` for successful excerpts and
+`status: "not_found"` when an allowed file is missing. This keeps empty files
+and empty ranges distinct from missing files without relying on pagination
+metadata.
+
+At registration, every statusless result from an older external memory manager
+preserves its legacy successful-read semantics and becomes `status: "ok"`,
+including empty results without range metadata. Only an explicit
+`status: "not_found"` reports absence. New producers must emit that status for
+missing files; registered-input normalization remains available through the
+next Plugin SDK major.
+
+### Plugin state migration declarations
+
+Plugins should declare `doctorContract.stateMigrations: true` in
 `openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
 artifact. Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
+sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
+errors and invalid JSON reach Doctor's detection or migration warnings; the
+source remains untouched so the operator can fix it and retry.
+
+Use `phase: "after-session-repair"` when a migration needs canonical session
+ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
+them after session repair under SQLite maintenance ownership. The context
+provides bounded `readPluginStateEntriesInKeyRange` and
+`readSessionIdentityEvidenceBatch` reads, plus
+`deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
+unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
+retained after maintenance ends cannot authorize later writes.
 
 The setup-entry `legacyStateMigrations` option and feature flag,
 `setupFeatures.legacyStateMigrations`,
@@ -102,9 +165,10 @@ reader sweep finds no remaining users.
 
 ### AuthStorage SQLite migration
 
-`AuthStorage.forAgent(agentDir)` is the canonical provider-keyed session SDK
-facade. It persists provider-default credentials through the agent's
+`AuthStorage.forAgent(agentDir)` is the canonical constructor for host session
+storage. It persists provider-default credentials through the agent's
 `openclaw-agent.sqlite` auth-profile rows and never creates `auth.json`.
+Harness plugins receive the prepared storage instance as `params.authStorage`.
 
 `AuthStorage.create(authPath)` remains as a named deprecated adapter for
 existing plugins. The path is used only to derive the owning agent directory;
@@ -113,11 +177,13 @@ the adapter reads and writes SQLite, not the named JSON file. Migrate to
 `AUTH_STORAGE_CREATE_DEPRECATED` and is eligible for removal after
 2026-10-01, provided the published-plugin reader sweep is clean.
 
-Direct `FileAuthStorageBackend` imports remain available through the same
-window as a SQLite-backed compatibility adapter. They emit
-`FILE_AUTH_STORAGE_BACKEND_DEPRECATED`; replace backend construction with
-`AuthStorage.forAgent(agentDir)`. Neither deprecated path reads or writes the
-legacy file.
+`FileAuthStorageBackend` is an internal SQLite-backed adapter, not an exported
+Plugin SDK backend. It is not available as a named import from
+`openclaw/plugin-sdk/agent-sessions`. Harness plugins should use the
+host-prepared `params.authStorage`; host code that constructs storage should
+use `AuthStorage.forAgent(agentDir)`. The internal adapter emits
+`FILE_AUTH_STORAGE_BACKEND_DEPRECATED` and never reads or writes the legacy
+file. Its internal deprecation window does not preserve the former SDK import.
 
 If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;
@@ -466,7 +532,7 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
     | In-memory and persistent-backed dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
-    | Safe local-file/media path helpers | `openclaw/plugin-sdk/file-access-runtime` |
+    | Safe local-file/media paths, regular-file checks, and symlink-parent checks | `openclaw/plugin-sdk/security-runtime` |
     | Dispatcher-aware fetch | `openclaw/plugin-sdk/runtime-fetch` |
     | Proxy and guarded fetch helpers | `openclaw/plugin-sdk/fetch-runtime` |
     | SSRF dispatcher policy types | `openclaw/plugin-sdk/ssrf-dispatcher` |
@@ -512,11 +578,7 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     consistently across native approvals, reply suppression, inbound dedupe,
     cron delivery, and session routing.
 
-    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
-    `resolveChannelRouteTargetWithParser(...)` from
-    `plugin-sdk/channel-route` - those are deprecated and remain only for older
-    plugins. New channel plugins should use
-    `messaging.targetResolver.resolveTarget(...)` for target-id normalization
+    Channel plugins use `messaging.targetResolver.resolveTarget(...)` for target-id normalization
     and directory-miss fallback,
     `messaging.inferTargetChatType(...)` when core needs an early peer kind,
     and `messaging.resolveOutboundSessionRoute(...)` for provider-native
@@ -702,11 +764,8 @@ timeline for current status.
     });
     ```
 
-    `subagent_spawning`, `PluginHookSubagentSpawningEvent`,
-    `PluginHookSubagentSpawningResult`, and
-    `SubagentLifecycleHookRunner.runSubagentSpawning(...)` remain only as
-    deprecated compatibility surfaces while external plugins migrate, removed
-    after 2026-08-30.
+    The `subagent_spawning` hook and its event/result types were removed in
+    August 2026 after thread binding moved to the core session-binding path.
 
   </Accordion>
 
@@ -796,10 +855,9 @@ timeline for current status.
     `contracts.embeddingProviders`.
 
     The generic embedding provider contract is reusable outside memory and is
-    the supported path for new providers. The memory-specific registration API
-    remains wired as deprecated compatibility while existing providers
-    migrate. Plugin inspection reports non-bundled usage as compatibility
-    debt.
+    the supported path for every provider. The memory-specific registration API
+    and manifest contract were removed after the **2026-08-21** migration
+    deadline.
 
   </Accordion>
 
@@ -810,8 +868,11 @@ timeline for current status.
 
     **New**: return `OutboundDeliveryResult` fields and attach the channel with
     `createAttachedChannelResultAdapter(...)`. Failed sends should throw instead
-    of returning an error string. The raw result type remains available until
-    the next plugin-SDK major release.
+    of returning an error string. Put the platform destination in
+    `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
+    the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
+    result fields are no longer accepted. The raw result type remains available
+    until the next plugin-SDK major release.
 
   </Accordion>
 
@@ -974,7 +1035,9 @@ await gateway.request("talk.session.create", {
   sessionKey: "main",
 });
 await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
-await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+// Capture this before stopping playback from the active output `talk.event`.
+const turnId = activeOutputTalkEvent.talkEvent.turnId;
+await gateway.request("talk.session.cancelOutput", { sessionId, turnId, reason: "barge-in" });
 await gateway.request("talk.session.submitToolResult", {
   sessionId,
   callId,

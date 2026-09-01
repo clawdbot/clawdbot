@@ -2,7 +2,8 @@
  * Tests webhook request guard body parsing and rejection behavior.
  */
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { describe, expect, it } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
@@ -19,6 +20,7 @@ import {
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
   destroy: () => MockIncomingMessage;
+  pause: () => MockIncomingMessage;
 };
 
 function createMockRequest(params: {
@@ -30,11 +32,13 @@ function createMockRequest(params: {
   const req = new EventEmitter() as MockIncomingMessage;
   req.method = params.method ?? "POST";
   req.headers = params.headers ?? {};
+  req.socket = new Socket();
   req.destroyed = false;
   req.destroy = (() => {
     req.destroyed = true;
     return req;
   }) as MockIncomingMessage["destroy"];
+  req.pause = (() => req) as MockIncomingMessage["pause"];
 
   if (params.chunks) {
     void Promise.resolve().then(() => {
@@ -204,17 +208,6 @@ describe("readWebhookBodyOrReject", () => {
     const { result } = await readRawBody({ chunks: ["plain text"] });
     expect(result).toEqual({ ok: true, value: "plain text" });
   });
-
-  it("enforces strict pre-auth default body limits", async () => {
-    const { result, res } = await readRawBody(
-      {
-        headers: { "content-length": String(70 * 1024) },
-      },
-      "pre-auth",
-    );
-    expect(result).toEqual({ ok: false });
-    expect(res.statusCode).toBe(413);
-  });
 });
 
 describe("beginWebhookRequestPipelineOrReject", () => {
@@ -308,16 +301,19 @@ describe("runDetachedWebhookWork", () => {
     const order: string[] = [];
     const detached: Promise<void>[] = [];
 
-    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
-      detached.push(
-        runDetachedWebhookWork(async () => {
-          order.push("work");
-        }),
-      );
-      order.push("ack");
-      expect(order).toEqual(["ack"]);
-      return true;
-    });
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        detached.push(
+          runDetachedWebhookWork(async () => {
+            order.push("work");
+          }),
+        );
+        order.push("ack");
+        expect(order).toEqual(["ack"]);
+        return true;
+      },
+    );
 
     await Promise.all(detached);
     expect(order).toEqual(["ack", "work"]);
@@ -329,17 +325,20 @@ describe("runDetachedWebhookWork", () => {
     const { enqueueCommandInLane } = await import("../process/command-queue.js");
 
     let detached: Promise<number> | null = null;
-    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
-      // Ack-first shape: dispatch continues after the handler (and its
-      // admission) completes; the queue enqueue happens well past release.
-      detached = runDetachedWebhookWork(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 25);
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        // Ack-first shape: dispatch continues after the handler (and its
+        // admission) completes; the queue enqueue happens well past release.
+        detached = runDetachedWebhookWork(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 25);
+          });
+          return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
         });
-        return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
-      });
-      return true;
-    });
+        return true;
+      },
+    );
 
     await expect(detached).resolves.toBe(42);
   });
@@ -350,16 +349,19 @@ describe("runDetachedWebhookWork", () => {
     const { enqueueCommandInLane } = await import("../process/command-queue.js");
 
     let inherited: Promise<number> | null = null;
-    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
-      inherited = (async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 25);
-        });
-        return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
-      })();
-      inherited.catch(() => {});
-      return true;
-    });
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        inherited = (async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 25);
+          });
+          return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
+        })();
+        inherited.catch(() => {});
+        return true;
+      },
+    );
 
     await expect(inherited).rejects.toThrow("Gateway is draining");
   });

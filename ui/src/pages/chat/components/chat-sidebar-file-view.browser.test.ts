@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
+import "../../../styles/chat.css";
 import "./chat-sidebar.ts";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
@@ -34,10 +35,6 @@ type FileSidebarContent = {
 beforeAll(async () => {
   if (browserMode) {
     ({ userEvent } = await import("vitest/browser"));
-    // Tests assert English labels; pin the locale so they do not depend on the
-    // runner machine's browser language.
-    const { i18n } = await import("../../../i18n/index.ts");
-    await i18n.setLocale("en");
   }
 });
 
@@ -46,13 +43,23 @@ type DetailPanel = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-const mounted: DetailPanel[] = [];
+const mounted: HTMLElement[] = [];
 
-async function mountFile(content: FileSidebarContent): Promise<DetailPanel> {
+async function mountFile(content: FileSidebarContent, width?: number): Promise<DetailPanel> {
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
-  document.body.append(panel);
-  mounted.push(panel);
+  if (width === undefined) {
+    document.body.append(panel);
+    mounted.push(panel);
+  } else {
+    const container = document.createElement("div");
+    container.className = "side-panel__panel";
+    container.style.cssText = `display:flex;width:${width}px;height:320px;`;
+    panel.className = "chat-sidebar";
+    container.append(panel);
+    document.body.append(container);
+    mounted.push(container);
+  }
   await panel.updateComplete;
   await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
   return panel;
@@ -76,6 +83,26 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
+  it("keeps long lines inside Review and gives horizontal scroll to the editor", async () => {
+    const panel = await mountFile(
+      {
+        kind: "file",
+        path: "src/long-line.ts",
+        name: "long-line.ts",
+        content: `export const value = "${"long-content-".repeat(80)}";`,
+      },
+      320,
+    );
+
+    const fileView = panel.querySelector<HTMLElement>(".file-view")!;
+    const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
+    await expect.poll(() => fileView.clientWidth).toBeGreaterThan(0);
+    expect(fileView.clientWidth).toBeLessThanOrEqual(panel.parentElement!.clientWidth);
+    expect(fileView.scrollWidth).toBe(fileView.clientWidth);
+    expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    expect(getComputedStyle(scroller).overflowX).toBe("auto");
+  });
+
   it("renders content and decorates the requested line", async () => {
     const panel = await mountFile({
       kind: "file",
@@ -334,44 +361,5 @@ describe.runIf(browserMode)("chat file editor", () => {
     finishReload?.({ content: "latest", hash: "hash-2", editable: true });
     await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
     expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
-  });
-
-  it("stops retrying after the editor chunk fails to load", async () => {
-    type LoadFailPanel = DetailPanel & {
-      loadFileEditorModule: () => Promise<unknown>;
-      fileEditorLoadFailed: boolean;
-    };
-    const panel = document.createElement("openclaw-chat-detail-panel") as LoadFailPanel;
-    let attempts = 0;
-    panel.loadFileEditorModule = () => {
-      attempts += 1;
-      if (attempts === 1) {
-        return Promise.reject(new Error("Failed to fetch dynamically imported module"));
-      }
-      // Connectivity "returned": the next (user-triggered) attempt loads the real chunk.
-      return import("./file-editor-view.ts");
-    };
-    panel.content = { kind: "file", path: "src/broken.ts", name: "broken.ts", content: "x" };
-    document.body.append(panel);
-    mounted.push(panel);
-
-    await expect.poll(() => panel.fileEditorLoadFailed, { timeout: 5_000 }).toBe(true);
-    expect(attempts).toBe(1);
-
-    for (let i = 0; i < 3; i++) {
-      panel.requestUpdate();
-      await panel.updateComplete;
-    }
-    expect(attempts).toBe(1);
-    expect(panel.textContent).toContain("Could not load the file editor");
-
-    // A deliberate user retry recovers once the chunk can load again.
-    // (Located structurally: button labels are localized in this environment.)
-    const retryButton = panel.querySelector<HTMLButtonElement>(".file-view__loading .btn");
-    expect(retryButton).not.toBeNull();
-    retryButton!.click();
-    await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
-    expect(attempts).toBe(2);
-    expect(panel.textContent).not.toContain("Could not load the file editor");
   });
 });

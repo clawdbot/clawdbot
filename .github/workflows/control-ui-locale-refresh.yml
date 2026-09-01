@@ -14,6 +14,7 @@ on:
       - scripts/control-ui-i18n.ts
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-config.json
       - scripts/lib/control-ui-i18n-config.ts
       - scripts/lib/control-ui-i18n-raw-copy.ts
       - scripts/lib/control-ui-i18n-sync-plan.ts
@@ -52,6 +53,7 @@ jobs:
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
+      locales: ${{ steps.base.outputs.locales }}
       sha: ${{ steps.base.outputs.sha }}
     steps:
       - name: Resolve source commit
@@ -65,17 +67,28 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then
-            sha="${WORKFLOW_SHA}"
+            source_ref="${WORKFLOW_SHA}"
           else
-            sha="$(
-              timeout --signal=TERM --kill-after=10s 60s \
-                gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
-            )"
+            source_ref="${DEFAULT_BRANCH}"
           fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          source="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api graphql \
+                -f query='query($owner: String!, $name: String!, $ref: String!, $configRef: String!) { repository(owner: $owner, name: $name) { revision: object(expression: $ref) { ... on Commit { oid } } config: object(expression: $configRef) { ... on Blob { text } } } }' \
+                -F owner="${repository_owner}" \
+                -F name="${repository_name}" \
+                -F ref="${source_ref}" \
+                -F configRef="${source_ref}:scripts/lib/control-ui-i18n-config.json"
+          )"
+          sha="$(jq -er '.data.repository.revision.oid' <<< "${source}")"
           if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Unable to resolve the locale refresh source to an exact commit." >&2
             exit 1
           fi
+          locales="$(jq -ce '.data.repository.config.text | fromjson | [.[].locale] | select(length > 0 and all(.[]; type == "string" and length > 0))' <<< "${source}")"
+          echo "locales=${locales}" >> "${GITHUB_OUTPUT}"
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
   publisher-preflight:
@@ -85,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           persist-credentials: false
@@ -130,34 +143,12 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        locale:
-          [
-            zh-CN,
-            zh-TW,
-            pt-BR,
-            de,
-            es,
-            ja-JP,
-            ko,
-            fr,
-            hi,
-            ar,
-            it,
-            tr,
-            uk,
-            id,
-            pl,
-            th,
-            vi,
-            nl,
-            fa,
-            ru,
-          ]
+        locale: ${{ fromJSON(needs.resolve-base.outputs.locales) }}
     runs-on: ubuntu-latest
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           persist-credentials: false
@@ -166,6 +157,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Ensure translation provider secrets exist
@@ -277,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           fetch-depth: 0
@@ -303,6 +295,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Finalize control UI generated artifacts
@@ -339,6 +332,7 @@ jobs:
             scripts/control-ui-i18n.ts
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-config.json
             scripts/lib/control-ui-i18n-config.ts
             scripts/lib/control-ui-i18n-raw-copy.ts
             scripts/lib/control-ui-i18n-sync-plan.ts

@@ -5,8 +5,9 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -63,9 +64,13 @@ export async function runDoctorRepairSequence(params: {
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
   state: DoctorConfigMutationState;
+  /** Notes for repairs already committed to durable state (SQLite/filesystem). */
   changeNotes: string[];
+  /** Notes for candidate-config mutations that are durable only after the config write. */
+  configChangeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
@@ -74,6 +79,7 @@ export async function runDoctorRepairSequence(params: {
   let state = params.state;
   const pluginMetadataSnapshotState = params.pluginMetadataSnapshotState ?? {};
   const changeNotes: string[] = [];
+  const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
   const resolveCurrentPluginMetadataScope = () => {
@@ -112,7 +118,8 @@ export async function runDoctorRepairSequence(params: {
     warnings?: string[];
   }) => {
     if (mutation.changes.length > 0) {
-      appendNotes(changeNotes, mutation.changes);
+      // Candidate-only mutation: report as applied only after the config write lands.
+      appendNotes(configChangeNotes, mutation.changes);
       state = applyDoctorConfigMutation({
         state,
         mutation,
@@ -197,6 +204,7 @@ export async function runDoctorRepairSequence(params: {
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,
       env,
+      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       ...(staleManagedNpmBundledPluginRepair
         ? { baselineRecords: staleManagedNpmBundledPluginRepair.installRecords }
         : {}),
@@ -211,15 +219,25 @@ export async function runDoctorRepairSequence(params: {
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
     const currentScope = resolveCurrentPluginMetadataScope();
-    pluginMetadataSnapshotState.current = resolveConfigWideDoctorPluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({
+    pluginMetadataSnapshotState.current = runWithCurrentPluginMetadata(() =>
+      resolveConfigWideDoctorPluginMetadataSnapshot({
+        snapshot: loadPluginMetadataSnapshot({
+          config: currentScope.config,
+          env,
+          workspaceDir: currentScope.workspaceDir,
+          // Later Doctor contributions reuse this cache owner. Carry the committed
+          // records into it so registry refresh cannot restore the pre-repair base.
+          index: loadInstalledPluginIndex({
+            config: currentScope.config,
+            env,
+            workspaceDir: currentScope.workspaceDir,
+            installRecords: missingConfiguredPluginInstallRepair.records,
+          }),
+        }),
         config: currentScope.config,
         env,
-        workspaceDir: currentScope.workspaceDir,
       }),
-      config: currentScope.config,
-      env,
-    });
+    );
   }
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
@@ -315,12 +333,6 @@ export async function runDoctorRepairSequence(params: {
   appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
-  appendRepairNotes(
-    migrateLegacyOnboardingRecommendationsScope({
-      cfg: state.candidate,
-      env,
-    }),
-  );
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -363,6 +375,7 @@ export async function runDoctorRepairSequence(params: {
   return {
     state,
     changeNotes,
+    configChangeNotes,
     warningNotes,
     authProfilesRepaired,
     ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),

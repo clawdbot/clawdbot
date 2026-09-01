@@ -1,6 +1,6 @@
 // Isolated agent helper tests cover low-level cron agent utilities.
 import { describe, expect, it } from "vitest";
-import { pickLastNonEmptyTextFromPayloads } from "./helpers.js";
+import { pickLastNonEmptyTextFromPayloads, resolveCronPayloadOutcome } from "./helpers.js";
 
 type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
 
@@ -42,5 +42,24 @@ const textPayloadPickerCases: Array<{
 describe("text payload pickers", () => {
   it.each(textPayloadPickerCases)("$name", ({ pick, payloads, expected }) => {
     expect(pick(payloads)).toBe(expected);
+  });
+});
+
+describe("cron delivery outcomes", () => {
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "keeps %s as a silent heartbeat acknowledgement",
+    (acknowledgement) => {
+      expect(
+        resolveCronPayloadOutcome({ payloads: [{ text: acknowledgement }] }).deliveryDisposition,
+      ).toEqual({ kind: "heartbeat", controlOnly: true });
+    },
+  );
+
+  it("keeps media visible even when its text is a silent acknowledgement", () => {
+    const payload = { text: "NO_REPLY", mediaUrl: "https://example.com/update.png" };
+    const outcome = resolveCronPayloadOutcome({ payloads: [payload] });
+
+    expect(outcome.deliveryDisposition).toEqual({ kind: "visible" });
+    expect(outcome.deliveryPayloads).toEqual([payload]);
   });
 });
