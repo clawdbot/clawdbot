@@ -5748,15 +5748,15 @@ button.chat-pr__diff {
 
 .chat-attachments-preview {
   display: flex;
-  gap: 8px;
+  gap: 18px;
   flex-wrap: nowrap;
   flex-shrink: 0;
   width: 100%;
   max-width: 100%;
   margin-top: 4px;
-  padding-block-start: 10px;
+  padding-block-start: 18px;
   padding-block-end: 5px;
-  padding-inline: 10px;
+  padding-inline: 18px;
   margin-bottom: 2px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5910,9 +5910,9 @@ button.chat-pr__diff {
 
 .chat-attachment-remove {
   position: absolute;
-  /* Visual children own cropping; the padded target extends into the rail inset. */
-  top: -8px;
-  right: -8px;
+  /* The rail reserves this overhang so the full target clears images and neighbors. */
+  top: -18px;
+  right: -18px;
   z-index: 1;
   width: 44px;
   height: 44px;
