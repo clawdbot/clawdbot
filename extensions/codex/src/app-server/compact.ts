@@ -59,7 +59,6 @@ import { getExistingCodexAppServerTurnRouter } from "./turn-router.js";
 const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
 const codexNativeCompactionQueue = new KeyedAsyncQueue();
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
-const CODEX_NATIVE_COMPACTION_ACTIVE_WRITER_RETRY_MS = 250;
 type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
@@ -340,75 +339,6 @@ async function runExclusiveCodexNativeCompaction<T>(
   } finally {
     removeAbortListener();
   }
-}
-
-async function requestCodexNativeCompactionWithRetry(params: {
-  client: CodexAppServerClient;
-  threadId: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  requestTimeoutMs?: number;
-}): Promise<void> {
-  const deadline = Date.now() + Math.max(1, params.timeoutMs);
-  for (;;) {
-    params.signal?.throwIfAborted();
-    try {
-      if (params.requestTimeoutMs === undefined) {
-        await params.client.request("thread/compact/start", { threadId: params.threadId });
-      } else {
-        await params.client.request(
-          "thread/compact/start",
-          { threadId: params.threadId },
-          {
-            timeoutMs: params.requestTimeoutMs,
-            ...(params.signal ? { signal: params.signal } : {}),
-          },
-        );
-      }
-      return;
-    } catch (error) {
-      if (!isCodexActiveThreadWriterError(error)) {
-        throw error;
-      }
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        throw error;
-      }
-      const delayMs = Math.min(CODEX_NATIVE_COMPACTION_ACTIVE_WRITER_RETRY_MS, remainingMs);
-      await waitForCodexCompactionRetry(delayMs, params.signal);
-    }
-  }
-}
-
-function isCodexActiveThreadWriterError(error: unknown): boolean {
-  return (
-    error instanceof CodexAppServerRpcError &&
-    /already has an active writer/i.test(coerceErrorMessage(error))
-  );
-}
-
-async function waitForCodexCompactionRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
 }
 
 /**
@@ -796,15 +726,18 @@ async function compactCodexNativeThread(
             });
             try {
               completionWatch.beginRequest();
-              await requestCodexNativeCompactionWithRetry({
-                client,
-                threadId: binding.threadId,
-                timeoutMs: nativeCompletionTimeoutMs,
-                ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-                ...(guardedRequestTimeoutMs !== undefined
-                  ? { requestTimeoutMs: guardedRequestTimeoutMs }
-                  : {}),
-              });
+              if (guardedRequestTimeoutMs === undefined) {
+                await client.request("thread/compact/start", { threadId: binding.threadId });
+              } else {
+                await client.request(
+                  "thread/compact/start",
+                  { threadId: binding.threadId },
+                  {
+                    timeoutMs: guardedRequestTimeoutMs,
+                    ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+                  },
+                );
+              }
               return { started: true as const, accepted: true as const };
             } catch (error) {
               if (error instanceof CodexAppServerRpcError) {

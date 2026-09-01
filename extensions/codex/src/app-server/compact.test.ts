@@ -259,7 +259,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
   });
 
-  it("retries a native compaction rejected by an active app-server writer", async () => {
+  it("does not retry a native compaction rejected by an active app-server writer", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(
       new CodexAppServerRpcError(
@@ -281,10 +281,14 @@ describe("maybeCompactCodexAppServerSession", () => {
         },
         { nativeCompletionTimeoutMs: 1_000 },
       ),
-    ).resolves.toMatchObject({ ok: true, compacted: true });
+    ).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "thread thread-1 already has an active writer",
+    });
     expect(
       fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   it("does not compact a thread created with restricted native authority", async () => {
