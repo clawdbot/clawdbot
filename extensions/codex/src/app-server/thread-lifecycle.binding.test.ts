@@ -2702,6 +2702,61 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
+  it("admits configured managed hooks for an interactive plugin-policy turn", async () => {
+    const sessionFile = path.join(tempDir, "plugin-policy-session.jsonl");
+    const workspaceDir = path.join(tempDir, "plugin-policy-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.pluginHarnessToolPolicyRestricted = true;
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return {
+          requirements: {
+            hooks: {
+              PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }],
+            },
+            featureRequirements: { hooks: true },
+          },
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-plugin-policy-managed-hooks");
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: fixture.client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: false,
+      }),
+    ).resolves.toMatchObject({
+      threadId: "thread-plugin-policy-managed-hooks",
+      lifecycle: { action: "started" },
+    });
+    expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+    ]);
+  });
+
   it("fails closed when requirements pin a restricted Codex feature on", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

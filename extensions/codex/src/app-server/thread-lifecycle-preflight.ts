@@ -135,6 +135,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroActive ||
     messageOnlySourceReply ||
     params.params.pluginHarnessToolPolicyRestricted === true;
+  const allowConfiguredManagedHooks =
+    params.params.pluginHarnessToolPolicyRestricted === true &&
+    !ringZeroActive &&
+    !messageOnlySourceReply &&
+    params.params.scheduledRuntimeAuthority === undefined;
   const imageGenerationDenied =
     params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
@@ -156,6 +161,9 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
             readScheduledCodexAppManagedRequirementsFingerprint(
               params.params.scheduledRuntimeAuthority,
             ),
+          // Plugin policy restricts model-visible tools, while configured hooks are
+          // administrator policy. Stricter and detached surfaces remain fail closed.
+          allowConfiguredManagedHooks,
         },
         params.signal,
       ),

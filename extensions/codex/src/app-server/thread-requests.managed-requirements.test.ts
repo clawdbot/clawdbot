@@ -12,6 +12,17 @@ const managedRequirements = {
 };
 
 describe("configured app-server managed requirements", () => {
+  it("admits managed hooks for an interactive plugin-policy turn", async () => {
+    const request = vi.fn(async () => ({ requirements: managedRequirements }));
+
+    await expect(
+      assertCodexManagedRequirementsDoNotOverrideToolPolicy({ request } as never, {
+        restrictedToolSurface: true,
+        allowConfiguredManagedHooks: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("admits the exact managed requirements captured for a scheduled restricted turn", async () => {
     const request = vi.fn(async () => ({ requirements: managedRequirements }));
     const managedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
