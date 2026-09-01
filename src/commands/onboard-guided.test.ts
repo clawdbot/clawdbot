@@ -199,6 +199,24 @@ function recommendationOutcome(config: OpenClawConfig) {
   return { config, commitResult: vi.fn() };
 }
 
+function trackProgressOwnership(prompter: WizardPrompter) {
+  let active = 0;
+  let peak = 0;
+  vi.mocked(prompter.progress).mockImplementation(() => {
+    peak = Math.max(peak, ++active);
+    return {
+      update: vi.fn(),
+      stop: vi.fn(() => {
+        active--;
+      }),
+    };
+  });
+  return () => {
+    expect(active).toBe(0);
+    expect(peak).toBe(1);
+  };
+}
+
 function setupDeps(params: {
   prompter: WizardPrompter;
   detect?: GuidedOnboardingDeps["detect"];
@@ -722,19 +740,24 @@ describe("runGuidedOnboarding", () => {
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
+    const expectSettledProgress = trackProgressOwnership(prompter);
     const activate = vi
-      .fn()
+      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockResolvedValueOnce({
         ok: false,
         status: "unknown",
         error: "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.4",
-        latencyMs: 700,
-        lines: ["Gateway: running"],
-      }) as GuidedOnboardingDeps["activate"];
+      .mockImplementationOnce(async ({ prompter: activationPrompter }) => {
+        const verification = activationPrompter!.progress("Testing your AI connection…");
+        verification.stop();
+        return {
+          ok: true,
+          modelRef: "openai/gpt-5.4",
+          latencyMs: 700,
+          lines: ["Gateway: running"],
+        };
+      });
     const deps = setupDeps({
       prompter,
       activate,
@@ -766,6 +789,7 @@ describe("runGuidedOnboarding", () => {
     expect(retryNotes).toContain(
       "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
     );
+    expectSettledProgress();
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -782,12 +806,17 @@ describe("runGuidedOnboarding", () => {
       text: text as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
     });
-    const activate = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 500,
-      lines: ["Default model: openai/gpt-5.5"],
-    })) as GuidedOnboardingDeps["activate"];
+    const expectSettledProgress = trackProgressOwnership(prompter);
+    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      const verification = params.prompter!.progress("Testing your AI connection…");
+      verification.stop();
+      return {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 500,
+        lines: ["Default model: openai/gpt-5.5"],
+      };
+    });
     const deps = setupDeps({
       prompter,
       detect,
@@ -814,6 +843,7 @@ describe("runGuidedOnboarding", () => {
       enteredValue,
     );
     expect(JSON.stringify([runtime.log, runtime.error])).not.toContain(enteredValue);
+    expectSettledProgress();
   });
 
   it("offers detected OAuth methods through the grouped provider picker", async () => {

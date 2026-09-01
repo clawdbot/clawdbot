@@ -1266,6 +1266,7 @@ extension OnboardingAISetupModel {
                 }
                 if cancellation != .unresolved {
                     self.authSessionID = nil
+                    self.providerAuthCancellation = nil
                 }
                 self.authBusy = false
                 self.authError = Self.transportFailure(error.localizedDescription)
@@ -1281,24 +1282,28 @@ extension OnboardingAISetupModel {
             self.clearProviderAuth()
             return
         }
-        let keepPresented = self.activationWizardCompletion != nil
         let context = (token: self.attemptToken, state: self.lastDetectedActivationState, authID: self.authAttemptID)
         self.providerAuthCancellation = .requesting
         self.authError = nil
-        if keepPresented { self.authBusy = true } else { self.dismissProviderAuth() }
+        self.authBusy = true
         Task {
             let cancellation = await self.gateway.cancelWizardSession(
                 sessionID,
                 on: authServerLease)
-            // Closing the sheet wins locally. Gateway admission keeps replacement
-            // setup fenced until this exact runner has authoritatively settled.
+            // A stale cancellation reply must not close or hand off a replacement wizard.
             guard context.token == self.attemptToken, context.authID == self.authAttemptID else { return }
-            if self.activationWizardCompletion != nil, cancellation != .unresolved {
-                if cancellation == .absent, self.authRequestID != nil {
-                    // A terminal reply can outlive its purged server session. Only
-                    // its tracked request, never the Cancel button's busy state, owns that result.
-                    return
+            // Absence can precede admission or follow a purged terminal result.
+            // Keep the exact pending request alive; absence alone cannot settle it.
+            let awaitingResult = cancellation == .absent && self.authRequestID != nil
+            if cancellation == .unresolved || awaitingResult {
+                if self.authRequestID == nil, self.authStep == nil {
+                    self.advanceProviderAuth(stepID: nil, value: nil)
                 }
+                self.providerAuthCancellation = .unconfirmed
+                self.authError = Self.providerAuthCancellationUnconfirmed()
+                return
+            }
+            if self.activationWizardCompletion != nil {
                 self.finishActivationWizard(.failure(cancellation == .cancelled
                         ? OnboardingAISetupError.activationCancelled
                         : OnboardingAISetupError.activationOutcomeUnavailable))
@@ -1315,26 +1320,12 @@ extension OnboardingAISetupModel {
                 return
             }
             guard context.authID == self.authAttemptID else { return }
-            if cancellation == .unresolved, keepPresented {
-                // Activation review keeps its existing retry path; provider sign-in
-                // has already dismissed its sheet and relies on Gateway settlement.
-                if self.authRequestID == nil, self.authStep == nil {
-                    self.advanceProviderAuth(stepID: nil, value: nil)
-                }
-                self.providerAuthCancellation = .unconfirmed
-                self.authError = Self.providerAuthCancellationUnconfirmed()
-                return
-            }
-            if cancellation != .unresolved { self.clearProviderAuth() }
+            self.clearProviderAuth()
         }
     }
 
     func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
-        guard let sessionID = authSessionID,
-              let serverLease,
-              let option = activeAuthOption,
-              let kind = providerWizardKind
-        else { return }
+        guard let sessionID = authSessionID, let serverLease else { return }
         self.authBusy = true
         self.authError = nil
         var params: [String: AnyCodable] = ["sessionId": AnyCodable(sessionID)]
@@ -1386,8 +1377,7 @@ extension OnboardingAISetupModel {
                     status: wizardStatusString(result.status),
                     error: result.error,
                     preparedModelRef: result.preparedmodelref,
-                    modelActivation: result.modelactivation,
-                    context: (option, kind))
+                    modelActivation: result.modelactivation)
             } catch {
                 let cancellation = await self.gateway.cancelWizardSession(sessionID, on: requestLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
@@ -1408,6 +1398,7 @@ extension OnboardingAISetupModel {
                 }
                 if cancellation != .unresolved {
                     self.authSessionID = nil
+                    self.providerAuthCancellation = nil
                 }
                 self.authBusy = false
                 self.authError = Self.transportFailure(error.localizedDescription)
@@ -1421,11 +1412,10 @@ extension OnboardingAISetupModel {
         status: String?,
         error: String?,
         preparedModelRef: String?,
-        modelActivation: [String: AnyCodable]? = nil,
-        context: (option: AuthOption, kind: ProviderWizardKind)? = nil)
+        modelActivation: [String: AnyCodable]? = nil)
     {
-        guard let option = context?.option ?? self.activeAuthOption,
-              let kind = context?.kind ?? self.providerWizardKind else { return }
+        guard let option = self.activeAuthOption,
+              let kind = self.providerWizardKind else { return }
         self.authBusy = false
         if self.activationWizardCompletion != nil,
            done || status == "done" || status == "cancelled" || status == "error"
@@ -1441,6 +1431,7 @@ extension OnboardingAISetupModel {
             // Terminal sessions are removed by the Gateway. Drop the local id
             // so Cancel dismisses the preserved, copyable error immediately.
             self.authSessionID = nil
+            self.providerAuthCancellation = nil
             self.authStep = nil
             self.authError = Self.failure(
                 label: option.label,
@@ -1552,10 +1543,6 @@ extension OnboardingAISetupModel {
         self.authAttemptID = UUID()
         self.authRequestID = nil
         self.providerAuthCancellation = nil
-        self.dismissProviderAuth()
-    }
-
-    private func dismissProviderAuth() {
         self.activeAuthOption = nil
         self.providerWizardKind = nil
         self.authSessionID = nil
