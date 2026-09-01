@@ -79,15 +79,18 @@ class ChatRichBlockRendererLifecycleTest {
     source: String,
   ): ChatRichBlockRequest =
     when (kind) {
-      ChatRichBlockKind.Math ->
+      ChatRichBlockKind.Math -> {
         ChatMathRenderRequest.create(source, widthPx = 320, darkMode = false, textColor = 0xff000000.toInt(), fontSizePx = 16f, density = 1f)
-      ChatRichBlockKind.Mermaid ->
+      }
+
+      ChatRichBlockKind.Mermaid -> {
         ChatMermaidRequest(
           "flowchart LR\nA[$source] --> B[End]",
           widthPx = 320,
           density = 1f,
           theme = ChatMermaidTheme("#ffffff", "#000000", "#666666", "#cccccc", "#ff0000", darkMode = false),
         )
+      }
     }
 }
 

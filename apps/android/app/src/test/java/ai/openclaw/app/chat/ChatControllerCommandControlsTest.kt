@@ -847,10 +847,22 @@ class ChatControllerCommandControlsTest {
               controller.switchSession("agent:main:dashboard:other")
               """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
             }
-            "chat.history" -> """{"sessionId":"other-session","messages":[]}"""
-            "health" -> "{}"
-            "sessions.list" -> """{"sessions":[]}"""
-            else -> "{}"
+
+            "chat.history" -> {
+              """{"sessionId":"other-session","messages":[]}"""
+            }
+
+            "health" -> {
+              "{}"
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)

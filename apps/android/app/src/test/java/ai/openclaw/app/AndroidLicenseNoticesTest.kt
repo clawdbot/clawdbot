@@ -36,6 +36,9 @@ class AndroidLicenseNoticesTest {
 
     assertEquals(
       listOf(
+        "Accompanist Drawable Painter",
+        "AndroidSVG",
+        "AndroidX CameraX",
         "AndroidX Compose",
         "AndroidX Media3",
         "AndroidX Room",
