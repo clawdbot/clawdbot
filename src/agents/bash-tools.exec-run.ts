@@ -652,10 +652,8 @@ export function createExecTool(
 
       const cleanupToolRunListeners = () => {
         run.disableUpdates();
-        if (registeredAbortSignal) {
-          registeredAbortSignal.removeEventListener("abort", onAbortSignal);
-          registeredAbortSignal = null;
-        }
+        registeredAbortSignal?.removeEventListener("abort", onAbortSignal);
+        registeredAbortSignal = null;
         if (yieldTimer) {
           clearTimeout(yieldTimer);
           yieldTimer = null;
