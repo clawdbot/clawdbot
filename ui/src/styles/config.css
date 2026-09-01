@@ -568,7 +568,7 @@
 }
 
 .settings-accent-swatch--reset {
-  color: var(--text-muted);
+  color: var(--muted);
   background: var(--bg-elevated);
 }
 
