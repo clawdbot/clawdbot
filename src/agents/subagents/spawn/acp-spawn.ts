@@ -56,7 +56,10 @@ import {
   resolveSpawnSandboxError,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
-import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
+import {
+  resolveExplicitSpawnedCwd,
+  resolveSpawnedWorkspaceInheritance,
+} from "../../spawned-context.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,
@@ -411,6 +414,10 @@ export async function spawnAcpDirect(
     requesterSessionKey: ctx.agentSessionKey,
     explicitWorkspaceDir: params.cwd,
   });
+  // ACP children persist the explicit cwd through the same contract as native
+  // children. Readers that group live runs by working directory would
+  // otherwise see ACP rows as workspace-inheriting and miss real collisions.
+  const spawnedCwd = resolveExplicitSpawnedCwd(params.cwd);
   let runtimeCwd: string | undefined;
   try {
     runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
@@ -519,6 +526,7 @@ export async function spawnAcpDirect(
             // Navigation parent is stamped at creation so the durable tree edge
             // does not depend on the control-lineage field.
             parentSessionKey: requesterInternalKey,
+            ...(spawnedCwd ? { spawnedCwd } : {}),
             ...childSessionPatch,
             inheritedToolPolicyVersion: 1,
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),

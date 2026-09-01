@@ -397,6 +397,19 @@ design — the default for `collect` swarms — and are never flagged. Ended run
 are excluded: the advisory covers concurrent writers, so a settled run leaves
 the directory to the survivor.
 
+Both spawn runtimes are covered: native children and `runtime: "acp"` children
+persist an explicit `cwd` through the same contract, so a native run and an ACP
+run in one directory are reported as peers of each other.
+
+Directories are matched by their canonical on-disk identity, so two runs still
+group together when one was spawned through a symlink to the other's path, or
+through a different letter case on a case-insensitive volume. `path` reports
+that canonical directory rather than whichever alias was named first. If a
+directory can no longer be resolved — deleted or unreadable while the run is
+still live — its rows fall back to lexical comparison, which can only split a
+group; the advisory under-reports in that case rather than inventing a
+collision.
+
 ## Thread-bound sessions
 
 When thread bindings are enabled for a channel, a sub-agent can stay bound

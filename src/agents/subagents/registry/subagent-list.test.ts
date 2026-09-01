@@ -621,6 +621,62 @@ describe("buildSubagentList", () => {
       }
     });
 
+    it("groups live runs that reached one directory through a symlink alias", async () => {
+      // Two callers can name the same checkout differently; lexical equality
+      // alone would leave both concurrent writers unflagged.
+      const now = Date.now();
+      const realDir = path.join(testWorkspaceDir, "alias-real-tree");
+      const linkDir = path.join(testWorkspaceDir, "alias-link-tree");
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.symlink(realDir, linkDir, "dir");
+      const runA = makeRun("alias-real", now);
+      const runB = makeRun("alias-link", now);
+      addSubagentRunForTests(runA);
+      addSubagentRunForTests(runB);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-alias.json");
+      await seedSessionEntry(storePath, runA.childSessionKey, realDir);
+      await seedSessionEntry(storePath, runB.childSessionKey, linkDir);
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(2);
+      const canonical = await fs.realpath(realDir);
+      const byRunId = new Map(list.active.map((item) => [item.runId, item]));
+      expect(byRunId.get(runA.runId)?.sharedCwd).toEqual({
+        path: canonical,
+        peerRunIds: [runB.runId],
+      });
+      // The alias row reports the canonical directory, not the link it named.
+      expect(byRunId.get(runB.runId)?.sharedCwd).toEqual({
+        path: canonical,
+        peerRunIds: [runA.runId],
+      });
+    });
+
+    it("falls back to lexical comparison when an explicit directory no longer exists", async () => {
+      // A deleted directory cannot be canonicalized; grouping must still work
+      // off the recorded paths rather than throwing or dropping the advisory.
+      const now = Date.now();
+      const missingDir = path.join(testWorkspaceDir, "missing-tree");
+      const runA = makeRun("missing-a", now);
+      const runB = makeRun("missing-b", now);
+      addSubagentRunForTests(runA);
+      addSubagentRunForTests(runB);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-missing.json");
+      await seedSessionEntry(storePath, runA.childSessionKey, missingDir);
+      await seedSessionEntry(storePath, runB.childSessionKey, missingDir);
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(2);
+      for (const item of list.active) {
+        expect(item.sharedCwd?.path).toBe(path.resolve(missingDir));
+        expect(item.sharedCwd?.peerRunIds).toHaveLength(1);
+      }
+    });
+
     it("ignores ended runs that shared a directory", async () => {
       const now = Date.now();
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-ended");

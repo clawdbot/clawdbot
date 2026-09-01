@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -59,6 +60,23 @@ export function mapToolContextToSpawnedRunMetadata(
     groupSpace: normalizeOptionalString(value?.agentGroupSpace),
     workspaceDir: normalizeOptionalString(value?.workspaceDir),
   };
+}
+
+/**
+ * The single explicit-working-directory contract shared by every spawn owner.
+ *
+ * Native and ACP children both persist `SessionEntry.spawnedCwd` through this
+ * helper, so downstream readers — sandbox explain, agent command cwd
+ * resolution, the shared-directory advisory — see one normalization instead of
+ * per-owner drift. Returns undefined when the caller inherited a workspace
+ * rather than naming a directory: inheritance is not an explicit cwd, and the
+ * advisory must stay silent for it.
+ */
+export function resolveExplicitSpawnedCwd(
+  requestedCwd: string | null | undefined,
+): string | undefined {
+  const requested = normalizeOptionalString(requestedCwd);
+  return requested ? resolveUserPath(requested) : undefined;
 }
 
 /** Resolve which workspace a spawned run should inherit. */

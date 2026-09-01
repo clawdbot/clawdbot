@@ -2568,6 +2568,61 @@ describe("spawnAcpDirect", () => {
     }
   });
 
+  it("persists an explicit ACP cwd so working-directory readers see it like a native child", async () => {
+    const fixture = await createCrossAgentWorkspaceFixture();
+    const explicitCwd = path.join(fixture.workspaceRoot, "shared-checkout");
+    await fs.mkdir(explicitCwd, { recursive: true });
+    try {
+      configureCrossAgentWorkspaceSpawn(fixture);
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Inspect the queue owner state",
+          agentId: "claude-code",
+          mode: "run",
+          cwd: explicitCwd,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expectCreatedSessionFields({ spawnedCwd: explicitCwd });
+      expectInitializeSessionFields({ agent: "claude-code", cwd: explicitCwd });
+    } finally {
+      await fs.rm(fixture.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("records no spawnedCwd when an ACP child inherits the target agent workspace", async () => {
+    const fixture = await createCrossAgentWorkspaceFixture();
+    try {
+      configureCrossAgentWorkspaceSpawn(fixture);
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Inspect the queue owner state",
+          agentId: "claude-code",
+          mode: "run",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      // Inheritance is not an explicit cwd: the advisory must stay silent for
+      // children that merely share the workspace they were given.
+      const createPatch = firstMockCall(hoisted.upsertSessionEntryMock, "session create")[1] as {
+        spawnedCwd?: string;
+      };
+      expect(createPatch.spawnedCwd).toBeUndefined();
+    } finally {
+      await fs.rm(fixture.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("binds LINE ACP sessions to the current conversation when the channel has no native threads", async () => {
     enableLineCurrentConversationBindings();
     hoisted.sessionBindingBindMock.mockImplementationOnce(

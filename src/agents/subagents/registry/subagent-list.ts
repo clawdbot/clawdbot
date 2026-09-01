@@ -3,6 +3,7 @@
  *
  * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
  */
+import { realpathSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -147,16 +148,47 @@ function buildLatestSubagentRunIndex(
   };
 }
 
+/**
+ * Canonical on-disk identity for one explicit working directory.
+ *
+ * Two explicit paths can name a single directory through a symlink, or through
+ * a case alias on a case-insensitive volume, so lexical equality under-reports
+ * real collisions. `realpathSync.native` collapses both classes: it follows
+ * links and returns the directory's true on-disk casing. The memo keeps this to
+ * one syscall per distinct explicit cwd among live runs — this list is built on
+ * an operator or agent `list` call, not on a message hot path.
+ *
+ * A path that cannot be resolved (already deleted, or unreadable) keeps its
+ * lexical form. That can only split a group, never merge unrelated ones, so a
+ * failed probe under-reports rather than fabricating a collision.
+ */
+function canonicalCwdIdentity(resolved: string, memo: Map<string, string>) {
+  const cached = memo.get(resolved);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let identity = resolved;
+  try {
+    identity = realpathSync.native(resolved);
+  } catch {
+    // Keep the lexical path; see the fail-open note above.
+  }
+  memo.set(resolved, identity);
+  return identity;
+}
+
 /** Case-fold the grouping key only where the platform filesystem is case-insensitive. */
-function sharedCwdGroupKey(resolved: string) {
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+function sharedCwdGroupKey(identity: string) {
+  return process.platform === "win32" ? identity.toLowerCase() : identity;
 }
 
 /**
  * Index live runs by the explicit working directory they were spawned into.
  *
- * Reads `spawnedCwd` off the already-cached session entry, so this costs no new
- * I/O and never probes the filesystem. Runs without an explicit `spawnedCwd`
+ * Reads `spawnedCwd` off the already-cached session entry, so grouping costs no
+ * new session I/O; the only filesystem work is one canonicalization per
+ * distinct explicit directory (see `canonicalCwdIdentity`). Runs without an
+ * explicit `spawnedCwd`
  * inherited the parent workspace — the default for `collect` swarms — and are
  * skipped so the advisory stays silent on normal usage.
  */
@@ -168,6 +200,7 @@ function buildSharedCwdIndex(params: {
 }) {
   const groups = new Map<string, { path: string; runIds: string[] }>();
   const groupKeyByRunId = new Map<string, string>();
+  const identityMemo = new Map<string, string>();
   for (const run of params.runs) {
     if (!isLiveUnendedSubagentRun(run, params.now)) {
       continue;
@@ -184,14 +217,17 @@ function buildSharedCwdIndex(params: {
     if (!resolved) {
       continue;
     }
-    const groupKey = sharedCwdGroupKey(resolved);
+    const identity = canonicalCwdIdentity(resolved, identityMemo);
+    const groupKey = sharedCwdGroupKey(identity);
     groupKeyByRunId.set(run.runId, groupKey);
     const existing = groups.get(groupKey);
     if (existing) {
       existing.runIds.push(run.runId);
       continue;
     }
-    groups.set(groupKey, { path: resolved, runIds: [run.runId] });
+    // Report the canonical directory rather than whichever alias was named
+    // first, so the operator sees the checkout the runs actually share.
+    groups.set(groupKey, { path: identity, runIds: [run.runId] });
   }
   return (runId: string): SubagentSharedCwd | undefined => {
     const groupKey = groupKeyByRunId.get(runId);
