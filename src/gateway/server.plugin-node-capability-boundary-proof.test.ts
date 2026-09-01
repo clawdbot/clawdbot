@@ -324,10 +324,24 @@ describe("gateway plugin node capability boundary proof", () => {
           expect(dispatches()).toEqual({ http: 2, ws: 2 });
           proof.operator = { http: operatorHttp.status, ws: operatorWs, dispatches: dispatches() };
         });
+        const testedCheckoutHead = execFileSync("git", ["rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim();
+        const reviewedHead = process.env.RATCHET_PR_HEAD_SHA?.trim() || testedCheckoutHead;
+        if (process.env.RATCHET_PR_HEAD_SHA) {
+          expect(reviewedHead).toMatch(/^[a-f0-9]{40}$/u);
+          const mergeParents = execFileSync("git", ["cat-file", "-p", testedCheckoutHead], {
+            encoding: "utf8",
+          })
+            .match(/^parent ([a-f0-9]{40})$/gmu)
+            ?.map((line) => line.slice("parent ".length));
+          expect(mergeParents?.[1]).toBe(reviewedHead);
+        }
         process.stdout.write(
           `plugin-node-capability-proof ${JSON.stringify(
             {
-              reviewedHead: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+              reviewedHead,
+              testedCheckoutHead,
               boundary: "Gateway Canvas plugin route authorization before HTTP/WS dispatch",
               ...proof,
             },
