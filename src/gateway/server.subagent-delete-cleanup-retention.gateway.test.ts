@@ -3,6 +3,10 @@
 // live completion path: lifecycle end, retained listing, SQLite restart, expiry.
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  persistSubagentRunsToDisk,
+  persistSubagentRunsToDiskOrThrow,
+} from "../agents/subagents/registry/subagent-registry-state.js";
+import {
   loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -342,6 +346,190 @@ describe("delete-cleanup archive retention through a real gateway", () => {
         childSessionListed: true,
         parentChildToggle: parentRow?.childSessions ?? null,
         dispatchStampCleared: retained.deleteCleanupDispatchedAt === undefined,
+      },
+    };
+    console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);
+  });
+
+  test("does not delete a successor after session-changed persist fails and registry restarts", async () => {
+    testState.sessionStorePath = gatewaySuite.sessionStorePath;
+    const parentSessionId = "sess-gw-delete-restart-parent";
+    const childSessionId = "sess-gw-delete-restart";
+    const originalRevision = "rev-gw-delete-restart";
+    const successorRevision = "rev-gw-delete-restart-successor";
+    const childSessionKey = `${CHILD_SESSION_KEY}-restart`;
+    const runId = `${RUN_ID}-restart`;
+    let failClearPersist = true;
+    const deletedRevisions: string[] = [];
+
+    const callLiveGateway = async (options: { method: string; params?: unknown }) => {
+      if (options.method === "sessions.delete") {
+        const expectedRevision = (
+          options.params as { expectedLifecycleRevision?: string } | undefined
+        )?.expectedLifecycleRevision;
+        if (expectedRevision) {
+          deletedRevisions.push(expectedRevision);
+        }
+        await writeSessionStore({
+          entries: {
+            [REQUESTER_SESSION_KEY]: {
+              sessionId: parentSessionId,
+              updatedAt: Date.now(),
+            },
+            [childSessionKey]: {
+              sessionId: childSessionId,
+              updatedAt: Date.now(),
+              spawnedBy: REQUESTER_SESSION_KEY,
+              lifecycleRevision: successorRevision,
+            },
+          },
+        });
+      }
+      const res = await rpcReq<Record<string, unknown>>(
+        gatewaySuite.ws,
+        options.method,
+        options.params,
+      );
+      if (!res.ok) {
+        throw Object.assign(new Error(res.error?.message ?? `gateway ${options.method} failed`), {
+          name: "GatewayClientRequestError",
+          gatewayCode: res.error?.code ?? "INVALID_REQUEST",
+          details: res.error?.details,
+        });
+      }
+      return res.payload;
+    };
+
+    subagentRegistryTesting.setDepsForTest({
+      callGateway: callLiveGateway as unknown as typeof callGateway,
+      persistSubagentRunsToDisk: (runs, ids) => {
+        const row = runs.get(runId);
+        if (
+          failClearPersist &&
+          row?.deleteCleanupDispatchedAt === undefined &&
+          row?.deleteCleanupTarget === undefined
+        ) {
+          // Process crash before later best-effort persistence of the
+          // in-memory session-changed fence.
+          return;
+        }
+        persistSubagentRunsToDisk(runs, ids);
+      },
+      persistSubagentRunsToDiskOrThrow: (runs, ids) => {
+        const row = runs.get(runId);
+        if (
+          failClearPersist &&
+          row?.deleteCleanupDispatchedAt === undefined &&
+          row?.deleteCleanupTarget === undefined &&
+          row?.execution.suppressSessionEffects === true
+        ) {
+          throw new Error("registry store boom");
+        }
+        persistSubagentRunsToDiskOrThrow(runs, ids);
+      },
+    });
+
+    await writeSessionStore({
+      entries: {
+        [REQUESTER_SESSION_KEY]: {
+          sessionId: parentSessionId,
+          updatedAt: Date.now(),
+        },
+        [childSessionKey]: {
+          sessionId: childSessionId,
+          updatedAt: Date.now(),
+          spawnedBy: REQUESTER_SESSION_KEY,
+          lifecycleRevision: originalRevision,
+        },
+      },
+    });
+
+    registerSubagentRun({
+      runId,
+      childSessionKey,
+      requesterSessionKey: REQUESTER_SESSION_KEY,
+      requesterDisplayKey: "main",
+      task: "keep successor after failed session-changed persist",
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+    });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "done" },
+      },
+    });
+
+    const dispatched = await vi.waitFor(() => {
+      const disk = loadSubagentRegistryFromSqlite().get(runId);
+      expect(disk?.deleteCleanupDispatchedAt).toBeTypeOf("number");
+      expect(disk?.deleteCleanupTarget).toEqual({
+        sessionId: childSessionId,
+        lifecycleRevision: originalRevision,
+      });
+      expect(getSubagentRunByRunId(runId)?.execution.suppressSessionEffects).toBe(true);
+      return disk!;
+    });
+
+    failClearPersist = false;
+    resetSubagentRegistryForTests({ persist: false });
+    subagentRegistryTesting.setDepsForTest({
+      callGateway: callLiveGateway as unknown as typeof callGateway,
+    });
+    initSubagentRegistry();
+    expect(getSubagentRunByRunId(runId)?.deleteCleanupTarget).toEqual(
+      dispatched.deleteCleanupTarget,
+    );
+    activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime: {
+            dispatchAgent: vi.fn(),
+            waitForAgent: vi.fn(),
+            sendRecoveryNotice: vi.fn(),
+          },
+        }) as never,
+    );
+
+    const recovered = await vi.waitFor(
+      () => {
+        const entry = getSubagentRunByRunId(runId);
+        expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(entry?.deleteCleanupDispatchedAt).toBeUndefined();
+        expect(entry?.deleteCleanupTarget).toBeUndefined();
+        return entry!;
+      },
+      { timeout: 10_000, interval: 25 },
+    );
+
+    const listed = await vi.waitFor(async () => {
+      const res = await rpcReq<{
+        sessions: Array<{ key: string; childSessions?: string[] }>;
+      }>(gatewaySuite.ws, "sessions.list", { includeUnknown: true });
+      expect(res.ok).toBe(true);
+      const keys = res.payload?.sessions.map((row) => row.key) ?? [];
+      expect(keys).toContain(childSessionKey);
+      return res.payload?.sessions ?? [];
+    });
+    const parentRow = listed.find((row) => row.key === REQUESTER_SESSION_KEY);
+    expect(parentRow?.childSessions).toContain(childSessionKey);
+    expect(shouldKeepSubagentRunChildLink(recovered)).toBe(true);
+    expect(deletedRevisions.every((revision) => revision === originalRevision)).toBe(true);
+    expect(deletedRevisions.length).toBeGreaterThanOrEqual(1);
+
+    const verdict = {
+      surface: "isolated-gateway",
+      path: "delete-cleanup session-changed persist-fail restart",
+      sessionNavigation: {
+        childSessionDeleted: false,
+        childSessionListed: true,
+        parentChildToggle: parentRow?.childSessions ?? null,
+        deletedRevisions,
+        persistedDispatchTarget: dispatched.deleteCleanupTarget,
       },
     };
     console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);

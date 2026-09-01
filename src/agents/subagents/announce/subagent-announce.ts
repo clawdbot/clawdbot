@@ -194,6 +194,8 @@ export async function runSubagentAnnounceFlow(params: {
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
+  /** Frozen delete identity from the cleanup owner; do not reload a successor. */
+  expectedDeleteTarget?: { sessionId: string; lifecycleRevision: string };
   wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
@@ -643,8 +645,9 @@ export async function runSubagentAnnounceFlow(params: {
         callGateway: subagentAnnounceDeps.callGateway,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,
-        expectedSessionId: childSessionId,
-        expectedLifecycleRevision: childSessionLifecycleRevision,
+        expectedSessionId: params.expectedDeleteTarget?.sessionId ?? childSessionId,
+        expectedLifecycleRevision:
+          params.expectedDeleteTarget?.lifecycleRevision ?? childSessionLifecycleRevision,
       });
       params.onChildSessionDeleteOutcome?.(sessionCleanup);
     }

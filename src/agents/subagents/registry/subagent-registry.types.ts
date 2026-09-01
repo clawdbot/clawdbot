@@ -280,6 +280,15 @@ export type SubagentRunRecord = {
   browserCleanupDispatchedAt?: number;
   /** Set immediately before irreversible sessions.delete cleanup is dispatched. Cleared when Gateway confirms the session changed. */
   deleteCleanupDispatchedAt?: number;
+  /**
+   * Exact child session identity captured with the dispatch stamp.
+   * Restart recovery must retry delete only against this identity; a live
+   * successor at the same key is a durable no-delete outcome.
+   */
+  deleteCleanupTarget?: {
+    sessionId: string;
+    lifecycleRevision: string;
+  };
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
   /** Durable top-level requester wake obligation, replayed after restart. */

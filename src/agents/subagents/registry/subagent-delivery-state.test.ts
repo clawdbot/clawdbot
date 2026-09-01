@@ -42,11 +42,39 @@ describe("normalizeSubagentRunState", () => {
   });
 
   it("normalizes the durable delete-dispatch boundary", () => {
-    const valid = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: 200 }));
-    const malformed = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: Number.NaN }));
+    const valid = normalizeSubagentRunState(
+      baseRun({
+        deleteCleanupDispatchedAt: 200,
+        deleteCleanupTarget: {
+          sessionId: "  child-session-id  ",
+          lifecycleRevision: "  child-revision  ",
+        },
+      }),
+    );
+    const malformedStamp = normalizeSubagentRunState(
+      baseRun({ deleteCleanupDispatchedAt: Number.NaN }),
+    );
+    const orphanTarget = normalizeSubagentRunState(
+      baseRun({
+        deleteCleanupTarget: { sessionId: "child-session-id", lifecycleRevision: "child-revision" },
+      }),
+    );
+    const incompleteTarget = normalizeSubagentRunState(
+      baseRun({
+        deleteCleanupDispatchedAt: 200,
+        deleteCleanupTarget: { sessionId: "child-session-id", lifecycleRevision: "  " },
+      }),
+    );
 
     expect(valid.deleteCleanupDispatchedAt).toBe(200);
-    expect(malformed.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(valid.deleteCleanupTarget).toEqual({
+      sessionId: "child-session-id",
+      lifecycleRevision: "child-revision",
+    });
+    expect(malformedStamp.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(malformedStamp.deleteCleanupTarget).toBeUndefined();
+    expect(orphanTarget.deleteCleanupTarget).toBeUndefined();
+    expect(incompleteTarget.deleteCleanupTarget).toBeUndefined();
   });
 
   it("preserves valid killed reconciliation ownership metadata", () => {

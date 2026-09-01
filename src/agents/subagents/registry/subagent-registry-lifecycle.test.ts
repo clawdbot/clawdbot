@@ -2343,12 +2343,105 @@ describe("subagent registry lifecycle hardening", () => {
         );
       expect(deletedRevisions).toEqual([originalRevision]);
       expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+      expect(entry.deleteCleanupTarget).toBeUndefined();
       expect(entry.execution.suppressSessionEffects).toBe(true);
       expect(shouldKeepSubagentRunChildLink(entry)).toBe(true);
     } finally {
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("does not delete a live successor when cleanup restarts from a persisted dispatch target", async () => {
+    const now = Date.now();
+    const archiveAtMs = now + 30 * 60_000;
+    const originalRevision = "child-lifecycle-revision";
+    const successorRevision = "successor-lifecycle-revision";
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      archiveAtMs,
+      createdAt: now - 120_000,
+      startedAt: now - 90_000,
+      endedAt: now - 60_000,
+      outcome: { status: "ok" },
+      deleteCleanupDispatchedAt: now - 5_000,
+      deleteCleanupTarget: {
+        sessionId: "child-session-id",
+        lifecycleRevision: originalRevision,
+      },
+    });
+    sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockImplementation(() => ({
+      sessionId: "child-session-id",
+      lifecycleRevision: successorRevision,
+    }));
+    gatewayMocks.callGateway.mockImplementation((opts) => {
+      if (opts.method !== "sessions.delete") {
+        return Promise.resolve({});
+      }
+      const expectedRevision = (opts.params as { expectedLifecycleRevision?: string } | undefined)
+        ?.expectedLifecycleRevision;
+      if (expectedRevision === successorRevision) {
+        return Promise.resolve({ deleted: true });
+      }
+      return Promise.reject(
+        Object.assign(new Error("session changed"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+        }),
+      );
+    });
+    const controller = createLifecycleController({ entry });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    const deletedRevisions = gatewayMocks.callGateway.mock.calls
+      .filter(([opts]) => opts.method === "sessions.delete")
+      .map(
+        ([opts]) =>
+          (opts.params as { expectedLifecycleRevision?: string } | undefined)
+            ?.expectedLifecycleRevision,
+      );
+    expect(deletedRevisions).toEqual([originalRevision]);
+    expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
+    expect(entry.deleteCleanupTarget).toBeUndefined();
+    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(shouldKeepSubagentRunChildLink(entry)).toBe(true);
+  });
+
+  it("does not resubmit delete when the persisted dispatch target is already gone", async () => {
+    const now = Date.now();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      archiveAtMs: now + 30 * 60_000,
+      createdAt: now - 120_000,
+      startedAt: now - 90_000,
+      endedAt: now - 60_000,
+      outcome: { status: "ok" },
+      deleteCleanupDispatchedAt: now - 5_000,
+      deleteCleanupTarget: {
+        sessionId: "child-session-id",
+        lifecycleRevision: "child-lifecycle-revision",
+      },
+    });
+    sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockReturnValue(undefined);
+    const controller = createLifecycleController({ entry });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+    expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number");
+    expect(entry.deleteCleanupTarget).toEqual({
+      sessionId: "child-session-id",
+      lifecycleRevision: "child-lifecycle-revision",
+    });
+    expect(shouldKeepSubagentRunChildLink(entry)).toBe(false);
   });
 
   it("discards completion capture when an authoritative yield arrives during the await", async () => {

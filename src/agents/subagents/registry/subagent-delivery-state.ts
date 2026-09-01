@@ -5,6 +5,43 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
+export type SubagentDeleteCleanupTarget = {
+  sessionId: string;
+  lifecycleRevision: string;
+};
+
+/** Returns a complete guarded delete identity, or undefined when either half is missing. */
+export function normalizeDeleteCleanupTarget(
+  value: unknown,
+): SubagentDeleteCleanupTarget | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { sessionId?: unknown; lifecycleRevision?: unknown };
+  const sessionId = typeof record.sessionId === "string" ? record.sessionId.trim() : "";
+  const lifecycleRevision =
+    typeof record.lifecycleRevision === "string" ? record.lifecycleRevision.trim() : "";
+  if (!sessionId || !lifecycleRevision) {
+    return undefined;
+  }
+  return { sessionId, lifecycleRevision };
+}
+
+/** Binds the irreversible delete handoff to the exact session identity being deleted. */
+export function assignDeleteCleanupDispatch(
+  entry: SubagentRunRecord,
+  target: SubagentDeleteCleanupTarget,
+): void {
+  entry.deleteCleanupDispatchedAt ??= Date.now();
+  entry.deleteCleanupTarget ??= target;
+}
+
+/** Releases a confirmed session-changed rejection so restart cannot retry that delete. */
+export function clearDeleteCleanupDispatch(entry: SubagentRunRecord): void {
+  entry.deleteCleanupDispatchedAt = undefined;
+  entry.deleteCleanupTarget = undefined;
+}
+
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
   entry.taskRunId = taskRunId || undefined;
@@ -24,6 +61,12 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
     ? entry.deleteCleanupDispatchedAt
     : undefined;
+  const deleteCleanupTarget = normalizeDeleteCleanupTarget(entry.deleteCleanupTarget);
+  if (deleteCleanupTarget && entry.deleteCleanupDispatchedAt !== undefined) {
+    entry.deleteCleanupTarget = deleteCleanupTarget;
+  } else {
+    entry.deleteCleanupTarget = undefined;
+  }
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&
