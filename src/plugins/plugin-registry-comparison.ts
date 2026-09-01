@@ -48,7 +48,8 @@ function resolvePluginRegistryRecordContent(
   // Compare the durable package-build contract. The store intentionally drops build-only
   // metadata that runtime selection does not consume, so an omitted packageBuild and one
   // carrying only build-only fields describe the same contract and must normalize
-  // identically; treating them as distinct reports source-changed drift no refresh clears.
+  // identically; treating them as distinct reports source-changed drift that persists until
+  // a refresh rewrites the record.
   const stableRecord = Object.assign(
     record,
     packageBuild?.bundledDist === undefined
