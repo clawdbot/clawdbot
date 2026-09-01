@@ -43,6 +43,7 @@
  * is safe in CI. Fails loudly (exit 1) when a run contradicts the patch's claim.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -74,6 +75,7 @@ import { createTestRegistry } from "../../src/test-utils/channel-plugins.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const GROUPS_MODULE_RELATIVE_PATH = "src/auto-reply/reply/groups.ts";
+const DEFAULT_BASELINE_REF = "3dd3003f49ce71f38c0ecf84dbdbc95023498a69";
 
 const { values } = parseArgs({
   options: {
@@ -87,9 +89,17 @@ const { values } = parseArgs({
 });
 const REPLICATES = Math.max(1, Number.parseInt(values.replicates ?? "5", 10));
 const CONCURRENCY = Math.max(1, Number.parseInt(values.concurrency ?? "3", 10));
-const BASE_REF = values["base-ref"] ?? "origin/main";
+const BASE_REF = values["base-ref"]?.trim() || DEFAULT_BASELINE_REF;
 const OUT_DIR = values.out?.trim() || "";
 const DUMP_EVENTS = values["dump-events"]?.trim() || "";
+const BASELINE_OID = execFileSync("git", ["rev-parse", `${BASE_REF}^{commit}`], {
+  cwd: repoRoot,
+  encoding: "utf8",
+}).trim();
+const PATCHED_OID = execFileSync("git", ["rev-parse", "HEAD^{commit}"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+}).trim();
 
 /**
  * Safe stringifier for the untyped runtime payload fields this script reads out of
@@ -284,19 +294,17 @@ function buildExtraSystemPrompt(arm: Arm, scenario: Scenario): string {
 /**
  * Production turn body, composed by `buildReplyPromptEnvelope`.
  *
- * Fidelity note, deliberately explicit because it cuts against this script's own result:
- * the envelope's runtime-owned per-turn directive (`MESSAGE_TOOL_ONLY_DELIVERY_HINT`)
- * lands in `envelope.currentInboundContext.text`, NOT in `prefixedCommandBody`, and the
- * embedded runner delivers it as a separate hidden runtime-context message
- * (`attempt-prompt-build.ts`). Submitting `prefixedCommandBody` therefore reproduces the
- * production user turn but omits that one directive, which makes this harness push the
- * model toward delivery LESS than production does, not more.
+ * The envelope owns both the visible user prompt and hidden per-turn inbound context.
+ * Production passes those fields separately to the harness; the Codex adapter prepends
+ * `currentInboundContext.text` before issuing `turn/start`.
  */
-function buildPromptBody(scenario: Scenario): string {
+function buildPromptSubmission(
+  scenario: Scenario,
+): Pick<EmbeddedRunAttemptParams, "prompt" | "currentInboundContext"> {
   const body = scenario.ctx.BodyStripped ?? scenario.ctx.Body ?? "";
   const inboundUserContext = buildInboundUserContextPrefix(scenario.ctx);
   const promptBody = [inboundUserContext, body].filter(Boolean).join("\n\n");
-  return buildReplyPromptEnvelope({
+  const envelope = buildReplyPromptEnvelope({
     ctx: scenario.ctx,
     sessionCtx: scenario.ctx,
     baseBody: promptBody,
@@ -307,7 +315,11 @@ function buildPromptBody(scenario: Scenario): string {
     prefixedBody: promptBody,
     inboundEventKind: "user_request",
     sourceReplyDeliveryMode: "message_tool_only",
-  } as Parameters<typeof buildReplyPromptEnvelope>[0]).prefixedCommandBody;
+  } as Parameters<typeof buildReplyPromptEnvelope>[0]);
+  return {
+    prompt: envelope.prefixedCommandBody,
+    currentInboundContext: envelope.currentInboundContext,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +342,7 @@ type Trial = {
   messageToolSpecJson?: string;
   developerInstructions?: string;
   chatContextPresent?: boolean;
+  currentInboundContextPresent?: boolean;
   events: Array<{ stream: string; data: Record<string, unknown> }>;
   error?: string;
 };
@@ -432,6 +445,7 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
     dynamicToolNames: [],
   };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `mto-appserver-${arm}-`));
+  const promptSubmission = buildPromptSubmission(scenario);
   const workspaceDir = path.join(root, "workspace");
   const agentDir = path.join(root, "agent");
   const codexHome = path.join(root, "codex-home");
@@ -502,6 +516,16 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
       trial.developerInstructions = instructions;
       trial.chatContextPresent = instructions.includes(renderChatContext(arm, scenario));
     }
+    if (method === "turn/start") {
+      const turn = params as { input?: Array<{ type?: unknown; text?: unknown }> };
+      const submittedText = (turn.input ?? [])
+        .filter((item) => item?.type === "text")
+        .map((item) => asText(item.text))
+        .join("\n");
+      const inboundText = promptSubmission.currentInboundContext?.text?.trim() ?? "";
+      trial.currentInboundContextPresent =
+        inboundText.length > 0 && submittedText.includes(inboundText);
+    }
     return originalRequest(method, params as never, opts as never);
   };
 
@@ -529,7 +553,7 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
       maxTokens: 8_000,
       compat: { supportsTools: true },
     },
-    prompt: buildPromptBody(scenario),
+    ...promptSubmission,
     extraSystemPrompt: buildExtraSystemPrompt(arm, scenario),
     config: {
       tools: { web: { search: { enabled: false } } },
@@ -763,7 +787,7 @@ const resolvedModelId = await resolveDefaultModelId();
 console.log(
   `Driving ${tasks.length} real Codex app-server turns on ${resolvedModelId} ` +
     `(${ARMS.length} arms x ${SCENARIOS.length} scenarios x ${REPLICATES} replicates, ` +
-    `concurrency ${CONCURRENCY}, base-ref ${BASE_REF}).`,
+    `concurrency ${CONCURRENCY}, baseline ${BASELINE_OID}, patched ${PATCHED_OID}).`,
 );
 const trials = await runPool(tasks, CONCURRENCY);
 
@@ -859,6 +883,18 @@ say();
 say("## Production-path attestation");
 say();
 say(
+  `- Baseline commit: \`${BASELINE_OID}\` (pre-fix parent; default ref \`${DEFAULT_BASELINE_REF}\`)`,
+);
+say(`- Patched commit: \`${PATCHED_OID}\``);
+for (const scenario of SCENARIOS) {
+  const baselineContext = renderChatContext("baseline", scenario);
+  const patchedContext = renderChatContext("patched", scenario);
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
+  say(
+    `- ${scenario.id} context SHA-256: baseline \`${digest(baselineContext)}\`; patched \`${digest(patchedContext)}\``,
+  );
+}
+say(
   `- Dynamic tools actually serialized to the app-server: ${[...toolNames].toSorted().join(", ") || "(none)"}`,
 );
 say(`- Codex app-server binary: managed \`@openai/codex\`; model: ${resolvedModelId}`);
@@ -868,6 +904,10 @@ say(
 say(
   `- Chat-context paragraph verified byte-present in the app-server developer instructions: ` +
     `${trials.filter((t) => t.chatContextPresent).length}/${trials.length} turns`,
+);
+say(
+  `- Current inbound context verified byte-present in Codex turn/start input: ` +
+    `${trials.filter((t) => t.currentInboundContextPresent).length}/${trials.length} turns`,
 );
 say(`- Turns that errored: ${errored.length}`);
 const sampleResults = trials.flatMap((t) => t.messageToolResults).slice(0, 3);
@@ -910,10 +950,8 @@ say("- The production harness-level visible-reply guidance (`buildHarnessVisible
 say("  emitted by `buildDeveloperInstructions` for `message_tool_only` runs) is present in BOTH");
 say("  arms, because production always emits it. It independently pushes both arms toward calling");
 say("  the message tool, which shrinks the measurable gap; the numbers above are conservative.");
-say("- The per-turn `MESSAGE_TOOL_ONLY_DELIVERY_HINT` is NOT in these turns: the envelope carries");
-say("  it in `currentInboundContext`, which the embedded runner delivers as a separate hidden");
-say("  runtime-context message, and this script submits `prefixedCommandBody` only. Production");
-say("  therefore carries one MORE delivery directive than this harness does.");
+say("- The per-turn `MESSAGE_TOOL_ONLY_DELIVERY_HINT` is included through the production");
+say("  `currentInboundContext` field and verified in the actual Codex `turn/start` text input.");
 say(
   "- Sample sizes are small and per-cell rates are noisy. Read the pooled p-values, not a single",
 );
@@ -984,6 +1022,21 @@ if (trials.some((trial) => trial.chatContextPresent === false)) {
   failures.push(
     "the arm's chat-context paragraph was NOT byte-present in the developer instructions sent " +
       "to the app-server; the A/B is not testing the changed prompt",
+  );
+}
+if (trials.some((trial) => trial.currentInboundContextPresent === false)) {
+  failures.push(
+    "the production currentInboundContext bytes were NOT present in Codex turn/start input",
+  );
+}
+if (
+  !SCENARIOS.some(
+    (scenario) =>
+      renderChatContext("baseline", scenario) !== renderChatContext("patched", scenario),
+  )
+) {
+  failures.push(
+    `baseline ${BASELINE_OID} and patched ${PATCHED_OID} render identical chat contexts`,
   );
 }
 // Positive control. A run where NEITHER arm ever delivered has not observed the behavior
