@@ -129,9 +129,11 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         // provenance boundary.
         if (repairPending()) {
           this.memorySourceProvenanceRepairPending = true;
-          void this.syncAdmitted(
-            { reason: "search" },
-            { allowEmbeddingBootstrapFallback: true },
+          // Keep the reindex tracked by the manager-operation boundary so close()
+          // still waits for its retry to settle, while the first turn stays
+          // non-blocking.
+          void this.withManagerOperation(() =>
+            this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
           ).catch((err) => {
             log.warn(`memory provenance repair failed (background): ${formatErrorMessage(err)}`);
           });
