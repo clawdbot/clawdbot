@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -28,7 +29,7 @@ export type BackupRunRecord = {
 
 function boundedText(value: string | undefined, maxLength: number): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+  return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
 }
 
 function parseBackupRun(row: {
