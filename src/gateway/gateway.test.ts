@@ -680,6 +680,234 @@ describe("gateway e2e", () => {
   );
 
   it(
+    "preserves a Code Mode approval budget across a wall-clock rollback in a real Gateway",
+    { timeout: 120_000 },
+    async () => {
+      const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-code-mode-clock-",
+      });
+      const token = nextGatewayId("code-mode-clock-token");
+      const approvalPluginId = "code-mode-clock-proof";
+      const approvalPluginPath = path.join(
+        workspaceDir,
+        ".openclaw",
+        "extensions",
+        approvalPluginId,
+      );
+      await fs.mkdir(approvalPluginPath, { recursive: true });
+      await fs.writeFile(
+        path.join(approvalPluginPath, "openclaw.plugin.json"),
+        `${JSON.stringify(
+          {
+            id: approvalPluginId,
+            activation: { onStartup: true },
+            contracts: { tools: ["code_mode_clock_approval"] },
+            configSchema: { type: "object", additionalProperties: false, properties: {} },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(approvalPluginPath, "index.cjs"),
+        `module.exports = {
+  id: ${JSON.stringify(approvalPluginId)},
+  register(api) {
+    api.on("before_tool_call", (event) => {
+      if (event.toolName !== "code_mode_clock_approval") return;
+      return {
+        requireApproval: {
+          pluginId: ${JSON.stringify(approvalPluginId)},
+          title: "Code Mode clock rollback proof",
+          description: "Approve the isolated clock rollback proof tool.",
+          allowedDecisions: ["allow-once", "deny"],
+          timeoutMs: 30_000,
+        },
+      };
+    });
+    api.registerTool({
+      name: "code_mode_clock_approval",
+      label: "Code Mode clock approval",
+      description: "A deterministic approval-gated proof tool.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      async execute() {
+        return { content: [{ type: "text", text: "CODE_MODE_APPROVAL_OK" }] };
+      },
+    });
+  },
+};
+`,
+        "utf8",
+      );
+
+      const originalFetch = globalThis.fetch;
+      const openaiBaseUrl = "https://api.openai.com/v1";
+      let responseCount = 0;
+      const writeSseResponse = (events: Record<string, unknown>[]) =>
+        new Response(
+          `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      globalThis.fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url === `${openaiBaseUrl}/responses`) {
+          responseCount += 1;
+          const body = JSON.parse(
+            String((init as { body?: unknown } | undefined)?.body ?? "{}"),
+          ) as { input?: unknown[] };
+          const hasToolOutput = body.input?.some(
+            (item) =>
+              item &&
+              typeof item === "object" &&
+              (item as { type?: unknown }).type === "function_call_output",
+          );
+          if (!hasToolOutput) {
+            const item = {
+              type: "function_call",
+              id: "fc_code_mode_clock",
+              call_id: "call_code_mode_clock",
+              name: "exec",
+              arguments: JSON.stringify({
+                code: 'return await code_mode_clock_approval({});',
+              }),
+              status: "completed",
+            };
+            return writeSseResponse([
+              {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { ...item, status: "in_progress", arguments: "" },
+              },
+              {
+                type: "response.function_call_arguments.done",
+                item_id: item.id,
+                output_index: 0,
+                arguments: item.arguments,
+              },
+              { type: "response.output_item.done", output_index: 0, item },
+              {
+                type: "response.completed",
+                response: {
+                  id: "resp_code_mode_clock_call",
+                  status: "completed",
+                  output: [item],
+                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                },
+              },
+            ]);
+          }
+        }
+        if (url === `${openaiBaseUrl}/models`) {
+          return new Response(JSON.stringify({ data: [{ id: "mock-model" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return await originalFetch(input, init);
+      };
+
+      try {
+        const configPath = await createGatewayConfigPath(tempHome);
+        const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              model: { primary: mockProvider.modelRef },
+              models: {
+                [mockProvider.modelRef]: {
+                  params: { transport: "sse", openaiWsWarmup: false },
+                },
+              },
+              skipBootstrap: true,
+            },
+            entries: { main: { default: true } },
+          },
+          plugins: { allow: [approvalPluginId] },
+          tools: {
+            profile: "full",
+            codeMode: { enabled: true, timeoutMs: 1_000 },
+            alsoAllow: ["code_mode_clock_approval"],
+          },
+          models: {
+            mode: "replace",
+            providers: { [mockProvider.providerId]: mockProvider.config },
+          },
+          gateway: { auth: { mode: "token", token } },
+        };
+        const { server, client } = await startGatewayWithClient({
+          cfg,
+          configPath,
+          token,
+          clientDisplayName: "code-mode-clock-proof",
+        });
+        try {
+          await server.startupSettled;
+          const sessionKey = "agent:main:code-mode-clock";
+          const runId = nextGatewayId("code-mode-clock-run");
+          const started = (await client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: runId,
+              message: "Run the Code Mode approval proof once.",
+              deliver: false,
+            },
+            { expectFinal: false },
+          )) as { runId?: string; status?: string };
+          expect(started.status).toBe("accepted");
+          expect(started.runId).toBeTruthy();
+
+          let approvalId = "";
+          await vi.waitFor(
+            async () => {
+              const pending = (await client.request("plugin.approval.list", {})) as Array<{
+                id?: string;
+                request?: { pluginId?: string };
+              }>;
+              approvalId =
+                pending.find((entry) => entry.request?.pluginId === approvalPluginId)?.id ?? "";
+              expect(approvalId).toBeTruthy();
+            },
+            { timeout: 30_000, interval: 20 },
+          );
+
+          const wallClockBeforeRollback = Date.now();
+          const wallClock = vi.spyOn(Date, "now").mockReturnValue(wallClockBeforeRollback - 5_000);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            await expect(
+              client.request("plugin.approval.resolve", {
+                id: approvalId,
+                decision: "allow-once",
+              }),
+            ).resolves.toEqual({ ok: true });
+          } finally {
+            wallClock.mockRestore();
+          }
+
+          const completed = await client.request(
+            "agent.wait",
+            { runId: started.runId, timeoutMs: 30_000 },
+            { timeoutMs: 35_000 },
+          );
+          expect(completed).toMatchObject({ status: "ok" });
+          expect(responseCount).toBeGreaterThanOrEqual(2);
+        } finally {
+          await disconnectGatewayClient(client);
+          await server.close({ reason: "Code Mode clock rollback proof complete" });
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
     "does not reload workspace plugins when POST /tools/invoke rebuilds tools for the same workspace",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
