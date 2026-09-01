@@ -14,6 +14,12 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
+  readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventPage,
+} from "../config/sessions/session-accessor.sqlite-history-events.js";
+import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -955,6 +961,122 @@ describe("runDoctorSessionSqlite", () => {
       );
     }
     expect(fs.readFileSync(move?.archivePath ?? store.transcriptPath)).toEqual(original);
+  });
+
+  it("archives identical indexed and leaf replays after normalized history verification", async () => {
+    const repeatedMessage = {
+      type: "message",
+      id: "reply",
+      parentId: "root",
+      message: { role: "assistant", content: "same replay" },
+    };
+    const repeatedLeaf = {
+      type: "leaf",
+      id: "selection",
+      parentId: "reply",
+      targetId: "reply",
+    };
+    const store = createLegacyStore({
+      transcriptLines: [
+        JSON.stringify({ type: "session", id: "session-1", version: 3 }),
+        JSON.stringify({
+          type: "message",
+          id: "root",
+          parentId: null,
+          message: { role: "user", content: "root" },
+        }),
+        JSON.stringify(repeatedMessage),
+        JSON.stringify(repeatedMessage),
+        JSON.stringify(repeatedLeaf),
+        JSON.stringify(repeatedLeaf),
+      ],
+    });
+
+    const imported = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(imported.targets[0]?.issues).toEqual([]);
+    const move = readMigrationManifest(
+      imported.migrationRun?.manifestPath,
+    ).targets[0]!.completedMoves.find((item) => item.kind === "transcript");
+    expect(move).toBeDefined();
+    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expect(
+      loadTranscriptEventsSync({
+        agentId: "main",
+        env: store.env,
+        sessionId: "session-1",
+      }).map((event) => event.id),
+    ).toEqual(["session-1", "root", "reply", "selection"]);
+
+    const scope = { agentId: "main", env: store.env, sessionId: "session-1" };
+    const history = readSessionTranscriptHistoryEvents(scope);
+    expect(history.map((row) => (row.event as { id?: string }).id)).toEqual(["root", "reply"]);
+    expect(readSessionTranscriptHistoryEventCount(scope)).toBe(2);
+    expect(
+      readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 }),
+    ).toMatchObject({
+      activeLeafEntryId: "reply",
+      totalMessages: 2,
+      events: [expect.objectContaining({ event: expect.objectContaining({ id: "reply" }) })],
+    });
+    expect(readSessionTranscriptHistoryEventById(scope, "reply")).toMatchObject({
+      event: expect.objectContaining({ id: "reply" }),
+    });
+  });
+
+  it("retains complete recovery when durable transcript verification is short", async () => {
+    const store = createLegacyStore({
+      transcriptLines: [
+        JSON.stringify({ type: "session", id: "session-1", version: 3 }),
+        JSON.stringify({
+          type: "message",
+          id: "root",
+          parentId: null,
+          message: { role: "user", content: "root" },
+        }),
+      ],
+    });
+    const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+    const spy = vi
+      .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
+      .mockImplementation((target) => {
+        const result = snapshot(target);
+        if (!result.ok) {
+          return result;
+        }
+        const counts = new Map(result.snapshot.transcriptEventCountsBySessionId);
+        counts.set("session-1", 1);
+        return {
+          ok: true,
+          snapshot: { ...result.snapshot, transcriptEventCountsBySessionId: counts },
+        };
+      });
+    let imported;
+    try {
+      imported = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(imported.targets[0]?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "sqlite_transcript_count_mismatch" }),
+      ]),
+    );
+    expect(fs.existsSync(store.transcriptPath)).toBe(true);
+    expect(
+      readMigrationManifest(imported.migrationRun?.manifestPath).targets[0]?.completedMoves.some(
+        (item) => item.kind === "transcript",
+      ),
+    ).toBe(false);
   });
 
   it("retains a recreated archive while resuming an interrupted unlink", async () => {
