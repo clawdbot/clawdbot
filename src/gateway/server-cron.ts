@@ -774,7 +774,7 @@ export function buildGatewayCronService(params: {
 
   // Cron job changes flip session automation badges; push refreshed rows so
   // subscribed session lists update without waiting for unrelated session events.
-  const broadcastCronBoundSessionChanges = async (evt: CronEvent) => {
+  const broadcastCronBoundSessionChanges = (evt: CronEvent) => {
     const job = evt.job ?? cron.getJob(evt.jobId);
     if (!job) {
       return;
@@ -1173,7 +1173,7 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(hookEvt);
       // Re-arm / cancel scheduler-owned process watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
-        void broadcastCronBoundSessionChanges(evt);
+        broadcastCronBoundSessionChanges(evt);
         void reconcileExitWatchers();
         // cron.update and cron.add (including declarative convergence) route
         // lifecycle after the mutation. Ignoring state-only update events keeps
@@ -1196,7 +1196,7 @@ export function buildGatewayCronService(params: {
         // Fully deleted jobs emit their own "removed" event instead.
         const finishedJob = evt.job ?? cron.getJob(evt.jobId);
         if (finishedJob?.enabled === false) {
-          void broadcastCronBoundSessionChanges(evt);
+          broadcastCronBoundSessionChanges(evt);
           void routeStreamWatcherMutation(evt.jobId, finishedJob, "finished").catch(
             (err: unknown) => {
               cronLogger.warn(
