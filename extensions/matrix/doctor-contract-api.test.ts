@@ -1,10 +1,12 @@
 // Matrix tests cover doctor contract state migrations.
 import "fake-indexeddb/auto";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -118,6 +120,95 @@ function matrixStateRowsSha256(databasePath: string): string {
   }
 }
 
+function runMatrixDoctorFix(params: { rootDir: string; stateDir: string }) {
+  const configPath = path.join(params.stateDir, "openclaw.json");
+  const loaderPath = path.join(params.rootDir, "doctor-test-loader.mjs");
+  fs.writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        gateway: {
+          mode: "remote",
+          remote: { url: "ws://127.0.0.1:1", token: "fixture-token" },
+        },
+        logging: { file: path.join(params.rootDir, "openclaw.log") },
+        plugins: { allow: ["matrix"], entries: { matrix: { enabled: true } } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  fs.writeFileSync(
+    loaderPath,
+    `import { registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.endsWith("/doctor-ui.js")) {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript," + encodeURIComponent([
+          "export async function detectUiProtocolFreshnessIssues() { return []; }",
+          "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+          "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+          "export async function maybeRepairUiProtocolFreshness() {}",
+        ].join("\\n")),
+      };
+    }
+    if (specifier.endsWith("/doctor-health-contributions.js")) {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript," + encodeURIComponent(
+          "export async function runDoctorHealthContributions() {}",
+        ),
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`,
+  );
+  const entryPath = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
+  return spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--import",
+      loaderPath,
+      entryPath,
+      "doctor",
+      "--fix",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+      "--no-color",
+    ],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: params.rootDir,
+        USERPROFILE: params.rootDir,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_ENV: undefined,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_HIDE_BANNER: "1",
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_STATE_DIR: params.stateDir,
+        OPENCLAW_TEST_FAST: "1",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+      },
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 120_000,
+    },
+  );
+}
+
 describe("matrix doctor contract state migrations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -175,22 +266,15 @@ describe("matrix doctor contract state migrations", () => {
       stale.close();
     }
 
-    const migration = migrationById("matrix-account-sqlite-schema");
-    const detection = await migration.detectLegacyState(createMigrationParams(stateDir));
-    expect(detection?.preview).toContain(
-      `Matrix account SQLite schema migration (audit-events-v2): ${storageRootDir}`,
+    const doctor = runMatrixDoctorFix({ rootDir: stateDir, stateDir });
+    const doctorOutput = `${doctor.stderr}\n${doctor.stdout}`;
+    expect(doctor.error, doctorOutput).toBeUndefined();
+    expect(doctor.signal, doctorOutput).toBeNull();
+    expect(doctor.status, doctorOutput).toBe(0);
+    expect(doctorOutput).toContain(`Matrix account SQLite ${storageRootDir}`);
+    expect(doctorOutput).toContain(
+      "Migrated shared state audit event ledger → versioned message lifecycle schema",
     );
-    expect(detection?.preview).toContain(
-      `Matrix account SQLite schema migration (strict-tables-v3): ${storageRootDir}`,
-    );
-    expect(detection?.preview.every((entry) => entry.endsWith(storageRootDir))).toBe(true);
-
-    const result = await migration.migrateLegacyState(createMigrationParams(stateDir));
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      `Matrix account SQLite ${storageRootDir}: Migrated shared state audit event ledger → versioned message lifecycle schema`,
-    );
-    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
     expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
 
     const repairedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
