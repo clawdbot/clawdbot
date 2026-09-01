@@ -54,6 +54,11 @@ import { runCodexAppServerAttempt } from "../../extensions/codex/src/app-server/
 import { createCodexTestBindingStore } from "../../extensions/codex/src/app-server/session-binding.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "../../extensions/codex/src/app-server/shared-client.js";
 import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  resolveMessageToolSourceReplyFinal,
+} from "../../src/agents/embedded-agent-message-tool-source-reply.js";
+import { extractMessagingToolSourceReplyPayload } from "../../src/agents/embedded-agent-messaging-extraction.js";
+import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../src/auto-reply/reply/inbound-meta.js";
@@ -115,6 +120,60 @@ function asText(value: unknown, fallback = ""): string {
   }
   return fallback;
 }
+
+function isCanonicalTerminalCurrentSourceReply(params: unknown, result: unknown): boolean {
+  return (
+    resolveMessageToolSourceReplyFinal(params) &&
+    extractMessagingToolSourceReplyPayload(result) !== undefined &&
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolName: "message",
+      args: params,
+      result,
+    })
+  );
+}
+
+function assertDeliveryClassifierRejectsFalsePositives(): void {
+  const settledDelivery = {
+    status: "settled",
+    partialDelivery: false,
+    createdThreadIds: [],
+  };
+  const canonicalResult = {
+    details: {
+      deliveryStatus: "sent",
+      channel: "webchat",
+      target: "current-run",
+      sourceReplySink: "internal-ui",
+      sourceReply: { text: "visible source reply" },
+      messageDelivery: settledDelivery,
+    },
+  };
+  if (!isCanonicalTerminalCurrentSourceReply({ action: "send" }, canonicalResult)) {
+    throw new Error("delivery classifier rejected a canonical terminal current-source reply");
+  }
+  if (
+    isCanonicalTerminalCurrentSourceReply(
+      { action: "send", channel: "telegram", target: "user:elsewhere" },
+      {
+        details: {
+          deliveryStatus: "sent",
+          channel: "telegram",
+          target: "user:elsewhere",
+          messageDelivery: settledDelivery,
+        },
+      },
+    )
+  ) {
+    throw new Error("delivery classifier accepted an off-target successful send");
+  }
+  if (isCanonicalTerminalCurrentSourceReply({ action: "send", final: false }, canonicalResult)) {
+    throw new Error("delivery classifier accepted a non-terminal source reply");
+  }
+}
+
+assertDeliveryClassifierRejectsFalsePositives();
 
 type GroupsModule = {
   buildGroupChatContext: (params: {
@@ -741,6 +800,7 @@ initializeGlobalHookRunner(
       handler: (event: unknown, ctx: unknown) => {
         const record = event as {
           toolName?: unknown;
+          params?: unknown;
           result?: unknown;
           error?: unknown;
         };
@@ -758,7 +818,11 @@ initializeGlobalHookRunner(
         const details = (record?.result as { details?: Record<string, unknown> })?.details;
         const deliveryStatus = asText(details?.deliveryStatus);
         const sourceReply = details?.sourceReply as { text?: unknown } | undefined;
-        if (deliveryStatus === "sent") {
+        const canonicalTerminalSourceReply = isCanonicalTerminalCurrentSourceReply(
+          record?.params,
+          record?.result,
+        );
+        if (canonicalTerminalSourceReply) {
           trial.delivered.push({
             text: asText(sourceReply?.text) || asText(details?.message),
             to: {
@@ -775,6 +839,8 @@ initializeGlobalHookRunner(
             sink: details?.sourceReplySink ?? null,
             channel: details?.channel ?? null,
             target: details?.target ?? null,
+            final: resolveMessageToolSourceReplyFinal(record?.params),
+            canonicalTerminalSourceReply,
             textChars: asText(sourceReply?.text).length,
           }),
         );
