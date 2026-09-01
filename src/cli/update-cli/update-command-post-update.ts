@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -10,6 +11,7 @@ import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
+  resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -108,9 +110,11 @@ export async function finishUpdate(params: {
     // before restarting; rewriting a consumed sentinel could deliver it twice.
     if (recoverService) {
       await maybeRestartServiceAfterFailedMutableUpdate({
-        root: result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: params.updateStepTimeoutMs,
+        invocationCwd: params.invocationCwd,
       });
     }
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
@@ -138,7 +142,7 @@ export async function finishUpdate(params: {
     if (!(await restoreWindowsAutoStart(params.result))) {
       return;
     }
-    await reportResult(params.result, params.result.recovery?.serviceRestartSafe !== false);
+    await reportResult(params.result, params.result.recovery?.serviceRestartSafe === true);
     if (params.result.recovery?.serviceRestartSafe === false) {
       if (!params.opts.json) {
         const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
@@ -157,7 +161,13 @@ export async function finishUpdate(params: {
         }
       }
     }
-    defaultRuntime.exit(1);
+    // The helper only recovers a service it parked that this CLI could not own
+    // (for example, an unloaded LaunchAgent). Never retry a handled restart.
+    defaultRuntime.exit(
+      params.preManagedServiceStop?.stopped
+        ? 1
+        : resolveManagedServiceUpdateFailureExitCode(params.result),
+    );
     return;
   }
 
@@ -165,7 +175,7 @@ export async function finishUpdate(params: {
     if (!(await restoreWindowsAutoStart(params.result))) {
       return;
     }
-    await reportResult(params.result, true);
+    await reportResult(params.result, params.result.recovery?.serviceRestartSafe === true);
     if (params.result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -189,7 +199,14 @@ export async function finishUpdate(params: {
         ),
       );
     }
-    defaultRuntime.exit(params.result.reason === "dirty" ? 1 : 0);
+    defaultRuntime.exit(
+      !params.preManagedServiceStop?.stopped &&
+        resolveManagedServiceUpdateFailureExitCode(params.result) !== 1
+        ? resolveManagedServiceUpdateFailureExitCode(params.result)
+        : params.result.reason === "dirty"
+          ? 1
+          : 0,
+    );
     return;
   }
 
@@ -250,7 +267,8 @@ export async function finishUpdate(params: {
         return;
       }
       await reportResult({ ...params.result, status: "error", reason: "post-core-update-failed" });
-      defaultRuntime.exit(freshProcessResult.exitCode);
+      // A nested process exit is not this updater's verified recovery verdict.
+      defaultRuntime.exit(1);
       return;
     }
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
@@ -346,16 +364,14 @@ export async function finishUpdate(params: {
       }
     : params.result;
 
-  if (postCorePluginUpdate?.status === "error") {
+  if (
+    postCorePluginUpdate?.status === "error" &&
+    postCorePluginUpdate.reason !== POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON
+  ) {
     if (!(await restoreWindowsAutoStart(resultWithPostUpdate))) {
       return;
     }
-    // If strict config became valid despite a fresh-doctor process failure, restore the service
-    // stopped by this update. Invalid post-migration config intentionally remains stopped.
-    await reportResult(
-      resultWithPostUpdate,
-      postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
-    );
+    await reportResult(resultWithPostUpdate);
     defaultRuntime.exit(1);
     return;
   }
@@ -408,6 +424,7 @@ export async function finishUpdate(params: {
         state: serviceState,
         root: postUpdateRoot,
         preManagedServiceStop: params.preManagedServiceStop,
+        allowInstallRootChange: true,
       });
       gatewayServiceEnv = serviceState.env;
       skipLegacyServiceRestart =
@@ -427,6 +444,9 @@ export async function finishUpdate(params: {
           serviceLoaded: serviceState.loadState.status === "loaded",
           serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
           serviceMatchesUpdateRoot: serviceUpdateVerdict.kind === "owned",
+          requiresInstallRootRefresh:
+            serviceUpdateVerdict.kind === "owned" &&
+            serviceUpdateVerdict.requiresInstallRootRefresh,
         })
       ) {
         gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
@@ -483,7 +503,10 @@ export async function finishUpdate(params: {
 
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
-    result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
+    result:
+      resultWithPostUpdate.status === "error"
+        ? resultWithPostUpdate
+        : buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
     jsonMode: Boolean(params.opts.json),
   });
 
@@ -570,5 +593,20 @@ export async function finishUpdate(params: {
     }
   }
 
+  if (resultWithPostUpdate.status === "error") {
+    // The recovering Gateway may have consumed the recorded Doctor failure.
+    // Keep that outcome without publishing a second notification after activation.
+    printFinalResult(completedResult(resultWithPostUpdate));
+    defaultRuntime.exit(1);
+    return;
+  }
   await reportResult(resultWithPostUpdate);
+  if (!params.opts.json) {
+    const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
+    defaultRuntime.log(
+      theme.muted(
+        `After verifying your history, preview recovery rollback retirement with ${formatCliCommand("openclaw update cleanup --dry-run", recoveryEnv)} for state ${resolveStateDir(recoveryEnv)}. Keep the same state/config overrides.`,
+      ),
+    );
+  }
 }

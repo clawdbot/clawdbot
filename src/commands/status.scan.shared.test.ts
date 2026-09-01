@@ -309,6 +309,43 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
+  it("does not use the local status RPC fallback for dotted localhost", async () => {
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
+      url: "ws://localhost.:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://localhost.:18789",
+    });
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://localhost.:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: {},
+      opts: {},
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(result.gatewayProbe?.ok).toBe(false);
+  });
+
   it("uses built-in probe defaults for the local status RPC fallback", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",

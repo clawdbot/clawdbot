@@ -393,17 +393,14 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
-export function collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
-  return items.flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.flatMap((entry) =>
-          extractToolCardsCached(entry.message, entry.key).map(({ args, name }) => ({
-            args,
-            name,
-          })),
-        )
-      : [],
-  );
+export function* collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
+  for (const item of items) {
+    if (item.kind === "group") {
+      for (const entry of item.messages) {
+        yield* extractToolCardsCached(entry.message);
+      }
+    }
+  }
 }
 
 export type AssistantMessageExpansionState =
@@ -466,7 +463,7 @@ export function syncToolCardExpansionState(
       continue;
     }
     for (const entry of item.messages) {
-      const cards = extractToolCardsCached(entry.message, entry.key);
+      const cards = extractToolCardsCached(entry.message);
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
         const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
         currentToolCardIds.add(disclosureId);

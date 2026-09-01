@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { replaceSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+  updateSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 
@@ -74,6 +79,7 @@ import {
   listSessionsFromStoreAsync,
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionRow,
+  loadSessionEntry,
 } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
@@ -209,6 +215,65 @@ describe("single gateway session row child projections", () => {
     resetPluginRuntimeStateForTest();
     subagentRegistryReadMock.setSubagentRunsForTest([]);
     vi.clearAllMocks();
+  });
+
+  test("preserves session selection and hidden effects across metadata and full reads", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-hidden-effects-",
+      "/tmp/openclaw-single-row-hidden-effects",
+      async ({ now, storePath }) => {
+        const hidden = resolveInternalSessionEffectsIdentity({
+          agentId: MAIN_AGENT_ID,
+          runId: "suppressed-effects",
+        });
+        const sessionKey = "agent:main:main";
+        const visible: SessionEntry = {
+          ...parentSession("visible-session", now),
+          skillsSnapshot: { prompt: "saved skill prompt", skills: [] },
+          systemPromptReport: {
+            source: "run",
+            generatedAt: now,
+            systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
+          },
+        };
+        await seedSessionEntries(storePath, {
+          [sessionKey]: visible,
+          [hidden.sessionKey]: parentSession(hidden.sessionId, now),
+        });
+
+        const metadata = loadSessionEntry("main", {
+          agentId: MAIN_AGENT_ID,
+          clone: false,
+          projection: "list",
+        });
+        expect(metadata).toMatchObject({
+          agentId: MAIN_AGENT_ID,
+          canonicalKey: sessionKey,
+          storePath,
+          entry: parentSession(visible.sessionId, now),
+        });
+        expect(metadata.entry?.skillsSnapshot).toBeUndefined();
+        expect(metadata.entry?.systemPromptReport).toBeUndefined();
+        expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone: false })).toMatchObject({
+          agentId: metadata.agentId,
+          canonicalKey: metadata.canonicalKey,
+          storePath: metadata.storePath,
+          entry: visible,
+        });
+
+        expect(loadSessionEntry(hidden.sessionKey).entry).toBeUndefined();
+        expect(loadSessionEntry(hidden.sessionKey, { projection: "list" }).entry).toBeUndefined();
+        expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
+          hidden.sessionId,
+        );
+        expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
+          hidden.sessionId,
+        );
+      },
+    );
   });
 
   test("keeps direct children visible with at most one candidate scan per exact snapshot", async () => {

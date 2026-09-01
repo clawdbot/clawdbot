@@ -42,7 +42,8 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
-  setChatSessionProjection,
+  publishChatSessionProjection,
+  publishChatSessionProjectionMessages,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
@@ -171,21 +172,21 @@ export async function hydrateChatHistory(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
-      const historyProjection = getChatSessionProjection(state, state.chatMessages);
+      const historyProjection = getChatSessionProjection(state);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
       // An accepted delta advances the same transcript generation, not a branch replacement.
       // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
-      setChatSessionProjection(state, {
+      publishChatSessionProjection(state, {
         ...historyProjection,
         scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
       });
       applyChatPendingInputs(state, response.pendingInputs, {
-        consumptions:
+        receipts:
           !previousSessionId || previousSessionId === state.currentSessionId
-            ? response.inputConsumptions
+            ? response.inputReceipts
             : undefined,
       });
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
@@ -214,7 +215,7 @@ export async function hydrateChatHistory(
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
         pendingInputs: response.pendingInputs,
-        inputConsumptions: response.inputConsumptions,
+        inputReceipts: response.inputReceipts,
         sessionInfo: response.sessionInfo,
         ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
@@ -274,7 +275,6 @@ export async function hydrateChatHistory(
       },
       {
         scope,
-        messages: retainsTranscriptIdentity ? state.chatMessages : [],
         runActive:
           res.sessionInfo &&
           (typeof res.sessionInfo.hasActiveRun === "boolean" ||
@@ -289,10 +289,8 @@ export async function hydrateChatHistory(
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     applyChatPendingInputs(state, res.pendingInputs, {
-      consumptions:
-        !previousSessionId || previousSessionId === nextSessionId
-          ? res.inputConsumptions
-          : undefined,
+      receipts:
+        !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
     commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
     if (
@@ -350,16 +348,22 @@ export async function hydrateChatHistory(
           visibleMessageCount: visibleMessages.length,
         });
       } else if (!state.chatRunId) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleAssistantStreamMessages(state.chatMessages, state),
+        );
         maybeResetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedSomeToolStream) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: false,
-          requirePersistedTool: !historyReplacedToolStream,
-          persistCommentary: true,
-        });
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+            includeCurrent: false,
+            requirePersistedTool: !historyReplacedToolStream,
+            persistCommentary: true,
+          }),
+        );
         if (!visibleCurrentAssistantStreamTail(state, streamReconciliation.isHiddenStreamText)) {
           state.chatStreamStartedAt = null;
         }

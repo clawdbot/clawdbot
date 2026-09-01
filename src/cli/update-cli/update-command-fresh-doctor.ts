@@ -8,6 +8,7 @@ import {
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveNodeRunner } from "./shared.js";
@@ -128,9 +129,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       logOutput: false,
       baseEnv,
       env: {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
-        [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+        // The outer updater owns service refresh and activation after every
+        // migration finishes; a fresh Doctor must not resume its parked service.
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          deferConfiguredPluginInstallRepair: true,
+        }),
         ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
       },
     });

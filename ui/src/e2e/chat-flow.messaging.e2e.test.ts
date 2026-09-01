@@ -1,10 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUiProofEnabled,
-  channelStopProofDir,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -872,7 +870,7 @@ suite.define(() => {
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
       expect(await composer.inputValue()).toBe("");
       if (captureUiProofEnabled) {
-        await mkdir(channelStopProofDir, { recursive: true });
+        const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
         await page.screenshot({
           path: path.join(channelStopProofDir, "stopped.png"),
           fullPage: true,

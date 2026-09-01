@@ -275,11 +275,7 @@ describe("chat history cursor revalidation", () => {
 
     await loadChatHistory(state);
 
-    const current = getChatSessionProjection(
-      state,
-      state.chatMessages,
-      readChatSessionProjectionScope(state),
-    );
+    const current = getChatSessionProjection(state, readChatSessionProjectionScope(state));
     expect(current.scope.activeLeafEntryId).toBe("next-leaf");
     expect(current.runs).toBe(projection.runs);
   });

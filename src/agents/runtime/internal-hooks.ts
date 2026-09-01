@@ -5,6 +5,7 @@ export {
   attachInternalToolResultAcknowledgement,
   attachInternalToolResultProvenance,
   copyInternalToolExecutionPreparer,
+  copyInternalToolResultState,
   getInternalToolResultProvenance,
   getInternalToolExecutionPreparer,
   setInternalBeforeToolBatch,

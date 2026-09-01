@@ -1,6 +1,6 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
@@ -15,6 +15,7 @@ import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "..
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import {
   createControlUiSessionFixtures,
   type ControlUiSessionFixture,
@@ -436,7 +437,6 @@ let sharedControlUiE2eServerBaseUrl: string | null = null;
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
-let controlUiE2eDiagnosticSequence = 0;
 
 type ControlUiE2eDiagnosticEvent = {
   at: string;
@@ -568,6 +568,7 @@ export type MockGatewayControls = {
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  suspendLatest: () => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   setGatewayBootId: (bootId: string) => Promise<void>;
   setServerBuildId: (buildId: string) => Promise<void>;
@@ -1094,6 +1095,7 @@ function installControlUiMockGateway(
     ) => void;
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
+    suspendLatest: () => void;
     setOnline: (online: boolean) => void;
     setGatewayBootId: (bootId: string) => void;
     setServerBuildId: (buildId: string) => void;
@@ -2280,6 +2282,13 @@ function installControlUiMockGateway(
       }, 0);
     }
 
+    suspend(): void {
+      if (this.tickTimer !== null) {
+        window.clearInterval(this.tickTimer);
+        this.tickTimer = null;
+      }
+    }
+
     deliver(frame: unknown): void {
       if (this.readyState !== MockWebSocket.OPEN) {
         return;
@@ -2343,6 +2352,9 @@ function installControlUiMockGateway(
           type: "res",
         });
       }
+    },
+    suspendLatest() {
+      MockWebSocket.latest?.suspend();
     },
     setOnline(nextOnline) {
       online = nextOnline;
@@ -2655,6 +2667,19 @@ function createMockGatewayControls(
         { targetMethod: method, responsePayload: payload },
       );
     },
+    async suspendLatest() {
+      await page.evaluate(() => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: { suspendLatest: () => void };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.suspendLatest();
+      });
+    },
     async setOnline(online) {
       await page.evaluate((nextOnline) => {
         const gateway = (
@@ -2859,12 +2884,12 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
   },
 ): Promise<void> {
   const configuredDir = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim();
-  const artifactDir = path.resolve(
+  const artifactDir = createControlUiE2eArtifactDir(
+    "failure",
     configuredDir || path.join(resolveRepoRoot(), ".artifacts", "control-ui-e2e-timeouts", "local"),
   );
-  mkdirSync(artifactDir, { recursive: true });
   const safeMethod = label.replaceAll(/[^a-zA-Z0-9_.-]+/gu, "-");
-  const captureId = `${new Date().toISOString().replaceAll(/[:.]/gu, "-")}-${String(++controlUiE2eDiagnosticSequence).padStart(2, "0")}-${safeMethod}`;
+  const captureId = `${new Date().toISOString().replaceAll(/[:.]/gu, "-")}-${safeMethod}`;
   const screenshotName = `${captureId}.png`;
   const screenshotPath = path.join(artifactDir, screenshotName);
   const reportPath = path.join(artifactDir, `${captureId}.json`);

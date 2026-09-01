@@ -35,6 +35,22 @@ describe("shared toast", () => {
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
   });
 
+  it("keeps queued outcomes behind an unrelated replacement toast", async () => {
+    const host = await mountHost();
+
+    showToast({ message: "First completion", fifo: true });
+    showToast({ message: "Second completion", fifo: true });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("First completion");
+
+    showToast({ message: "Critical observer notice" });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Critical observer notice");
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second completion");
+  });
+
   it("uses the active modal's toast layer before the app layer", async () => {
     const appHost = await mountHost();
     const modal = document.createElement("openclaw-modal-dialog");

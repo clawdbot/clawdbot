@@ -101,7 +101,9 @@ describe("Vitest reporter contracts", () => {
         expect(
           reporters.map(([name]) => name),
           config,
-        ).toEqual(expected);
+        ).toEqual(
+          config === "test/vitest/vitest.ui-e2e.config.ts" ? [...expected, "default"] : expected,
+        );
         expect(cli, `${config} CLI override`).toEqual([["json", {}]]);
       }
       expect(resolved.defaults).toHaveLength(reporterConfigs.length);

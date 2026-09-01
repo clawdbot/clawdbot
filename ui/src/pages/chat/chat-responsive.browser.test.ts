@@ -122,6 +122,8 @@ async function createSharedAppPage(): Promise<Page> {
       assistantName: "Claw",
       historyMessages: [
         {
+          // Keep context geometry independent of the lazily loaded media fixtures.
+          __openclaw: { runId: "context-fixture-run" },
           content: [{ text: SHARED_APP_CONTEXT_TEXT, type: "text" }],
           model: "openai/gpt-5.5",
           role: "assistant",
@@ -639,7 +641,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
               ${
                 opts.sessionRailBody !== undefined
                   ? `<openclaw-chat-session-rail>
-                    <section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Session companion">
+                    <section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Side chat">
                       <header class="chat-session-rail__header">
                         <div class="chat-session-rail__header-copy">
                           <strong class="chat-session-rail__headline">Reviewing the session</strong>
@@ -651,7 +653,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                           <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
                           <span class="chat-session-rail__pr-checks">2 passed</span>
                           <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
-                          <div class="chat-session-rail__hint">The companion is already answering a question.</div>
+                          <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
                         </article>
                       </div>
                       <footer class="agent-chat__input chat-session-rail__composer" data-composer-layout="multiline">
@@ -2703,12 +2705,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await messageText.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
         expect(await context.isVisible()).toBe(false);
 
-        // Finish the shared image layout before measuring whether opening the
-        // tooltip moves the row.
         await messageText.hover();
-        await page.waitForFunction(
-          () => document.querySelector<HTMLImageElement>(".chat-message-image")?.complete,
-        );
         await waitForLayoutSettled(page, ".chat-group");
         const initialLayout = await group.evaluate((node) => {
           const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;

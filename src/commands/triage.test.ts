@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 // Triage tests protect bounded prompts, sanitized handoffs, and embedded-run gating.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -202,6 +204,8 @@ describe("triageCommand", () => {
     vi.clearAllMocks();
     stateDir = tempDirs.make("openclaw-triage-test-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", undefined);
     mocks.collectDoctorFindings.mockResolvedValue([]);
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: true, config: {} });
     mocks.resolveExecutablePath.mockReturnValue(undefined);
@@ -239,9 +243,9 @@ describe("triageCommand", () => {
       findings: { error: 1, warning: 1, info: 1 },
       detectedAgents: [],
       suggestedCommands: [
-        `claude "$(cat '${promptPath}')"`,
-        `codex exec --skip-git-repo-check - < '${promptPath}'`,
-        "openclaw triage --run",
+        `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' claude "$(cat '${promptPath}')"`,
+        `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' codex exec --skip-git-repo-check - < '${promptPath}'`,
+        `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' openclaw triage --run`,
       ],
     });
     expect(await fs.readFile(promptPath, "utf8")).toContain("[error] core/error: broken");
@@ -249,6 +253,55 @@ describe("triageCommand", () => {
     expect(mocks.verifySetupInference).not.toHaveBeenCalled();
     expect(mocks.agentExecCommand).not.toHaveBeenCalled();
   });
+
+  it.skipIf(process.platform === "win32").each(["default", "custom"])(
+    "pins state, config and %s workspace in executable, POSIX-quoted manual handoffs",
+    async (workspaceSelector) => {
+      const home = path.join(stateDir, "operator's $fixture");
+      const originalState = path.join(home, ".openclaw");
+      const configPath = path.join(home, "custom config.json");
+      const defaultWorkspaceDir =
+        workspaceSelector === "custom"
+          ? path.join(home, "custom workspace")
+          : path.join(originalState, "workspace");
+      const bin = path.join(home, "bin");
+      await fs.mkdir(bin, { recursive: true });
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+      // Doctor's dotenv phase can establish the original custom selectors.
+      mocks.collectDoctorFindings.mockImplementation(async () => {
+        process.env.OPENCLAW_CONFIG_PATH = configPath;
+        if (workspaceSelector === "custom") {
+          process.env.OPENCLAW_WORKSPACE_DIR = defaultWorkspaceDir;
+        }
+        return [];
+      });
+      for (const command of ["claude", "codex", "openclaw"]) {
+        await fs.writeFile(
+          path.join(bin, command),
+          '#!/bin/sh\nprintf "%s\\n" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_WORKSPACE_DIR"\n',
+          { mode: 0o700 },
+        );
+      }
+      const runtime = createRuntime();
+      await triageCommand(runtime, { json: true, noExport: true });
+      const report = runtime.writeJson.mock.calls[0]?.[0] as {
+        promptPath: string;
+        suggestedCommands: string[];
+      };
+      for (const command of report.suggestedCommands) {
+        const { stdout } = await promisify(execFile)("/bin/sh", ["-c", command], {
+          env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+          timeout: 10_000,
+        });
+        expect(stdout).toBe(`${originalState}\n${configPath}\n${defaultWorkspaceDir}\n`);
+      }
+      expect(await fs.readFile(report.promptPath, "utf8")).not.toContain(home);
+      expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+    },
+  );
 
   it("reports only external agents resolved on PATH without checking their credentials", async () => {
     mocks.resolveExecutablePath.mockImplementation((binary: string) =>
@@ -512,7 +565,7 @@ describe("triageCommand", () => {
         { value: { kind: "print" }, label: "Just print the commands" },
       ]);
       expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringMatching(new RegExp(`^  ${agent} `, "u")),
+        expect.stringMatching(new RegExp(`^  env .* ${agent} `, "u")),
       );
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
@@ -549,7 +602,15 @@ describe("triageCommand", () => {
     expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
       `/usr/local/bin/${agent}`,
       [await fs.readFile(promptPath, "utf8")],
-      { stdio: "inherit" },
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+          OPENCLAW_WORKSPACE_DIR: path.join(stateDir, "workspace"),
+        },
+      },
     );
     expect(mocks.verifySetupInference).not.toHaveBeenCalled();
     if (exitCode === 0) {
@@ -580,7 +641,9 @@ describe("triageCommand", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith("Failed to launch claude: permission denied");
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringMatching(/^Run manually: claude /u));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/^Run manually: env .* claude /u),
+    );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 

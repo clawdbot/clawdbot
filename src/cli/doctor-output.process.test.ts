@@ -8,7 +8,225 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function runDoctorFix(params: { root: string; configPath: string; loaderPath: string }) {
+  const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
+  return spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--import",
+      params.loaderPath,
+      entryPath,
+      "doctor",
+      "--fix",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+      "--no-color",
+    ],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: params.root,
+        USERPROFILE: params.root,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_ENV: undefined,
+        OPENCLAW_CONFIG_PATH: params.configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_HIDE_BANNER: "1",
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_STATE_DIR: path.join(params.root, "state"),
+        OPENCLAW_TEST_FAST: "1",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+      },
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 60_000,
+    },
+  );
+}
+
 describe("Doctor report process output", () => {
+  it("reports deferred Doctor-only state after config refusal, then converges", () => {
+    const root = tempDirs.make("openclaw-doctor-deferred-state-");
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const configPath = path.join(root, "openclaw.json");
+    const workspaceSource = path.join(workspaceDir, "openclaw-workspace-state.json");
+    const tuiSource = path.join(stateDir, "tui", "last-session.json");
+    const agentSource = path.join(stateDir, "agent", "auth.json");
+    const loaderPath = path.join(root, "doctor-test-loader.mjs");
+    fs.mkdirSync(path.dirname(tuiSource), { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(
+      loaderPath,
+      `import { registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.endsWith("/doctor-ui.js")) {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript," + encodeURIComponent(
+          [
+            "export async function detectUiProtocolFreshnessIssues() { return []; }",
+            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+            "export async function maybeRepairUiProtocolFreshness() {}",
+          ].join("\\n"),
+        ),
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`,
+    );
+    const invalidConfig = {
+      gatway: { port: 12345 },
+      gateway: {
+        mode: "remote",
+        remote: { url: "ws://127.0.0.1:1", token: "fixture-token" },
+      },
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { every: 5 } },
+        entries: {
+          primary: { workspace: workspaceDir },
+          secondary: {},
+        },
+      },
+    };
+    fs.writeFileSync(configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`);
+    fs.writeFileSync(
+      workspaceSource,
+      `${JSON.stringify({ version: 1, setupCompletedAt: "2026-08-01T00:00:00.000Z" })}\n`,
+    );
+    fs.writeFileSync(
+      tuiSource,
+      `${JSON.stringify({ global: { sessionKey: "agent:main:main", updatedAt: 1 } })}\n`,
+    );
+    fs.mkdirSync(path.dirname(agentSource), { recursive: true });
+    fs.writeFileSync(agentSource, "{}\n");
+    const configBefore = fs.readFileSync(configPath);
+    const workspaceBefore = fs.readFileSync(workspaceSource);
+    const tuiBefore = fs.readFileSync(tuiSource);
+    const agentBefore = fs.readFileSync(agentSource);
+
+    const refused = runDoctorFix({ root, configPath, loaderPath });
+    const refusedOutput = `${refused.stderr}\n${refused.stdout}`;
+
+    expect(refused.error, refusedOutput).toBeUndefined();
+    expect(refused.signal, refusedOutput).toBeNull();
+    expect(refused.status, refusedOutput).toBe(1);
+    expect(refusedOutput.match(/Legacy state deferred/g) ?? [], refusedOutput).toHaveLength(1);
+    expect(refusedOutput).toContain("Workspace setup and attestations");
+    expect(refusedOutput).toContain("TUI last-session pointers");
+    expect(refusedOutput).toContain(
+      "Deferred legacy agent/session migration: select an agent owner",
+    );
+    expect(refusedOutput).toContain("No listed legacy source was removed.");
+    expect(refusedOutput).toContain('rerun "openclaw doctor --fix"');
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
+    expect(fs.readFileSync(workspaceSource)).toEqual(workspaceBefore);
+    expect(fs.readFileSync(tuiSource)).toEqual(tuiBefore);
+    expect(fs.readFileSync(agentSource)).toEqual(agentBefore);
+    expect(fs.readdirSync(workspaceDir)).toEqual(["openclaw-workspace-state.json"]);
+    expect(fs.readdirSync(path.dirname(tuiSource))).toEqual(["last-session.json"]);
+
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          ...invalidConfig,
+          agents: {
+            ...invalidConfig.agents,
+            defaults: {
+              heartbeat: { every: "30m" },
+              systemAgent: { agentId: "primary" },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const repaired = runDoctorFix({ root, configPath, loaderPath });
+    const repairedOutput = `${repaired.stderr}\n${repaired.stdout}`;
+    expect(repaired.error, repairedOutput).toBeUndefined();
+    expect(repaired.signal, repairedOutput).toBeNull();
+    expect(repaired.status, repairedOutput).toBe(0);
+    expect(fs.existsSync(workspaceSource)).toBe(false);
+    expect(fs.existsSync(tuiSource)).toBe(false);
+    expect(fs.existsSync(agentSource)).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "agents", "primary", "agent", "auth.json"))).toBe(
+      true,
+    );
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("gatway");
+
+    const clean = runDoctorFix({ root, configPath, loaderPath });
+    const cleanOutput = `${clean.stderr}\n${clean.stdout}`;
+    expect(clean.error, cleanOutput).toBeUndefined();
+    expect(clean.signal, cleanOutput).toBeNull();
+    expect(clean.status, cleanOutput).toBe(0);
+    expect(cleanOutput).not.toContain("Legacy state deferred");
+    expect(cleanOutput).not.toContain("Legacy state detected");
+  }, 180_000);
+
+  it("fails repair when session import leaves a startup-blocking legacy store", () => {
+    const root = tempDirs.make("openclaw-doctor-session-convergence-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const loaderPath = path.join(root, "doctor-test-loader.mjs");
+    const original = Buffer.from('{"agent:main:legacy":');
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
+    fs.writeFileSync(storePath, original);
+    fs.writeFileSync(
+      loaderPath,
+      `import { registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.endsWith("/doctor-ui.js")) {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript," + encodeURIComponent(
+          [
+            "export async function detectUiProtocolFreshnessIssues() { return []; }",
+            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+            "export async function maybeRepairUiProtocolFreshness() {}",
+          ].join("\\n"),
+        ),
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`,
+    );
+
+    const result = runDoctorFix({ root, configPath, loaderPath });
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.error, output).toBeUndefined();
+    expect(result.signal, output).toBeNull();
+    expect(result.status, output).toBe(1);
+    expect(output).toContain("Legacy session store requires migration");
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).not.toContain("Doctor complete.");
+    expect(fs.readFileSync(storePath)).toEqual(original);
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+      agents: { defaults: { heartbeat: { every: "30m" } } },
+    });
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("heartbeat");
+  }, 120_000);
+
   it("omits backup tips for Git-backed nested agent workspaces", () => {
     const root = tempDirs.make("openclaw-doctor-workspace-git-");
     const repoRoot = path.join(root, "repo");

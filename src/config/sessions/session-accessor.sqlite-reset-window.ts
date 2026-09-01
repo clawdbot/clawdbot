@@ -159,7 +159,7 @@ function readLatestActiveBoundaryMetadata(
   return reset && (!compaction || reset.seq > compaction.seq) ? reset : compaction;
 }
 
-function readBoundaryPayload(
+function readBoundaryWindowFacts(
   projection: ResetWindowProjection,
   seq: number,
   scope: BoundaryWindowScope,
@@ -168,7 +168,11 @@ function readBoundaryPayload(
     projection.database.db,
     getResetWindowKysely(projection.database)
       .selectFrom("transcript_events")
-      .select("event_json")
+      .select((eb) => [
+        projectModelContextNavigationSql(eb.ref("event_json")).as("event_json"),
+        /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
+        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+      ])
       .where("session_id", "=", projection.resolved.sessionId)
       .where("seq", "=", seq)
       .limit(1),
@@ -180,10 +184,7 @@ function readBoundaryPayload(
   if (!isWindowBoundary(parsed.type, scope)) {
     throw new Error("Active transcript boundary has invalid payload");
   }
-  return {
-    event: parsed,
-    sizeBytes: Buffer.byteLength(row.event_json, "utf8") + 1,
-  };
+  return { firstKeptEntryId: parsed.firstKeptEntryId, sizeBytes: row.serialized_bytes };
 }
 
 function findLatestResetMessageWindow(
@@ -196,8 +197,7 @@ function findLatestResetMessageWindow(
   if (!latestBoundary) {
     return null;
   }
-  const boundaryPayload = readBoundaryPayload(projection, latestBoundary.seq, scope);
-  const boundary = boundaryPayload.event;
+  const boundary = readBoundaryWindowFacts(projection, latestBoundary.seq, scope);
   const postBoundaryMessagePosition =
     executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -213,7 +213,7 @@ function findLatestResetMessageWindow(
   let keptMessagePositions: number[] = [];
   const includesBoundary = latestBoundary.event_type === "compaction";
   let contextPrefixEventCount = includesBoundary ? 1 : 0;
-  let contextPrefixSizeBytes = includesBoundary ? boundaryPayload.sizeBytes : 0;
+  let contextPrefixSizeBytes = includesBoundary ? boundary.sizeBytes : 0;
   if (typeof boundary.firstKeptEntryId === "string") {
     const firstKept = executeSqliteQueryTakeFirstSync(
       projection.database.db,

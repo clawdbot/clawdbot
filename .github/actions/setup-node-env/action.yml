@@ -171,7 +171,9 @@ runs:
         set -euo pipefail
         # Keep both sides of pnpm's hard links below the workspace so one tar
         # archive preserves them without relying on runner-home path depth.
+        # Pnpm also needs registry metadata for offline supply-chain checks.
         echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" >> "$GITHUB_ENV"
+        echo "PNPM_CONFIG_CACHE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store/cache" >> "$GITHUB_ENV"
 
     - name: Resolve dependency cache key
       id: dependency-cache-key
@@ -183,7 +185,7 @@ runs:
         set -euo pipefail
         deps_input_fingerprint="$(node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs" \
           --workspace "$GITHUB_WORKSPACE" --frozen-lockfile "$FROZEN_LOCKFILE")"
-        cache_key="${GITHUB_REPOSITORY:?}-node-deps-v2-os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"
+        cache_key="${GITHUB_REPOSITORY:?}-node-deps-v3-os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"
         echo "key=$cache_key" >> "$GITHUB_OUTPUT"
 
     - name: Prepare dependency cache restore
@@ -391,6 +393,7 @@ runs:
             install_args+=("--config.${option_name}=${value}")
           fi
         }
+        append_pnpm_option_arg PNPM_CONFIG_CACHE_DIR cache-dir
         append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
         append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
@@ -463,8 +466,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .artifacts/build-all-cache
-        # Exact keys deduplicate concurrent jobs. Coarse restore supplies the
-        # newest declaration groups; build-all rehashes every group's inputs.
-        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mts', 'scripts/tsdown-build.mts', 'scripts/lib/tsdown-*.mts', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
+        # Each protected warmer attempt publishes a new immutable generation.
+        # Group signatures own validity; an outer input list can strand rebuilt
+        # groups behind an old exact key that Actions cache cannot replace.
+        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-

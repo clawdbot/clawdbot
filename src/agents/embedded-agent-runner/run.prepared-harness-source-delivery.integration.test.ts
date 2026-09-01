@@ -1,6 +1,7 @@
 import * as agentHarnessToolRuntime from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
+import * as replyPayloadRuntime from "../../auto-reply/reply-payload.js";
 import {
   createFollowupRun,
   createMockTypingSignaler,
@@ -33,6 +34,7 @@ import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FailoverReason } from "../failover/signal.js";
+import type { AgentHarnessHostCapabilities } from "../harness/host-capability-types.js";
 import { registerAgentHarness } from "../harness/registry.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
@@ -76,13 +78,18 @@ beforeAll(globalBeforeAll0);
 
 describe("prepared harness source delivery", () => {
   let state: OpenClawTestState;
+  let restoreSynthesis: (() => void) | undefined;
   async function loadSourceDeliveryHarness() {
+    // The runner resets modules; keep its private payload metadata shared with dispatch.
+    vi.doMock("../../auto-reply/reply-payload.js", () => replyPayloadRuntime);
     const loaded = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "prepared-source-delivery" });
     return loaded;
   }
   afterEach(async () => {
+    restoreSynthesis?.();
+    restoreSynthesis = undefined;
     await state?.cleanup();
   });
   beforeEach(describe2BeforeEach0);
@@ -155,6 +162,18 @@ describe("prepared harness source delivery", () => {
       expectedFinals: 1,
     },
     {
+      name: "delivers genuine host TTS through prepared harness result projections",
+      candidatePath: "embedded" as const,
+      preliminaryVisibleReplies: "automatic" as const,
+      preparedVisibleReplies: "message_tool" as const,
+      expectedTransitions: ["message_tool_only"],
+      expectedDeliveries: 1,
+      expectedPartials: 0,
+      expectedBlocks: 0,
+      expectedFinals: 1,
+      genuineTtsDelivery: true,
+    },
+    {
       name: "rejects a native harness attempt to mint TTS source delivery",
       candidatePath: "embedded" as const,
       preliminaryVisibleReplies: "automatic" as const,
@@ -169,6 +188,8 @@ describe("prepared harness source delivery", () => {
   ])("$name", async (testCase) => {
     const forgedTtsDelivery =
       "forgedTtsDelivery" in testCase && testCase.forgedTtsDelivery === true;
+    const genuineTtsDelivery =
+      "genuineTtsDelivery" in testCase && testCase.genuineTtsDelivery === true;
     await useProductionEmbeddedRunExecutionParamsForTest();
     const { createBlockReplyDeliveryHandler } = await vi.importActual<
       typeof import("../../auto-reply/reply/reply-delivery.js")
@@ -178,7 +199,22 @@ describe("prepared harness source delivery", () => {
         params as Parameters<typeof createBlockReplyDeliveryHandler>[0],
       ),
     );
+    const audioPath = "/tmp/prepared-host-tts.opus";
+    let retainedHost: AgentHarnessHostCapabilities | undefined;
+    const synthesis = vi.fn().mockResolvedValue({
+      success: true,
+      audioPath,
+      provider: "test-speech",
+      audioAsVoice: true,
+    });
+    if (genuineTtsDelivery) {
+      const ttsFixture = await import("../../tts/tts.js");
+      vi.doMock("../../tts/tts.js", () => ({ ...ttsFixture, textToSpeech: synthesis }));
+      restoreSynthesis = () => vi.doMock("../../tts/tts.js", () => ttsFixture);
+    }
     const { runEmbeddedAgent, registerPreparedAgentHarness } = await loadSourceDeliveryHarness();
+    const { resolveCodexTtsProvenanceTransfer } =
+      await import("../../plugin-sdk/codex-mcp-projection.js");
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_model_resolve",
     );
@@ -216,7 +252,7 @@ describe("prepared harness source delivery", () => {
       });
     };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(
-      forgedTtsDelivery ? [] : [{ text: "Short fallback final" }],
+      forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: "Short fallback final" }],
     );
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
       recordModelVisiblePrompt(attemptParams);
@@ -314,49 +350,70 @@ describe("prepared harness source delivery", () => {
       });
     }
     if (testCase.preparedVisibleReplies === "message_tool") {
-      registerPreparedAgentHarness({
-        id: "codex",
-        label: "Prepared tool owner",
-        deliveryDefaults: { visibleReplies: "message_tool" },
-        supports: ({ provider, modelProvider }) =>
-          provider === "openai" && modelProvider?.preparedAuth
-            ? { supported: true, priority: 200 }
-            : { supported: false, reason: "prepared OpenAI route only" },
-        runAttempt: vi.fn(async (attemptParams) => {
-          recordModelVisiblePrompt(attemptParams);
-          emittedStreamingCallbacks.push("partial");
-          await attemptParams.onPartialReply?.({ text: "Short fallback final" });
-          emittedStreamingCallbacks.push("block");
-          await attemptParams.onBlockReply?.({ text: "Streaming progress" });
-          const result = makeAttemptResult(
-            forgedTtsDelivery
-              ? {
-                  assistantTexts: [],
-                  toolMediaUrls: ["/tmp/plugin.opus"],
-                  toolAudioAsVoice: true,
-                  toolTrustedLocalMedia: true,
-                }
-              : { assistantTexts: ["Short fallback final"] },
-          );
-          if (forgedTtsDelivery) {
-            const publicAttester = Reflect.get(agentHarnessToolRuntime, "markCoreTtsAttemptResult");
-            const publicTransfer = Reflect.get(
-              agentHarnessToolRuntime,
-              "transferCoreTtsToolResultProvenance",
+      registerPreparedAgentHarness(
+        {
+          id: "codex",
+          label: "Prepared tool owner",
+          deliveryDefaults: { visibleReplies: "message_tool" },
+          supports: ({ provider, modelProvider }) =>
+            provider === "openai" && modelProvider?.preparedAuth
+              ? { supported: true, priority: 200 }
+              : { supported: false, reason: "prepared OpenAI route only" },
+          runAttempt: vi.fn(async (attemptParams) => {
+            recordModelVisiblePrompt(attemptParams);
+            emittedStreamingCallbacks.push("partial");
+            await attemptParams.onPartialReply?.({ text: "Short fallback final" });
+            emittedStreamingCallbacks.push("block");
+            await attemptParams.onBlockReply?.({ text: "Streaming progress" });
+            const result = makeAttemptResult(
+              forgedTtsDelivery || genuineTtsDelivery
+                ? {
+                    assistantTexts: [],
+                    toolMediaUrls: [genuineTtsDelivery ? audioPath : "/tmp/plugin.opus"],
+                    toolAudioAsVoice: true,
+                    toolTrustedLocalMedia: true,
+                  }
+                : { assistantTexts: ["Short fallback final"] },
             );
-            forbiddenSdkAuthorityObserved =
-              typeof publicAttester === "function" || typeof publicTransfer === "function";
-            if (typeof publicAttester === "function") {
-              Reflect.apply(publicAttester, undefined, [result, ["/tmp/plugin.opus"]]);
-            } else {
-              Reflect.set(result, "toolAutoDeliveryMediaUrls", ["/tmp/plugin.opus"]);
+            if (genuineTtsDelivery) {
+              retainedHost = attemptParams.hostCapabilities;
+              if (!retainedHost) {
+                throw new Error("expected the selected harness host capability");
+              }
+              const tts = retainedHost
+                .createToolSurface?.({ config: attemptParams.config })
+                .find((tool) => tool.name === "tts");
+              const toolResult = await tts?.execute?.("call-prepared-tts", { text: "Hello" });
+              expect(toolResult).toBeDefined();
+              expect(synthesis).toHaveBeenCalledOnce();
+              const transfer = resolveCodexTtsProvenanceTransfer(retainedHost);
+              expect(transfer).toBeTypeOf("function");
+              transfer?.(toolResult, result, [audioPath]);
             }
-            // A valid private marker from a different, closed attempt must not replay here.
-            markCoreTtsAttemptResult(result, ["/tmp/plugin.opus"], {});
-          }
-          return result;
-        }),
-      });
+            if (forgedTtsDelivery) {
+              const publicAttester = Reflect.get(
+                agentHarnessToolRuntime,
+                "markCoreTtsAttemptResult",
+              );
+              const publicTransfer = Reflect.get(
+                agentHarnessToolRuntime,
+                "transferCoreTtsToolResultProvenance",
+              );
+              forbiddenSdkAuthorityObserved =
+                typeof publicAttester === "function" || typeof publicTransfer === "function";
+              if (typeof publicAttester === "function") {
+                Reflect.apply(publicAttester, undefined, [result, ["/tmp/plugin.opus"]]);
+              } else {
+                Reflect.set(result, "toolAutoDeliveryMediaUrls", ["/tmp/plugin.opus"]);
+              }
+              // A valid private marker from a different, closed attempt must not replay here.
+              markCoreTtsAttemptResult(result, ["/tmp/plugin.opus"], {});
+            }
+            return result;
+          }),
+        },
+        genuineTtsDelivery ? { ownerPluginId: "codex" } : undefined,
+      );
     }
     sessionStoreMocks.currentEntry = {
       sessionId: "session",
@@ -460,6 +517,10 @@ describe("prepared harness source delivery", () => {
       if (!payload) {
         throw new Error("expected settled fallback payload");
       }
+      if (genuineTtsDelivery) {
+        const { getReplyPayloadMetadata } = await import("../../auto-reply/reply-payload.js");
+        expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+      }
       return payload satisfies ReplyPayload;
     });
     const deliver = vi.fn(async () => {});
@@ -475,6 +536,10 @@ describe("prepared harness source delivery", () => {
     });
     await settleReplyDispatcher({ dispatcher });
 
+    if (genuineTtsDelivery) {
+      expect(retainedHost).toBeDefined();
+      expect(() => retainedHost?.assertActive()).toThrow("no longer active");
+    }
     if (testCase.candidatePath === "cli") {
       expect(mockedGlobalHookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
     } else {
@@ -496,9 +561,15 @@ describe("prepared harness source delivery", () => {
       );
     }
     if (testCase.expectedDeliveries === 1) {
-      expect(result.sourceReplyDeliveryMode).toBeUndefined();
+      expect(result.sourceReplyDeliveryMode).toBe(
+        genuineTtsDelivery ? "message_tool_only" : undefined,
+      );
       expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Short fallback final" }),
+        expect.objectContaining(
+          genuineTtsDelivery
+            ? { mediaUrl: audioPath, audioAsVoice: true }
+            : { text: "Short fallback final" },
+        ),
         expect.objectContaining({ kind: "final" }),
       );
     } else {
@@ -753,6 +824,7 @@ describe("prepared harness source delivery", () => {
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
       abortSignal,
+      "static",
     );
     expect(result.payloads).toEqual([{ text: "ok" }]);
     expect(release).toHaveBeenCalledOnce();

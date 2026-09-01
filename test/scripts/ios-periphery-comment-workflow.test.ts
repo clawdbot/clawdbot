@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { compileFunction } from "node:vm";
-import { deflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
@@ -76,7 +76,7 @@ type WorkflowRun = {
   workflow_id: number;
 };
 
-function commenterScript(): string {
+function readCommenterScript(): string {
   const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as Workflow;
   const step = workflow.jobs?.comment?.steps?.find(
     (candidate) => candidate.name === "Upsert Periphery PR comment",
@@ -87,6 +87,14 @@ function commenterScript(): string {
   }
   return script;
 }
+
+const commenterScript = readCommenterScript();
+const executeCommenter = compileFunction(`return (async () => {\n${commenterScript}\n})();`, [
+  "require",
+  "context",
+  "core",
+  "github",
+]) as (require: NodeJS.Require, context: unknown, core: unknown, github: unknown) => Promise<void>;
 
 async function runCommenter(
   artifact: Artifact,
@@ -103,7 +111,6 @@ async function runCommenter(
     workflowRuns?: WorkflowRun[];
   } = {},
 ) {
-  const script = commenterScript();
   const core = {
     infos: [] as string[],
     warnings: [] as string[],
@@ -225,19 +232,8 @@ async function runCommenter(
       repo: "openclaw",
     },
   };
-  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
-    "require",
-    "context",
-    "core",
-    "github",
-  ]) as (
-    require: NodeJS.Require,
-    context: unknown,
-    core: unknown,
-    github: unknown,
-  ) => Promise<void>;
 
-  await execute(createRequire(import.meta.url), context, core, github);
+  await executeCommenter(createRequire(import.meta.url), context, core, github);
 
   return {
     artifactListCount,
@@ -253,17 +249,6 @@ async function runCommenter(
 function expectUnavailableComment(bodies: string[]): void {
   expect(bodies).toHaveLength(1);
   expect(bodies[0]).toContain("Periphery did not complete or its report could not be safely read.");
-}
-
-function crc32(input: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of input) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function u16(value: number): Buffer {
@@ -375,7 +360,7 @@ function setFirstEntryUncompressedSize(archive: Buffer, size: number): Buffer {
 
 describe("iOS Periphery comment workflow", () => {
   it("parses the workflow YAML and embedded github-script JavaScript", () => {
-    const script = commenterScript();
+    const script = commenterScript;
     expect(script).not.toContain("node:child_process");
     expect(script).not.toContain("execFileSync");
     expect(() =>

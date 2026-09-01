@@ -1,10 +1,10 @@
 // Control UI tests cover the session diff panel (sessions.diff RPC).
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -25,7 +25,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/diff-highlighting");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    artifactDir = createControlUiE2eArtifactDir("diff-highlighting");
+  }
+});
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -607,7 +612,6 @@ describeControlUiE2e("session diff panel", () => {
         ),
     ).toBe(true);
     if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
       await panelSurface.screenshot({ path: path.join(artifactDir, "unified-light.png") });
     }
 

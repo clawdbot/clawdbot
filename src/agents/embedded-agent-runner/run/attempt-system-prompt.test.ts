@@ -8,6 +8,17 @@ import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+// Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
+vi.mock("../../../plugins/providers.runtime.js", () => {
+  const rejectProviderDiscovery = () => {
+    throw new Error("Prompt fixture unexpectedly discovered provider runtime");
+  };
+  return {
+    isPluginProvidersLoadInFlight: rejectProviderDiscovery,
+    resolvePluginProvidersCore: rejectProviderDiscovery,
+  };
+});
+
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -117,17 +128,18 @@ describe("buildAttemptSystemPrompt", () => {
           ],
         },
       };
+      const attempt = {
+        config,
+        agentId: "marketing",
+        sessionId: "global-system-prompt",
+        sessionKey: "global",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
+        workspaceDir,
+      };
       const result = await prepareEmbeddedAttemptSystemPrompt({
-        attempt: {
-          config,
-          agentId: "marketing",
-          sessionId: "global-system-prompt",
-          sessionKey: "global",
-          provider: "openai",
-          modelId: "gpt-5.5",
-          model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
-          workspaceDir,
-        } as never,
+        attempt: attempt as never,
         bootstrap: {
           ...buildBootstrapBudgetState({ config, agentId: "marketing", files: [] }),
           workspaceNotes: [],
@@ -139,7 +151,7 @@ describe("buildAttemptSystemPrompt", () => {
         effectiveCwd: workspaceDir,
         effectiveTools: [],
         effectiveWorkspace: workspaceDir,
-        getProviderRuntimeHandle: () => ({ provider: "openai" }),
+        getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
         isRawModelRun: true,
         markStage: vi.fn(),
         modelToolsEnabled: false,

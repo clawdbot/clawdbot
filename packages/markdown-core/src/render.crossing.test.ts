@@ -44,3 +44,36 @@ describe("renderMarkdownWithMarkers crossing spans", () => {
     ).toBe(html);
   });
 });
+
+describe("renderMarkdownWithMarkers code content", () => {
+  it.each([
+    {
+      name: "terminal inline code",
+      markdown: "Copy `name `",
+      html: "Copy <code>name </code>",
+    },
+    {
+      name: "terminal inline code in a link label",
+      markdown: "[`name `](https://example.com)",
+      html: '<a href="https://example.com"><code>name </code></a>',
+    },
+    {
+      name: "inline code followed by prose",
+      markdown: "Copy `name ` next",
+      html: "Copy <code>name </code> next",
+    },
+  ])("renders authored code whitespace: $name", ({ markdown, html }) => {
+    expect(
+      renderMarkdownWithMarkers(markdownToIR(markdown), {
+        styleMarkers: { code: { open: "<code>", close: "</code>" } },
+        escapeText: (text) => text,
+        buildLink: (link) => ({
+          start: link.start,
+          end: link.end,
+          open: `<a href="${link.href}">`,
+          close: "</a>",
+        }),
+      }),
+    ).toBe(html);
+  });
+});

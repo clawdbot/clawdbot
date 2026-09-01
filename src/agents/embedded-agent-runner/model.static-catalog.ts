@@ -280,7 +280,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
     workspaceDir: params?.workspaceDir,
   };
   const matchesStaticModelId = params?.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -549,7 +549,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
 ) => Promise<ProviderRuntimeModel | undefined> {
   const env = params.env ?? process.env;
   const matchesStaticModelId = params.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
   const providerPluginIds = new Map<string, string[]>();

@@ -35,10 +35,6 @@ const stubs = new Map<string, string>([
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
   [
-    sourceUrl("../infra/update-check.ts"),
-    "export const resolveUpdateInstallKind = async () => { throw new Error('Unexpected install check'); };",
-  ],
-  [
     sourceUrl("../plugins/installed-plugin-index-records.ts"),
     "export const loadInstalledPluginIndexInstallRecords = async () => ({});",
   ],
@@ -60,7 +56,7 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
+    "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),

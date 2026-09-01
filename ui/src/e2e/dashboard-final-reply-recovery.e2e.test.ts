@@ -10,7 +10,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/dashboard-final-reply-recovery");
 
 function dashboardPath(): string {
   return controlUiSessionPath(sessionKey).replace(/^\/chat\//u, "/dashboard/");
@@ -20,13 +19,20 @@ suite.define(() => {
   it("projects a distinct durable reply after interim text and a message-less terminal", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "dashboard-final-reply-recovery"), {
+        recursive: true,
+      });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -176,14 +182,22 @@ suite.define(() => {
       if (recordProof) {
         await page.screenshot({
           fullPage: true,
-          path: path.join(proofDir, "dashboard-final-reply-recovered.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
+            "dashboard-final-reply-recovered.png",
+          ),
         });
       }
     } finally {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(proofDir, "dashboard-final-reply-recovered.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
+            "dashboard-final-reply-recovered.webm",
+          ),
+        );
       }
     }
   });

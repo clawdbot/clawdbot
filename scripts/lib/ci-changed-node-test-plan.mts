@@ -18,6 +18,7 @@ import {
 import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  resolveExtensionTestJobFileLimit,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
@@ -30,6 +31,7 @@ import {
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
   pretestBuildMode?: VitestPretestBuildMode;
@@ -363,22 +365,46 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
-  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
-    ...rootsByConfig,
-  ].flatMap(([config, roots]) => {
-    const testFiles = shouldSplitExtensionTestProcesses(config)
-      ? listExtensionTestFilesForRoots(roots)
+  const plans: Array<{
+    config: string;
+    env?: Record<string, string>;
+    includePatterns?: string[];
+  }> = [...rootsByConfig].flatMap(([config, roots]) => {
+    const splitProcesses = shouldSplitExtensionTestProcesses(config);
+    const testFiles = resolveExtensionTestJobFileLimit(config)
+      ? listExtensionTestFilesForRoots(splitProcesses ? roots : ["extensions"]).filter(
+          (file) =>
+            splitProcesses ||
+            resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/")) === config,
+        )
       : [];
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
     return chunks.length > 1
-      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
-      : [{ config, roots }];
+      ? chunks.map((includePatterns, index) =>
+          Object.assign(
+            { config },
+            splitProcesses
+              ? { includePatterns }
+              : {
+                  // Counts size jobs only. Vitest owns the complete config inventory,
+                  // including unrelated plugin roots, excludes and untracked tests.
+                  env: {
+                    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+                      `--shard=${index + 1}/${chunks.length}`,
+                    ]),
+                  },
+                },
+          ),
+        )
+      : [{ config }];
   });
-  return plans.map(({ config, includePatterns, roots }, index) => {
+  return plans.map(({ config, env, includePatterns }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
     const shard: ChangedNodeTestShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
+      // No plans overlap in this row, so CI can scale the single process's worker budget.
+      planConcurrency: 1,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
@@ -392,8 +418,8 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }
-    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
-      shard.planConcurrency = 1;
+    if (env) {
+      shard.env = env;
     }
     return shard;
   });

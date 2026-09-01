@@ -1349,12 +1349,6 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   }
   clearRuntimeAuthProfileStoreSnapshots();
   clearAuthProfileMigrationDiagnostics();
-  if (result.changes.length > 0) {
-    note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
-  }
   return result;
 }
 

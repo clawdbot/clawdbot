@@ -2138,12 +2138,6 @@ button.chat-reply-preview--message:disabled {
   outline: none;
 }
 
-.chat-selection-popup button svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--muted);
-}
 /* Keep size containment outside the flex surface: retained mobile panes can be
    measured at zero width, and containment there collapses the editor subtree. */
 .agent-chat__composer-shell,
@@ -6116,6 +6110,13 @@ button.chat-pr__diff {
 .chat-controls__effort-picker--reserved {
   visibility: hidden;
   pointer-events: none;
+}
+
+/* Collapse the empty effort slot while loading unless the open model menu
+   needs its anchor. */
+.chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
+  .chat-controls__effort-picker--reserved {
+  display: none;
 }
 
 .chat-controls__inline-select {

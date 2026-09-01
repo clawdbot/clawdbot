@@ -130,6 +130,9 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
         disableLoginShell: true,
       };
@@ -159,11 +162,14 @@ describe("Codex managed shell environment", () => {
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
           PREVIEW_SERVICE_TOKEN: "",
+          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
+          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
       });
       expect(request.config?.allow_login_shell).toBe(false);
       const includeOnly = shellEnvironmentPolicy.include_only;
-      expect(includeOnly).toHaveLength(5);
+      expect(includeOnly).toHaveLength(8);
       expect(includeOnly).toEqual(
         expect.arrayContaining([
           "PATH",
@@ -171,6 +177,9 @@ describe("Codex managed shell environment", () => {
           "GITHUB_TOKEN",
           "GH_TOKEN",
           "PREVIEW_SERVICE_TOKEN",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WORKSPACE_DIR",
         ]),
       );
       expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
@@ -2615,7 +2624,11 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
-      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+      managedThreads: {
+        has: vi.fn(async () => false),
+        mark,
+        snapshot: vi.fn(async () => new Map()),
+      },
     });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2665,7 +2678,13 @@ describe("Codex plugin binding recovery", () => {
     const mark = vi.fn(async () => undefined);
     const bindingStore = Object.assign(
       createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
-      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+      {
+        managedThreads: {
+          has: vi.fn(async () => false),
+          mark,
+          snapshot: vi.fn(async () => new Map()),
+        },
+      },
     );
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -2709,6 +2728,7 @@ describe("Codex plugin binding recovery", () => {
     const stateStore = createCodexTestBindingStateStore();
     const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark: vi.fn(async () => {
           throw new Error("managed ownership unavailable");
         }),
@@ -2796,46 +2816,6 @@ describe("Codex plugin binding recovery", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
-  it("rechecks scheduled current policy against the exact existing thread", async () => {
-    const sessionFile = path.join(tempDir, "session-current-policy.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-current-policy");
-    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start" || method === "thread/resume") {
-        return threadStartResult("thread-current-policy");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const build = vi.fn(async (_options?: { threadId?: string }) => ({
-      enabled: true,
-      configPatch: { apps: { _default: { enabled: false } } },
-      fingerprint: "plugin-config-current-policy",
-      inputFingerprint: "plugin-input-current-policy",
-      policyContext: { fingerprint: "plugin-policy-current", apps: {}, pluginAppIds: {} },
-      diagnostics: [],
-    }));
-    const common = {
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      pluginThreadConfig: {
-        enabled: true,
-        requiresCurrentPolicyCheck: true,
-        inputFingerprint: "plugin-input-current-policy",
-        build,
-      },
-    };
-
-    await startOrResumeThread(common);
-    await startOrResumeThread(common);
-
-    expect(build).toHaveBeenNthCalledWith(1);
-    expect(build).toHaveBeenNthCalledWith(2, { threadId: "thread-current-policy" });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
-  });
-
   it("rebuilds once when a settled negative binding still enables the plugin", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2843,6 +2823,9 @@ describe("Codex plugin binding recovery", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-settled-transition");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -2907,6 +2890,8 @@ describe("Codex plugin binding recovery", () => {
     expect(build).toHaveBeenCalledTimes(2);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
+      "thread/resume",
+      "thread/unsubscribe",
       "thread/start",
       "thread/resume",
     ]);
@@ -3014,6 +2999,7 @@ describe("Codex plugin binding recovery", () => {
       "thread/start",
       "app/installed",
       "thread/resume",
+      "app/installed",
     ]);
     expect(threadStarts).toHaveLength(3);
     expect(threadStarts[1]?.config).toMatchObject({

@@ -344,6 +344,7 @@ describe("openclaw.setup", () => {
   });
 
   it.each([
+    ["openclaw.setup.activate.start" as const, { sessionId: "busy-activation", kind: "codex-cli" }],
     [
       "openclaw.setup.auth.start" as const,
       { sessionId: "busy-auth", authChoice: "github-copilot" },

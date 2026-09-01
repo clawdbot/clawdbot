@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
-import { aroundEach, expect, type TestContext } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
@@ -21,26 +21,17 @@ export const preparationClient = `
   finally {process.disconnect();}
 `;
 
-export function createWorkerArtifactFixtures() {
+function createWorkerArtifactFixtures({
+  signal,
+  onTestFinished,
+}: Pick<TestContext, "signal" | "onTestFinished">) {
   const fixtureLifetime = createFixtureLifetime();
-  // Each suite owns its inputs and late child work. Concurrent files must never
-  // drain or delete another suite's fixtures after a failed assertion.
-  aroundEach(async (runTest) => {
-    try {
-      await runTest();
-    } finally {
-      await fixtureLifetime.cleanup();
-    }
-  });
   function fixtureDirectory() {
     fs.mkdirSync(artifacts, { recursive: true });
     return fixtureLifetime.createTempDir("worker proof-", artifacts);
   }
 
-  function createFixtureCommands({
-    signal,
-    onTestFinished,
-  }: Pick<TestContext, "signal" | "onTestFinished">) {
+  function createFixtureCommands() {
     const finished = new AbortController();
     const commandSignal = AbortSignal.any([signal, finished.signal]);
     const commands: Promise<unknown>[] = [];
@@ -147,6 +138,28 @@ export function createWorkerArtifactFixtures() {
   return { fixtureLifetime, fixtureDirectory, createFixtureCommands };
 }
 
+export function createWorkerArtifactTest() {
+  const test = it.extend<{ workerArtifacts: ReturnType<typeof createWorkerArtifactFixtures> }>({
+    workerArtifacts: async ({ signal, onTestFinished }, use) => {
+      await use(createWorkerArtifactFixtures({ signal, onTestFinished }));
+    },
+  });
+  // Resolve the case's lifetime before runTest so cleanup follows onTestFinished.
+  // Ordinary fixture teardown runs earlier and can wait on children not yet aborted.
+  test.aroundEach(async (runTest, { workerArtifacts }) => {
+    try {
+      await runTest();
+    } finally {
+      await workerArtifacts.fixtureLifetime.cleanup();
+    }
+  });
+  test.beforeAll(() => {
+    vi.setConfig({ maxConcurrency: 2 });
+    return () => vi.resetConfig();
+  });
+  return test;
+}
+
 export function writeFixture(directory: string, name: string, source: string) {
   const filename = path.join(directory, name);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
@@ -212,6 +225,7 @@ export function workerProbe(
     import path from 'node:path';
     import { fileURLToPath } from 'node:url';
     import { DatabaseSync } from 'node:sqlite';
+    import { Worker } from 'node:worker_threads';
     import { it, expect, vi, inject } from 'vitest';
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
@@ -219,27 +233,34 @@ export function workerProbe(
     import { runtimeProcessBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
     import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
+    import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-readonly-location.ts"))};
+    import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
+    const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
     // Import acquisition must finish during collection, before any fixture hook starts.
-    const tuiPresentAtCollection = tuiUrls.every(url => fs.existsSync(new URL(url)));
+    const entriesPresentAtCollection = [...tuiUrls,...setupUrls].every(url => fs.existsSync(new URL(url)));
     vi.mock('node:child_process', async (original) => {
       const actual = await original();
       return {...actual, execFile: vi.fn(actual.execFile)};
+    });
+    vi.mock('node:worker_threads', async (original) => {
+      const actual = await original();
+      return {...actual, Worker: vi.fn(function(...args) { return new actual.Worker(...args); })};
     });
     it('runs current SQLite code in the expected execution mode', async () => {
       const launcherArgv = inject('launcherArgv');
       expect(path.isAbsolute(launcherArgv[1])).toBe(true);
       expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
-      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(7);
+      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(9);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
         expect(source).toMatch(/\\.ts$/);
         expect(fs.existsSync(source)).toBe(true);
       }
-      expect(tuiPresentAtCollection).toBe(true);
-      for (const entry of Object.values(tuiPtyRuntimeEntrypoints)) {
+      expect(entriesPresentAtCollection).toBe(true);
+      for (const entry of [...Object.values(tuiPtyRuntimeEntrypoints),...cliCompactionBackendEntrypoints]) {
         const source = vitestWorkerBuildEntries[entry.distWorkerPath.replace(/\\.js$/, '')];
         expect(source).not.toContain('/dist/');
         expect(source).toMatch(/\\.ts$/);
@@ -259,14 +280,19 @@ export function workerProbe(
           const args = cp.execFile.mock.calls[0][1];
           const generation = runtimeProcessEntrypoints.sqliteReadOnly.currentModuleUrl;
           const sourceMode = ${mode === "auto" ? "generation.endsWith('.ts')" : mode === "source"};
+          await expect(runSqliteTranscriptArchivePublishWorker([])).resolves.toEqual([]);
+          const [archiveUrl] = Worker.mock.calls.at(-1);
+          expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
+          if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           expect(tuiUrls).toHaveLength(4);
-          for (const url of tuiUrls) {
+          expect(setupUrls).toHaveLength(2);
+          for (const url of [...tuiUrls,...setupUrls]) {
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           }
           expect(args.includes('tsx')).toBe(sourceMode);
           expect(args[sourceMode ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
-          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, value, configValue:inject('configValue'), knn:vectorKnnProcessEntrypoint.currentModuleUrl})+'\\n');
+          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:vectorKnnProcessEntrypoint.currentModuleUrl})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {

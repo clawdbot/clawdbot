@@ -266,9 +266,12 @@ describe("package scripts", () => {
     expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
   });
 
-  it("runs compiled worker path, IPC, and cleanup coverage in Windows CI", () => {
-    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toContain(
-      "test/scripts/vitest-worker-artifacts.test.ts",
+  it("runs compiled worker path, IPC, transform, and cleanup coverage in Windows CI", () => {
+    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toEqual(
+      expect.arrayContaining([
+        "test/scripts/vitest-worker-artifacts.test.ts",
+        "test/scripts/vitest-worker-artifacts.transforms.test.ts",
+      ]),
     );
   });
 

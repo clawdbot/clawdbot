@@ -6,6 +6,11 @@ import {
   listCacheFiles,
   portableRelativePath,
   publishArtifactFiles,
+  restoreBuildStepCacheOutputs,
+  finalizeBuildStepCache,
+  type BuildCacheStep,
+  type BuildCacheState,
+  type BuildCacheParams,
 } from "./build-artifact-cache.mts";
 
 function declarationReferences(file: string, contents: string) {
@@ -53,12 +58,26 @@ export async function publishStagedDeclarations(
   staging: string,
   dist: string,
   required: string[],
+  cache?: {
+    step: BuildCacheStep;
+    state: BuildCacheState;
+    params: BuildCacheParams;
+    sealInputs?: () => { signature: string; inputs: string[] };
+  },
 ) {
-  const code = await executeTsdownBuildPlan(plan);
-  if (code !== 0) {
-    throw Object.assign(new Error(`SDK declaration build failed with exit ${code}`), {
-      exitCode: code,
-    });
+  const reused = cache?.state.fresh === true;
+  if (reused) {
+    if (!restoreBuildStepCacheOutputs(cache.state, cache.params)) {
+      throw new Error("SDK declaration cache changed before restoration; rerun the build");
+    }
+    console.log("[plugin-sdk declarations] restored complete cached generation");
+  } else {
+    const code = await executeTsdownBuildPlan(plan);
+    if (code !== 0) {
+      throw Object.assign(new Error(`SDK declaration build failed with exit ${code}`), {
+        exitCode: code,
+      });
+    }
   }
   const files = listCacheFiles(
     staging,
@@ -111,5 +130,15 @@ export async function publishStagedDeclarations(
     [{ path: "plugin-sdk", extensions: [".d.ts", ".d.mts", ".d.cts"], recursive: false }],
     fs,
   ).map((file) => portableRelativePath(dist, file));
+  if (cache?.sealInputs && !reused) {
+    const { signature, inputs } = cache.sealInputs();
+    cache.state.signature = signature;
+    cache.state.consumedInputs = inputs;
+  }
   publishArtifactFiles(staging, dist, ordered, previous);
+  if (cache && !reused) {
+    // Seal only the validated private generation; live dist also contains declarations
+    // owned by other compiler groups and must never become this SDK snapshot.
+    finalizeBuildStepCache(cache.step, cache.state, cache.params);
+  }
 }

@@ -27,7 +27,10 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
-import { validateReleasePreflightTagIdentity } from "./npm-preflight-tooling-identity.mjs";
+import {
+  validateNpmPreflightProducer,
+  validateReleasePreflightTagIdentity,
+} from "./npm-preflight-tooling-identity.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import {
   dedicatedSectionVersionForTag,
@@ -2002,6 +2005,14 @@ async function main() {
   downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const npmPreflightProducer = validateNpmPreflightProducer({
+    manifest: npmManifest,
+    repository: options.repo,
+    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
+    workflowSha: npmRun.headSha,
+    runId: options.npmPreflightRunId,
+    runAttempt: npmRun.runAttempt,
+  });
   const immutablePluginSdkApiEvidence = readJson(
     join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
     "immutable Plugin SDK API evidence",
@@ -2140,6 +2151,7 @@ async function main() {
     npmPreflightUrl: npmRun.url,
     npmPreflightSource,
     pluginSdkApi: npmManifest.pluginSdkApi,
+    npmPreflightProducer,
     pluginSdkApiValidation,
     artifacts: {
       npmPreflight: npmArtifactName,

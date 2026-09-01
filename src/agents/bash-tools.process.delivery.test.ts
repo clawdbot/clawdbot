@@ -1,6 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginHookBeforeMessageWriteEvent } from "../plugins/types.js";
 import {
   addSession,
   appendOutput,
@@ -10,12 +17,22 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import {
+  resetCodeModeTestState,
+  resultDetails,
+  waitUntilCompleted,
+} from "./code-mode.test-support.js";
 import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { SessionManager } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 
 afterEach(() => {
+  resetGlobalHookRunner();
+  resetCodeModeTestState();
   resetProcessRegistryForTests();
 });
 
@@ -96,13 +113,17 @@ test.each(["running", "completed"] as const)(
     const guard = installSessionToolResultGuard(manager);
 
     const droppedTurn = processTurn(`${status}-dropped`, sessionId);
-    const dropped = await poll(processTool, sessionId, droppedTurn.toolCall.id, droppedTurn);
+    const dropped = snapshotToolSearchTargetTranscriptResult(
+      await poll(processTool, sessionId, droppedTurn.toolCall.id, droppedTurn),
+    );
     expect(resultText(dropped)).toContain(`${status}-output`);
     manager.appendMessage(droppedTurn.assistantMessage);
     guard.flushPendingToolResults();
 
     const retryTurn = processTurn(`${status}-retry`, sessionId);
-    const retry = await poll(processTool, sessionId, retryTurn.toolCall.id, retryTurn);
+    const retry = snapshotToolSearchTargetTranscriptResult(
+      await poll(processTool, sessionId, retryTurn.toolCall.id, retryTurn),
+    );
     expect(resultText(retry)).toContain(`${status}-output`);
     manager.appendMessage(retryTurn.assistantMessage);
     persistResult(manager, retryTurn.toolCall.id, retry);
@@ -111,6 +132,107 @@ test.each(["running", "completed"] as const)(
     expect(resultText(observed)).not.toContain(`${status}-output`);
   },
 );
+
+test.each(["transformed", "blocked", "error"] as const)(
+  "preserves poll acknowledgement through %s nested activity persistence",
+  async (mode) => {
+    const session = createProcessSessionFixture({ id: "nested-poll", backgrounded: true });
+    addSession(session);
+    appendOutput(session, "stdout", "nested-output\n");
+    if (mode === "error") {
+      markExited(session, 1, null, "failed");
+    }
+    let writes = 0;
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "nested-poll-write",
+      hookName: "before_message_write",
+      source: "test",
+      handler: ({ message }: PluginHookBeforeMessageWriteEvent) => {
+        if (message.role !== "custom") {
+          return undefined;
+        }
+        writes += 1;
+        return mode === "blocked" && writes === 1 ? { block: true } : { message: { ...message } };
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const harness = createSubscribedCodeModeHarness({ name: "poll-persistence" });
+    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, createProcessTool()] });
+    const execTool = expectDefined(harness.tools[0], "Code Mode exec tool");
+    const waitTool = expectDefined(harness.tools[1], "Code Mode wait tool");
+    const code = 'return await process({ action: "poll", sessionId: "nested-poll" });';
+    const pollThroughBridge = async (id: string) => {
+      const toolCall = { type: "toolCall" as const, id, name: execTool.name, arguments: { code } };
+      const assistantMessage = makeAgentAssistantMessage({
+        content: [toolCall],
+        stopReason: "toolUse",
+      });
+      return await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, async () => {
+        const details = resultDetails(await execTool.execute(id, { code }));
+        return await waitUntilCompleted({ details, waitTool });
+      });
+    };
+    try {
+      expect(await pollThroughBridge("nested-first")).toMatchObject({ status: "completed" });
+      expect(harness.nestedToolActivities).toHaveLength(1);
+      expect(harness.nestedToolActivities[0]?.details.result.content).toContainEqual(
+        expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),
+      );
+      if (mode === "error") {
+        expect(harness.nestedToolActivities[0]?.details.isError).toBe(true);
+      }
+
+      expect(await pollThroughBridge("nested-next-turn")).toMatchObject({ status: "completed" });
+      expect(harness.nestedToolActivities).toHaveLength(2);
+      if (mode === "blocked") {
+        expect(harness.nestedToolActivities[1]?.details.result.content).toContainEqual(
+          expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),
+        );
+        expect(await pollThroughBridge("nested-after-retry")).toMatchObject({
+          status: "completed",
+        });
+      }
+      expect(harness.nestedToolActivities.at(-1)?.details.result.content).not.toContainEqual(
+        expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),
+      );
+      expect(writes).toBe(mode === "blocked" ? 3 : 2);
+      expect(
+        harness.sessionManager
+          .getEntries()
+          .filter((entry) => entry.type === "message" && entry.message.role === "custom"),
+      ).toHaveLength(2);
+    } finally {
+      harness.dispose();
+    }
+  },
+);
+
+test("a retained old snapshot cannot consume a successor poll delivery", async () => {
+  const session = createProcessSessionFixture({ id: "retained-poll", backgrounded: true });
+  addSession(session);
+  appendOutput(session, "stdout", "old-output\n");
+  const processTool = createProcessTool();
+  const firstTurn = processTurn("old-result", session.id);
+  const result = await poll(processTool, session.id, firstTurn.toolCall.id, firstTurn);
+  const retained = snapshotToolSearchTargetTranscriptResult(result);
+  const manager = SessionManager.inMemory();
+  installSessionToolResultGuard(manager);
+  manager.appendMessage(firstTurn.assistantMessage);
+  persistResult(manager, firstTurn.toolCall.id, result);
+
+  appendOutput(session, "stdout", "successor-output\n");
+  expect(resultText(await poll(processTool, session.id, "successor-dropped"))).toContain(
+    "successor-output",
+  );
+  const retainedTurn = processTurn("retained-old-result", session.id);
+  manager.appendMessage(retainedTurn.assistantMessage);
+  persistResult(manager, retainedTurn.toolCall.id, retained);
+
+  expect(resultText(await poll(processTool, session.id, "successor-retry"))).toContain(
+    "successor-output",
+  );
+});
 
 test.each(["initial", "retry"] as const)(
   "does not duplicate $phase output across parallel polls from one assistant turn",

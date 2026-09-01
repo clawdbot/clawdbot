@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
@@ -139,10 +140,10 @@ async function setToolTitleProofCue(page: Page, text: string): Promise<void> {
 
 suite.define(() => {
   it("bounds a 240-row title burst and preserves overflow fallbacks", async () => {
-    const artifactDir =
-      process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() ||
-      path.join(process.cwd(), ".artifacts", "ui-visual-proof", "tool-title-bounds", "executable");
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir(
+      "tool-title-bounds-executable",
+      process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined,
+    );
     const context = await suite.newBrowserContext({
       locale: "en-US",
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1440 } },
@@ -269,10 +270,10 @@ suite.define(() => {
   });
 
   it("resumes title generation after transcript pruning removes the cursor", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("tool-title-bounds", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -546,7 +547,10 @@ suite.define(() => {
   });
 
   it("invalidates a rendered title when the gateway client is replaced", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("tool-title-bounds", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir

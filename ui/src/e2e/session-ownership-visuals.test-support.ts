@@ -1,21 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-export const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "drafts-ux",
-);
-export const sessionOwnerProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-owner-stack",
-);
 
 type AvatarFixture = {
   id: string;
@@ -66,38 +53,47 @@ export async function avatarLabelCenterDelta(row: Locator) {
   });
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, "drafts-ux", fileName),
   });
 }
 
-export async function captureSessionOwnerProof(page: Page, fileName: string) {
+export async function captureSessionOwnerProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
   await page.locator(".sidebar-sessions").screenshot({
     animations: "disabled",
-    path: path.join(sessionOwnerProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
   });
 }
 
-export async function captureSessionOwnerPageProof(page: Page, fileName: string) {
+export async function captureSessionOwnerPageProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(sessionOwnerProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
   });
 }
 

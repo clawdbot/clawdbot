@@ -34,40 +34,6 @@ function snapshotAndReplace(configPath, snapshotPath, authoredConfig, parkedConf
   );
 }
 
-function parkPrepublish(configPath, snapshotPath) {
-  requirePaths("park-prepublish", configPath, snapshotPath);
-  const authoredConfig = fs.readFileSync(configPath);
-  const config = JSON.parse(authoredConfig.toString("utf8"));
-  requireObject(config, "prepublish auth config");
-  for (const key of ["plugins", "channels", "gateway"]) {
-    const value = config[key];
-    if (value !== undefined) {
-      requireObject(value, `prepublish auth config ${key}`);
-    }
-  }
-  if (config.plugins?.allow !== undefined && !Array.isArray(config.plugins.allow)) {
-    throw new Error("prepublish auth config plugins.allow must be an array");
-  }
-  if (config.plugins?.entries !== undefined) {
-    requireObject(config.plugins.entries, "prepublish auth config plugins.entries");
-  }
-  if (config.gateway?.reload !== undefined) {
-    requireObject(config.gateway.reload, "prepublish auth config gateway.reload");
-  }
-  if (Array.isArray(config.plugins?.allow)) {
-    config.plugins.allow = config.plugins.allow.filter((id) => id !== "whatsapp");
-  }
-  if (config.plugins?.entries) {
-    delete config.plugins.entries.whatsapp;
-  }
-  if (config.channels) {
-    delete config.channels.whatsapp;
-  }
-  config.gateway ??= {};
-  config.gateway.reload = { ...config.gateway.reload, mode: "off" };
-  snapshotAndReplace(configPath, snapshotPath, authoredConfig, config);
-}
-
 function parkRestartProbe(configPath, snapshotPath, rawPort) {
   requirePaths("park-restart-probe", configPath, snapshotPath);
   const port = Number(rawPort);
@@ -119,9 +85,6 @@ const [command, configPath, snapshotPath, port] = process.argv.slice(2);
 
 try {
   switch (command) {
-    case "park-prepublish":
-      parkPrepublish(configPath, snapshotPath);
-      break;
     case "park-restart-probe":
       parkRestartProbe(configPath, snapshotPath, port);
       break;
@@ -133,7 +96,7 @@ try {
       break;
     default:
       throw new Error(
-        "usage: config-parking.mjs <park-prepublish|park-restart-probe|park-companion-install|restore> <config-path> <snapshot-path> [port]",
+        "usage: config-parking.mjs <park-restart-probe|park-companion-install|restore> <config-path> <snapshot-path> [port]",
       );
   }
 } catch (error) {

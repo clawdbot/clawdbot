@@ -851,7 +851,20 @@ describe("ConfigPage Updates integration", () => {
     }
     channel.value = "beta";
     channel.dispatchEvent(new Event("change"));
-    const automatic = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const policySwitches = [
+      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
+    ];
+    const checks = policySwitches.find(
+      (control) => control.textContent?.trim() === "Check for updates",
+    );
+    if (!checks) {
+      throw new Error("Missing update checks control");
+    }
+    checks.checked = false;
+    checks.dispatchEvent(new Event("change"));
+    const automatic = policySwitches.find(
+      (control) => control.textContent?.trim() === "Automatic updates",
+    );
     if (!automatic) {
       throw new Error("Missing automatic update control");
     }
@@ -863,6 +876,7 @@ describe("ConfigPage Updates integration", () => {
     await nextFrame();
 
     expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
+    expect(patchForm).toHaveBeenCalledWith(["update", "checkOnStart"], false);
     expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
     // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
     expect(runUpdate).not.toHaveBeenCalled();

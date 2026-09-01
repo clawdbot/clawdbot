@@ -207,30 +207,6 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
   return Type.Object(properties);
 }
 
-function resolveVideoGenerationModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-}): ToolModelConfig | null {
-  return resolveCapabilityModelConfigForTool({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.video,
-    modelOverride: params.modelOverride,
-    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
-  });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.videoGenerateToolTestApi")] = {
-    resolveVideoGenerationModelConfigForTool,
-  };
-}
-
 function collectVideoGenerationModelProviderIds(params: {
   cfg: OpenClawConfig;
   modelConfig: ToolModelConfig;
@@ -858,12 +834,14 @@ export function createVideoGenerateTool(options?: {
       }
 
       const model = readToolStringParam(args, "model");
-      const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
+      const videoGenerationModelConfig = resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.video,
         modelOverride: model,
+        providers: () => listRuntimeVideoGenerationProviders({ config: cfg }),
       });
       if (!videoGenerationModelConfig) {
         throw new ToolInputError("No video-generation model configured.");
