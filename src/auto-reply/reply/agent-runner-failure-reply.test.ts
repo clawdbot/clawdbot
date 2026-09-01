@@ -89,6 +89,23 @@ describe("buildExternalRunFailureReply", () => {
     );
     expect(reply.isGenericRunnerFailure).toBe(false);
   });
+
+  it("surfaces a Claude CLI re-auth hint for a structured 410 session-expired failure", () => {
+    const message = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    const reply = buildExternalRunFailureReply({
+      message,
+      error: new FailoverError(message, {
+        reason: "session_expired",
+        provider: "claude-cli",
+        model: "claude-sonnet-4-20250514",
+        status: 410,
+      }),
+    });
+
+    expect(reply.text).toContain("Model login expired on the gateway");
+    expect(reply.text).toContain("claude auth login");
+    expect(reply.isGenericRunnerFailure).toBe(false);
+  });
 });
 
 describe("buildPreflightCompactionFailureText", () => {

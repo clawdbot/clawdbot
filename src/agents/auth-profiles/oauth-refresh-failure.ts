@@ -136,9 +136,17 @@ const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 // unrelated provider 401 failures.
 const CLAUDE_CLI_AUTH_FAILURE_RE =
   /\bclaude-cli\b.+?\b(failed to authenticate|401\s+invalid authentication credentials)\b/is;
+// 410 session_expired structured failure surfaces "OAuth session expired" without
+// the 401 "Invalid authentication credentials" phrase; recognize it so the same
+// re-authentication hint family is emitted when structured metadata is incomplete.
+const CLAUDE_CLI_SESSION_EXPIRED_RE = /\bclaude-cli\b.+?\boauth session expired\b/is;
 
 function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
+}
+
+function isClaudeCliSessionExpiredMessage(message: string): boolean {
+  return CLAUDE_CLI_SESSION_EXPIRED_RE.test(message);
 }
 
 function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
@@ -149,8 +157,8 @@ function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAu
   if (
     candidate.name !== "FailoverError" ||
     candidate.provider !== "claude-cli" ||
-    candidate.reason !== "auth" ||
-    candidate.status !== 401
+    (candidate.reason !== "auth" && candidate.reason !== "session_expired") ||
+    (candidate.status !== 401 && candidate.status !== 410)
   ) {
     return null;
   }
@@ -173,7 +181,8 @@ function classifyStructuredClaudeCliOAuthFailureReason(
   }
   const hasExpiredTokenSignal =
     lower.includes("failed to authenticate") ||
-    lower.includes("invalid authentication credentials");
+    lower.includes("invalid authentication credentials") ||
+    lower.includes("oauth session expired");
   return hasExpiredTokenSignal ? "revoked" : null;
 }
 
@@ -183,12 +192,13 @@ function isOAuthRefreshFailureMessage(message: string): boolean {
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
     lower.includes("authentication session could not be refreshed automatically") ||
-    isClaudeCliExpiredOAuthMessage(message)
+    isClaudeCliExpiredOAuthMessage(message) ||
+    isClaudeCliSessionExpiredMessage(message)
   );
 }
 
 function extractOAuthRefreshFailureProvider(message: string): string | null {
-  if (isClaudeCliExpiredOAuthMessage(message)) {
+  if (isClaudeCliExpiredOAuthMessage(message) || isClaudeCliSessionExpiredMessage(message)) {
     // The message was produced by the claude-cli subprocess; the provider is
     // statically known — no need to parse it from the error text.
     return "claude-cli";
@@ -256,6 +266,11 @@ export function classifyOAuthRefreshFailureReason(
     // when its stored OAuth token has expired.  Map this to "revoked" so the
     // caller surfaces the targeted re-auth hint rather than the generic login
     // failure copy.
+    return "revoked";
+  }
+  if (isClaudeCliSessionExpiredMessage(message)) {
+    // 410 session_expired: the native Claude login expired and could not be
+    // refreshed. Same targeted re-auth family as the 401 path.
     return "revoked";
   }
   return null;
