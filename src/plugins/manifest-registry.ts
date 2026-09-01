@@ -457,7 +457,6 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
-    icon: normalizeOptionalString(params.manifest.icon),
     iconPath: resolvePortablePluginIconPath({
       rootDir: params.candidate.rootDir,
       rejectHardlinks: params.rejectHardlinks,

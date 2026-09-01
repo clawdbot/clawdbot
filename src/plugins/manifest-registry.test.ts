@@ -592,7 +592,7 @@ describe("loadPluginManifestRegistry", () => {
     expectRegistryDiagnosticContains(registry, "plugin manifest not found");
   });
 
-  it("preserves optional manifest icon URLs on registry records", () => {
+  it("ignores legacy manifest icon URLs", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "icon-demo",
@@ -609,7 +609,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
+    expect(registry.plugins[0]).not.toHaveProperty("icon");
   });
 
   it("discovers the portable package icon without manifest indirection", () => {

@@ -347,33 +347,30 @@ export async function handlePluginIconHttpRequest(
       ? // The route accepts a hostname, never a caller-controlled URL. Keep
         // path and scheme fixed so only the strict fetch guard owns redirects.
         `https://${faviconHostname}/favicon.ico`
-      : pluginIcon?.kind === "url"
-        ? pluginIcon.url
-        : undefined;
+      : undefined;
   if (!pluginIcon && !remoteIconUrl) {
     sendNotFound(res);
     return true;
   }
   const cacheScope = pluginId ? `plugin:${pluginId}` : faviconHostname ? "favicon" : "catalog";
-  const icon =
-    pluginIcon?.kind === "file"
-      ? await loadPackageIcon({
-          cacheScope,
-          iconPath: pluginIcon.path,
-          rootPath: pluginIcon.rootPath,
-        })
-      : await loadCatalogIcon({
-          cacheScope,
-          iconUrl: remoteIconUrl!,
-          ...(faviconHostname
-            ? {
-                maxBytes: LINK_FAVICON_MAX_BYTES,
-                requireHttps: true,
-                retainFailureForMs: LINK_FAVICON_NEGATIVE_CACHE_TTL_MS,
-                limitConcurrency: true,
-              }
-            : {}),
-        });
+  const icon = pluginIcon
+    ? await loadPackageIcon({
+        cacheScope,
+        iconPath: pluginIcon.path,
+        rootPath: pluginIcon.rootPath,
+      })
+    : await loadCatalogIcon({
+        cacheScope,
+        iconUrl: remoteIconUrl!,
+        ...(faviconHostname
+          ? {
+              maxBytes: LINK_FAVICON_MAX_BYTES,
+              requireHttps: true,
+              retainFailureForMs: LINK_FAVICON_NEGATIVE_CACHE_TTL_MS,
+              limitConcurrency: true,
+            }
+          : {}),
+      });
   if (!icon) {
     sendNotFound(res);
     return true;

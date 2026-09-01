@@ -221,10 +221,17 @@ function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string
 function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
   const source = path.join(pluginDir, PACKAGE_ICON_PATH);
   const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
-  if (!fs.existsSync(source)) {
-    removeFileIfExists(target);
+  let sourceIsFile = false;
+  try {
+    sourceIsFile = fs.lstatSync(source).isFile();
+  } catch {
+    // Missing or unreadable presentation assets must not invalidate the plugin package.
+  }
+  if (!sourceIsFile) {
+    removePathIfExists(target);
     return;
   }
+  removePathIfExists(target);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(source, target);
 }

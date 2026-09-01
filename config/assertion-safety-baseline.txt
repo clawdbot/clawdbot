@@ -3458,7 +3458,7 @@ src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-runtime-load.ts	2
 src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	4
-src/plugins/management-service.ts	5
+src/plugins/management-service.ts	4
 src/plugins/manifest-capability-normalizers.ts	3
 src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-registry.ts	2

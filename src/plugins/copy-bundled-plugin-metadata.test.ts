@@ -121,6 +121,22 @@ describe("copyBundledPluginMetadata", () => {
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
+  it("ignores a non-file package icon and removes stale output", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-invalid-icon-");
+    const pluginDir = createPlugin(repoRoot, {
+      id: "acpx",
+      packageName: "@openclaw/acpx",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    fs.mkdirSync(path.join(pluginDir, "assets", "icon.png"), { recursive: true });
+    const staleIconPath = path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png");
+    fs.mkdirSync(path.dirname(staleIconPath), { recursive: true });
+    fs.writeFileSync(staleIconPath, "stale");
+
+    expect(() => copyBundledPluginMetadata({ repoRoot })).not.toThrow();
+    expect(fs.existsSync(staleIconPath)).toBe(false);
+  });
+
   it("copies generated bundled channel config schemas into dist manifests", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-channel-config-meta-");
     createPlugin(repoRoot, {

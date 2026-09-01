@@ -301,7 +301,7 @@ describe("plugin management service", () => {
     }
   });
 
-  it("projects and resolves installed manifest icons by plugin identity", async () => {
+  it("does not project or resolve installed manifest icon URLs", async () => {
     const icon = "https://cdn.example.test/workboard.svg";
     const config = {
       agents: {
@@ -313,7 +313,14 @@ describe("plugin management service", () => {
       },
     };
     const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false, icon }));
+    const metadata = metadataSnapshot({ enabled: false });
+    const manifest = metadata.byPluginId.get("workboard");
+    expect(manifest).toBeDefined();
+    if (!manifest) {
+      throw new Error("missing workboard manifest fixture");
+    }
+    metadata.byPluginId.set("workboard", Object.assign(manifest, { icon }));
+    mocks.metadata.mockReturnValue(metadata);
 
     const catalog = await listManagedPlugins({
       config,
@@ -324,11 +331,11 @@ describe("plugin management service", () => {
       config,
       env,
       pluginId: "workboard",
-      officialCatalog: { entries: [] },
     });
 
-    expect(catalog.plugins[0]).toMatchObject({ id: "workboard", hasIcon: true });
-    expect(resolved).toEqual({ kind: "url", url: icon });
+    expect(catalog.plugins[0]).toMatchObject({ id: "workboard" });
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolved).toBeUndefined();
     expect(mocks.metadata).toHaveBeenNthCalledWith(1, {
       config,
       env,
@@ -341,7 +348,7 @@ describe("plugin management service", () => {
     });
   });
 
-  it("projects and resolves official catalog icons without exposing their URL", async () => {
+  it("does not project or resolve official catalog icon URLs", async () => {
     const icon = "https://cdn.example.test/firecrawl.svg";
     const officialCatalog = {
       entries: [
@@ -363,20 +370,19 @@ describe("plugin management service", () => {
       config: {},
       env: {},
       pluginId: "firecrawl",
-      officialCatalog,
     });
 
-    expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl", hasIcon: true });
+    expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl" });
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
     expect(catalog.plugins[0]).not.toHaveProperty("icon");
-    expect(resolved).toEqual({ kind: "url", url: icon });
+    expect(resolved).toBeUndefined();
   });
 
-  it("prefers the portable package icon over remote presentation URLs", async () => {
+  it("resolves the portable package icon", async () => {
     const iconPath = "/tmp/workboard/assets/icon.png";
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         enabled: false,
-        icon: "https://cdn.example.test/workboard.svg",
         iconPath,
       }),
     );
@@ -384,20 +390,18 @@ describe("plugin management service", () => {
     const catalog = await listManagedPlugins({
       config: {},
       env: {},
-      officialCatalog: { entries: [] },
     });
     const resolved = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "workboard",
-      officialCatalog: { entries: [] },
     });
 
     expect(catalog.plugins[0]).toMatchObject({ id: "workboard", hasIcon: true });
     expect(resolved).toEqual({ kind: "file", path: iconPath, rootPath: "/tmp/workboard" });
   });
 
-  it("allows only manifest and bundled setup catalog icon URLs", async () => {
+  it("allows only provider-choice and bundled setup catalog icon URLs", async () => {
     const providerIcon = "https://cdn.example.test/provider.svg";
     const recommendedIcon = "https://cdn.example.test/tool.png";
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
@@ -417,7 +421,7 @@ describe("plugin management service", () => {
     });
   });
 
-  it("omits icon capability when neither manifest nor catalog has one", async () => {
+  it("omits icon capability when the package has no local icon", async () => {
     mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
 
     const catalog = await listManagedPlugins({
@@ -429,7 +433,6 @@ describe("plugin management service", () => {
       config: {},
       env: {},
       pluginId: "workboard",
-      officialCatalog: { entries: [] },
     });
 
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");

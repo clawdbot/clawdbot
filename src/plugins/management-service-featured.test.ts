@@ -39,7 +39,7 @@ function metadataSnapshot(params: {
   installRecord?: Record<string, unknown>;
   featured?: boolean;
   description?: string;
-  icon?: string;
+  iconPath?: string;
 }) {
   const id = params.id ?? "workboard";
   const packageName =
@@ -52,7 +52,7 @@ function metadataSnapshot(params: {
       name: params.name ?? "Workboard",
       description: params.description ?? "Coordinate agent work in a shared board.",
       catalog: { featured: params.featured ?? true, order: 10 },
-      ...(params.icon ? { icon: params.icon } : {}),
+      ...(params.iconPath ? { iconPath: params.iconPath } : {}),
       channels: [],
       providers: [],
       cliBackends: [],
@@ -206,7 +206,6 @@ describe("plugin management Featured authority", () => {
       config: {},
       env: {},
       pluginId: "@expediagroup/expedia-openclaw",
-      officialCatalog,
     });
 
     expect(catalog.plugins[0]).toMatchObject({
@@ -215,9 +214,9 @@ describe("plugin management Featured authority", () => {
       description: "Search flights, stays, and travel options.",
       featured: true,
       order: 10,
-      hasIcon: true,
     });
-    expect(resolved).toEqual({ kind: "url", url: icon });
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolved).toBeUndefined();
   });
 
   beforeEach(() => {
@@ -466,7 +465,6 @@ describe("plugin management Featured authority", () => {
         packageName: "@openclaw/firecrawl-plugin",
         featured: false,
         description: "Optional OpenClaw capability.",
-        icon: "https://cdn.example.test/firecrawl-bundled.png",
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -499,10 +497,10 @@ describe("plugin management Featured authority", () => {
         featured: true,
         featuredAt: 1_784_280_000_000,
         order: 10,
-        hasIcon: true,
       }),
     ]);
-    expect(resolvedIcon).toEqual({ kind: "url", url: hostedIcon });
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolvedIcon).toBeUndefined();
   });
 
   it("keeps local curation for an unproven global package identity", async () => {
@@ -530,12 +528,10 @@ describe("plugin management Featured authority", () => {
   });
 
   it("does not identify a package-less private bundled plugin by hosted runtime id", async () => {
-    const localIcon = "https://cdn.example.test/private-workboard.png";
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         packageName: null,
         description: "Private local workboard.",
-        icon: localIcon,
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -565,7 +561,7 @@ describe("plugin management Featured authority", () => {
         order: 10,
       }),
     ]);
-    expect(resolvedIcon).toEqual({ kind: "url", url: localIcon });
+    expect(resolvedIcon).toBeUndefined();
   });
 
   it("does not identify a package-less global plugin by hosted runtime id alone", async () => {
@@ -812,10 +808,10 @@ describe("plugin management Featured authority", () => {
           installed: true,
           name: curated ? "Remote" : "Local",
           featured: curated,
-          hasIcon: true,
         }),
       ]);
-      expect(icon).toEqual({ kind: "url", url: curated ? hostedIcon : localIcon });
+      expect(catalog.plugins.find((entry) => entry.id === "installed")?.hasIcon).toBeUndefined();
+      expect(icon).toBeUndefined();
     },
   );
 
@@ -881,21 +877,18 @@ describe("plugin management Featured authority", () => {
         },
       ],
     };
-    const expected = firstIcon ?? fallbackIcon;
-
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
     const icon = await resolveManagedPluginIconSource({
       config: {},
       env: {},
       pluginId: "ALIAS",
-      officialCatalog,
     });
 
     expect(catalog.plugins).toHaveLength(2);
     for (const plugin of catalog.plugins) {
-      expect(plugin.hasIcon).toBe(expected ? true : undefined);
+      expect(plugin.hasIcon).toBeUndefined();
     }
-    expect(icon).toEqual(expected ? { kind: "url", url: expected } : undefined);
+    expect(icon).toBeUndefined();
   });
 
   it.each([undefined, "https://cdn.example.test/first.png"])(
@@ -914,14 +907,10 @@ describe("plugin management Featured authority", () => {
         config: {},
         env: {},
         pluginId: "duplicate",
-        officialCatalog,
       });
 
-      expect(catalog.plugins.map((plugin) => plugin.hasIcon)).toEqual([
-        firstIcon ? true : undefined,
-        true,
-      ]);
-      expect(icon).toEqual(firstIcon ? { kind: "url", url: firstIcon } : undefined);
+      expect(catalog.plugins.map((plugin) => plugin.hasIcon)).toEqual([undefined, undefined]);
+      expect(icon).toBeUndefined();
     },
   );
 
