@@ -155,6 +155,7 @@ function createFullModelCatalogAccess(params: {
     input: createPreparedModelCatalogWorkerInput({
       agentFacts: params.agentFacts,
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
     }),
     isCurrent: params.isCurrent,
   });

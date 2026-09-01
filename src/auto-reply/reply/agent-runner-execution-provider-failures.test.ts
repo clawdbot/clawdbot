@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -1003,7 +1002,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
@@ -1055,12 +1054,10 @@ describe("executeAgentTurn: provider failures", () => {
     }
   });
 
-  it("formats raw Codex API payloads before forwarding verbose external errors", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}',
-      ),
-    );
+  it("redacts classified raw Codex API payloads in verbose external errors", async () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(raw));
 
     const result = await executeTestTurn(undefined, {
       commandBody: "hello",
@@ -1070,8 +1067,10 @@ describe("executeAgentTurn: provider failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Agent failed before reply: LLM error server_error: Something exploded. Please try again, or use /new to start a fresh session.",
+        "⚠️ LLM request failed (provider internal error). " +
+          "This is usually temporary — try again shortly.",
       );
+      expect(result.payload.text).not.toContain("Something exploded");
     }
   });
 });

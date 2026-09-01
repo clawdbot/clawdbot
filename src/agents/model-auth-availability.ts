@@ -119,6 +119,7 @@ export type ModelAuthAvailabilityEvaluation = {
 };
 export type ModelAuthAvailabilityResolver = {
   providerDiscoveryProviderIds: readonly string[];
+  preparedSyntheticAuthComplete: boolean;
   resolvePreparedRuntimeAuthMode(
     provider: string,
   ): PreparedAgentCredentialModes[string] | undefined;
@@ -192,7 +193,9 @@ export function applyCliRuntimeModelAuthAvailability(params: {
         selectedAuthMode: runtimeAuthMode,
         evidence: "runtime",
       }
-    : { availability: undefined, routeResolution: null };
+    : params.authResolver.preparedSyntheticAuthComplete
+      ? { availability: false, routeResolution: null, unavailableReason: "missing-auth" }
+      : { availability: undefined, routeResolution: null };
 }
 type CreateModelAuthAvailabilityResolverParams = {
   cfg: OpenClawConfig;
@@ -209,6 +212,7 @@ type CreateModelAuthAvailabilityResolverParams = {
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  preparedSyntheticAuthComplete?: boolean;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -741,13 +745,17 @@ export function createModelAuthAvailabilityResolver(
       provider === OPENAI_PROVIDER_ID &&
       synthetic.has("codex") &&
       (target.authRequirement === "subscription" || target.api === OPENAI_CODEX_RESPONSES_API);
+    if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
+      return { availability: undefined, evidence: "synthetic" };
+    }
     if (
-      hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider }) ||
       synthetic.has(normalizeProviderIdForAuth(provider)) ||
       synthetic.has(normalizeProvider(provider)) ||
       hasCompatibleCodexSyntheticAuth
     ) {
-      return { availability: undefined, evidence: "synthetic" };
+      return params.preparedSyntheticAuthComplete
+        ? { availability: false, evidence: "synthetic", unavailableReason: "missing-auth" }
+        : { availability: undefined, evidence: "synthetic" };
     }
     const hasAuthEvidence =
       configured?.auth !== undefined ||
@@ -1332,6 +1340,7 @@ export function createModelAuthAvailabilityResolver(
     providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
       left.localeCompare(right),
     ),
+    preparedSyntheticAuthComplete: params.preparedSyntheticAuthComplete === true,
     evaluateModelAuth,
     resolvePreparedRuntimeAuthMode: (provider) =>
       params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(provider)],

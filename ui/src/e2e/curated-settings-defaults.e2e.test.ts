@@ -1,8 +1,8 @@
 // Control UI tests cover inherited defaults across curated settings pages.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "curated-settings-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("curated-settings-defaults");
+  }
+});
 
 function configResponse(config: Record<string, unknown>, hash: string) {
   return {
@@ -110,7 +110,6 @@ suite.define(() => {
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await codeModeRow.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-labs-explicit-override.png"),

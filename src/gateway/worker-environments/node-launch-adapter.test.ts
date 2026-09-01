@@ -354,26 +354,80 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it("reports offline availability when the dispatch grace expires", async () => {
-    vi.useFakeTimers();
-    const onDispatchReady = vi.fn();
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke, async () => []),
-    });
-    try {
-      const launch = adapter
-        .launch({ ...launchRequest(), timeoutMs: 30_000, onDispatchReady })
-        .catch((error: unknown) => error);
-      await vi.runAllTimersAsync();
+  it.each([
+    {
+      name: "timer expiry",
+      clockOnly: false,
+      timeoutMs: 30_000,
+      abort: false,
+      expected: { code: "runner-offline" },
+    },
+    {
+      name: "clock expiry before timer callback",
+      clockOnly: true,
+      timeoutMs: 30_000,
+      abort: false,
+      expected: { code: "runner-offline" },
+    },
+    {
+      name: "shorter launch deadline",
+      clockOnly: true,
+      timeoutMs: 5_000,
+      abort: false,
+      expected: { message: "node worker launch timed out" },
+    },
+    {
+      name: "equal launch deadline",
+      clockOnly: true,
+      timeoutMs: 10_000,
+      abort: false,
+      expected: { message: "node worker launch timed out" },
+    },
+    {
+      name: "caller cancellation",
+      clockOnly: true,
+      timeoutMs: 30_000,
+      abort: true,
+      expected: { message: "caller cancelled" },
+    },
+  ])(
+    "preserves pre-dispatch failure identity after $name",
+    async ({ clockOnly, timeoutMs, abort, expected }) => {
+      vi.useFakeTimers();
+      let nowMs = 0;
+      const controller = new AbortController();
+      const onDispatchReady = vi.fn();
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => []),
+        ...(clockOnly
+          ? {
+              now: () => nowMs,
+              sleep: async () => {
+                nowMs += 10_000;
+                if (abort) {
+                  controller.abort(new Error("caller cancelled"));
+                }
+              },
+            }
+          : {}),
+      });
+      try {
+        const launch = adapter
+          .launch({ ...launchRequest(), timeoutMs, onDispatchReady, signal: controller.signal })
+          .catch((error: unknown) => error);
+        if (!clockOnly) {
+          await vi.runAllTimersAsync();
+        }
 
-      expect(await launch).toMatchObject({ code: "runner-offline" });
-      expect(invoke).not.toHaveBeenCalled();
-      expect(onDispatchReady).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(await launch).toMatchObject(expected);
+        expect(invoke).not.toHaveBeenCalled();
+        expect(onDispatchReady).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("dispatches a bound environment at capacity so its retained worker can reuse the slot", async () => {
     const input = launchInput();

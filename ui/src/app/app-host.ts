@@ -1,3 +1,4 @@
+import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import "../components/app-topbar.ts";
@@ -61,7 +62,7 @@ import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
-  CUSTODIAN_PANEL_ELEMENT,
+  ASSISTANT_PANEL_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   LazyCustomElementRequestController,
@@ -71,7 +72,11 @@ import {
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
+import {
+  isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import {
   changedServerUiPrefs,
   isApplyingServerUiPrefs,
@@ -136,7 +141,7 @@ class OpenClawShell
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
-  readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
+  readonly assistantPanelElement = ASSISTANT_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   readonly onboardingMemoryImportElement = {
     tagName: "openclaw-onboarding-memory-import",
@@ -645,9 +650,13 @@ class OpenClawShell
     }
   }
 
-  override updated() {
+  override updated(changed: PropertyValues<this>) {
     this.syncDocumentTitle();
-    syncControlUiSystemChrome();
+    // Theme and breakpoint owners sync their changes; route/runtime changes
+    // can change whether the committed shell uses the chat background.
+    if (changed.has("routeState") || changed.has("runtime")) {
+      syncControlUiSystemChrome();
+    }
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
@@ -688,8 +697,8 @@ class OpenClawShell
       if (desktopAvailable) {
         this.lazyCustomElements.preload(this.desktopPanelElement);
       }
-      if (custodianAvailable) {
-        this.lazyCustomElements.preload(this.custodianPanelElement);
+      if (custodianAvailable || isHomePanelAvailable(context.gateway)) {
+        this.lazyCustomElements.preload(this.assistantPanelElement);
       }
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {

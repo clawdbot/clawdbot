@@ -1015,6 +1015,35 @@ describe("poll vote echo guard", () => {
     expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
   });
 
+  it.each([
+    { elapsedMs: 29_999, suppressed: true },
+    { elapsedMs: 30_000, suppressed: false },
+    { elapsedMs: 30_001, suppressed: false },
+  ])("expires the same-route vote after $elapsedMs ms", async ({ elapsedMs, suppressed }) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    try {
+      const sessionKey = `agent:test:imessage:direct:ttl-${elapsedMs}`;
+      const voteTool = createPollVoteTool("Black", sessionKey);
+      await castBlueVote(voteTool);
+
+      now.mockReturnValue(100_000 + elapsedMs);
+      const nextRunTool = createPollVoteTool("Black", sessionKey);
+      const result = await nextRunTool.execute("send", {
+        action: "send",
+        channel: "imessage",
+        message: "🦞 Black.",
+      });
+      if (suppressed) {
+        expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
+      } else {
+        expect(result.details).not.toMatchObject({ status: "suppressed" });
+      }
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(suppressed ? 1 : 2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("does not suppress a later-run echo from a different conversation", async () => {
     const voteTool = createPollVoteTool("Black", "agent:test:imessage:direct:convo-a");
     await castBlueVote(voteTool);
@@ -3954,6 +3983,7 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "discord",
       currentChannelId: "channel:123",
+      currentChatType: "channel",
       currentThreadTs: "thread-456",
       currentMessageId: "msg-789",
       agentAccountId: "ops",
@@ -3968,6 +3998,7 @@ describe("message tool schema scoping", () => {
     }
     expect(context.currentChannelProvider).toBe("discord");
     expect(context.currentChannelId).toBe("channel:123");
+    expect(context.chatType).toBe("channel");
     expect(context.currentThreadTs).toBe("thread-456");
     expect(context.currentMessageId).toBe("msg-789");
     expect(context?.accountId).toBe("ops");

@@ -594,7 +594,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
   const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
-  const writerFence = getOwnedSessionTranscriptWriterFence();
+  const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,

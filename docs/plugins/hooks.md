@@ -781,6 +781,8 @@ restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
 
+Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+
 ### Authorized prompt enrichment
 
 Register `before_prompt_build` with `requiresToolAuthority: true` when a plugin
@@ -995,6 +997,10 @@ saw it: a later failure can prevent submission. This is the right seam for
 approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
+
+Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
+agents are configured. Enqueueing, consumption, and plugin session state stay in
+that agent's store; the owner selector is not part of the persisted injection.
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or

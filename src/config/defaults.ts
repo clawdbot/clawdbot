@@ -14,6 +14,7 @@ import {
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
+import { mergeModelCost } from "./model-cost.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelSelectionForConfig,
@@ -268,16 +269,7 @@ export function applyModelDefaults(
 
         const input = raw.input ?? catalogModel?.input ?? [...DEFAULT_MODEL_INPUT];
 
-        const cost = resolveModelCost(
-          raw.cost || catalogModel?.cost ? { ...catalogModel?.cost, ...raw.cost } : undefined,
-        );
-        // resolveModelCost keeps only the flat per-token fields; carry tiered
-        // pricing through explicitly so an authored or catalog tier table is
-        // not silently discarded when other cost fields are defaulted.
-        const tieredPricing = raw.cost?.tieredPricing ?? catalogModel?.cost?.tieredPricing;
-        if (tieredPricing) {
-          cost.tieredPricing = tieredPricing;
-        }
+        const cost = resolveModelCost(mergeModelCost(catalogModel?.cost, raw.cost));
         const costMutated =
           !raw.cost ||
           raw.cost.input !== cost.input ||

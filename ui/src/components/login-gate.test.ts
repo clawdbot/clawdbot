@@ -43,6 +43,32 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it.each([
+    "Authenticated profile verification is unavailable; retry the request.",
+    "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
+  ])(
+    "explains profile verification failures without credential or network recovery: %s",
+    async (error) => {
+      const element = await mountFailure(
+        error,
+        ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+      );
+      const failure = element.querySelector(".login-gate__failure");
+
+      expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
+      expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+        "Profile verification unavailable",
+      );
+      expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+        "Gateway administrator",
+      );
+      expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+      expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+    },
+  );
+
   it("renders every auth recovery command exactly once", async () => {
     const element = await mountFailure(
       "unauthorized: gateway token required",

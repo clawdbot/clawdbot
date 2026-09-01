@@ -468,7 +468,7 @@ function ensureSchema(
                   .where((eb) =>
                     eb.or([
                       eb("schema_meta.schema_version", "!=", OPENCLAW_STATE_SCHEMA_VERSION),
-                      eb("schema_meta.app_version", "!=", VERSION),
+                      eb("schema_meta.app_version", "is not", VERSION),
                       eb("schema_meta.role", "!=", "global"),
                     ]),
                   ),

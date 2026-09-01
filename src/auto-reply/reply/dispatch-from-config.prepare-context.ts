@@ -15,14 +15,11 @@ import {
 } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
-import { resolveConversationBindingRecord } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { logVerbose } from "../../globals.js";
-import {
-  isPluginOwnedSessionBindingRecord,
-  toPluginConversationBinding,
-} from "../../plugins/conversation-binding.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -97,16 +94,14 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   // through the binding contract instead of reusing the hook projection.
   const pluginBindingConversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
   const pluginOwnedBindingRecord = pluginBindingConversation
-    ? resolveConversationBindingRecord({
+    ? getSessionBindingService().resolveByConversation({
         channel: pluginBindingConversation.channel,
         accountId: pluginBindingConversation.accountId,
         conversationId: pluginBindingConversation.conversationId,
         parentConversationId: pluginBindingConversation.parentConversationId,
       })
     : null;
-  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
-    ? toPluginConversationBinding(pluginOwnedBindingRecord)
-    : null;
+  const pluginOwnedBinding = toPluginConversationBinding(pluginOwnedBindingRecord);
   const pluginBindingSessionKey = normalizeOptionalString(
     pluginOwnedBindingRecord?.targetSessionKey,
   );

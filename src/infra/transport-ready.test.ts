@@ -9,31 +9,17 @@ const transportReadyMocks = vi.hoisted(() => ({
 type TransportReadyModule = typeof import("./transport-ready.js");
 let waitForTransportReady: TransportReadyModule["waitForTransportReady"];
 
-vi.mock("./backoff.js", () => ({
-  sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
-    if (transportReadyMocks.injectedSleepError) {
-      throw transportReadyMocks.injectedSleepError;
-    }
-    if (signal?.aborted) {
-      throw new Error("aborted");
-    }
-    if (ms <= 0) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-        reject(new Error("aborted"));
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  },
-}));
+vi.mock("./backoff.js", async (importOriginal) => {
+  const { sleepWithAbort } = await importOriginal<typeof import("./backoff.js")>();
+  return {
+    sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
+      if (transportReadyMocks.injectedSleepError) {
+        throw transportReadyMocks.injectedSleepError;
+      }
+      return sleepWithAbort(ms, signal);
+    },
+  };
+});
 
 function createRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

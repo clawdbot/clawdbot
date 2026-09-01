@@ -20,6 +20,7 @@ export async function runConsentScenario(entry, coreTarball) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-consent-"));
   const pluginId = "update-consent-fixture";
   const packageName = `@acme/${pluginId}`;
+  const capabilityConsentRequired = "PLUGIN_CAPABILITY_CONSENT_REQUIRED";
   const groups = [
     "channels",
     "providers",
@@ -176,6 +177,21 @@ export async function runConsentScenario(entry, coreTarball) {
     return { record, bytes };
   }
 
+  function assertConsentBlocked(command, result, expectedReason) {
+    assert.equal(command.code, 1, `${command.output}\n${command.diagnostic}`);
+    assert.equal(result.status, "error");
+    if (expectedReason) {
+      assert.equal(result.reason, expectedReason);
+    }
+    assert.equal(result.postUpdate?.plugins?.status, "error");
+    assert.equal(
+      result.postUpdate?.plugins?.npm?.outcomes?.find(
+        (outcome) => outcome.pluginId === pluginId && outcome.status === "error",
+      )?.code,
+      capabilityConsentRequired,
+    );
+  }
+
   try {
     const help = await cli("update-help", ["update", "--help"]);
     if (fixtureCapabilityConsentArgs(help.output).length === 0) {
@@ -228,16 +244,19 @@ export async function runConsentScenario(entry, coreTarball) {
         "updates must keep an unpinned registry selector",
       );
       await serve(2);
-      const denied = await cli("update-denied", [
-        "update",
-        "--tag",
-        coreTarball,
-        "--yes",
-        "--no-restart",
-        "--json",
-      ]);
+      const denied = await cli(
+        "update-denied",
+        ["update", "--tag", coreTarball, "--yes", "--json"],
+        { allowFailure: true },
+      );
       const deniedResult = JSON.parse(denied.output);
-      assert.match(JSON.stringify(deniedResult), /capabilit/i);
+      assertConsentBlocked(denied, deniedResult, "post-update-plugins");
+      assert(
+        !denied.children.some(
+          (child) => child.argv.includes("gateway") && child.argv.includes("restart"),
+        ),
+        "denied update attempted a Gateway restart",
+      );
       assert(
         denied.children.some((child) => child.postCore),
         "denied update did not hand off",
@@ -252,7 +271,12 @@ export async function runConsentScenario(entry, coreTarball) {
       ]);
       const repaired = await snapshot("repaired", 2);
       await serve(3);
-      await cli("later-repair-denied", ["update", "repair", "--yes", "--json"]);
+      const laterDenied = await cli(
+        "later-repair-denied",
+        ["update", "repair", "--yes", "--json"],
+        { allowFailure: true },
+      );
+      assertConsentBlocked(laterDenied, JSON.parse(laterDenied.output));
       assert.deepEqual(await snapshot("no-future-permission", 2), repaired);
       const accepted = await cli("update-accepted", [
         "update",

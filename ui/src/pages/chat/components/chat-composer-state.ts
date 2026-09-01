@@ -88,7 +88,8 @@ export function composerDraftKey(
 }
 
 export function commitComposerDraft(props: ChatComposerProps, value: string): void {
-  if (props.getDraft?.() === value || props.draft === value) {
+  const currentDraft = props.getDraft ? props.getDraft() : props.draft;
+  if (currentDraft === value) {
     return;
   }
   props.onDraftChange(value);

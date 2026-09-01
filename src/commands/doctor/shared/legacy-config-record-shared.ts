@@ -48,6 +48,38 @@ export function deleteRetiredPath(owner: unknown, path: readonly string[], index
   return true;
 }
 
+/** Visit agent defaults and both persisted roster shapes in config order. */
+export function visitAgentConfigScopes(
+  raw: JsonRecord,
+  visitor: (scope: JsonRecord, path: string) => void,
+  options: { includeDefaults?: boolean; listPathStyle?: "brackets" | "dots" } = {},
+): void {
+  const agents = raw.agents;
+  if (!isRecord(agents)) {
+    return;
+  }
+  if (options.includeDefaults !== false && isRecord(agents.defaults)) {
+    visitor(agents.defaults, "agents.defaults");
+  }
+  if (isRecord(agents.entries)) {
+    for (const [agentId, value] of Object.entries(agents.entries)) {
+      if (isRecord(value)) {
+        visitor(value, `agents.entries.${agentId}`);
+      }
+    }
+  }
+  if (!Array.isArray(agents.list)) {
+    return;
+  }
+  agents.list.forEach((value, index) => {
+    if (isRecord(value)) {
+      const path =
+        options.listPathStyle === "dots" ? `agents.list.${index}` : `agents.list[${index}]`;
+      visitor(value, path);
+    }
+  });
+}
+
 /** Visit a channel root followed by its object-shaped accounts in config order. */
 export function visitChannelEntries(
   raw: JsonRecord,

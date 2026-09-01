@@ -1,9 +1,9 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
@@ -17,14 +17,10 @@ const suite = createControlUiE2eSuite({
 });
 
 const baseTime = 1_700_000_000_000;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
+let artifactDir: string;
 const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
-const ownershipProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/ui-visual-proof/agent-quota-ownership",
-  ownershipProofPhase,
-);
+let ownershipProofDir: string;
 
 const authStatusWithUsage = {
   ts: baseTime,
@@ -129,6 +125,14 @@ const selectedGlobalSessions = {
       modelProvider: "openai",
     },
   ],
+};
+
+const workGlobalSession = {
+  ...selectedGlobalSessions.sessions[0],
+  agentId: "work",
+  sessionId: "session:work:global",
+  contextTokens: 300_000,
+  totalTokens: 90_000,
 };
 
 const claudeSubscriptionAuthStatus = {
@@ -325,6 +329,12 @@ async function openVisibleQuotaPopover(page: Page) {
 }
 
 suite.define(() => {
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
+    if (captureOwnershipProof) {
+      ownershipProofDir = path.join(artifactDir, "agent-quota-ownership", ownershipProofPhase);
+    }
+  });
   it("shows high context pressure without a compact action", async () => {
     const fixture = await openChat(authStatusWithUsage, {
       "sessions.list": highPressureSessions,
@@ -454,9 +464,6 @@ suite.define(() => {
   });
 
   it("binds delayed auth and quota presentation to the selected global agent", async () => {
-    if (captureOwnershipProof) {
-      await mkdir(ownershipProofDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -496,7 +503,31 @@ suite.define(() => {
               { match: { agentId: "work" }, response: agentAuthStatus("work") },
             ],
           },
-          "sessions.list": selectedGlobalSessions,
+          "sessions.list": {
+            // Static rows seed Main; response cases never seed canonical fixture state.
+            ...selectedGlobalSessions,
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: { ...selectedGlobalSessions, sessions: [workGlobalSession] },
+              },
+              { response: selectedGlobalSessions },
+            ],
+          },
+          // A Work main alias resolves to Work's canonical global history on
+          // the Gateway; it must not borrow the Main-owned list projection.
+          "chat.startup": {
+            cases: [
+              {
+                match: { sessionKey: "agent:work:main", agentId: "work" },
+                response: {
+                  messages: [],
+                  sessionId: workGlobalSession.sessionId,
+                  sessionInfo: workGlobalSession,
+                },
+              },
+            ],
+          },
         },
         sessionKey: "global",
         sessionScope: "global",
@@ -510,6 +541,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("models.authStatus")).length)
         .toBe(2);
 
+      expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
+        sessionKey: "global",
+        agentId: "main",
+      });
       let popover = await openVisibleQuotaPopover(page);
       expect(
         await page
@@ -677,6 +712,15 @@ suite.define(() => {
         });
       }
       popover = await openVisibleQuotaPopover(page);
+      expect(
+        await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring")
+          .getAttribute("aria-label"),
+      ).toBe("Session context usage: 90k of 300k (30%)");
+      expect((await gateway.getRequests("chat.startup")).at(-1)?.params).toMatchObject({
+        sessionKey: "agent:work:main",
+        agentId: "work",
+      });
       await expect.poll(async () => popover.textContent()).toContain("Work Team");
       const settledText = (await popover.textContent()) ?? "";
       expect(settledText).toContain("work@example.test");
@@ -692,7 +736,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(ownershipProofDir, "03-work-settled.png"),
+          path: path.join(ownershipProofDir, "04-work-quota-popover.png"),
         });
       }
     } finally {

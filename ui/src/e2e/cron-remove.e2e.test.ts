@@ -65,7 +65,7 @@ suite.define(() => {
         await row.waitFor({ state: "visible", timeout: 10_000 });
         expect(await page.locator(".cron-table__head").getAttribute("role")).toBeNull();
         expect(await row.getAttribute("role")).toBeNull();
-        const openTask = row.getByRole("button", { name: /Nightly digest/ });
+        const openTask = row.locator("button.cron-table__name");
         await openTask.focus();
         await page.keyboard.press("Enter");
         const detail = page.locator('.cron-page[data-panel-mode="job"]');

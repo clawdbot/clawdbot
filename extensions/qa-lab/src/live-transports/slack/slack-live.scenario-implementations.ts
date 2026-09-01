@@ -296,7 +296,7 @@ export const slackQaProgressCommentaryOmittedScenario: SlackQaScenarioImplementa
   buildRun: (sutUserId) =>
     buildSlackProgressCommentaryRun(sutUserId, {
       commentary: "headline",
-      toolProgress: "draft",
+      toolProgress: "absent",
     }),
 };
 

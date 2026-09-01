@@ -48,7 +48,10 @@ describe("OpenClaw shell locale preferences", () => {
     const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const refreshTheme = vi.fn();
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://locale.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://locale.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: vi.fn() },
       theme: { refresh: refreshTheme },
       runtimeConfig,
@@ -84,7 +87,10 @@ describe("OpenClaw shell locale preferences", () => {
     const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const refreshTheme = vi.fn();
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://locale.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://locale.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: vi.fn() },
       theme: { refresh: refreshTheme },
       runtimeConfig,
@@ -116,7 +122,10 @@ describe("OpenClaw shell locale preferences", () => {
     const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const recordServerSelection = vi.fn();
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://theme.test" } },
+      gateway: {
+        connection: { gatewayUrl: "ws://theme.test" },
+        snapshot: { phase: "connected" },
+      },
       navigation: { update: vi.fn() },
       theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
       runtimeConfig,

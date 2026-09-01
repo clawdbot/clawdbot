@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { artifactFixture } from "./mac-elevation-artifact.test-support.js";
 import {
@@ -26,6 +26,7 @@ import {
   macObjectFixture,
   runMacFixtureTool,
 } from "./mac-native-fixtures.test-support.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -217,6 +218,7 @@ install_openclaw() { :; }
 
 export function registerMacWorkerMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("elevation worker materialization", () => {
+    const it = createMacScriptTest();
     it("preserves standard and derived elevation payloads through shared verification", () => {
       for (const variant of ["standard", "elevation-host"]) {
         const fixture = stagingFixture();
@@ -864,38 +866,40 @@ def evidence():
       expect(existsSync(fixture.destination)).toBe(false);
     });
 
-    it("feeds freshly derived worker pairs to the real portable consumer", () => {
-      const harness = artifactFixture();
-      for (const arch of ["arm64", "x86_64"] as const) {
-        const worker = harness.at(`Contents/Resources/node-worker/${arch}`);
-        const canonical = path.join(harness.home, `canonical-${arch}`);
-        renameSync(worker, canonical);
-        write(path.join(canonical, "nested/win32/README.md"), "Windows source is retained\n");
-        write(path.join(canonical, "nested/win32/foreign.node"), harness.binaries.pe);
-        write(
-          path.join(canonical, "opposite-mac.node"),
-          harness.binaries[arch === "arm64" ? "x86_64" : "arm64"],
-        );
-        const before = snapshot(canonical);
-        const result = spawnSync(
-          "/usr/bin/python3",
-          ["-B", materializer, canonical, worker, path.dirname(worker), arch],
-          {
-            encoding: "utf8",
-            env: { HOME: harness.home, TMPDIR: harness.home, PATH: systemPath },
-          },
-        );
+    it("feeds freshly derived worker pairs to the real portable consumer", async ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const harness = artifactFixture(mac);
+        for (const arch of ["arm64", "x86_64"] as const) {
+          const worker = harness.at(`Contents/Resources/node-worker/${arch}`);
+          const canonical = path.join(harness.home, `canonical-${arch}`);
+          renameSync(worker, canonical);
+          write(path.join(canonical, "nested/win32/README.md"), "Windows source is retained\n");
+          write(path.join(canonical, "nested/win32/foreign.node"), harness.binaries.pe);
+          write(
+            path.join(canonical, "opposite-mac.node"),
+            harness.binaries[arch === "arm64" ? "x86_64" : "arm64"],
+          );
+          const before = snapshot(canonical);
+          const result = spawnSync(
+            "/usr/bin/python3",
+            ["-B", materializer, canonical, worker, path.dirname(worker), arch],
+            {
+              encoding: "utf8",
+              env: { HOME: harness.home, TMPDIR: harness.home, PATH: systemPath },
+            },
+          );
+          expect(result.status, result.stderr).toBe(0);
+          expect(snapshot(canonical)).toEqual(before);
+          expect(snapshot(worker)).toEqual(
+            before.filter(
+              ({ path: name }) =>
+                !["nested/win32/foreign.node", "opposite-mac.node"].includes(name),
+            ),
+          );
+        }
+        const result = await harness.verify();
         expect(result.status, result.stderr).toBe(0);
-        expect(snapshot(canonical)).toEqual(before);
-        expect(snapshot(worker)).toEqual(
-          before.filter(
-            ({ path: name }) => !["nested/win32/foreign.node", "opposite-mac.node"].includes(name),
-          ),
-        );
-      }
-      const result = harness.verify();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("Elevation artifact verified");
-    });
+        expect(result.stdout).toContain("Elevation artifact verified");
+      }));
   });
 }

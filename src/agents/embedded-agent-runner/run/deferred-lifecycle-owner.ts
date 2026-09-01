@@ -86,6 +86,7 @@ export type DeferredEmbeddedRunLifecycleManager = {
 
 export function createDeferredEmbeddedRunLifecycleManager(params: {
   runId: string;
+  agentId?: string;
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
@@ -134,7 +135,13 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       previous?.discard();
     },
     handoffToCli: () => {
-      setActiveEmbeddedRun(params.sessionId, cliOwner, params.sessionKey, params.sessionFile);
+      setActiveEmbeddedRun(
+        params.sessionId,
+        cliOwner,
+        params.sessionKey,
+        params.sessionFile,
+        params.agentId,
+      );
       const previous = current;
       current = undefined;
       previous?.discard();

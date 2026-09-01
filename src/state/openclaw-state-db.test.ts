@@ -2095,7 +2095,6 @@ describe("openclaw state database", () => {
         id: "legacy-wide-job",
         name: "Legacy wide job",
         description: "preserved cron configuration",
-        enabled: true,
         declarationKey: "legacy-declaration",
         owner: { agentId: "legacy-owner" },
         createdAtMs: 100,
@@ -2344,6 +2343,7 @@ describe("openclaw state database", () => {
         to: null,
         accountId: null,
       });
+      expect(JSON.parse(row.job_json).enabled).toBe(true);
       expect(JSON.parse(row.state_json)).toEqual({
         lastStatus: "error",
         lastRunStatus: "error",
@@ -2351,6 +2351,7 @@ describe("openclaw state database", () => {
       expect(loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey)).store.jobs).toEqual([
         {
           ...job,
+          enabled: true,
           declarationKey: "legacy-declaration",
           owner: { agentId: "legacy-owner" },
           delivery: {

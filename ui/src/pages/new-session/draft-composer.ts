@@ -45,6 +45,7 @@ export function renderNewSessionDraftComposer(options: {
   onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
+  onBackgroundSubmit?: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
   const commandClient = options.context?.gateway.snapshot.client ?? null;
@@ -109,5 +110,6 @@ export function renderNewSessionDraftComposer(options: {
     onOpenImage: options.onOpenImage,
     onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
+    onBackgroundSubmit: options.onBackgroundSubmit,
   });
 }

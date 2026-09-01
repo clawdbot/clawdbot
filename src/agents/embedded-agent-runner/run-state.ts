@@ -1,3 +1,4 @@
+import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 /**
  * Shared process-local state for active and abandoned embedded-agent runs.
  */
@@ -39,6 +40,13 @@ export type EmbeddedAgentQueueHandle = {
   startedAtMs?: number;
   /** Exact authority of the concrete provider/model attempt behind this handle. */
   toolAuthorityFingerprint?: string;
+  /** Shared outer-run owner survives an intentional native-turn replacement. */
+  permissionChangeOwner?: object;
+  /** Fences prior tools, revokes their approvals, then acknowledges installed permissions. */
+  applyPermissionMode?: (
+    mode: SessionPermissionMode | null,
+    revokeApprovals: () => void,
+  ) => Promise<boolean>;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
   claimPendingUserInputAnswer?: (
     text: string,
@@ -81,6 +89,7 @@ export type ActiveEmbeddedRunSnapshot = {
 export type EmbeddedRunRegistration = {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
   onHumanInputResolved?: () => void;

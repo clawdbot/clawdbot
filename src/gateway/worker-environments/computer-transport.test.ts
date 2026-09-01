@@ -31,6 +31,7 @@ import {
   connectionIdentity,
   type Harness,
 } from "./computer-transport.test-support.js";
+import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { createWorkerComputerRpc } from "./worker-turn-computer-rpc.js";
 
 function request(
@@ -127,6 +128,18 @@ describe("session computer transport", () => {
     resetAgentRunRegistryForTest();
     resetPluginRuntimeStateForTest();
   });
+
+  it.each([false, true])(
+    "reports an offline runner before preparing a disconnected desktop (shared host: %s)",
+    async (sharedHost) => {
+      const h = createHarness(sharedHost);
+      vi.spyOn(h.state.context!.nodeRegistry, "get").mockReturnValue(undefined);
+      await expect(h.prepare()).rejects.toBeInstanceOf(WorkerRunnerUnavailableError);
+      expect(h.privateInvoke).not.toHaveBeenCalled();
+      expect(h.publicInvoke).not.toHaveBeenCalled();
+      expect(h.options.placements.validateTurnClaim(h.claim)).toBe(true);
+    },
+  );
 
   it("routes snapshots and classified input to the exact private node without public fallback", async () => {
     const h = createHarness();

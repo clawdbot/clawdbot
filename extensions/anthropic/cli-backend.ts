@@ -232,6 +232,7 @@ export function buildAnthropicCliBackend(
     resolveModelId: ({ modelId, contextWindow }) =>
       resolveClaudeCliContextWindowModelId(modelId, contextWindow),
     authEpochMode: "profile-only",
+    autoSelectAuthProfile: false,
     prepareExecution: (context) => {
       const prepare = () => {
         const credentialContext = context as typeof context & {

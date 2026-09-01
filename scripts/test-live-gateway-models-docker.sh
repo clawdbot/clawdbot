@@ -61,11 +61,7 @@ while IFS= read -r docker_package; do
   openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$docker_package"
 done <<<"$docker_packages"
 openclaw_live_stage_gemini_auth
-if [[ -f scripts/test-live.mjs ]]; then
-  node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts
-else
-  node --import tsx scripts/test-live.mts -- src/gateway/gateway-models.profiles.live.test.ts
-fi
+openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-models.profiles.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"

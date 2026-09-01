@@ -144,9 +144,15 @@ function projectedSessionsSendHistoryMessage(
   timestamp: number,
   fields: ChatHistoryTestMessage = {},
 ): ChatHistoryTestMessage {
+  const provenance = (fields.provenance ?? sessionsSendProvenance()) as {
+    sourceSessionKey?: string;
+  };
+  const sessionKey = provenance.sourceSessionKey;
+  const agentId = sessionKey?.split(":")[1];
   return assistantHistoryMessage(text, {
     senderLabel: "Forwarded from main",
     provenance: sessionsSendProvenance(),
+    ...(sessionKey ? { senderSession: { sessionKey, ...(agentId ? { agentId } : {}) } } : {}),
     timestamp,
     ...fields,
   });

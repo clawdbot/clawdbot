@@ -511,7 +511,7 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
-  const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
+  const timestamped = eventTs !== null && eventTs > next.ts ? { ...next, ts: eventTs } : next;
   const previousOwner = existing.owner?.actor;
   const nextOwner = row.owner?.actor;
   const ownershipChanged =

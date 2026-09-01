@@ -28,7 +28,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
@@ -105,10 +104,11 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     hasRuntimeAuthExchange,
     resolvedWorkspace,
     sandboxSessionKey,
+    sandboxAgentId,
     sandbox,
     effectiveWorkspace,
     effectiveCwd,
-    effectiveSkillAgentId,
+    effectiveSkillAgentId: sessionAgentId,
   } = prepared;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
@@ -169,7 +169,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       resolveEmbeddedRunSkillEntries({
         workspaceDir: effectiveSkillsWorkspace,
         config: params.config,
-        agentId: effectiveSkillAgentId,
+        agentId: sessionAgentId,
         eligibility: skillsEligibility,
         skillsSnapshot: skillsSnapshotForRun,
         // Sandbox fallbacks stay inside their sandbox skill workspace;
@@ -208,14 +208,14 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       }),
       config: params.config,
       workspaceDir: effectiveSkillsPromptWorkspace,
-      agentId: effectiveSkillAgentId,
+      agentId: sessionAgentId,
       eligibility: skillsEligibility,
       preserveEntryOrder,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const contextInjectionMode = resolveContextInjectionMode(params.config, effectiveSkillAgentId);
+    const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
     const { contextFiles } =
       contextInjectionMode === "never"
         ? { contextFiles: [] }
@@ -225,7 +225,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             chatType: params.chatType,
-            agentId: effectiveSkillAgentId,
+            agentId: sessionAgentId,
             warn: makeBootstrapWarn({
               sessionLabel,
               warn: (message) => log.warn(message),
@@ -239,7 +239,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       provider: contextConfigProvider,
       modelId,
       model: runtimeModelWithContext,
-      agentId: effectiveSkillAgentId,
+      agentId: sessionAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
@@ -274,7 +274,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         config: params.config,
         workspaceDir: effectiveWorkspace,
         agentDir,
-        agentId: effectiveSkillAgentId,
+        agentId: sessionAgentId,
         thinkingLevel: mapThinkingLevelForProvider(thinkLevel),
       });
     const runtimePlan = reuseFullRuntimePlan
@@ -292,6 +292,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
       config: params.config,
       sessionKey: sandboxSessionKey,
+      agentId: sandboxAgentId,
       runSessionKey:
         params.sessionKey && params.sessionKey !== sandboxSessionKey
           ? params.sessionKey
@@ -329,6 +330,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
+          agentId: sessionAgentId,
           exec: {
             ...execOverrides,
             config: params.config,
@@ -393,7 +395,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       diagnostics: normalizableToolProjection.diagnostics,
       tools: toolsEnabled ? toolsRaw : [],
       runId,
-      agentId: effectiveSkillAgentId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -421,9 +423,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
-      // The same profile constructed the core tool set above, so core and
-      // bundled tools cannot disagree about policy inputs (agentId included:
-      // both resolve it from the session key inside the profile).
+      // Reuse the core tool profile so bundled tools share its policy owner.
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
@@ -433,7 +433,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         diagnostics: normalizableBundledToolProjection.diagnostics,
         tools: filteredBundledTools,
         runId,
-        agentId: effectiveSkillAgentId,
+        agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
       });
@@ -451,7 +451,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       diagnostics: toolSchemaProjection.diagnostics,
       tools: projectedEffectiveTools,
       runId,
-      agentId: effectiveSkillAgentId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -480,17 +480,13 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-      agentId: params.agentId,
-    });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
           buildEmbeddedMessageActionDiscoveryInput({
             cfg: params.config,
             channel: runtimeChannel,
+            chatType: params.chatType,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,

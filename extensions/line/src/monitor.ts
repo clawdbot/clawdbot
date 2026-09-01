@@ -1,5 +1,5 @@
 // Line plugin module implements monitor behavior.
-import type { webhook } from "@line/bot-sdk";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -61,7 +61,7 @@ interface MonitorLineProviderOptions {
 
 interface LineProviderMonitor {
   account: ResolvedLineAccount;
-  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
+  handleWebhook: ReturnType<typeof createLineBot>["handleWebhook"];
   stop: () => Promise<void>;
 }
 
@@ -225,6 +225,11 @@ export async function monitorLineProvider(
               ctxPayload,
               record: ctx.turn.record,
               replyPipeline: {},
+              // Block replies are paced by the agent's own humanDelay; nothing else
+              // reads it, so a turn that never forwards it silently paces at zero.
+              dispatcherOptions: {
+                humanDelay: resolveHumanDelayConfig(turnConfig, route.agentId),
+              },
               ...(replyOptions ? { replyOptions } : {}),
               delivery: {
                 // Core renders presentations inside the outbound send pipeline only,
@@ -412,9 +417,10 @@ export async function monitorLineProvider(
 
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
-            await match.target.bot.handleWebhook(body);
-            // Only a committed event is adopted; signed LINE verification pings must stay unmarked.
-            res.setHeader("x-openclaw-delivery-accepted", "durable");
+            // Only the admission owner can distinguish queued events from ignored standby deliveries.
+            if ((await match.target.bot.handleWebhook(body)) === "durable") {
+              res.setHeader("x-openclaw-delivery-accepted", "durable");
+            }
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");

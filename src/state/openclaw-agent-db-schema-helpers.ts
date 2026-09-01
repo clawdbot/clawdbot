@@ -63,6 +63,14 @@ type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
+export function migratedSessionColumn(
+  columns: ReadonlySet<string>,
+  columnName: string,
+  fallback: string,
+): string {
+  return columns.has(columnName) ? columnName : fallback;
+}
+
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
@@ -82,6 +90,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_pending_inputs.consumed_event_id",
     "session_transcript_active_events.context_eligible",
     "session_conversations.route_context_json",
     "standing_intents.creator_sender",
@@ -240,7 +249,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   }
 }
 
-export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
+export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): number {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
@@ -250,14 +259,18 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
       OPENCLAW_AGENT_SCHEMA_VERSION,
     );
   }
+  return userVersion;
 }
 
-/** Versioned data repairs run only through Doctor, never a steady-state reader or writer. */
-export function assertCanonicalAgentPersistenceVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  const hasApplicationSchema = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1")
-    .get();
+/** Readers may pass their immediate check; writers reread the version after integrity work. */
+export function assertCanonicalAgentPersistenceVersion(
+  db: DatabaseSync,
+  pathname: string,
+  userVersion = readSqliteUserVersion(db),
+): void {
+  const hasApplicationSchema =
+    userVersion === 0 &&
+    db.prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1").get();
   const isNewUnownedDatabase =
     userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
   if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {

@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -15,6 +17,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { VERSION } from "../../version.js";
 
 const mocks = vi.hoisted(() => ({
   entrypoint: vi.fn(),
@@ -68,6 +71,9 @@ beforeEach(async () => {
       OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: undefined,
       OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: undefined,
       OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: undefined,
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: undefined,
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: undefined,
     },
   });
   await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
@@ -179,11 +185,15 @@ function expectSuccess(lane: Lane): void {
 
 describe("update orchestration lifecycle ownership", () => {
   it.each(["resume", "current-process", "repair"] as const)(
-    "%s keeps plugin mutation exclusive and releases ownership for fresh doctor and strict validation",
+    "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
       await writeScenario(lane, {
         hostVersion: lane === "repair" ? undefined : "1.0.0",
       });
+      if (lane === "current-process") {
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION", "1");
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR", "1");
+      }
       mocks.plugins.mockImplementationOnce(async () => {
         const result = await runExec(process.execPath, [entrypoint, "probe"], {
           timeoutMs: 15_000,
@@ -193,11 +203,15 @@ describe("update orchestration lifecycle ownership", () => {
       });
       await invoke(lane);
       expectSuccess(lane);
+      expect(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe(
+        lane === "current-process" ? "1" : undefined,
+      );
       expect(await events()).toEqual([
         ...(lane === "current-process" ? [] : ["pre-attempt", "pre-acquired"]),
         "post-attempt",
         "post-acquired",
         "validate",
+        "readiness",
       ]);
       if (lane === "current-process") {
         expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
@@ -316,6 +330,7 @@ describe("update orchestration lifecycle ownership", () => {
         "post-attempt",
         "post-acquired",
         "validate",
+        "readiness",
       ]);
     },
   );
@@ -327,7 +342,7 @@ describe("update orchestration lifecycle ownership", () => {
       mocks.plugins.mockResolvedValueOnce({ ...pluginResult, changed: false });
       await invoke(lane);
       expectSuccess(lane);
-      expect(await events()).toEqual(["pre-attempt", "pre-acquired"]);
+      expect(await events()).toEqual(["pre-attempt", "pre-acquired", "readiness"]);
     },
   );
 
@@ -395,7 +410,7 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it("keeps a failed final doctor fatal even when strict validation succeeds", async () => {
+  it("retains a final doctor failure while activating a strictly valid install", async () => {
     await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
     await invoke("current-process");
     expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
@@ -403,9 +418,119 @@ describe("update orchestration lifecycle ownership", () => {
       postUpdate: { plugins: { reason: "post-plugin-doctor-execution-failed" } },
     });
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restart).toHaveBeenCalledOnce();
     expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate"]);
+    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
   });
+
+  it.each([
+    {
+      lane: "resume" as const,
+      failure: "finding" as const,
+      reason: "post-plugin-update-readiness-failed",
+    },
+    {
+      lane: "resume" as const,
+      failure: "execution" as const,
+      reason: "post-plugin-update-readiness-execution-failed",
+    },
+    {
+      lane: "current-process" as const,
+      failure: "finding" as const,
+      reason: "post-plugin-update-readiness-failed",
+    },
+    {
+      lane: "current-process" as const,
+      failure: "execution" as const,
+      reason: "post-plugin-update-readiness-execution-failed",
+    },
+    {
+      lane: "repair" as const,
+      failure: "finding" as const,
+      reason: "post-plugin-update-readiness-failed",
+    },
+    {
+      lane: "repair" as const,
+      failure: "execution" as const,
+      reason: "post-plugin-update-readiness-execution-failed",
+    },
+  ])(
+    "$lane leaves the Gateway stopped after a readiness $failure",
+    async ({ lane, failure, reason }) => {
+      await writeScenario(lane, {
+        readinessFailure: failure,
+        hostVersion: lane === "repair" ? undefined : "1.0.0",
+      });
+
+      await invoke(lane);
+
+      const output =
+        lane === "current-process"
+          ? mocks.print.mock.lastCall?.[0]
+          : vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
+      expect(output).toMatchObject({
+        status: "error",
+        postUpdate: { plugins: { reason } },
+      });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(lane === "resume" ? 0 : 1);
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(await events()).toEqual([
+        ...(lane === "current-process" ? [] : ["pre-attempt", "pre-acquired"]),
+        "post-attempt",
+        "post-acquired",
+        "validate",
+        "readiness",
+      ]);
+    },
+  );
+
+  it.each([
+    { lane: "resume", valid: true },
+    { lane: "repair", valid: true },
+    { lane: "resume", valid: false },
+    { lane: "repair", valid: false },
+  ] as const)(
+    "$lane preserves downgrade startup eligibility after a Doctor error (valid=$valid)",
+    async ({ lane, valid }) => {
+      const futureVersion = "2099.1.1";
+      await state.writeConfig({
+        meta: { lastTouchedVersion: futureVersion },
+        plugins: { enabled: false },
+        update: { channel: "stable" },
+        gateway: { port: valid ? 19004 : -1 },
+      });
+      await writeScenario(lane, { failDoctor: "post", invalidConfig: !valid });
+
+      await invoke(lane);
+
+      expect(vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]).toMatchObject({
+        status: "error",
+        postUpdate: {
+          plugins: {
+            reason: valid
+              ? "post-plugin-doctor-execution-failed"
+              : "post-plugin-doctor-invalid-config",
+          },
+        },
+      });
+      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+      expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
+      expect(persisted.update?.channel).toBe("stable");
+      const startupBlock = resolveFutureConfigActionBlock({
+        action: "start gateway service",
+        config: persisted,
+        env: {},
+      });
+      expect(startupBlock === null).toBe(valid);
+      expect(await events()).toEqual([
+        "pre-attempt",
+        "pre-acquired",
+        "post-attempt",
+        "post-acquired",
+        "validate",
+        ...(valid ? ["readiness"] : []),
+      ]);
+    },
+  );
 });

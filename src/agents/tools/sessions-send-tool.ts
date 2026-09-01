@@ -38,7 +38,10 @@ import {
   normalizeAgentIdStrict,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   isCronRunSessionKey,
@@ -48,6 +51,10 @@ import {
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
@@ -128,6 +135,7 @@ const SessionsSendOutputSchema = Type.Union([
       runId: Type.String(),
       status: Type.Literal("accepted"),
       sessionKey: Type.String(),
+      targetDisposition: Type.Union([Type.Literal("queued"), Type.Literal("steered")]),
       delivery: SessionsSendDeliverySchema,
       watched: Type.Optional(Type.Boolean()),
     },
@@ -350,9 +358,15 @@ function shouldFallbackCronRunScopedActiveDelivery(
 }
 
 async function startAgentRun(params: {
+  cfg: OpenClawConfig;
   callGateway: GatewayCaller;
   runId: string;
-  sendParams: Record<string, unknown>;
+  sendParams: Record<string, unknown> & {
+    message: string;
+    agentId: string;
+    inputProvenance: InputProvenance;
+    sourceReplyDeliveryMode: "message_tool_only";
+  };
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
@@ -362,7 +376,7 @@ async function startAgentRun(params: {
   | {
       ok: true;
       runId: string;
-      activeRunQueue?: boolean;
+      targetDisposition: "queued" | "steered";
       a2aSessionKey?: string;
       a2aDisplayKey?: string;
     }
@@ -380,20 +394,37 @@ async function startAgentRun(params: {
     ) {
       throw new Error("active run session incarnation changed");
     }
-    const messageText =
-      typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
+    const {
+      agentId,
+      inputProvenance,
+      message: messageText,
+      sourceReplyDeliveryMode,
+    } = params.sendParams;
     if (activeRunSessionId && messageText) {
-      const sourceReplyDeliveryMode =
-        params.sendParams.sourceReplyDeliveryMode === "automatic" ||
-        params.sendParams.sourceReplyDeliveryMode === "message_tool_only"
-          ? params.sendParams.sourceReplyDeliveryMode
-          : undefined;
       const queueOptions: EmbeddedAgentQueueMessageOptions = {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
-        ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
+        sourceReplyDeliveryMode,
+        // Carry the same input facts as a new run; transcript ownership stays
+        // with the receiving runtime and its exact session incarnation.
+        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+          input: {
+            text: messageText,
+            provenance: inputProvenance,
+            idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
+          },
+          target: {
+            sessionId: activeRunSessionId,
+            expectedSessionId: activeRunSessionId,
+            sessionKey: params.sessionKey,
+            sessionEntry: undefined,
+            agentId,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+            config: params.cfg,
+          },
+        }),
       };
       let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
         activeRunSessionId,
@@ -410,7 +441,7 @@ async function startAgentRun(params: {
         );
       }
       if (queueOutcome.queued) {
-        return { ok: true, runId: params.runId, activeRunQueue: true };
+        return { ok: true, runId: params.runId, targetDisposition: "steered" };
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (
@@ -431,6 +462,7 @@ async function startAgentRun(params: {
           ok: true,
           runId:
             typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          targetDisposition: "queued",
           a2aSessionKey: fallbackSessionKey,
           a2aDisplayKey: fallbackSessionKey,
         };
@@ -447,6 +479,7 @@ async function startAgentRun(params: {
     return {
       ok: true,
       runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+      targetDisposition: "queued",
     };
   } catch (err) {
     const messageText =
@@ -1067,14 +1100,6 @@ export function createSessionsSendTool(opts?: {
           // post-return work or durable watches that could follow a reused key.
           const skipA2AFlow =
             skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(expectedSessionId);
-          // When the A2A flow is skipped, no follow-up announcement will fire and
-          // the reply (when present) is returned inline via the `reply` field.
-          // Reflect that in the metadata so the parent LLM does not wait for a
-          // second result that will never arrive.
-          const delivery = skipA2AFlow
-            ? ({ status: "skipped", mode: "announce" } as const)
-            : ({ status: "pending", mode: "announce" } as const);
-
           const startA2AFlow = (
             roundOneReply?: string,
             waitRunId?: string,
@@ -1091,27 +1116,29 @@ export function createSessionsSendTool(opts?: {
                 : baselineReply;
             // This detached flow can outlive the tool request that launched it.
             // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(() =>
-              runWithoutOwnedSessionTranscriptWrites(() =>
-                runSessionsSendA2AFlow({
-                  callGateway: gatewayCall,
-                  targetSessionKey: flowTargetSessionKey,
-                  targetAgentId,
-                  displayKey: flowDisplayKey,
-                  message,
-                  announceTimeoutMs,
-                  // Cron runs are isolated jobs; target replies must not become new
-                  // requester turns, but the target-side announce still runs.
-                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterAgentId,
-                  requesterChannel,
-                  baseline: flowBaseline,
-                  roundOneReply,
-                  waitRunId,
-                  notifyRequesterOnWaitFailure,
-                }),
-              ),
+            void runWithGatewayIndependentRootWorkContinuation(
+              () =>
+                runWithoutOwnedSessionTranscriptWrites(() =>
+                  runSessionsSendA2AFlow({
+                    callGateway: gatewayCall,
+                    targetSessionKey: flowTargetSessionKey,
+                    targetAgentId,
+                    displayKey: flowDisplayKey,
+                    message,
+                    announceTimeoutMs,
+                    // Cron runs are isolated jobs; target replies must not become new
+                    // requester turns, but the target-side announce still runs.
+                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                    requesterSessionKey: replyRequesterSessionKey,
+                    requesterAgentId,
+                    requesterChannel,
+                    baseline: flowBaseline,
+                    roundOneReply,
+                    waitRunId,
+                    notifyRequesterOnWaitFailure,
+                  }),
+                ),
+              "session:a2a-send",
             ).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",
@@ -1121,6 +1148,7 @@ export function createSessionsSendTool(opts?: {
           };
 
           const start = await startAgentRun({
+            cfg,
             callGateway: gatewayCall,
             runId,
             sendParams,
@@ -1141,6 +1169,13 @@ export function createSessionsSendTool(opts?: {
             return start.result;
           }
           const acceptedTargetSessionKey = start.a2aSessionKey ?? resolvedKey;
+          // Active-run steering is consumed by the current turn and does not
+          // launch the detached A2A flow. Report that boundary directly so the
+          // caller never mistakes target admission for announcement delivery.
+          const delivery =
+            skipA2AFlow || start.targetDisposition === "steered"
+              ? ({ status: "skipped", mode: "announce" } as const)
+              : ({ status: "pending", mode: "announce" } as const);
           recordSessionToolActionFact({
             operation: "send",
             fact: "committed",
@@ -1158,13 +1193,14 @@ export function createSessionsSendTool(opts?: {
           runId = start.runId;
           const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
           if (timeoutSeconds === 0) {
-            if (!start.activeRunQueue) {
+            if (start.targetDisposition !== "steered") {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
             return jsonResult({
               runId,
               status: "accepted",
               sessionKey: displayKey,
+              targetDisposition: start.targetDisposition,
               delivery,
               ...watchField,
             });
@@ -1199,6 +1235,7 @@ export function createSessionsSendTool(opts?: {
                 runId,
                 status: "accepted",
                 sessionKey: displayKey,
+                targetDisposition: start.targetDisposition,
                 delivery,
                 ...watchField,
               });

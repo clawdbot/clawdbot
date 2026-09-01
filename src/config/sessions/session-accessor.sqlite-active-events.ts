@@ -16,9 +16,9 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   readTranscriptProjectionGeneration,
+  readVisibleMessageMetadata,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
-  resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import {
@@ -378,27 +378,25 @@ export function readRecentSessionTranscriptMessageEvents(
       1024,
       Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
     );
-    const candidates = readVisibleMessageRange(
+    const candidates = readVisibleMessageMetadata(
       projection,
-      Math.max(0, visible.total - maxLines),
+      Math.max(0, visible.total - Math.min(maxLines, maxMessages)),
       visible.total,
     );
-    const selected: SessionTranscriptMessageEvent[] = [];
+    let selectedStart = visible.total;
     let bytes = 0;
-    for (const event of candidates.toReversed()) {
-      const eventBytes = Buffer.byteLength(JSON.stringify(event.event)) + 1;
-      if (
-        selected.length >= maxMessages ||
-        (selected.length > 0 && bytes + eventBytes > maxBytes)
-      ) {
+    for (const row of candidates.toReversed()) {
+      // Keep the newest event even when oversized, then a contiguous suffix. Size stored JSONL
+      // before loading payloads so a small usage budget cannot materialize the entire line window.
+      if (selectedStart < visible.total && bytes + row.serialized_bytes > maxBytes) {
         break;
       }
-      selected.push(event);
-      bytes += eventBytes;
+      selectedStart = row.logicalPosition;
+      bytes += row.serialized_bytes;
     }
     return {
       activeLeafEntryId: projection.state.leafEventId,
-      events: selected.toReversed(),
+      events: readVisibleMessageRange(projection, selectedStart, visible.total),
       totalMessages: visible.total,
     };
   });
@@ -456,45 +454,28 @@ export function readSessionTranscriptBoundedMessageTailPage(
     );
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
-    const positions = resolveVisibleMessagePositionRange(projection, start, endExclusive);
-    if (positions.length === 0 || maxBytes === 0) {
+    const scannedMessages = endExclusive - start;
+    if (scannedMessages === 0 || maxBytes === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
         events: [],
         newestContiguousEventCount: 0,
-        scannedMessages: positions.length,
+        scannedMessages,
         serializedBytes: 0,
         snapshot,
         totalMessages,
       };
     }
     const db = getActiveTranscriptKysely(projection.database);
-    const metadata = executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select([
-          "active.message_position",
-          /* kysely-allow-raw: byte budget covers the exact newline-terminated JSON event. */
-          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.message_position", "in", positions)
-        .orderBy("active.message_position", "desc"),
-    ).rows;
-    if (metadata.length !== positions.length) {
+    const metadata = readVisibleMessageMetadata(projection, start, endExclusive).toReversed();
+    if (metadata.length !== scannedMessages) {
       throw new Error("Active transcript bounded message page is incomplete");
     }
     const selectedPositions: number[] = [];
     let newestContiguousEventCount: number | undefined;
     let serializedBytes = 0;
     for (const row of metadata) {
-      if (row.message_position === null || serializedBytes + row.serialized_bytes > maxBytes) {
+      if (serializedBytes + row.serialized_bytes > maxBytes) {
         newestContiguousEventCount ??= selectedPositions.length;
         continue;
       }
@@ -522,7 +503,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
       activeLeafEntryId: projection.state.leafEventId,
       events,
       newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,
-      scannedMessages: positions.length,
+      scannedMessages,
       serializedBytes,
       snapshot,
       totalMessages,

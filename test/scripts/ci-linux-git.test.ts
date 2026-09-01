@@ -714,6 +714,7 @@ posixIt.each([
           }),
       fetchResults: failure ? [failure] : fetches.map(() => 0),
       realClock: true,
+      realDrain: false,
       poisonPython: true,
       env: {
         BASELINE_REF: baseline ? "baseline" : "",
@@ -812,6 +813,7 @@ posixIt.each([
       fetchResults: fetch ? [result] : [],
       cloneResults: fetch ? [] : [result],
       realClock: true,
+      realDrain: false,
       poisonPython: true,
       env: { CRABBOX_REF: "main" },
     });
@@ -932,7 +934,14 @@ posixIt.each([
       },
       fetchResults: [],
       worktreeResults: failure ? ["cleanup-failure"] : lanes.map(() => 0),
+      // The runner hands off the earlier allocation's output; keep setup logs
+      // inside this fixture's fresh invocation directory.
+      stepOutputs:
+        workflow === "web-ui-chat-proof"
+          ? { prepare_evidence: { output_dir: "${RUNNER_TEMP}" } }
+          : undefined,
       realClock: true,
+      realDrain: false,
       poisonPython: true,
       env: { BASELINE_SHA: base, CANDIDATE_SHA: candidate },
     });

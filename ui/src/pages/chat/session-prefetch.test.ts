@@ -277,7 +277,7 @@ describe("recent session prefetch", () => {
       "agent:main:eligible-4",
       "agent:main:eligible-5",
     ]);
-    expect(request.mock.calls.every((call) => (call[1] as { limit: number }).limit === 100)).toBe(
+    expect(request.mock.calls.every((call) => (call[1] as { limit: number }).limit === 800)).toBe(
       true,
     );
     expect(locksRequest).toHaveBeenCalledWith(

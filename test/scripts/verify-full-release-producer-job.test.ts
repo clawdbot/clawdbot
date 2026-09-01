@@ -74,7 +74,10 @@ describe.skipIf(process.platform === "win32")("full release producer job verific
     ["run ID", { run_id: 457 }, "producer run ID mismatch"],
     ["run attempt", { run_attempt: 3 }, "producer run attempt mismatch"],
     ["completed status", { status: "in_progress" }, "producer job status mismatch"],
-    ["successful conclusion", { conclusion: "failure" }, "producer job conclusion mismatch"],
+    ["failure conclusion", { conclusion: "failure" }, "producer job conclusion mismatch"],
+    ["cancelled conclusion", { conclusion: "cancelled" }, "producer job conclusion mismatch"],
+    ["timed_out conclusion", { conclusion: "timed_out" }, "producer job conclusion mismatch"],
+    ["skipped conclusion", { conclusion: "skipped" }, "producer job conclusion mismatch"],
   ])("rejects a mismatched %s", (_label, override, message) => {
     const { result } = runVerification({ ...expectedJob, ...override });
     expect(result.status).toBe(1);

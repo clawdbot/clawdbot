@@ -122,18 +122,10 @@ async function postTavilyJson(params: {
       ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) =>
-      readTavilyJsonResponse(response, params.errorLabel, {
+      readProviderJsonResponse<Record<string, unknown>>(response, params.errorLabel, {
         maxBytes: params.responseMaxBytes,
       }),
   );
-}
-
-async function readTavilyJsonResponse(
-  response: Response,
-  label: string,
-  opts?: { maxBytes?: number },
-): Promise<Record<string, unknown>> {
-  return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
 export async function runTavilySearch(
@@ -415,6 +407,5 @@ export async function runTavilyExtract(
 }
 
 export const testing = {
-  readTavilyJsonResponse,
   resolveEndpoint,
 };

@@ -295,12 +295,15 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
   inheritedAuthDir?: string,
 ): AuthProfileStore | undefined {
-  const inherited = getRuntimeAuthProfileStoreSnapshotCore(inheritedAuthDir);
-  const requested = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (!agentDir || resolveRuntimeStoreKey(agentDir) === resolveRuntimeStoreKey(inheritedAuthDir)) {
-    return requested ?? inherited;
+  const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir);
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
+  if (requestedKey === inheritedKey) {
+    return inherited;
   }
-  if (inherited && requested) {
+  const requested = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
+  // With no agent, the shared snapshot wins without merging the inherited store.
+  if (agentDir && inherited && requested) {
     return mergeAuthProfileStores(inherited, requested, {
       preserveBaseRuntimeExternalProfiles: true,
     });

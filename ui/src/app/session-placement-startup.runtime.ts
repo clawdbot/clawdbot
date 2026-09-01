@@ -22,7 +22,7 @@ import {
 } from "../lib/sessions/session-placement-submit.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
-import { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
+import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
 import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
@@ -152,21 +152,18 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
   ) => {
-    const message = buildLocalUserMessage({
-      text: recovery.message,
-      attachments: entry.attachments,
-      createdAt: entry.createdAt,
-      runId: result.messageId,
-      sequence: result.messageSeq,
-    });
-    if (message) {
-      params.initialUserMessage.prepare({
-        sessionKey: entry.owner.sessionKey,
-        owner: entry.scope.client,
-        pendingRunId: result.messageId,
-        message,
-      });
-    }
+    params.chatSubmissions.retain(
+      buildInitialChatSubmission(
+        entry.owner.sessionKey,
+        {
+          text: recovery.message,
+          attachments: entry.attachments,
+          createdAt: entry.createdAt,
+        },
+        entry.scope.client,
+        result.messageId,
+      ),
+    );
   };
 
   const refreshAfterFailure = (entry: PlacementStartupEntry) => {
@@ -191,13 +188,12 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     recovering: boolean,
   ) => {
-    let accepted = false;
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
-      cleanupOnCancellation: !entry.persistRecovery,
+      cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
       recovering,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
@@ -237,8 +233,8 @@ export default function createApplicationPlacementStartupRuntime(
           }
           return;
         }
+        // Retained custody already owns the visible input; a local handoff would duplicate it.
         if (result.status === "started") {
-          accepted = true;
           prepareAcceptedMessage(entry, currentRecovery, result);
         }
         retireEntry(entry);
@@ -248,11 +244,7 @@ export default function createApplicationPlacementStartupRuntime(
           pauseEntry(entry, currentRecovery, formatUiError(error));
         }
       })
-      .finally(() => {
-        if (!accepted) {
-          refreshAfterFailure(entry);
-        }
-      });
+      .finally(() => refreshAfterFailure(entry));
   };
 
   const start = (input: PlacementStartupInput) => {
@@ -388,6 +380,26 @@ export default function createApplicationPlacementStartupRuntime(
       };
     },
     start,
+    pause(sessionKey, error) {
+      const entry = findEntry(sessionKey)?.entry;
+      if (!entry || !isCurrent(entry)) {
+        return;
+      }
+      const recovery = pauseSessionPlacementRecovery(
+        entry.work.recovery,
+        error,
+        entry.persistRecovery,
+      );
+      // Replace the owner before Stop leaves the browser; late active dispatch replies lose send authority.
+      entry.work = { kind: "paused", recovery };
+      retireEntry(entry, false);
+      start({
+        recovery,
+        persistRecovery: entry.persistRecovery,
+        recovering: true,
+        createdAt: entry.createdAt,
+      });
+    },
     retry(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
       if (!entry || entry.work.kind !== "paused" || !isCurrent(entry)) {

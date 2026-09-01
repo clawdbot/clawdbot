@@ -213,6 +213,7 @@ export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSche
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
+export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
@@ -319,6 +320,9 @@ export const validateSystemAgentSetupDetectParams = compile(S.SystemAgentSetupDe
 export const validateSystemAgentSetupVerifyParams = compile(S.SystemAgentSetupVerifyParamsSchema);
 export const validateSystemAgentSetupActivateParams = compile(
   S.SystemAgentSetupActivateParamsSchema,
+);
+export const validateSystemAgentSetupActivateStartParams = compile(
+  S.SystemAgentSetupActivateStartParamsSchema,
 );
 export const validateSystemAgentSetupAuthStartParams = compile(
   S.SystemAgentSetupAuthStartParamsSchema,

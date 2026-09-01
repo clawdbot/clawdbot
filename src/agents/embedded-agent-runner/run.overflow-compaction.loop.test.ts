@@ -1,16 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
   observeReplayMetadata,
 } from "./replay-state.js";
+import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
 import { dispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../delegation-capability.js", () => ({
   resolveDelegationCapability: vi.fn(() => undefined),
@@ -131,6 +136,93 @@ describe("embedded run retry dispatch", () => {
   beforeEach(() => {
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
+  });
+
+  it.each([undefined, "global", "agent:main:policy"])(
+    "dispatches a global plugin attempt with its prepared owner (%s)",
+    async (sandboxSessionKey) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.config = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sandbox: { mode: "off" } },
+          list: [{ id: "main" }, { id: "marketing" }],
+        },
+      };
+      input.params.sessionKey = "global";
+      input.params.sandboxSessionKey = sandboxSessionKey;
+      input.runtime.agentId = "marketing";
+      input.runtime.sessionKey = "global";
+      input.runtime.workspaceDir = tempDirs.make("openclaw-global-plugin-attempt-");
+
+      const result = await dispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt).toMatchObject({
+        agentId: "marketing",
+        sessionKey: "global",
+        sandbox: null,
+      });
+      expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
+    },
+  );
+
+  it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
+    const flushStarted = createDeferred();
+    const flush = createDeferred();
+    const afterTurnError = new Error("after-turn cleanup failed");
+    const onContextAccountingEvent = vi.fn();
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    input.runtime.agentHarnessId = "openclaw";
+    input.control.pluginHarnessOwnsTransport = false;
+    Object.assign(input.params, { onContextAccountingEvent });
+    let subscription: ReturnType<typeof createSubscribedSessionHarness>["subscription"] | undefined;
+    mocks.runAttempt.mockImplementationOnce(async (attempt: EmbeddedRunAttemptInternalParams) => {
+      const harness = createSubscribedSessionHarness({
+        runId: attempt.runId,
+        sessionExtras: { messages: [] },
+        blockReplyBreak: "message_end",
+        onBlockReplyFlush: () => {
+          flushStarted.resolve();
+          return flush.promise;
+        },
+        onContextAccountingEvent: attempt.onContextAccountingEvent,
+      });
+      subscription = harness.subscription;
+      try {
+        harness.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Completed answer" }],
+            stopReason: "stop",
+          },
+        });
+        await flushStarted.promise;
+        // The mocked attempt reports its replacement hook before the public notice.
+        attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter: 40 });
+        harness.emit({
+          type: "compaction_end",
+          reason: "threshold",
+          outcome: { status: "completed", tokensBefore: 100, tokensAfter: 40, willRetry: false },
+        });
+        expect(subscription.getCompactionCount()).toBe(0);
+        throw afterTurnError;
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+
+    try {
+      await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
+      expect(onContextAccountingEvent.mock.calls).toEqual([
+        [{ kind: "model", contextTokens: undefined }],
+        [{ kind: "compaction", tokensAfter: 40 }],
+      ]);
+    } finally {
+      flush.resolve();
+      await subscription?.waitForPendingEvents();
+      subscription?.unsubscribe();
+    }
   });
 
   it("preserves caller-owned turn facts and unsafe replay state on the next attempt", async () => {

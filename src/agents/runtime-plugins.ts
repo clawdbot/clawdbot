@@ -1,3 +1,4 @@
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
 import {
@@ -5,13 +6,16 @@ import {
   listRuntimePluginIdsFromRegistry,
   registryContainsRuntimePluginIds,
 } from "../plugins/active-runtime-registry.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { adoptRuntimeMemoryRegistrations } from "../plugins/memory-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir,
+} from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -44,7 +48,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+  if (params.config?.plugins?.enabled === false) {
     return {
       loadOptions: {
         config: params.config,
@@ -146,10 +150,35 @@ export async function withAgentPluginRegistry<T>(params: {
   if (getPluginRuntimeGatewayRequestScope()?.pluginRegistry) {
     return await params.run();
   }
+  const metadataSnapshot =
+    params.config.plugins?.enabled !== false
+      ? loadPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: params.workspaceDir,
+        })
+      : undefined;
   const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
     basePluginIds: [],
     config: params.config,
+    ...(metadataSnapshot ? { metadataSnapshot } : {}),
     workspaceDir: params.workspaceDir,
   });
-  return await withPluginRuntimeRegistryScope(pluginRegistry, params.run);
+  const activeRegistry = getActivePluginRegistry();
+  const scopedRegistry =
+    activeRegistry &&
+    metadataSnapshot &&
+    getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
+      ? adoptRuntimeMemoryRegistrations(
+          pluginRegistry,
+          activeRegistry,
+          applyPluginAutoEnable({
+            config: params.config,
+            env: process.env,
+            discovery: metadataSnapshot.discovery,
+            manifestRegistry: metadataSnapshot.manifestRegistry,
+          }).config,
+        )
+      : pluginRegistry;
+  return await withPluginRuntimeRegistryScope(scopedRegistry, params.run);
 }
