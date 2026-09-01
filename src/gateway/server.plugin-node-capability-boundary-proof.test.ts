@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
-import { type Socket } from "node:net";
+import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -43,6 +43,7 @@ function makeWsClient(params: {
       role: params.role,
       caps: params.caps ?? (params.role === "node" ? ["canvas"] : []),
       client: { id: params.connId, mode: params.role === "node" ? "node" : "webchat" },
+      ...(params.role === "node" ? { declaredCaps: ["canvas"] } : {}),
     } as GatewayWsClient["connect"],
     connId: params.connId,
     usesSharedGatewayAuth: false,
@@ -137,7 +138,13 @@ async function listen(server: ReturnType<typeof createGatewayHttpServer>) {
       }
       await withTimeout(
         new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
         }),
         CLOSE_TIMEOUT_MS,
         { message: "proof gateway server close timed out" },
@@ -208,12 +215,16 @@ async function runBoundaryProof(
       ws.terminate();
     }
     await withTimeout(
-      new Promise<void>((resolve) => canvasWss.close(() => resolve())),
+      new Promise<void>((resolve) => {
+        canvasWss.close(() => resolve());
+      }),
       CLOSE_TIMEOUT_MS,
       { message: "proof canvas websocket server close timed out" },
     );
     await withTimeout(
-      new Promise<void>((resolve) => gatewayWss.close(() => resolve())),
+      new Promise<void>((resolve) => {
+        gatewayWss.close(() => resolve());
+      }),
       CLOSE_TIMEOUT_MS,
       { message: "proof gateway websocket server close timed out" },
     );
