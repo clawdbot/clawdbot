@@ -9,8 +9,6 @@ import {
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
 
-const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
-
 describe("ingress retry policy", () => {
   it.each([
     {
@@ -166,36 +164,39 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it("bounds repeated session-start conflicts without waiting for the 24-hour age gate", () => {
+  it("bounds repeated session-start conflicts at the configured attempt budget", () => {
+    const maxAttempts = 3;
     const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
     const beforeLimit = resolveIngressFailureDisposition({
       err: new Error(message),
       event: {
         receivedAt: 1_000,
-        attempts: SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS - 2,
+        attempts: maxAttempts - 2,
       },
       formatError: coerceErrorMessage,
+      config: { maxAttempts },
       now: 2_000,
     });
     expect(beforeLimit).toMatchObject({
       kind: "release",
-      attempt: SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS - 1,
+      attempt: maxAttempts - 1,
     });
 
     const atLimit = resolveIngressFailureDisposition({
       err: Object.assign(new Error(message), { code: "SESSION_WORK_START_INVALIDATED" }),
       event: {
         receivedAt: 1_000,
-        attempts: SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS - 1,
+        attempts: maxAttempts - 1,
       },
       formatError: coerceErrorMessage,
+      config: { maxAttempts },
       now: 2_000,
     });
     expect(atLimit).toEqual({
       kind: "fail",
       reason: "session-start-conflict-retry-limit",
       message,
-      attempt: SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS,
+      attempt: maxAttempts,
     });
   });
 
@@ -204,14 +205,14 @@ describe("ingress retry policy", () => {
       err: new Error("temporary provider outage"),
       event: {
         receivedAt: 1_000,
-        attempts: SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS - 1,
+        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
       },
       formatError: coerceErrorMessage,
       now: 2_000,
     });
     expect(disposition).toMatchObject({
       kind: "release",
-      attempt: SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS,
+      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
     });
   });
 });

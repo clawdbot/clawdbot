@@ -14,7 +14,6 @@ export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
  * If it remains identical through the normal attempt budget, keeping the lane blocked for
  * the generic 24-hour age gate cannot make the stale event healthier.
  */
-const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
 const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 
 export type IngressRetryPolicyConfig = {
@@ -117,6 +116,7 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
+  const { maxAttempts } = resolveConfig(params.config);
   const attempt = resolveIngressAttemptNumber(params.event);
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
@@ -128,10 +128,7 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  if (
-    attempt >= SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS &&
-    isSessionStartConflictFailure(params.err, message)
-  ) {
+  if (attempt >= maxAttempts && isSessionStartConflictFailure(params.err, message)) {
     return {
       kind: "fail",
       reason: "session-start-conflict-retry-limit",

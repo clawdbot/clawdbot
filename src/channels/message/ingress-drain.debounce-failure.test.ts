@@ -8,8 +8,7 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
-
-const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
@@ -110,7 +109,7 @@ describe("channel ingress drain debounce failures", () => {
         },
       });
 
-      for (let attempt = 0; attempt < SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
         expect(await drain.drainOnce()).toEqual({ started: 1 });
         await drain.waitForIdle();
         clock += 1;
