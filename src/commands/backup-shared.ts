@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import {
   readConfigFileSnapshot,
   resolveConfigPath,
@@ -189,7 +190,9 @@ async function resolveBackupPlanFromPaths(params: {
   const configPath = params.configPath;
   const oauthDir = params.oauthDir;
   const archiveRoot = buildBackupArchiveRoot(params.nowMs);
-  const workspaceDirs = includeWorkspace ? (params.workspaceDirs ?? []) : [];
+  const requestedWorkspaceDirs = params.workspaceDirs ?? [];
+  const workspaceDirs = includeWorkspace ? requestedWorkspaceDirs : [];
+  const excludedWorkspaceDirs = includeWorkspace ? [] : requestedWorkspaceDirs;
   const agentRoots = onlyConfig ? [] : (params.agentRoots ?? []);
   const configInsideState = params.configInsideState ?? false;
   const oauthInsideState = params.oauthInsideState ?? false;
@@ -200,6 +203,9 @@ async function resolveBackupPlanFromPaths(params: {
     oauthDir: await canonicalizePathForContainment(oauthDir),
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
+    ),
+    excludedWorkspaceDirs: await Promise.all(
+      excludedWorkspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
@@ -555,14 +561,17 @@ export async function resolveBackupPlanFromDisk(
   const agentRoots = unresolvedOwnership
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
-  const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
+  const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
+  const workspaceDirs = includeWorkspace
+    ? discoveredWorkspaceDirs
+    : [...discoveredWorkspaceDirs, resolveDefaultAgentWorkspaceDir()];
   const pluginInventory = unresolvedOwnership
     ? undefined
     : resolveActivatedPluginBackupInventory({
         config: discoverySnapshot.config,
         env: process.env,
         stateDir,
-        workspaceDirs,
+        workspaceDirs: includeWorkspace ? discoveredWorkspaceDirs : [],
       });
   return await resolveBackupPlanFromPaths({
     stateDir,
