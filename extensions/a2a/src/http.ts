@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { boundedJsonUtf8Bytes } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -69,16 +70,23 @@ function writeRpcResponse(
   response: ServerResponse,
   value: A2aRpcResponse | A2aRpcResponse[],
 ): void {
-  const body = JSON.stringify(value);
-  if (Buffer.byteLength(body) <= MAX_RESPONSE_BODY_BYTES) {
-    writeJsonBody(response, 200, body);
+  const measured = boundedJsonUtf8Bytes(value, MAX_RESPONSE_BODY_BYTES);
+  if (measured.complete) {
+    writeJsonBody(response, 200, JSON.stringify(value));
     return;
   }
   const errorMessage = "A2A response exceeds the 1 MiB limit";
   const bounded = Array.isArray(value)
     ? value.map((entry) => createRpcError(entry.id, -32000, errorMessage))
     : createRpcError(value.id, -32000, errorMessage);
-  writeJsonResponse(response, 200, bounded);
+  // Request IDs can consume nearly the entire inbound budget. Drop correlation
+  // only when an already-oversized response's replacement still cannot fit.
+  const fallback = boundedJsonUtf8Bytes(bounded, MAX_RESPONSE_BODY_BYTES).complete
+    ? bounded
+    : Array.isArray(bounded)
+      ? bounded.map(() => createRpcError(null, -32000, errorMessage))
+      : createRpcError(null, -32000, errorMessage);
+  writeJsonResponse(response, 200, fallback);
 }
 
 function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): string | undefined {

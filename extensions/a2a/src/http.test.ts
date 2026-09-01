@@ -334,17 +334,44 @@ describe("A2A HTTP authentication and request limits", () => {
   it("replaces oversized RPC results with a bounded error", async () => {
     const harness = await startHttpHarness();
     const task = harness.taskStore.create("ctx-large", "alpha");
-    harness.taskStore.completeNext(task.contextId, "x".repeat(1024 * 1024), "alpha");
-
-    const response = await harness.post({
+    const oversizedText = "x".repeat(1024 * 1024);
+    harness.taskStore.completeNext(task.contextId, oversizedText, "alpha");
+    const requestBody = JSON.stringify({
       jsonrpc: "2.0",
       id: "large-result",
       method: "GetTask",
       params: { id: task.id },
     });
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    const response = await harness.post(requestBody);
 
     await expect(response.json()).resolves.toMatchObject({
       id: "large-result",
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+    expect(
+      stringifySpy.mock.calls.some(
+        ([value]) =>
+          (value as { result?: { artifacts?: Array<{ parts?: Array<{ text?: string }> }> } })
+            ?.result?.artifacts?.[0]?.parts?.[0]?.text === oversizedText,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the overflow fallback bounded when its request ID cannot fit", async () => {
+    const harness = await startHttpHarness();
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "i".repeat(1024 * 1024 - 25),
+    });
+    expect(Buffer.byteLength(requestBody)).toBeLessThanOrEqual(1024 * 1024);
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
       error: { code: -32000, message: expect.stringContaining("response") },
     });
     expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
