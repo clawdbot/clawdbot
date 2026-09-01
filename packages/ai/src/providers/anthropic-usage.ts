@@ -205,7 +205,12 @@ export function applyAnthropicMessageDeltaUsage(
   payload: AnthropicUsagePayload | undefined,
   messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
 ): void {
-  const usage = payload ?? {};
+  // An omitted usage object reports nothing; overwriting here would discard the
+  // message_start prompt snapshot that Anthropic-compatible proxies never repeat.
+  if (!payload) {
+    return;
+  }
+  const usage = payload;
   const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
   const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
   const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
