@@ -864,6 +864,10 @@ channel that supports conversion.
 
 When `tts.auto` is enabled, OpenClaw:
 
+- Keeps terminal slash and plugin command replies text-only, including with
+  `auto: "always"`. Explicit speech requests such as `/tts audio` and `/tts latest`
+  still send audio. Commands that continue into an assistant run keep the normal
+  auto-TTS behavior for the assistant's answer.
 - Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
 - Summarizes long replies when summaries are enabled, using

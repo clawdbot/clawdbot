@@ -720,6 +720,7 @@ describe("runGatewayLoop", () => {
           restartExpectedMs: null,
         });
         expect(start).toHaveBeenCalledWith({
+          processStartedAt: expect.any(Number),
           startupStartedAt: expect.any(Number),
           requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
         });
@@ -731,6 +732,44 @@ describe("runGatewayLoop", () => {
         flushDiagnosticsTimeline();
         tempDirs.cleanup();
       }
+    });
+  });
+
+  it("passes the process origin to the initial startup only", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce(createGatewayServer(closeFirst))
+        .mockResolvedValueOnce(createGatewayServer(closeSecond));
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 1,
+        "expected initial gateway start",
+      );
+
+      expect(start.mock.calls[0]?.[0]).toMatchObject({
+        processStartedAt: expect.any(Number),
+        startupStartedAt: expect.any(Number),
+      });
+
+      captureSignal("SIGUSR1")();
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 2,
+        "expected restart gateway start",
+      );
+      expect(start.mock.calls[1]?.[0]).not.toHaveProperty("processStartedAt");
+
+      captureSignal("SIGINT")();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

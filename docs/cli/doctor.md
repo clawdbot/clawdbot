@@ -245,6 +245,13 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
 
+The probes also warn with `plugin.version_drift` when an enabled official plugin
+in the installed index belongs to a different release cohort than the upgraded
+OpenClaw CLI. Follow the reported plugin update command, then restart the
+Gateway. Exact npm pins receive an update command only after the registry
+confirms that target exists. Independently versioned community plugins and
+disabled plugins are excluded; version drift alone does not change the exit code.
+
 Container image startup is the exception to the usual "run doctor after
 updating" flow. When `openclaw gateway run` starts on a new OpenClaw version, it
 runs safe state and plugin repairs before reporting ready. If repair cannot

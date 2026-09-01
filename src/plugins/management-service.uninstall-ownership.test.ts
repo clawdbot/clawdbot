@@ -201,44 +201,64 @@ describe("plugin management uninstall channel ownership", () => {
     expect(mocks.commitRecords).not.toHaveBeenCalled();
   });
 
-  it("removes an exact orphan owner record with no discovered plugin code", async () => {
-    const pluginId = "orphaned-plugin";
-    const installRecord = {
-      source: "path",
-      sourcePath: "/tmp/missing-orphan-source",
-      installPath: "/tmp/missing-orphan-install",
-    } as const;
-    mocks.readConfig.mockResolvedValue({
-      snapshot: {
-        valid: true,
-        parsed: {},
-        path: "/tmp/openclaw.json",
-        sourceConfig: { plugins: { entries: { [pluginId]: { enabled: true } } } },
-        hash: "base-hash",
-      },
-      writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-    });
-    mocks.installRecords.mockResolvedValue({ [pluginId]: installRecord });
-    mocks.metadata.mockReturnValue({
-      index: {
-        plugins: [],
-        installRecords: { [pluginId]: installRecord },
-      },
-      byPluginId: new Map(),
-      normalizePluginId: (rawPluginId: string) => rawPluginId,
-    });
+  it.each([false, true])(
+    "preserves another channel owner during managed orphan uninstall: %s",
+    async (claimed) => {
+      const pluginId = "orphaned-plugin";
+      const installRecord = {
+        source: "path",
+        sourcePath: "/tmp/missing-orphan-source",
+        installPath: "/tmp/missing-orphan-install",
+      } as const;
+      mocks.readConfig.mockResolvedValue({
+        snapshot: {
+          valid: true,
+          parsed: {},
+          path: "/tmp/openclaw.json",
+          sourceConfig: {
+            plugins: { entries: { [pluginId]: { enabled: true } } },
+            channels: { [pluginId]: { enabled: true }, unknown: { enabled: true } },
+          },
+          hash: "base-hash",
+        },
+        writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
+      });
+      mocks.installRecords.mockResolvedValue({ [pluginId]: installRecord });
+      mocks.metadata.mockReturnValue({
+        index: {
+          plugins: claimed
+            ? [
+                {
+                  pluginId: "bridge",
+                  rootDir: "/tmp/bridge",
+                  startup: { agentHarnesses: [] },
+                  contributions: { channels: [pluginId] },
+                },
+              ]
+            : [],
+          installRecords: { [pluginId]: installRecord },
+        },
+        byPluginId: new Map(),
+        normalizePluginId: (rawPluginId: string) => rawPluginId,
+      });
 
-    const result = await uninstallManagedPlugin({ pluginId, env: {} });
+      const result = await uninstallManagedPlugin({ pluginId, env: {} });
 
-    expect(mocks.commitRecords).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: {},
-        nextInstallRecords: {},
-      }),
-    );
-    expect(result.pluginId).toBe(pluginId);
-    expect(result.removed).toContain("install record");
-  });
+      expect(mocks.commitRecords).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig: {
+            channels: {
+              ...(claimed ? { [pluginId]: { enabled: true } } : {}),
+              unknown: { enabled: true },
+            },
+          },
+          nextInstallRecords: {},
+        }),
+      );
+      expect(result.pluginId).toBe(pluginId);
+      expect(result.removed).toContain("install record");
+    },
+  );
 
   it("resolves a child request to one package owner and removes every sibling policy", async () => {
     const installPath = "/tmp/openclaw-managed-linked-pack";

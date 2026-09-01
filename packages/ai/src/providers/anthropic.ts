@@ -423,7 +423,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        maxRetries: requestOptions?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -911,6 +911,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -934,6 +935,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -961,6 +963,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -985,6 +988,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: true, serverSideFallback: false };
@@ -1015,6 +1019,7 @@ function createClient(
       optionsHeaders,
     ),
     fetch,
+    maxRetries: 0,
   });
 
   return { client, isOAuthToken: false, serverSideFallback };

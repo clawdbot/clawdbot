@@ -39,6 +39,7 @@ import {
   appendConfiguredProviderRows,
   appendDiscoveredRows,
   appendPreparedModelCatalogRows,
+  loadListModelCatalogSnapshot,
   type RowBuilderContext,
 } from "./list.rows.js";
 
@@ -278,6 +279,18 @@ describe("appendPreparedModelCatalogRows", () => {
       configuredKeys: [],
     });
     expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadListModelCatalogSnapshot", () => {
+  it("opts the unscoped model list into stale catalog refresh", async () => {
+    mocks.loadModelCatalogSnapshot.mockResolvedValue({ entries: [], routeVariants: [] });
+
+    await loadListModelCatalogSnapshot(createRowContext({ authIndex }));
+
+    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true, refreshFullCatalog: true }),
+    );
   });
 });
 

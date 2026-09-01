@@ -4421,6 +4421,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     const slackCtx = createUnavailableMentionCtx(
       params.mentionPatterns ? { mentionPatterns: params.mentionPatterns } : {},
     );
+    const info = vi.spyOn(slackCtx.logger, "info").mockImplementation(() => undefined);
     slackCtx.historyLimit = 5;
     const message = createUnavailableMentionMessage("<@B1> trying again");
     expect(await prepareMessageWith(slackCtx, createSlackAccount(), message)).toBeNull();
@@ -4433,6 +4434,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     assertPrepared(prepared);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        reason: params.mentionPatterns ? "missing-mention" : "mention-detection-unavailable",
+        source: "message",
+      }),
+      "Slack inbound event rejected during preparation",
+    );
     expect(prepared.ctxPayload.MentionSource).toBe("explicit_bot");
     expect(prepared.ctxPayload.InboundHistory).toEqual([]);
     expect(Array.from(slackCtx.channelHistories.values()).flat()).toEqual([]);

@@ -65,6 +65,8 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
+  const { createInstalledPluginIndexScopeLookup } =
+    await import("../plugins/installed-plugin-index-scope-lookup.js");
   const { resolveInstalledPluginLifecycleOwnership } =
     await import("../plugins/installed-plugin-package-ownership.js");
   const {
@@ -142,7 +144,7 @@ async function runPluginUninstallCommandUnlocked(
   let channelIds: string[] | undefined;
   if (ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId) {
     channelIds = plugin?.channelIds;
-  } else if (ownedPluginIds.length > 1) {
+  } else if (ownedPluginIds.length > 0) {
     channelIds = [
       ...new Set(
         ownedPluginIds.flatMap(
@@ -150,6 +152,11 @@ async function runPluginUninstallCommandUnlocked(
         ),
       ),
     ];
+  } else if (
+    createInstalledPluginIndexScopeLookup(installedIndex).hasChannelContributionOwners([pluginId])
+  ) {
+    // An orphan's owner-key fallback cannot remove another discovered plugin's channel policy.
+    channelIds = [];
   }
   const initialPlan = planPluginUninstall(
     recordPluginPackageUninstallPlan(

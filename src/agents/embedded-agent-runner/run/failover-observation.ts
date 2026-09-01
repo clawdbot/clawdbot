@@ -14,7 +14,13 @@ import { log } from "../logger.js";
 /** Structured fields emitted whenever embedded run failover chooses an action. */
 type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
-  decision: "rotate_profile" | "fallback_model" | "surface_error";
+  decision:
+    | "rotate_profile"
+    | "fallback_model"
+    | "surface_error"
+    | "retry_same_model"
+    | "retry_thinking_level"
+    | "continue_normal";
   runId?: string;
   rawError?: string;
   failoverReason: FailoverReason | null;
@@ -28,6 +34,9 @@ type FailoverDecisionLoggerInput = {
   timedOut?: boolean;
   aborted?: boolean;
   status?: number;
+  retryCount?: number;
+  profileRotationCount?: number;
+  attemptCount?: number;
 };
 
 /** Stable context captured before a concrete failover decision is known. */
@@ -56,7 +65,7 @@ export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
   decision: FailoverDecisionLoggerInput["decision"],
-  extra?: Pick<FailoverDecisionLoggerInput, "status">,
+  extra?: Pick<FailoverDecisionLoggerInput, "status" | "retryCount" | "profileRotationCount">,
 ) => void {
   const normalizedBase = normalizeFailoverDecisionObservationBase(base);
   const safeProfileId = normalizedBase.profileId
@@ -98,10 +107,15 @@ export function createFailoverDecisionLogger(
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,
+      retryCount: extra?.retryCount ?? normalizedBase.retryCount,
+      profileRotationCount: extra?.profileRotationCount ?? normalizedBase.profileRotationCount,
+      attemptCount: normalizedBase.attemptCount,
       ...observedError,
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
-        `reason=${reasonText} from=${safeSourceProvider}/${safeSourceModel}` +
+        `reason=${reasonText} attempt=${normalizedBase.attemptCount ?? "-"} ` +
+        `retry=${normalizedBase.retryCount ?? "-"} rotations=${normalizedBase.profileRotationCount ?? "-"} ` +
+        `from=${safeSourceProvider}/${safeSourceModel}` +
         `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
     });
   };

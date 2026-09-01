@@ -418,34 +418,74 @@ describe("CustodianSessionStore", () => {
     expect(store.messages.at(-1)?.text).toBe("Ready.");
   });
 
-  it("blocks messages until inference setup succeeds", async () => {
+  it.each([
+    new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "The configured runtime could not start. Repair the launcher and retry.",
+      details: { code: "system_agent_inference_unavailable" },
+    }),
+    new Error("The greeting could not start. Retry after repairing the runtime."),
+  ])(
+    "keeps startup failures in the conversation and blocks sends until verified: %s",
+    async (error) => {
+      const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce({
+        sessionId: "shared-session",
+        reply: "Ready.",
+        action: "none",
+      });
+      const { context } = createContext(request);
+      const store = new CustodianSessionStore();
+
+      store.connect(context, "caretaker");
+      await waitForFast(() => expect(store.error).toBe(error.message));
+      expect(store.setupRequired).toBe(false);
+      await expect(store.send("should not send")).resolves.toBe("rejected");
+      expect(request).toHaveBeenCalledOnce();
+
+      store.setInput("Keep my draft");
+      store.retry();
+      await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Ready."));
+      expect(store.input).toBe("Keep my draft");
+      expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+      expect(store.error).toBeNull();
+    },
+  );
+
+  it("rechecks failed inference without replaying a user turn", async () => {
     const request = vi
       .fn()
+      .mockResolvedValueOnce({
+        sessionId: "shared-session",
+        reply: "Ready.",
+        action: "none",
+      })
       .mockRejectedValueOnce(
         new GatewayRequestError({
           code: "UNAVAILABLE",
-          message: "OpenClaw requires working inference: no configured model",
+          message: "Runtime verification failed.",
           details: { code: "system_agent_inference_unavailable" },
         }),
       )
       .mockResolvedValueOnce({
         sessionId: "shared-session",
-        reply: "Ready.",
+        reply: "Recovered.",
         action: "none",
       });
     const { context } = createContext(request);
     const store = new CustodianSessionStore();
-
     store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.setupRequired).toBe(true));
-    expect(store.setupIssue).toBe("unavailable");
-
-    await expect(store.send("should not send")).resolves.toBe("rejected");
-    expect(request).toHaveBeenCalledOnce();
-
+    await waitForFast(() => expect(store.sending).toBe(false));
+    await store.send("Check this system");
+    expect(store.error).toBe("Runtime verification failed.");
+    expect(store.messages.map((message) => message.text)).toContain("Check this system");
+    await expect(store.send("Do not send yet")).resolves.toBe("rejected");
+    store.setInput("Next question");
     store.retry();
-    await waitForFast(() => expect(store.setupRequired).toBe(false));
-    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Ready."));
+    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Recovered."));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(store.messages.map((message) => message.text)).toContain("Check this system");
+    expect(store.input).toBe("Next question");
   });
 
   it("shows setup before starting chat when the default agent has no model", async () => {
@@ -463,7 +503,6 @@ describe("CustodianSessionStore", () => {
     store.connect(context, "caretaker");
 
     expect(store.setupRequired).toBe(true);
-    expect(store.setupIssue).toBe("missing");
     expect(store.sending).toBe(false);
     expect(request).not.toHaveBeenCalled();
     await expect(store.send("should not send")).resolves.toBe("rejected");

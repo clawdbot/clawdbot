@@ -9,17 +9,8 @@ import {
   type CodexMirroredSessionHistoryTarget,
 } from "./session-history.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
-import {
-  hasCodexMirrorOrigin,
-  readCodexMirrorSourceFingerprint,
-  serializeCodexMirrorSourceEvidence,
-} from "./transcript-mirror-attestation.js";
-import {
-  attachCodexMirrorIdentity,
-  attachUpstreamUserText,
-  readMirrorIdentity,
-  readUpstreamUserText,
-} from "./upstream-prompt-provenance.js";
+import { serializeCodexMirrorSourceEvidence } from "./transcript-mirror-attestation.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function freezeProjection(value: JsonValue): void {
   if (value !== null && typeof value === "object") {
@@ -50,27 +41,6 @@ function rejectEvidence(): never {
   throw new Error("Codex settled-turn transcript does not match the settled turn");
 }
 
-function adoptPersistedHostPrompt(message: AgentMessage, source: AgentMessage): AgentMessage {
-  const sourceText = readUpstreamUserText(source);
-  const persistedText = readUpstreamUserText(message);
-  if (
-    readMirrorIdentity(message) !== undefined ||
-    readCodexMirrorSourceFingerprint(message) !== undefined ||
-    hasCodexMirrorOrigin(message) ||
-    (persistedText !== undefined && persistedText !== sourceText)
-  ) {
-    rejectEvidence();
-  }
-  let logical = attachCodexMirrorIdentity(message, readMirrorIdentity(source)!);
-  if (sourceText !== undefined) {
-    logical = attachUpstreamUserText(logical, sourceText);
-  }
-  if (serializeCodexMirrorSourceEvidence(logical) !== serializeCodexMirrorSourceEvidence(source)) {
-    rejectEvidence();
-  }
-  return logical;
-}
-
 /** Yields only the settled prefix, but exhausts suffix identity checks before accepting it. */
 function* verifiedSettledMessages(
   history: Iterable<AgentMessage>,
@@ -93,19 +63,7 @@ function* verifiedSettledMessages(
   ) {
     rejectEvidence();
   }
-  const sourcePrompt = params.settledMessages[0];
-  const sourceKey = (sourcePrompt as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
-  const adoption =
-    !params.mirroredMessages.some((message) => readMirrorIdentity(message) === promptIdentity) &&
-    sourcePrompt?.role === "user" &&
-    readMirrorIdentity(sourcePrompt) === promptIdentity &&
-    typeof sourceKey === "string" &&
-    sourceKey.trim().length > 0
-      ? { prompt: sourcePrompt, key: sourceKey }
-      : undefined;
-  const mirrored = adoption
-    ? [adoption.prompt, ...params.mirroredMessages]
-    : params.mirroredMessages;
+  const mirrored = params.mirroredMessages;
   const mirroredIds = mirrored.flatMap((message) => readMirrorIdentity(message) ?? []);
   const mirroredBoundaryIndex = mirrored.findIndex(
     (message) => readMirrorIdentity(message) === boundaryIdentity,
@@ -120,22 +78,9 @@ function* verifiedSettledMessages(
   const required = new Map(requiredIds.map((id, index) => [id, mirrored[index]!]));
   const seen = new Set<string>();
   let matched = 0;
-  let hostPromptMatches = 0;
   let throughBoundary = false;
   for (const message of history) {
-    let verificationMessage = message;
-    if (
-      adoption &&
-      message.role === "user" &&
-      (message as { idempotencyKey?: unknown }).idempotencyKey === adoption.key
-    ) {
-      hostPromptMatches += 1;
-      if (hostPromptMatches > 1) {
-        rejectEvidence();
-      }
-      verificationMessage = adoptPersistedHostPrompt(message, adoption.prompt);
-    }
-    const identity = readMirrorIdentity(verificationMessage);
+    const identity = readMirrorIdentity(message);
     if (identity) {
       if (seen.has(identity)) {
         rejectEvidence();
@@ -145,7 +90,7 @@ function* verifiedSettledMessages(
       if (expected) {
         if (
           identity !== requiredIds[matched] ||
-          serializeCodexMirrorSourceEvidence(verificationMessage) !==
+          serializeCodexMirrorSourceEvidence(message) !==
             serializeCodexMirrorSourceEvidence(expected)
         ) {
           rejectEvidence();
@@ -154,12 +99,11 @@ function* verifiedSettledMessages(
       }
     }
     if (!throughBoundary) {
-      // Adoption is verification-only: replay the canonical persisted prompt, not its synthetic view.
       yield message;
     }
     throughBoundary ||= identity === boundaryIdentity;
   }
-  if (!throughBoundary || matched !== requiredIds.length || (adoption && hostPromptMatches !== 1)) {
+  if (!throughBoundary || matched !== requiredIds.length) {
     rejectEvidence();
   }
 }

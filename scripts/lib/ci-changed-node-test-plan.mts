@@ -16,9 +16,9 @@ import {
   resolvePolicyTestTargets,
 } from "./ci-node-test-plan.mts";
 import {
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
-  resolveExtensionTestJobFileLimit,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
@@ -27,6 +27,7 @@ import {
   resolveVitestPretestBuildMode,
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
@@ -34,6 +35,7 @@ type ChangedNodeTestShard = {
   env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
+  predictedSeconds?: number;
   pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
@@ -365,24 +367,29 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
+  const filesByConfig = new Map<string, string[]>();
+  for (const file of rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(["extensions"]) : []) {
+    const config = resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/"));
+    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
+  }
   const plans: Array<{
     config: string;
     env?: Record<string, string>;
     includePatterns?: string[];
+    predictedSeconds: number;
   }> = [...rootsByConfig].flatMap(([config, roots]) => {
     const splitProcesses = shouldSplitExtensionTestProcesses(config);
-    const testFiles = resolveExtensionTestJobFileLimit(config)
-      ? listExtensionTestFilesForRoots(splitProcesses ? roots : ["extensions"]).filter(
-          (file) =>
-            splitProcesses ||
-            resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/")) === config,
-        )
-      : [];
+    const testFiles = (filesByConfig.get(config) ?? []).filter(
+      (file) => !splitProcesses || roots.some((root) => file.startsWith(`${root}/`)),
+    );
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    const predictedSeconds = Math.ceil(
+      estimateExtensionTestCost(config, testFiles.length) / chunks.length,
+    );
     return chunks.length > 1
       ? chunks.map((includePatterns, index) =>
           Object.assign(
-            { config },
+            { config, predictedSeconds },
             splitProcesses
               ? { includePatterns }
               : {
@@ -396,15 +403,16 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
                 },
           ),
         )
-      : [{ config }];
+      : [{ config, predictedSeconds }];
   });
-  return plans.map(({ config, env, includePatterns }, index) => {
+  return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
     const shard: ChangedNodeTestShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
       // No plans overlap in this row, so CI can scale the single process's worker budget.
       planConcurrency: 1,
+      predictedSeconds,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
@@ -414,6 +422,7 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     ]);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
+      shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
     }
     if (includePatterns) {
       shard.includePatterns = includePatterns;

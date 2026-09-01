@@ -109,6 +109,9 @@ describe("createFailoverDecisionLogger", () => {
       fallbackConfigured: true,
       timedOut: true,
       aborted: false,
+      attemptCount: 4,
+      retryCount: 2,
+      profileRotationCount: 1,
     });
 
     logDecision("fallback_model");
@@ -116,6 +119,12 @@ describe("createFailoverDecisionLogger", () => {
     const [message] = firstWarnCall(warnSpy);
     expect(message).toBe("embedded run failover decision");
     const observation = firstWarnDetails(warnSpy);
+    expect(observation).toMatchObject({
+      decision: "fallback_model",
+      attemptCount: 4,
+      retryCount: 2,
+      profileRotationCount: 1,
+    });
     expect(observation.sourceProvider).toBe("github-copilot");
     expect(observation.sourceModel).toBe("gpt-5.4-mini");
     expect(observation.provider).toBe("openai");

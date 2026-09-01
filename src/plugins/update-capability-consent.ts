@@ -83,10 +83,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
         );
 
       const requiresAcceptance =
-        !previousDeclared ||
-        hasWidening ||
-        (params.record.acceptedSurface !== undefined &&
-          (!priorAcceptanceCurrent || !priorIntegrity));
+        !previousDeclared || hasWidening || !priorAcceptanceCurrent || !priorIntegrity;
       if (requiresAcceptance && enabled) {
         const loadedManifest = loadPluginManifest(stagedArtifactDir);
         const packageManifest = readInstalledPackageManifest(stagedArtifactDir);

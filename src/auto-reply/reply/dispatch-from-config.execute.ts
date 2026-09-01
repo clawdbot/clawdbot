@@ -5,9 +5,6 @@ import {
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -19,6 +16,7 @@ import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
+import { flushDispatchDeferredFinalText } from "./dispatch-from-config.deferred-final.js";
 import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
@@ -29,6 +27,7 @@ import {
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
+import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
@@ -60,7 +59,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     resolveToolDeliveryPayload,
     runWithDispatchLifecycleAdmission,
     sendPayloadAsync,
-    sendFinalPayload,
     sessionAgentId,
     sessionTtsAuto,
     shouldForwardProgressCallback,
@@ -79,34 +77,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   );
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
+  let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
+  const releasePendingContinuation = async () => {
+    const settlement = pendingContinuationSettlement;
+    pendingContinuationSettlement = undefined;
+    await settlement?.settle(false);
+  };
   let didDeliverVisiblePartialReply = false;
   const flushDeferredFinalText = async () => {
-    try {
-      if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
-        return;
-      }
-      const deferredVisibleText = cleanBlockTtsDirectiveText
-        ? cleanDeferredFinalText(state.progressState.accumulatedBlockTtsText)
-        : state.progressState.accumulatedBlockText;
-      if (!deferredVisibleText.trim()) {
-        return;
-      }
-      const fallback = await sendFinalPayload(
-        { text: deferredVisibleText },
-        { abortSignal: isDispatchOperationAborted() ? false : undefined, skipTts: true },
-      );
-      if (!fallback.queuedFinal && fallback.routedFinalCount === 0) {
-        return;
-      }
-      didDeliverVisiblePartialReply = true;
-      state.progressState.accumulatedBlockText = "";
-      state.progressState.accumulatedBlockTtsText = "";
-    } catch (fallbackError) {
-      // Recovery must not replace the original resolver or cancellation outcome.
-      logVerbose(
-        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
-      );
-    }
+    const delivered = await flushDispatchDeferredFinalText({
+      deferFinalTtsText,
+      isHeartbeat: params.replyOptions?.isHeartbeat === true,
+      state,
+    });
+    didDeliverVisiblePartialReply ||= delivered;
+    return delivered;
   };
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
@@ -126,8 +111,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   onDeliberateSilentTerminalReply: () => {
                     deliberateSilentTerminalReply = true;
                   },
-                  onPendingContinuation: () => {
+                  onPendingContinuation: (settlement) => {
                     pendingContinuation = true;
+                    pendingContinuationSettlement ??= settlement;
                   },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: state.notePreparedSession,
@@ -598,6 +584,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         trackDispatchLifecycleWork,
       ),
   ).catch(async (error: unknown) => {
+    await releasePendingContinuation();
     await flushDeferredFinalText();
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     const adopted = state.turnAdoptionState?.adopted === true;
@@ -635,9 +622,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ? ({ status: "ready" } as const)
     : await state.ensureDispatchReplyOperation("dispatch");
   if (finalDispatchAcquisition.status === "aborted") {
+    await releasePendingContinuation();
     return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
   }
   if (finalDispatchAcquisition.status === "busy") {
+    await releasePendingContinuation();
     return {
       status: "complete" as const,
       result: state.finishReplyOperationBusyDispatch({
@@ -651,11 +640,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
 
   const acpTailResult = await handleAcpDispatchTailAfterReset(state);
   if (acpTailResult) {
+    await releasePendingContinuation();
     return acpTailResult;
   }
   const nextState = extendPreparedDispatchState(state, {
     deliberateSilentTerminalReply,
     pendingContinuation,
+    pendingContinuationSettlement,
     replyResult,
   });
   return { status: "ready" as const, state: nextState };

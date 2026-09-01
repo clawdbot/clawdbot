@@ -1,4 +1,4 @@
-import "./runtime-snapshots.js";
+import "./mutation-lineage.js";
 
 type RuntimeSnapshotsTestApi = {
   MAX_PERSISTED_MUTATION_OWNERS: number;
