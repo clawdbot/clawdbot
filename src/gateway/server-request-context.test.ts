@@ -15,6 +15,7 @@ import {
   linkEmail,
   resolveUserProfileId,
 } from "../state/user-profiles.js";
+import { createTaskLaneGatewayService } from "../task-lanes/gateway/service.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
@@ -41,11 +42,12 @@ function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
   const config = {} as never;
-  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "taskLanes"> = {
     cronState: makeCronState({
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
     }),
+    taskLanes: createTaskLaneGatewayService(),
   };
   return {
     trackExecution: trackAsyncWork,
@@ -195,8 +197,9 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "taskLanes"> = {
       cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
+      taskLanes: createTaskLaneGatewayService(),
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
