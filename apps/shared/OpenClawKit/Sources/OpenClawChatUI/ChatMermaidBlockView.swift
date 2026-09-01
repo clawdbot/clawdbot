@@ -105,9 +105,9 @@ struct ChatMermaidBlockView: View {
         .onChange(of: self.request, initial: true) { _, _ in self.render() }
         .onDisappear { self.cancel() }
         #if os(macOS)
-            .sheet(item: self.$expanded) { self.preview($0) }
+        .sheet(item: self.$expanded) { self.preview($0) }
         #else
-            .fullScreenCover(item: self.$expanded) { self.preview($0) }
+        .fullScreenCover(item: self.$expanded) { self.preview($0) }
         #endif
     }
 
@@ -237,7 +237,7 @@ private struct ChatMermaidPreviewView: View {
         }
         .background(OpenClawChatTheme.assistantBubble)
         #if os(macOS)
-            .frame(minWidth: 500, minHeight: 350)
+        .frame(minWidth: 500, minHeight: 350)
         #endif
     }
 }
