@@ -34,8 +34,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **State database performance:** reuse table metadata within each startup read transaction to reduce database-open overhead while preserving schema, integrity, and repair checks.
-
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
 
 - **macOS AI setup:** show confirmed capability-review cancellation and retry guidance directly instead of a misleading Gateway failure headline. (#134573)
