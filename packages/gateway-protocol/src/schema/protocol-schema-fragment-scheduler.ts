@@ -1,4 +1,3 @@
-import * as cronAddResult from "./cron-add-result.js";
 import * as cron from "./cron.js";
 import * as logMigrations from "./log-migration-protocol-schemas.js";
 import * as terminal from "./terminal-protocol-schemas.js";
@@ -9,8 +8,8 @@ export const SchedulerProtocolSchemas = {
   CronStatusParams: cron.CronStatusParamsSchema,
   CronGetParams: cron.CronGetParamsSchema,
   CronAddParams: cron.CronAddParamsSchema,
-  CronAddResult: cronAddResult.CronAddResultSchema,
-  CronDeclarativeAddResult: cronAddResult.CronDeclarativeAddResultSchema,
+  CronAddResult: cron.CronAddResultSchema,
+  CronDeclarativeAddResult: cron.CronDeclarativeAddResultSchema,
   CronUpdateParams: cron.CronUpdateParamsSchema,
   CronRemoveParams: cron.CronRemoveParamsSchema,
   CronRunParams: cron.CronRunParamsSchema,

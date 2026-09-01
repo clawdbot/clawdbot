@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { CronDeliveryPreviewsSchema } from "./cron.types.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -694,6 +695,20 @@ export const CronAddParamsSchema = closedObject({
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
 });
+
+/** Successful declaration-key convergence result. */
+export const CronDeclarativeAddResultSchema = closedObject({
+  created: Type.Boolean(),
+  updated: Type.Optional(Type.Boolean()),
+  job: CronJobSchema,
+  deliveryPreviews: CronDeliveryPreviewsSchema,
+});
+
+/** Successful result from imperative create or declaration-key convergence. */
+export const CronAddResultSchema = Type.Union([
+  closedObject({ ...CronJobSchema.properties, deliveryPreviews: CronDeliveryPreviewsSchema }),
+  CronDeclarativeAddResultSchema,
+]);
 
 /** Mutable cron job fields accepted by update APIs. */
 const CronJobPatchSchema = closedObject({

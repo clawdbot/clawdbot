@@ -1,8 +1,10 @@
 // Wire types derive from the cron schemas without importing the ProtocolSchemas registry.
-import type { Static } from "typebox";
-import type { CronAddResultSchema, CronDeclarativeAddResultSchema } from "./cron-add-result.js";
+import { Type, type Static } from "typebox";
+import { closedObject } from "./closed-object.js";
 import type {
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -34,3 +36,12 @@ export type CronScratchGetResult = Static<typeof CronScratchGetResultSchema>;
 export type CronScratchSetParams = Static<typeof CronScratchSetParamsSchema>;
 export type CronScratchSetResult = Static<typeof CronScratchSetResultSchema>;
 export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
+
+/** User-visible dry-run delivery route label/detail. */
+export const CronDeliveryPreviewSchema = closedObject({
+  label: Type.String(),
+  detail: Type.String(),
+});
+
+/** Delivery route previews keyed by cron job id. */
+export const CronDeliveryPreviewsSchema = Type.Record(Type.String(), CronDeliveryPreviewSchema);

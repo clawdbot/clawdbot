@@ -17,7 +17,6 @@ export * from "./schema/commands.js";
 export * from "./schema/config.js";
 export * from "./schema/openclaw.js";
 export * from "./schema/cron.js";
-export * from "./schema/cron-add-result.js";
 export * from "./schema/cron.types.js";
 export * from "./schema/error-codes.js";
 export * from "./schema/environments.js";
