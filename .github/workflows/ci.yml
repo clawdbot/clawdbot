@@ -3194,19 +3194,17 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            # Top light-run pole (~186s of shard work); oxlint shard
-            # concurrency scales with cores at similar billed core-minutes.
+            # Oxlint shard concurrency scales with observed CPU and memory capacity.
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            # Concurrent Knip scans need cores and memory headroom; the wall
-            # clock roughly halves for similar billed core-minutes.
+            # Concurrent Knip scans need CPU and memory headroom.
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
-            # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
-            # PR critical path for roughly the same billed core-minutes.
-            runner: blacksmith-16vcpu-ubuntu-2404
+            # The 16 label delivered 4 CPUs/15 GiB; 32 delivered 8 CPUs/31 GiB.
+            # Keep type checks above the constrained-host threshold; see docs/ci.md#blacksmith-runner-capacity.
+            runner: blacksmith-32vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3577,20 +3575,18 @@ jobs:
           node --import tsx scripts/run-oxlint-shards.mts \
             --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
 
-  # The github/hybrid planner profile stripes the 14 serial core test-type
-  # graphs (~34-42s per graph on either runner class; tsgo saturates a machine
-  # per graph) across four jobs; the check-test-types row keeps the
-  # extensions/root/scripts tail. All-Blacksmith mode keeps the single
-  # 16-vCPU test-types job.
+  # Stripe core test-type graphs across five jobs; each graph can saturate a machine.
+  # check-test-types keeps the extensions/root/scripts tail in github/hybrid mode;
+  # all-Blacksmith mode uses one 32-vCPU test-types job for the full workload.
   check-test-types-hosted-core-shard:
     permissions:
       contents: read
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
-    # Measured 232-269s per stripe on hosted 4-core; hybrid attempt 1 rides
-    # the 8 vCPU class like the compact large rows, retries stay hosted.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # The 8 label delivered only 2 CPUs/8 GiB; 32 delivered 8 CPUs/31 GiB.
+    # Preserve two graphs per stripe and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -3664,16 +3660,13 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
-            # Light-run critical-path pole: cold runs spend ~100s in nine
-            # parallel plugin-sdk dts builds plus ~58s compiling 122 plugins
-            # at concurrency 6 on 8 vCPUs. Both phases scale with cores at
-            # similar billed core-minutes.
+            # Cold SDK declaration builds and plugin compilation need CPU and memory headroom.
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
-            # Measured 274s on hosted 4-core and ~170s on 4 vCPU; the 8 vCPU
-            # class keeps this off the hybrid critical path.
-            runner: blacksmith-8vcpu-ubuntu-2404
+            # The 8 label delivered only 2 CPUs/8 GiB in the capacity probe.
+            # Request 32 for measured 8 CPUs/31 GiB; see docs/ci.md#blacksmith-runner-capacity.
+            runner: blacksmith-32vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
       # The report is dispatch-only; fetching its inputs can otherwise fail skipped PR work.
@@ -3784,8 +3777,8 @@ jobs:
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
-          # Matches the boundary lane's 32 vCPU runner (cores/2); the
-          # script's default caps at 6 to protect laptops.
+          # Keep the existing CI worker budget; the requested runner label is not a CPU count.
+          # The script's resource-based default caps at 6 outside this explicit override.
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
         shell: bash
         run: |
