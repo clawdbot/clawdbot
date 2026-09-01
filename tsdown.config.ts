@@ -22,7 +22,6 @@ import {
 } from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
-  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
@@ -785,9 +784,7 @@ const configs = [
             name,
             entry: unifiedDistEntries,
             deps: unifiedDeps,
-            ...(TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => group === name)
-              ? { hooks: { "build:done": createDeclarationInputCapture(name) } }
-              : {}),
+            hooks: { "build:done": createDeclarationInputCapture(name) },
           },
           { emitDtsOnly: true, entry: sources },
         ),

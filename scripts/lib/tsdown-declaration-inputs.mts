@@ -51,7 +51,6 @@ export function createDeclarationInputCapture(name: string) {
       ),
     );
     if (
-      !request.roots.length ||
       request.roots.some((root) => !roots.has(fs.realpathSync(path.resolve(options.cwd, root))))
     ) {
       throw new Error(`Incomplete compiler membership for ${name}`);
@@ -78,7 +77,9 @@ export function readDeclarationInputs(output: string, groups: readonly string[])
         );
         if (
           !Array.isArray(receipt.inputs) ||
-          !receipt.inputs.length ||
+          // Bounded selections can leave empty partitions; only those requests
+          // may finish successfully without creating a compiler Program.
+          (!receipt.inputs.length && receipt.roots.length > 0) ||
           !receipt.inputs.every((input): input is string => typeof input === "string")
         ) {
           throw new Error(`Missing successful compiler membership for ${name}`);

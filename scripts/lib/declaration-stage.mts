@@ -58,6 +58,7 @@ export async function publishStagedDeclarations(
   staging: string,
   dist: string,
   required: string[],
+  previous: string[],
   cache?: {
     step: BuildCacheStep;
     state: BuildCacheState;
@@ -68,13 +69,13 @@ export async function publishStagedDeclarations(
   const reused = cache?.state.fresh === true;
   if (reused) {
     if (!restoreBuildStepCacheOutputs(cache.state, cache.params)) {
-      throw new Error("SDK declaration cache changed before restoration; rerun the build");
+      throw new Error("Declaration cache changed before restoration; rerun the build");
     }
-    console.log("[plugin-sdk declarations] restored complete cached generation");
+    console.log(`[${cache.step.label}] restored complete cached generation`);
   } else {
     const code = await executeTsdownBuildPlan(plan);
     if (code !== 0) {
-      throw Object.assign(new Error(`SDK declaration build failed with exit ${code}`), {
+      throw Object.assign(new Error(`Declaration build failed with exit ${code}`), {
         exitCode: code,
       });
     }
@@ -87,11 +88,11 @@ export async function publishStagedDeclarations(
   const emitted = new Set(files);
   for (const entry of required) {
     if (!emitted.has(entry)) {
-      throw new Error(`Missing canonical SDK declaration: ${entry}`);
+      throw new Error(`Missing canonical declaration: ${entry}`);
     }
   }
   // Validate all staged relative edges before touching live declarations, including
-  // shared root chunks. The SDK subset has no authority to garbage-collect chunks.
+  // shared root chunks. The caller supplies only its owned previous inventory.
   const dependencies = new Map<string, string[]>();
   for (const file of files) {
     const targets: string[] = [];
@@ -125,11 +126,6 @@ export async function publishStagedDeclarations(
   for (const file of files) {
     visit(file);
   }
-  const previous = listCacheFiles(
-    dist,
-    [{ path: "plugin-sdk", extensions: [".d.ts", ".d.mts", ".d.cts"], recursive: false }],
-    fs,
-  ).map((file) => portableRelativePath(dist, file));
   if (cache?.sealInputs && !reused) {
     const { signature, inputs } = cache.sealInputs();
     cache.state.signature = signature;
@@ -138,7 +134,7 @@ export async function publishStagedDeclarations(
   publishArtifactFiles(staging, dist, ordered, previous);
   if (cache && !reused) {
     // Seal only the validated private generation; live dist also contains declarations
-    // owned by other compiler groups and must never become this SDK snapshot.
+    // owned by other compiler groups and must never become this snapshot.
     finalizeBuildStepCache(cache.step, cache.state, cache.params);
   }
 }
