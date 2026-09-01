@@ -65,9 +65,10 @@ function resolveCompactionSteerRetryDelaysMs() {
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
 
-// Wake an active requester run through transient compacting and transcript-wait
-// outcomes. Both active-wake call sites use one loop so delivery deadlines and
-// best-effort transcript retry stay consistent.
+// Wake an active requester run through transient compacting and delivery-mode
+// outcomes. Unsupported transcript-commit waits are terminal refusals: the loop
+// keeps the requested gate intact and lets the caller fall through to the
+// canonical requester-agent handoff instead of re-steering on stale context.
 export async function resolveActiveWakeWithRetries(
   sessionId: string,
   message: string,
@@ -116,16 +117,6 @@ export async function resolveActiveWakeWithRetries(
     if (isAttemptAllowed?.() === false) {
       outcome = SOURCE_OWNER_CHANGED;
       break;
-    }
-    if (
-      outcome.reason === "transcript_commit_wait_unsupported" &&
-      currentOptions.waitForTranscriptCommit === true
-    ) {
-      const bestEffortOptions = { ...currentOptions };
-      delete bestEffortOptions.waitForTranscriptCommit;
-      currentOptions = bestEffortOptions;
-      outcome = await attemptWake(currentOptions);
-      continue;
     }
     if (
       outcome.reason === "source_reply_delivery_mode_mismatch" &&

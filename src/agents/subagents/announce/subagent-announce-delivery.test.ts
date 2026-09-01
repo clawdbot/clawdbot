@@ -1275,53 +1275,59 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
+  it("does not drop the transcript-commit gate for active runtimes without support", async () => {
     const queueEmbeddedAgentMessageWithOutcome = vi
       .fn<QueueEmbeddedAgentMessageWithOutcome>()
-      .mockImplementationOnce((sessionId: string) => ({
+      .mockImplementation((sessionId: string) => ({
         queued: false,
         sessionId,
         reason: "transcript_commit_wait_unsupported",
         gatewayHealth: "live",
-      }))
-      .mockImplementationOnce((sessionId: string) => ({
-        queued: true,
-        sessionId,
-        target: "embedded_run",
-        gatewayHealth: "live",
-        enqueuedAtMs: 4_100,
       }));
-    const callGateway = await deliverSteeredAnnouncement({
+    const callGateway = createGatewayMock();
+    let activityChecks = 0;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: activityChecks++ === 0,
+      }),
       queueEmbeddedAgentMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: { queue: { mode: "followup" } },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
       requesterOrigin: {
         channel: "slack",
         to: "channel:C123",
         accountId: "acct-1",
       },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-no-external-route",
     });
 
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    // The unsupported backend must fall through to the requester-agent handoff
+    // instead of silently removing the requested transcript-commit wait.
+    expectDeliveryPath(result, "direct");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       1,
       "paperclip-session",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
-      },
-    );
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
-      "paperclip-session",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-        deliveryTimeoutMs: 120_000,
-      },
+      }),
     );
   });
 
@@ -2909,7 +2915,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "channel:C123",
       threadId: "171.222",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(3);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       1,
       "requester-session-4",
