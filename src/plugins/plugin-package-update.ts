@@ -62,6 +62,9 @@ export function reconcilePluginPackageUpdateConfig(params: {
 }): { ok: true; config: OpenClawConfig } | { ok: false; error: string } {
   let config = params.config;
   for (const [installOwner, before] of params.snapshot) {
+    if (before.pluginIds.length === 0) {
+      continue;
+    }
     const nextInstallOwner = params.installOwnerMigrations?.[installOwner] ?? installOwner;
     const after = resolveInstalledPluginPackageOwnership(
       params.afterIndex,
