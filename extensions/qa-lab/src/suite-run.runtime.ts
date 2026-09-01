@@ -24,6 +24,8 @@ import { shouldCaptureGatewayHeapCheckpoints } from "./suite-support.js";
 import type { QaSuiteResolvedRunContext, QaSuiteResult, QaSuiteRunParams } from "./suite-types.js";
 import {
   formatQaSuiteRunStartProgress,
+  isQaSuiteNestedRun,
+  markQaSuiteNestedRun,
   runQaSuiteScenarioDefinitionForRuntime,
   shouldLogQaSuiteProgress,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
@@ -86,6 +88,10 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       }),
     }),
   };
+  // Preparation copies params, so carry the child's publication ownership to the new object.
+  if (isQaSuiteNestedRun(params)) {
+    markQaSuiteNestedRun(preparedParams);
+  }
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),
