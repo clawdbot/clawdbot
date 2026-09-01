@@ -279,9 +279,7 @@ private fun UsageSettingsScreen(
 
       // The warning panel above already reports a failed load; adding
       // "No usage data yet." beside it claims the operator has no providers.
-      usageErrorText != null -> {
-        Unit
-      }
+      usageErrorText != null -> {}
 
       else -> {
         ClawPanel {
@@ -1366,9 +1364,7 @@ private fun PhoneCapabilitiesScreen(
           }
         }
 
-        LocationMode.Off -> {
-          Unit
-        }
+        LocationMode.Off -> {}
       }
       viewModel.setLocationPreciseEnabled(fineGranted)
     }

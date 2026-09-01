@@ -160,9 +160,7 @@ fun VoiceScreen(
             }
           }
 
-          null -> {
-            Unit
-          }
+          null -> {}
         }
       }
       pendingAction = null

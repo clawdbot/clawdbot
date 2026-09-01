@@ -48,9 +48,7 @@ private fun findFirstLink(start: Node?): String? {
         if (isSafeMarkdownLinkDestination(destination)) return destination
       }
 
-      is Code, is FencedCodeBlock, is IndentedCodeBlock -> {
-        Unit
-      }
+      is Code, is FencedCodeBlock, is IndentedCodeBlock -> {}
 
       else -> {
         findFirstLink(node.firstChild)?.let { return it }

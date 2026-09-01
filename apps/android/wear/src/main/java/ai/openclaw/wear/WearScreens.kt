@@ -365,9 +365,7 @@ internal fun OpenClawWearScreens(
           )
         }
 
-        else -> {
-          Unit
-        }
+        else -> {}
       }
     }
   }

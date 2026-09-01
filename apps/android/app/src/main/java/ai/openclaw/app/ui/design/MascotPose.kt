@@ -78,9 +78,7 @@ data class MascotPose(
           MascotMood.Idle,
           MascotMood.Curious,
           MascotMood.Attentive,
-          -> {
-            Unit
-          }
+          -> {}
 
           MascotMood.Thinking -> {
             gaze = MascotGaze(x = 0.3, y = -0.5)

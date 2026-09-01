@@ -1939,9 +1939,7 @@ internal fun ChatBubble(
                 ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               }
 
-              part.type == "text" -> {
-                Unit
-              }
+              part.type == "text" -> {}
 
               part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
                 ChatAudioPlayerCard(

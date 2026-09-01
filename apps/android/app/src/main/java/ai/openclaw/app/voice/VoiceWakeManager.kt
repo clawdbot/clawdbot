@@ -536,9 +536,7 @@ internal class VoiceWakeManager(
         recognizer.destroy(action.operationId)
       }
 
-      null -> {
-        Unit
-      }
+      null -> {}
     }
   }
 }

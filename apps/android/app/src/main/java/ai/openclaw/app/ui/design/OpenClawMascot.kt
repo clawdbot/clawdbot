@@ -300,9 +300,7 @@ private fun DrawScope.drawHardHat(
 
 private fun DrawScope.drawEffect(pose: MascotPose) {
   when (pose.effect) {
-    MascotEffect.None -> {
-      Unit
-    }
+    MascotEffect.None -> {}
 
     MascotEffect.Sparkles -> {
       repeat(6) { index ->

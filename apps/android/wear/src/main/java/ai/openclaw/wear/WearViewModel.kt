@@ -1044,9 +1044,7 @@ internal class WearViewModel(
         return
       }
 
-      WearSequenceDecision.Accepted -> {
-        Unit
-      }
+      WearSequenceDecision.Accepted -> {}
     }
     when (event.event) {
       WearEventType.Connection -> {

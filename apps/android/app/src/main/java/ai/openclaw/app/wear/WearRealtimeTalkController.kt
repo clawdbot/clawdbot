@@ -505,9 +505,7 @@ internal class WearRealtimeTalkController(
         handleToolCallEvent(owner, currentSessionId, obj)
       }
 
-      "toolResult" -> {
-        Unit
-      }
+      "toolResult" -> {}
 
       "error" -> {
         fail(

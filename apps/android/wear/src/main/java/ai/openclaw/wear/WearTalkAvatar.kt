@@ -482,9 +482,7 @@ internal fun avatarPoseAt(
   var haloPulse = 0.5f + (0.5f * sin(animationSeconds * tau / 2.4f))
 
   when (state) {
-    RealtimeVoiceButtonState.IDLE -> {
-      Unit
-    }
+    RealtimeVoiceButtonState.IDLE -> {}
 
     RealtimeVoiceButtonState.CONNECTING -> {
       val orbit = animationSeconds * tau / 1.65f

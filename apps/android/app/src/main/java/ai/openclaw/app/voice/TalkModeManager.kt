@@ -1431,9 +1431,7 @@ class TalkModeManager internal constructor(
         )
       }
 
-      "toolResult" -> {
-        Unit
-      }
+      "toolResult" -> {}
 
       "error" -> {
         val message = obj["message"].asStringOrNull() ?: "realtime talk error"

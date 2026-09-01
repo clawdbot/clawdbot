@@ -80,9 +80,7 @@ private class ChatRichBlockBitmapCache(
         while (failures.size > RENDER_NEGATIVE_CACHE_ENTRIES) failures.remove(failures.entries.first().key)
       }
 
-      ChatRichBlockResult.TransientFailure -> {
-        Unit
-      }
+      ChatRichBlockResult.TransientFailure -> {}
     }
   }
 }
