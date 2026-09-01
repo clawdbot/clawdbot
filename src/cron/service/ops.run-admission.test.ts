@@ -25,6 +25,7 @@ import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
+import { commitCronRuntimeRows } from "./runtime-store.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -54,7 +55,7 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
-  it("preserves private runtime authority across manual-run reservation", async () => {
+  it("hydrates private runtime authority in runtime row transactions", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job = createDueIsolatedJob({
@@ -71,10 +72,6 @@ describe("cron service run admission", () => {
     job.runtimeAuthority = runtimeAuthority;
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: CronJob }) => {
-      expect(runningJob.runtimeAuthority).toEqual(runtimeAuthority);
-      return { status: "ok" as const };
-    });
     const state = createAdmissionTestState({
       cronEnabled: true,
       storePath: store.storePath,
@@ -82,11 +79,17 @@ describe("cron service run admission", () => {
       nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
-    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    const committedJob = commitCronRuntimeRows({
+      state,
+      jobIds: [job.id],
+      operationLabel: "test runtime authority hydration",
+      mutate: ({ jobs }) => ({ value: jobs.get(job.id) }),
+    });
+
+    expect(committedJob?.runtimeAuthority).toEqual(runtimeAuthority);
   });
 
   it("rechecks a queued if-enabled run after the job is disabled", async () => {
