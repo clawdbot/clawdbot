@@ -60,7 +60,7 @@ function makeStdinInteractive(): () => void {
     if (descriptor) {
       Object.defineProperty(stdin, "isTTY", descriptor);
     } else {
-      delete stdin.isTTY;
+      Reflect.deleteProperty(stdin, "isTTY");
     }
   };
 }
