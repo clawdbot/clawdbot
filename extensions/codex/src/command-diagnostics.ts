@@ -16,10 +16,8 @@ import {
   codexDiagnosticsTargetsMatch,
   createCodexDiagnosticsConfirmation,
   deletePendingCodexDiagnosticsConfirmation,
-  escapeCodexChatText,
   formatCodexDiagnosticsTargetLines,
   formatCodexDiagnosticsUploadResult,
-  formatCodexTextForDisplay,
   formatDiagnosticsUsage,
   normalizeDiagnosticsReason,
   parseDiagnosticsArgs,
@@ -30,6 +28,7 @@ import {
   readPendingCodexDiagnosticsConfirmation,
   recordCodexDiagnosticsUpload,
 } from "./command-diagnostics-support.js";
+import { escapeCodexChatText, formatCodexTextForDisplay } from "./command-display-text.js";
 import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveControlTarget } from "./command-handler-scope.js";
 
