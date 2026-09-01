@@ -5,6 +5,8 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { gunzipSync } from "node:zlib";
+import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPersistentDedupeImportEntry,
@@ -50,6 +52,14 @@ import { installMatrixTestRuntime } from "./src/test-runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const DOCTOR_IDB_DATABASE_PREFIX = "openclaw-matrix-doctor-test";
+const MATRIX_V2026_7_1_FIXTURE_BASE64 = new URL(
+  "./test/fixtures/sqlite/matrix-account-v2026.7.1.sqlite.gz.base64",
+  import.meta.url,
+);
+const MATRIX_V2026_7_1_GZIP_SHA256 =
+  "2bbfc5b55c083a1532ac1162baa9a01a886b2bd6f17fb060c6794b2a10f7aeb0";
+const MATRIX_V2026_7_1_RAW_SHA256 =
+  "d8a543808fe9d4ae3cd989bbae9cb5e3c425fe5ecf8322309e08787fd87ec7f6";
 
 function createContext(env?: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -83,6 +93,31 @@ function migrationById(id: string) {
   return migration;
 }
 
+function matrixSyncResponse(nextBatch: string): ISyncResponse {
+  return {
+    next_batch: nextBatch,
+    rooms: { join: {}, invite: {}, leave: {}, knock: {} },
+    account_data: { events: [] },
+  };
+}
+
+function matrixStateRowsSha256(databasePath: string): string {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = database
+      .prepare(
+        `SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
+         FROM plugin_state_entries
+         WHERE plugin_id = 'matrix'
+         ORDER BY namespace, entry_key`,
+      )
+      .all();
+    return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+  } finally {
+    database.close();
+  }
+}
+
 describe("matrix doctor contract state migrations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -97,7 +132,7 @@ describe("matrix doctor contract state migrations", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("repairs account-scoped SQLite schemas without losing Matrix plugin state", async () => {
+  it("repairs a 2026.7.1 account database before Matrix persists a new sync cursor", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = path.join(
       stateDir,
@@ -109,55 +144,46 @@ describe("matrix doctor contract state migrations", () => {
     );
     const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const db = new DatabaseSync(databasePath);
+    const compressedFixture = Buffer.from(
+      fs.readFileSync(MATRIX_V2026_7_1_FIXTURE_BASE64, "utf8").replaceAll(/\s/gu, ""),
+      "base64",
+    );
+    expect(createHash("sha256").update(compressedFixture).digest("hex")).toBe(
+      MATRIX_V2026_7_1_GZIP_SHA256,
+    );
+    const rawFixture = gunzipSync(compressedFixture);
+    expect(createHash("sha256").update(rawFixture).digest("hex")).toBe(MATRIX_V2026_7_1_RAW_SHA256);
+    fs.writeFileSync(databasePath, rawFixture);
+
+    const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
+    const staleStore = new SqliteBackedMatrixSyncStore(storageRootDir);
+    await expect(staleStore.getSavedSyncToken()).resolves.toBe("cursor-a");
+    await staleStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
+    await expect(staleStore.flush()).rejects.toMatchObject({
+      cause: {
+        name: "OpenClawStateDatabaseSchemaMigrationRequiredError",
+        message: expect.stringContaining("audit-events-v2"),
+      },
+    });
+    resetPluginStateStoreForTests();
+
+    const stale = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      db.exec(`
-        PRAGMA user_version = 1;
-        CREATE TABLE audit_events (
-          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-          event_id TEXT NOT NULL UNIQUE,
-          source_id TEXT NOT NULL UNIQUE,
-          source_sequence INTEGER NOT NULL,
-          occurred_at INTEGER NOT NULL,
-          kind TEXT NOT NULL,
-          action TEXT NOT NULL,
-          status TEXT NOT NULL,
-          error_code TEXT,
-          actor_type TEXT NOT NULL,
-          actor_id TEXT NOT NULL,
-          agent_id TEXT NOT NULL,
-          session_key TEXT,
-          session_id TEXT,
-          run_id TEXT NOT NULL,
-          tool_call_id TEXT,
-          tool_name TEXT
-        );
-        CREATE TABLE plugin_state_entries (
-          plugin_id TEXT NOT NULL,
-          namespace TEXT NOT NULL,
-          entry_key TEXT NOT NULL,
-          value_json TEXT NOT NULL,
-          created_at INTEGER NOT NULL,
-          expires_at INTEGER,
-          PRIMARY KEY (plugin_id, namespace, entry_key)
-        ) STRICT;
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES
-          ('matrix', 'storage-meta', 'current', '{"accountId":"default"}', 1, NULL),
-          ('matrix', 'sync-cache', 'current:meta', '{"kind":"meta","version":1}', 2, NULL);
-      `);
+      expect(stale.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(stale.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     } finally {
-      db.close();
+      stale.close();
     }
 
     const migration = migrationById("matrix-account-sqlite-schema");
-    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
-      preview: [
-        `Matrix account SQLite schema migration (audit-events-v2): ${storageRootDir}`,
-        `Matrix account SQLite schema migration (strict-tables-v3): ${storageRootDir}`,
-      ],
-    });
+    const detection = await migration.detectLegacyState(createMigrationParams(stateDir));
+    expect(detection?.preview).toContain(
+      `Matrix account SQLite schema migration (audit-events-v2): ${storageRootDir}`,
+    );
+    expect(detection?.preview).toContain(
+      `Matrix account SQLite schema migration (strict-tables-v3): ${storageRootDir}`,
+    );
+    expect(detection?.preview.every((entry) => entry.endsWith(storageRootDir))).toBe(true);
 
     const result = await migration.migrateLegacyState(createMigrationParams(stateDir));
     expect(result.warnings).toEqual([]);
@@ -165,38 +191,16 @@ describe("matrix doctor contract state migrations", () => {
       `Matrix account SQLite ${storageRootDir}: Migrated shared state audit event ledger → versioned message lifecycle schema`,
     );
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
+    expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
 
-    const repaired = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const userVersion = repaired.prepare("PRAGMA user_version").get() as {
-        user_version: number;
-      };
-      expect(userVersion.user_version).toBeGreaterThan(1);
-      expect(
-        repaired
-          .prepare(
-            `SELECT plugin_id, namespace, entry_key, value_json
-             FROM plugin_state_entries
-             ORDER BY namespace, entry_key`,
-          )
-          .all(),
-      ).toEqual([
-        {
-          plugin_id: "matrix",
-          namespace: "storage-meta",
-          entry_key: "current",
-          value_json: '{"accountId":"default"}',
-        },
-        {
-          plugin_id: "matrix",
-          namespace: "sync-cache",
-          entry_key: "current:meta",
-          value_json: '{"kind":"meta","version":1}',
-        },
-      ]);
-    } finally {
-      repaired.close();
-    }
+    const repairedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
+    await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");
+    await repairedStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
+    await repairedStore.flush();
+    resetPluginStateStoreForTests();
+
+    const reopenedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
+    await expect(reopenedStore.getSavedSyncToken()).resolves.toBe("cursor-after-repair");
   });
 
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
