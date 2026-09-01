@@ -310,8 +310,8 @@ machine-readable tool output. Successful runs have no failure trailer. Signals
 forwarded during child execution and shard timeouts fail the command; whole-host
 loss or `SIGKILL` of the reporting process can prevent a final line.
 
-Local plugin lint and package-boundary compilation consume native declarations in
-`packages/plugin-sdk/dist` and seven separate plugin API trees in
+Local plugin lint consumes native SDK declarations in `packages/plugin-sdk/dist`.
+The dedicated package-boundary compiler also consumes seven plugin API trees in
 `.artifacts/extension-package-boundary/plugins`. Each declaration and compile
 owner validates its consumed source content, inherited config, selected compiler,
 and complete output inventory. Unrelated existing source or test edits retain

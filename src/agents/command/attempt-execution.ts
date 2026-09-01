@@ -102,7 +102,7 @@ import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   isSubagentAnnounceCompletionHandoff,
@@ -978,7 +978,7 @@ export function runAgentAttempt(params: {
               ...mutableCliSessionStore,
             }
           : undefined;
-      return withLocalSessionPlacementTurnAdmission(
+      return withLocalSessionPlacementTurnSettlement(
         {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey ?? params.sessionId,
