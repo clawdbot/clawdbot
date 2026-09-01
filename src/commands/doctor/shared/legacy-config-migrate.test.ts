@@ -370,6 +370,35 @@ describe("legacy memory search config migrate", () => {
     expect(res.changes.join(" ")).toContain("agents.entries.coach.memorySearch");
   });
 
+  it("normalizes keyed memory.search records the move just created", () => {
+    // The move can hand the follow-up normalizers a keyed record holding legacy
+    // flat fields, provider "auto", or store.path. Those passes previously
+    // returned unless agents.list existed, leaving schema-invalid leftovers.
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        entries: {
+          coach: {
+            memorySearch: {
+              provider: "auto",
+              chunkSize: 900,
+              store: { path: "/tmp/coach-memory.sqlite" },
+            },
+          },
+        },
+      },
+    });
+
+    // config must be fully valid, not "migration applied but issues remain":
+    // that is the state the unnormalized keyed record used to leave behind.
+    expect(res.partiallyValid).not.toBe(true);
+    expect(res.changes.join(" ")).not.toContain("validation issues remain");
+    const search = (res.config?.agents?.entries?.coach as Record<string, any> | undefined)?.memory
+      ?.search;
+    expect(search?.provider).toBe("openai");
+    expect(search?.chunkSize).toBeUndefined();
+    expect(search?.store?.path).toBeUndefined();
+  });
+
   it("removes sidecar memory search index paths", () => {
     const res = migrateLegacyConfigForTest({
       memorySearch: {
@@ -1222,8 +1251,8 @@ describe("legacy memory search config migrate", () => {
     expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
       "Moved legacy memorySearch defaults → memory.search.",
-      "Moved agents.list[0].memorySearch → agents.list[0].memory.search.",
-      "Moved agents.list[1].memorySearch → agents.list[1].memory.search.",
+      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
+      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
       'Moved memory.search.provider from legacy "auto" to "openai".',
       'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
     ]);

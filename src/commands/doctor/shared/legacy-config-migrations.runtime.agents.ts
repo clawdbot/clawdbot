@@ -57,6 +57,15 @@ const AGENT_MEMORY_SEARCH_OWNER_RULES: LegacyConfigRule[] = [
       'agents.list[].memorySearch moved to agents.list[].memory.search. Run "openclaw doctor --fix".',
     match: (value) => someAgentList(value, (agent) => agent.memorySearch !== undefined),
   },
+  {
+    // Detection must cover the keyed roster too: doctor only applies migrations
+    // for rules that matched, so a keyed-only config would otherwise never reach
+    // the migration and its legacy key would be stripped as unknown instead.
+    path: ["agents", "entries"],
+    message:
+      'agents.entries.*.memorySearch moved to agents.entries.*.memory.search. Run "openclaw doctor --fix".',
+    match: (value) => someAgentEntry(value, (agent) => agent.memorySearch !== undefined),
+  },
 ];
 
 const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
@@ -134,6 +143,25 @@ function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
 function getAgentMemorySearchRecord(agent: unknown): Record<string, unknown> | null {
   const record = getRecord(agent);
   return getRecord(record?.memorySearch) ?? getRecord(getRecord(record?.memory)?.search);
+}
+
+function someAgentEntry(
+  value: unknown,
+  predicate: (agent: Record<string, unknown>) => boolean,
+): boolean {
+  const entries = getRecord(value);
+  if (!entries) {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    const agent = getRecord(entry);
+    return agent !== null && predicate(agent);
+  });
+}
+
+/** Render a visitor path in the legacy dot style so existing doctor messages keep their wording. */
+function dotAgentPath(path: string): string {
+  return path.replace(/\[(\d+)\]/g, ".$1");
 }
 
 function someAgentList(
@@ -419,15 +447,13 @@ function migrateAgentDefaultsAndList(
   if (defaults) {
     migrateAgent(defaults, "agents.defaults", changes);
   }
-  if (!Array.isArray(agents?.list)) {
-    return;
-  }
-  for (const [index, agent] of agents.list.entries()) {
-    const agentRecord = getRecord(agent);
-    if (agentRecord) {
-      migrateAgent(agentRecord, `agents.list.${index}`, changes);
-    }
-  }
+  // Both roster shapes: the memorySearch move above can now produce keyed
+  // memory.search records, so the follow-up normalizers must see them too.
+  // Keep the legacy dot rendering for list entries: this walker is shared by
+  // several unrelated migrations whose operator-visible messages are pinned.
+  visitAgentEntries(raw, (agent, path) => {
+    migrateAgent(agent, dotAgentPath(path), changes);
+  });
 }
 
 function migrateLegacyEmbeddedAgentKey(
@@ -532,17 +558,13 @@ function migrateCanonicalMemorySearches(
   agentPathStyle: "dot" | "brackets" = "dot",
 ): void {
   migrateMemorySearch(getRecord(getRecord(raw.memory)?.search), "memory.search", changes);
-  const agents = getRecord(raw.agents);
-  if (!Array.isArray(agents?.list)) {
-    return;
-  }
-  for (const [index, agent] of agents.list.entries()) {
+  visitAgentEntries(raw, (agent, path) => {
     const pathLabel =
       agentPathStyle === "brackets"
-        ? `agents.list[${index}].memory.search`
-        : `agents.list.${index}.memory.search`;
-    migrateMemorySearch(getRecord(getRecord(getRecord(agent)?.memory)?.search), pathLabel, changes);
-  }
+        ? `${path}.memory.search`
+        : `${dotAgentPath(path)}.memory.search`;
+    migrateMemorySearch(getRecord(getRecord(agent.memory)?.search), pathLabel, changes);
+  });
 }
 
 function migrateLegacySandboxPerSession(
@@ -1454,6 +1476,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         if (!legacy) {
           return;
         }
+        // Dot rendering keeps existing doctor output byte-identical for list entries.
+        const label = dotAgentPath(path);
         const agentMemory = ensureRecord(agent, "memory");
         const existing = getRecord(agentMemory.search);
         const target = structuredClone(existing ?? {});
@@ -1462,8 +1486,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         delete agent.memorySearch;
         changes.push(
           existing
-            ? `Merged ${path}.memorySearch → ${path}.memory.search (kept explicit memory.search values).`
-            : `Moved ${path}.memorySearch → ${path}.memory.search.`,
+            ? `Merged ${label}.memorySearch → ${label}.memory.search (kept explicit memory.search values).`
+            : `Moved ${label}.memorySearch → ${label}.memory.search.`,
         );
       });
     },
