@@ -58,17 +58,26 @@ suite.define(() => {
         textarea.addEventListener(
           "keydown",
           () => {
-            window.setTimeout(() => {
-              textarea.value = "second prompt";
-              textarea.dispatchEvent(
-                new InputEvent("input", {
-                  bubbles: true,
-                  data: "second prompt",
-                  inputType: "insertText",
-                }),
-              );
-              record("next-input-task");
-            }, 0);
+            const channel = new MessageChannel();
+            channel.port1.addEventListener(
+              "message",
+              () => {
+                channel.port1.close();
+                channel.port2.close();
+                textarea.value = "second prompt";
+                textarea.dispatchEvent(
+                  new InputEvent("input", {
+                    bubbles: true,
+                    data: "second prompt",
+                    inputType: "insertText",
+                  }),
+                );
+                record("next-input-task");
+              },
+              { once: true },
+            );
+            channel.port1.start();
+            channel.port2.postMessage(undefined);
           },
           { capture: true, once: true },
         );
