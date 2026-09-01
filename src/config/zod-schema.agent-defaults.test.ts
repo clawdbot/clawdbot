@@ -27,6 +27,53 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it.each([true, false])("rejects Code Mode %s without an exact model entry", (codeMode) => {
+    for (const key of ["openai/*", "openrouter/provider/*", "*", "model", "provider/", "/model"]) {
+      const models = { [key]: { codeMode } };
+      expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ models }), `models.${key}.codeMode`);
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models }),
+        `models.${key}.codeMode`,
+      );
+    }
+    const models = { "openai/*": { agentRuntime: { id: "openclaw" } } };
+    expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+    expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+  });
+
+  it.each([undefined, true, false])(
+    "preserves the optional per-model Code Mode override %s on defaults and agents",
+    (codeMode) => {
+      const entry = {
+        alias: "test",
+        params: { temperature: 0.5 },
+        agentRuntime: { id: "openclaw" },
+        streaming: false,
+        ...(codeMode === undefined ? {} : { codeMode }),
+      };
+      const models = { "example/model": entry };
+
+      expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+      expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+    },
+  );
+
+  it.each(["auto", "true", null, { enabled: true }])(
+    "rejects non-boolean per-model Code Mode override %j",
+    (codeMode) => {
+      const models = { "example/model": { codeMode } };
+
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ models }),
+        "models.example/model.codeMode",
+      );
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models }),
+        "models.example/model.codeMode",
+      );
+    },
+  );
+
   it.each([undefined, "session", "agent", "global"] as const)(
     "preserves the optional model selection scope %s",
     (modelSelectionScope) => {

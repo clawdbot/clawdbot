@@ -432,6 +432,93 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     ],
   };
 
+  const approvedPlugin: PublishablePluginPackage = {
+    ...plugin,
+    version: "2026.8.2",
+    requiredLatestDependencies: [{ packageName: "@openai/codex", version: "0.151.0" }],
+  };
+  const approvedSha = "0965053fe6b9341776df147a6934b7485c60b5ca";
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["0.152.0", "0.153.0"])(
+    "retains the approved frozen pin while reporting actual npm latest %s",
+    (latest) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      childProcessMock.execFileSyncOverride = ((
+        command: string,
+        args: readonly string[],
+        options: unknown,
+      ) => {
+        expect(command).toBe("git");
+        expect(args).toEqual(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        expect(options).toMatchObject({ cwd: approvedPlugin.packageDir });
+        return approvedSha;
+      }) as unknown as ExecFileSync;
+      const resolveLatest = vi.fn(() => latest);
+      expect(
+        collectPluginReleaseDependencyFreshnessErrors([approvedPlugin], resolveLatest),
+      ).toEqual([]);
+      expect(resolveLatest).toHaveBeenCalledWith("@openai/codex");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`npm latest is "${latest}"`),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(approvedSha));
+    },
+  );
+
+  it.each(["another checkout", "missing git"])("keeps the pin strict for %s", (scenario) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    childProcessMock.execFileSyncOverride = (() => {
+      if (scenario === "missing git") throw new Error("not a git repository");
+      return "8fc5024659a9915406aed0d5d0ad2f368c8557e4";
+    }) as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([approvedPlugin], () => "0.152.0"),
+    ).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { packageName: "@openclaw/other" },
+    { version: "2026.8.3" },
+    { requiredLatestDependencies: [{ packageName: "another-runtime", version: "0.151.0" }] },
+    { requiredLatestDependencies: [{ packageName: "@openai/codex", version: "0.150.0" }] },
+  ])("does not broaden the approved package tuple %j", (change) => {
+    const git = vi.fn(() => approvedSha);
+    childProcessMock.execFileSyncOverride = git as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors(
+        [{ ...approvedPlugin, ...change }],
+        () => "0.152.0",
+      ),
+    ).toHaveLength(1);
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it("retains unrelated failures after the approved exception", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    childProcessMock.execFileSyncOverride = (() => approvedSha) as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([approvedPlugin, plugin], () => "0.152.0"),
+    ).toEqual([
+      '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.152.0".',
+    ]);
+  });
+
+  it("never uses the approved exception when the live registry lookup fails", () => {
+    const git = vi.fn(() => approvedSha);
+    childProcessMock.execFileSyncOverride = git as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([approvedPlugin], () => {
+        throw new Error("registry unavailable");
+      }),
+    ).toEqual([
+      "@openclaw/codex@2026.8.2: could not resolve npm latest for @openai/codex: registry unavailable",
+    ]);
+    expect(git).not.toHaveBeenCalled();
+  });
+
   it("rejects release dependencies older than the npm latest dist-tag", () => {
     expect(collectPluginReleaseDependencyFreshnessErrors([plugin], () => "0.142.5")).toEqual([
       '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.142.5".',
@@ -836,6 +923,7 @@ describe("collectPluginNpmGitRangeSelection", () => {
     "scripts/lib/tsx-cli-shim.mjs",
     "scripts/tsx.mjs",
     "scripts/plugin-npm-release-plan.ts",
+    "src/plugins/package-entrypoints.ts",
   ])("selects all publishable plugins for an authority-only %s change", (changedPath) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-range-");
     const absolutePath = join(repoDir, changedPath);

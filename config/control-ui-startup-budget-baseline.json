@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346461,
-  "reason": "standing-grant scope line + grants ledger (#131602); recorded at the CI e2e-lane build (346461 B) — checks-ui and local builds of the same tree measure ~600 B less, beyond the 64 B variance allowance",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 348668,
+  "reason": "Model provider defaults consolidation, autosave, and contextual help add 235 B (0.07%) over the reconciled 348433 B main baseline; fixed 358400 B cap and existing allowances retained",
+  "updatedAt": "2026-09-01"
 }

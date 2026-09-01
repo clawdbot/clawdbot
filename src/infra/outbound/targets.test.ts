@@ -1,11 +1,12 @@
 // Covers outbound direct target resolution, heartbeat target derivation,
 // heartbeat sender context, and route-aware heartbeat refinements.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 import {
@@ -111,6 +112,10 @@ vi.mock("./channel-resolution.js", () => ({
 }));
 
 runResolveOutboundTargetCoreTests();
+
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+});
 
 beforeEach(() => {
   mocks.normalizeDeliverableOutboundChannel.mockReset();
@@ -700,6 +705,73 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved).toMatchObject({ channel: "alpha", to: "user:alpha-owner" });
   });
+
+  it.each(["cold", "disabled", "inspection-unavailable", "stale"] as const)(
+    "keeps heartbeat owner discovery usable when an account is %s",
+    (state) => {
+      const unavailable = state !== "stale";
+      const alpha = createOwnerAllowlistTargetTestPlugin({
+        id: "alpha",
+        label: "Alpha",
+        ownerId: "user:alpha-owner",
+        inferTargetChatType: () => "direct",
+      });
+      const beta = createOwnerAllowlistTargetTestPlugin({
+        id: "beta",
+        label: "Beta",
+        ownerId: "user:beta-owner",
+        inferTargetChatType: () => "direct",
+      });
+      const resolveAllowFrom = vi.fn(() => {
+        if (unavailable) {
+          throw new Error("unavailable credential must not resolve for owner discovery");
+        }
+        return ["user:alpha-owner"];
+      });
+      alpha.config = {
+        ...alpha.config,
+        listAccountIds: () => ["work"],
+        inspectAccount: () => ({
+          enabled: state !== "disabled",
+          configured: true,
+          tokenStatus: state === "inspection-unavailable" ? "configured_unavailable" : "available",
+        }),
+        resolveAllowFrom,
+      };
+      beta.config.listAccountIds = () => ["work"];
+      setActivePluginRegistry(createTargetsTestRegistry([alpha, beta]));
+      if (state === "cold" || state === "stale") {
+        setActiveDegradedSecretOwners([
+          {
+            ownerKind: "account",
+            ownerId: "alpha:work",
+            state: "unavailable",
+            degradationState: state,
+            paths: ["channels.alpha.accounts.work.token"],
+            refKeys: [],
+            reason: "secret reference was not found",
+          },
+        ]);
+      }
+      const cfg = { channels: { alpha: {}, beta: {} } } as OpenClawConfig;
+
+      expect(hasResolvableHeartbeatOwnerRoute({ cfg, heartbeat: { accountId: "work" } })).toBe(
+        true,
+      );
+      expect(
+        resolveHeartbeatDeliveryTarget({ cfg, heartbeat: { accountId: "work" } }),
+      ).toMatchObject({
+        channel: unavailable ? "beta" : "alpha",
+        accountId: "work",
+        to: unavailable ? "user:beta-owner" : "user:alpha-owner",
+      });
+      if (unavailable) {
+        expect(resolveAllowFrom).not.toHaveBeenCalled();
+      } else {
+        expect(resolveAllowFrom).toHaveBeenCalled();
+      }
+    },
+  );
 
   it("reuses an exact direct owner route with its account and thread", () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");

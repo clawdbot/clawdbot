@@ -44,7 +44,6 @@ const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 type StoreListener = () => void;
-type CustodianSetupIssue = "missing" | "unavailable";
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
@@ -58,7 +57,6 @@ export class CustodianSessionStore {
   questionReplyUncertain = false;
   error: string | null = null;
   transcript = new CustodianTranscriptLoader(() => this.emit());
-  setupIssue: CustodianSetupIssue | null = null;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
   activeClient: GatewayBrowserClient | null = null;
@@ -69,6 +67,7 @@ export class CustodianSessionStore {
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
 
+  private inferenceState: "unverified" | "ready" = "unverified";
   private context: ApplicationContext | null = null;
   private variant: CustodianSessionVariant = "caretaker";
   private sessionVariant: CustodianSessionVariant | null = null;
@@ -190,7 +189,17 @@ export class CustodianSessionStore {
   }
 
   get setupRequired(): boolean {
-    return this.setupIssue !== null;
+    return this.configuredInferenceState === "required";
+  }
+
+  get canSend(): boolean {
+    return (
+      this.activeClient !== null &&
+      this.chatAvailable &&
+      !this.sending &&
+      this.configuredInferenceState === "ready" &&
+      this.inferenceState === "ready"
+    );
   }
 
   get wizardCancelAvailable(): boolean {
@@ -201,7 +210,7 @@ export class CustodianSessionStore {
     const client = this.activeClient;
     const params = this.retryParams;
     if (client && params && !hasCustodianUserInput(params) && this.chatAvailable && !this.sending) {
-      void this.initializeSession(client, params);
+      void this.initializeSession(client, params, false);
     }
   }
 
@@ -213,7 +222,7 @@ export class CustodianSessionStore {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
-    if (!message.trim() || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+    if (!message.trim() || !client || !this.canSend) {
       this.emit();
       return "rejected";
     }
@@ -338,7 +347,7 @@ export class CustodianSessionStore {
     }
     const submission = custodianWizardSubmission(message.step, value);
     const client = this.activeClient;
-    if (!submission || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+    if (!submission || !client || !this.canSend) {
       this.emit();
       return;
     }
@@ -358,10 +367,8 @@ export class CustodianSessionStore {
       !step ||
       !this.wizardInputPending ||
       !client ||
-      !this.chatAvailable ||
-      !this.wizardCancelAvailable ||
-      this.sending ||
-      this.setupRequired
+      !this.canSend ||
+      !this.wizardCancelAvailable
     ) {
       this.emit();
       return;
@@ -457,7 +464,6 @@ export class CustodianSessionStore {
     this.wizardSecretVisible = false;
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.error = null;
-    this.setupIssue = null;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, variant, false);
   }
@@ -565,11 +571,7 @@ export class CustodianSessionStore {
     if (configuredInferenceState === "required") {
       this.sessionStarted = false;
       this.clearConversation();
-      this.setupIssue = "missing";
       return;
-    }
-    if (inferenceStateChanged) {
-      this.setupIssue = null;
     }
     if (this.sessionStarted) {
       if (!this.retryParams) {
@@ -588,6 +590,7 @@ export class CustodianSessionStore {
   ): Promise<void> {
     const epoch = this.advanceRequestEpoch();
     this.sending = true;
+    this.inferenceState = "unverified";
     this.error = null;
     this.retryParams = params;
     this.emit();
@@ -634,7 +637,7 @@ export class CustodianSessionStore {
     this.retryParams = null;
     this.error = null;
     this.transcript.reset();
-    this.setupIssue = null;
+    this.inferenceState = "unverified";
     this.input = "";
     [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
@@ -663,9 +666,6 @@ export class CustodianSessionStore {
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
-    if (hasCustodianUserInput(params)) {
-      this.setupIssue = null;
-    }
     this.retryParams = params;
     this.emit();
     try {
@@ -682,7 +682,7 @@ export class CustodianSessionStore {
       this.sensitive = result.sensitive === true;
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
-      this.setupIssue = null;
+      this.inferenceState = "ready";
       const step = result.step ?? null;
       const question = step ? null : parseCustodianQuestion(result.question);
       if (this.rejoinBarrierPending && !hasCustodianUserInput(params)) {
@@ -728,12 +728,11 @@ export class CustodianSessionStore {
         this.error = custodianErrorMessage(error);
         const details =
           error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
-        this.setupIssue =
-          readSystemAgentInferenceUnavailableErrorDetails(details) !== undefined
-            ? this.configuredInferenceState === "required"
-              ? "missing"
-              : "unavailable"
-            : null;
+        if (readSystemAgentInferenceUnavailableErrorDetails(details)) {
+          this.inferenceState = "unverified";
+          // Recheck the runtime without replaying a user turn that may have reached the Gateway.
+          this.retryParams = { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
+        }
         const sessionInvalidated = isCustodianSessionInvalidatedError(error);
         if (sessionInvalidated && hasCustodianUserInput(params)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.

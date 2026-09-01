@@ -11,6 +11,7 @@ import {
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import { visitSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
@@ -46,6 +47,7 @@ export type { SessionTranscriptReadScope };
 export type ReadRecentSessionMessagesResult = {
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
+  displaySource?: string;
   messages: unknown[];
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
@@ -151,7 +153,7 @@ function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget): SqliteM
 
 function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEvent[]): unknown[] {
   return entries.flatMap((entry) => {
-    const message = projectTranscriptEntryMessage(entry.event, entry.seq);
+    const message = projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
     return message ? [message] : [];
   });
 }
@@ -180,6 +182,7 @@ async function readRecentSqliteMessageRecords(
 ): Promise<{
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
+  displaySource?: string;
   messages: unknown[];
   transcriptEvents: TranscriptEvent[];
   totalMessages: number;
@@ -191,6 +194,7 @@ async function readRecentSqliteMessageRecords(
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
     ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
+    displaySource: page.displaySource,
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     totalMessages: page.totalMessages,
@@ -231,8 +235,10 @@ function sqliteRecordMessageWithSeq(record: {
   });
 }
 
-export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent): unknown {
-  return projectTranscriptEntryMessage(entry.event, entry.seq);
+export function sqliteMessageEventWithSeq(
+  entry: Pick<SessionTranscriptMessageEvent, "event" | "seq" | "displayPosition">,
+): unknown {
+  return projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
 }
 
 function readSqliteAggregateUsageSnapshot(
@@ -318,7 +324,11 @@ export async function readSessionMessageByIdAsync(
   if (foundEvent) {
     return {
       found: true,
-      message: projectTranscriptEntryMessage(foundEvent.event, foundEvent.seq),
+      message: projectTranscriptEntryMessage(
+        foundEvent.event,
+        foundEvent.seq,
+        foundEvent.displayPosition,
+      ),
       oversized: false,
       seq: foundEvent.seq,
     };
@@ -340,10 +350,13 @@ export async function visitSessionMessagesAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   let count = 0;
-  for (const record of readSqliteMessageRecords(target)) {
-    visit(record.message, record.seq);
-    count += 1;
-  }
+  visitSessionTranscriptMessageEvents(toTranscriptReadScope(target), (entry) => {
+    const record = extractMessageRecord(entry.event);
+    if (record) {
+      visit(record.message, entry.seq);
+      count += 1;
+    }
+  });
   return count;
 }
 
@@ -372,8 +385,14 @@ export async function readRecentSessionMessagesWithStatsAsync(
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const { activeLeafEntryId, deltaCursor, messages, transcriptEvents, totalMessages } =
-    await readRecentSqliteMessageRecords(target, opts);
+  const {
+    activeLeafEntryId,
+    deltaCursor,
+    displaySource,
+    messages,
+    transcriptEvents,
+    totalMessages,
+  } = await readRecentSqliteMessageRecords(target, opts);
   if (totalMessages === 0 && messages.length === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readRecentWithStats({
       ...opts,
@@ -383,6 +402,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
   return {
     ...(activeLeafEntryId !== undefined ? { activeLeafEntryId } : {}),
     ...(deltaCursor ? { deltaCursor } : {}),
+    displaySource,
     messages,
     transcriptEvents,
     totalMessages,
@@ -407,6 +427,7 @@ export async function readSessionMessagesPageWithStatsAsync(
       : {}),
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
+    displaySource: page.displaySource,
     totalMessages: page.totalMessages,
     transcriptPath: target.sessionFile,
     transcriptSource: "active",

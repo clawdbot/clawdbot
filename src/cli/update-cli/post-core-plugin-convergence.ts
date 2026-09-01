@@ -1,9 +1,12 @@
 // Reconciles configured plugin installs after the core package update has completed.
 import path from "node:path";
+// Link mandatory repairs before a package swap can remove this updater's old chunks.
+import { maybeRepairStaleManagedNpmBundledPlugins } from "../../commands/doctor-plugin-registry.js";
 import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
@@ -160,6 +163,7 @@ export async function runPostCorePluginConvergence(params: {
    * map is what gets persisted and returned via `installRecords`.
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
@@ -168,8 +172,6 @@ export async function runPostCorePluginConvergence(params: {
   };
   // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
   // became bundled with the new core must not survive into the next startup's contract graph.
-  const { maybeRepairStaleManagedNpmBundledPlugins } =
-    await import("../../commands/doctor-plugin-registry.js");
   const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins({
     config: params.cfg,
     env,
@@ -189,6 +191,7 @@ export async function runPostCorePluginConvergence(params: {
     cfg: params.cfg,
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
+    onCapabilityConsent: params.onCapabilityConsent,
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -279,18 +282,6 @@ export async function runPostCorePluginConvergence(params: {
   };
 }
 
-/**
- * Drop install records that the gateway would never activate: disabled
- * plugin entries, plugins listed in `plugins.deny`, etc. Records that
- * resolve as a trusted-source-linked official install (npm or ClawHub)
- * are retained even when the entry is disabled, mirroring the existing
- * `collectMissingPluginInstallPayloads({ skipDisabledPlugins: true,
- * syncOfficialPluginInstalls: true })` policy at
- * `update-command.ts:~218`. We do NOT collapse to the configured plugin
- * id set here — that would over-filter and miss e.g. providers/runtimes
- * that are enabled implicitly via auth profiles or model refs. Effective
- * enable state is the right precision boundary.
- */
 /**
  * Pure helper used by `updatePluginsAfterCoreUpdate` to fold a convergence
  * result into the existing `PluginUpdateOutcome[]` / warning shape that the

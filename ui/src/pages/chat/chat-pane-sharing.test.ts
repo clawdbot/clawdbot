@@ -2,6 +2,7 @@
 /* @vitest-environment-options {"url":"http://chat-pane-sharing.test/"} */
 
 import { describe, expect, it, vi } from "vitest";
+import type { SessionSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -152,6 +153,48 @@ const mutations = [
 ] as const;
 
 describe("chat pane sharing authorization", () => {
+  it.each(["draft", "shared"] as const)(
+    "loads selected-global Work suggestions after visibility changes to %s",
+    async (visibility) => {
+      const pending: SessionSuggestion = {
+        id: `pending-${visibility}`,
+        sessionKey: "agent:work:main",
+        agentId: "work",
+        author: { type: "human", id: "alice", label: "Alice" },
+        text: "still needs review",
+        createdAt: 1,
+        state: "pending",
+      };
+      const request = vi.fn(async () => ({ suggestions: [pending], role: "owner" as const }));
+      const { pane, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: {} as SessionCapability,
+      });
+      state.sessionKey = "agent:work:main";
+      state.assistantAgentId = "work";
+      state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+      state.sessionsResultAgentId = "work";
+      state.sessionsResult = sharingSessionsResult({
+        ...sessionRow(),
+        key: "global",
+        kind: "global",
+        visibility,
+      });
+      pane.presencePayload = {
+        presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+      };
+
+      await pane.refreshSessionSuggestions();
+
+      expect(request).toHaveBeenCalledWith("session.suggestions.list", {
+        sessionKey: "agent:work:main",
+        agentId: "work",
+      });
+      expect(pane.sessionSuggestions).toEqual([pending]);
+      expect(pane.sessionSuggestionRole).toBe("owner");
+    },
+  );
+
   it("allows read-scoped owners to load sharing data but not mutate it", async () => {
     const row = sessionRow();
     const request = vi.fn(async (method: string) => {

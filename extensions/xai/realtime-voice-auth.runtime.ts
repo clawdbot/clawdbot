@@ -1,4 +1,4 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

@@ -11,6 +11,12 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
@@ -328,6 +334,7 @@ function firstDeferredAuthScope() {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetConfigRuntimeState();
 });
 
 function expectLogoutFailurePreservesRun(params: {
@@ -508,6 +515,58 @@ describe("models.authStatus", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: after }),
     );
+  });
+
+  it("does not wait for full catalog discovery during auth status refresh", async () => {
+    let releaseDiscovery!: () => void;
+    const discovery = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    mocks.loadDeferredCatalog.mockImplementation(async (_context, agentId, options) => {
+      const deferredOptions = requireRecord(options);
+      if (deferredOptions.refreshFullCatalog !== false) {
+        await discovery;
+      }
+      return createPreparedOwnerSnapshot(agentId);
+    });
+
+    const request = handler(createOptions({ refresh: true }));
+    try {
+      await expect(
+        Promise.race([
+          Promise.resolve(request).then(() => "replied" as const),
+          new Promise<"timed-out">((resolve) => {
+            setTimeout(() => resolve("timed-out"), 25);
+          }),
+        ]),
+      ).resolves.toBe("replied");
+    } finally {
+      releaseDiscovery();
+    }
+    await request;
+  });
+
+  it("reports an unavailable prepared owner without failing the RPC or discovering credentials", async () => {
+    mocks.readPreparedCatalog.mockResolvedValueOnce(undefined);
+
+    const unavailable = await readAuthStatus();
+
+    expect(unavailable).toEqual({
+      ts: expect.any(Number),
+      providers: [],
+      unavailable: {
+        code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+        message: expect.stringContaining("Refresh Models"),
+      },
+    });
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+    expect(mocks.buildAuthHealthSummary).not.toHaveBeenCalled();
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+
+    const recovered = await readAuthStatus();
+    expect(recovered).not.toHaveProperty("unavailable");
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledOnce();
   });
 
   it("returns a serialisable snapshot on first call", async () => {
@@ -1070,16 +1129,27 @@ describe("models.authStatus", () => {
     }
   });
 
-  it("reports non-env SecretRefs as presence-only config auth", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
+  it("reports runtime-resolved non-env SecretRefs as presence-only config auth", async () => {
+    const sourceProvider: ModelProviderConfig = {
+      baseUrl: "https://example.test/v1",
+      models: [],
+      apiKey: { source: "file", provider: "mounted-json", id: "model-provider-key" },
+    };
+    const runtimeProvider: ModelProviderConfig = {
+      baseUrl: sourceProvider.baseUrl,
+      models: sourceProvider.models,
+      apiKey: "runtime-secret-value",
+    };
+    const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: Object.fromEntries([
-            ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
-          ]),
+          openai: sourceProvider,
         },
       },
-    });
+    };
+    const runtimeConfig: OpenClawConfig = { models: { providers: { openai: runtimeProvider } } };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
       warnAfterMs: 0,

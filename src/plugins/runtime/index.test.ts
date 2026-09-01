@@ -17,6 +17,12 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
   getRuntimeAuthForModelCore: vi.fn(),
   resolveProviderRuntimeApiKey: vi.fn(),
 }));
+const heartbeatRunnerMocks = vi.hoisted(() => ({ loads: 0, runHeartbeatOnce: vi.fn() }));
+vi.mock("../../infra/heartbeat-runner.js", () => {
+  heartbeatRunnerMocks.loads++;
+  return { runHeartbeatOnce: heartbeatRunnerMocks.runHeartbeatOnce };
+});
+
 const sandboxContextMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
 }));
@@ -135,6 +141,40 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     await expectRunCommandOutcome({ runtime, expected, commandResult });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
+  });
+
+  it("defers heartbeat execution and forwards only plugin-safe options", async () => {
+    const system = createPluginRuntime().system;
+    expect(heartbeatRunnerMocks.loads).toBe(0);
+    const result = { status: "skipped", reason: "disabled" };
+    heartbeatRunnerMocks.runHeartbeatOnce.mockResolvedValueOnce(result);
+    await expect(
+      system.runHeartbeatOnce({
+        reason: "plugin-event",
+        agentId: "main",
+        sessionKey: "session",
+        heartbeat: { target: "none", every: "1ms" },
+        cfg: {},
+        deps: {},
+      } as Parameters<typeof system.runHeartbeatOnce>[0]),
+    ).resolves.toBe(result);
+    expect(heartbeatRunnerMocks.loads).toBe(1);
+    expect(heartbeatRunnerMocks.runHeartbeatOnce).toHaveBeenCalledWith({
+      reason: "plugin-event",
+      agentId: "main",
+      sessionKey: "session",
+      heartbeat: { target: "none" },
+    });
+    const failure = new Error("heartbeat failed");
+    heartbeatRunnerMocks.runHeartbeatOnce.mockRejectedValueOnce(failure);
+    await expect(system.runHeartbeatOnce()).rejects.toBe(failure);
+    expect(heartbeatRunnerMocks.runHeartbeatOnce).toHaveBeenLastCalledWith({
+      reason: undefined,
+      agentId: undefined,
+      sessionKey: undefined,
+      heartbeat: undefined,
+    });
+    heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
   });
 
   it.each([

@@ -46,7 +46,10 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
-import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import {
+  getTelegramCallbackQueryAnswerPromise,
+  startTelegramCallbackQueryAnswer,
+} from "./callback-query-answer-state.js";
 import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -101,14 +104,11 @@ export function createTelegramCallbackRouter({
       return;
     }
     let callbackAnswered = false;
-    const answerCallbackQuery = async (text?: string) => {
+    const answerCallbackQuery = async () => {
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
-        fn: () =>
-          text
-            ? bot.api.answerCallbackQuery(callback.id, { text })
-            : bot.api.answerCallbackQuery(callback.id),
+        fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
       callbackAnswered = true;
     };
@@ -582,13 +582,13 @@ async function handleTelegramModelCallback(params: {
       totalPages,
       modelNames,
     });
-    const text = formatModelsAvailableHeader({
+    const text = `${formatModelsAvailableHeader({
       provider,
       total: models.length,
       cfg: runtimeCfg,
       agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
       sessionEntry: sessionState.sessionEntry,
-    });
+    })}\nSelecting a model also applies its configured runtime.`;
     await retryModelAction(() => editMessageWithButtons(text, buttons));
     return true;
   }
@@ -637,9 +637,6 @@ async function handleTelegramModelCallback(params: {
     };
     const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
     const sessionStore = { [sessionState.sessionKey]: sessionEntry };
-    const modelCatalog = [...byProvider.entries()].flatMap(([provider, models]) =>
-      [...models].map((model) => ({ provider, id: model, name: model })),
-    );
     const currentModelRef = sessionState.model?.trim();
     const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
     const currentProvider =
@@ -663,14 +660,13 @@ async function handleTelegramModelCallback(params: {
         defaultModel: resolvedDefault.model,
         currentProvider,
         currentModel,
-        allowedModelKeys: new Set(modelCatalog.map((entry) => `${entry.provider}/${entry.id}`)),
-        modelCatalog,
+        modelCatalog: modelData.modelCatalog,
         canPersistStickyModelSelection: false,
         request: {
           provider: selection.provider,
           model: selection.model,
           isDefault: isDefaultSelection,
-          runtime: { kind: "unchanged" },
+          runtime: { kind: "clear" },
         },
         markLiveSwitchPending: true,
       }),
@@ -691,13 +687,10 @@ async function handleTelegramModelCallback(params: {
     const actionText = isDefaultSelection
       ? "reset to default"
       : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
-    const runtimeText =
-      applied.runtimeChange?.kind === "clear"
-        ? "Runtime reset to configured policy."
-        : "Runtime unchanged.";
+    const runtimeText = `Runtime set to <b>${escapeHtml(applied.agentRuntime)}</b> from configured policy.`;
     const scopeText = isDefaultSelection
       ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
-      : `Session-only model selection. ${runtimeText} Use /model ${escapeHtml(selection.provider)}/${escapeHtml(selection.model)} --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
+      : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
     await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
       parse_mode: "HTML",
     });

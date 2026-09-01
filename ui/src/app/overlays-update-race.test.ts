@@ -42,6 +42,63 @@ afterEach(() => {
 });
 
 describe("application update reconciliation races", () => {
+  it("preserves a verified campaign outcome when update.run rejects afterward", async () => {
+    const updateRun = deferred();
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "update.run") {
+        return updateRun.promise;
+      }
+      return Promise.resolve(
+        method === "update.status"
+          ? {
+              sentinel: {
+                kind: "update",
+                status: "ok",
+                stats: { after: { version: "2.0.0" } },
+              },
+            }
+          : [],
+      );
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    const schedule = {
+      channel: "stable",
+      autoEnabled: true,
+      target: { kind: "package", version: "2.0.0" },
+    };
+    const running = overlays.runUpdate();
+    try {
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledWith("update.run", {});
+      harness.emitEvent("update.available", {
+        schedule: {
+          ...schedule,
+          campaign: {
+            id: "manual-campaign",
+            state: "applying",
+            announcedAtMs: 1_000,
+            forceAtMs: 1_000,
+            updatedAtMs: 1_000,
+          },
+        },
+      });
+      harness.emitEvent("update.available", { schedule });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+
+      updateRun.reject(new Error("late-rpc-rejection"));
+      await running;
+
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+    } finally {
+      updateRun.resolve({});
+      await running;
+      overlays.dispose();
+    }
+  });
+
   it("checks the authoritative sentinel when disconnect wins the update.run response race", async () => {
     installUpdateTranslations();
     const updateRun = deferred<{
@@ -256,10 +313,16 @@ describe("application update reconciliation races", () => {
       await overlays.runUpdate();
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
+      const statusRequestsBeforeReconnect = request.mock.calls.filter(
+        ([method]) => method === "update.status",
+      ).length;
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
       expectUpdateStatusRequested(request);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusRequestsBeforeReconnect + 1,
+      );
 
       harness.update({
         hello: {
@@ -286,7 +349,9 @@ describe("application update reconciliation races", () => {
         tone: "danger",
         text: UNKNOWN_OUTCOME_TEXT,
       });
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusRequestsBeforeReconnect + 1,
+      );
     } finally {
       updateStatus.resolve({});
       overlays.dispose();

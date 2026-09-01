@@ -421,9 +421,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Rich message formatting">
-    Outbound text uses standard Telegram HTML messages by default, readable across current clients: bold, italic, links, code, spoilers, quotes — not Bot API 10.2 rich-only blocks (native tables, details, rich media, formulas).
+    Outbound text uses standard Telegram HTML messages by default, readable across current clients: bold, italic, links, code, spoilers, quotes — not Bot API 10.3 rich-only blocks (native tables, details, rich media, formulas).
 
-    Opt into Bot API 10.2 rich messages:
+    Opt into Bot API 10.3 rich messages:
 
 ```json5
 {
@@ -435,7 +435,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    When enabled: the agent is told rich messages are available for this bot/account (with the supported Markdown + HTML-island authoring contract); Markdown text renders through OpenClaw's Markdown IR as typed Bot API 10.2 rich blocks (headings, tables, details, checklists, rich media, formulas, maps, collages); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
+    When enabled: the agent is told rich messages are available for this bot/account (with the supported Markdown + HTML-island authoring contract); Markdown text renders through OpenClaw's Markdown IR as typed Bot API 10.3 rich blocks (headings, tables, details, checklists, rich media, formulas, maps, collages); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
 
     This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block.
 
@@ -581,6 +581,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Mini App buttons only work in private chats between a user and the bot.
 
     Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
+
+    With durable ingress, OpenClaw sends the callback acknowledgement after storing the update, without waiting for earlier handlers in that chat's lane. Telegram clears its loading indicator when the acknowledgement succeeds; the button's action still follows normal authorization and ordered processing.
 
   </Accordion>
 
@@ -819,7 +821,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     The listener reserves `/healthz` for health checks, so `webhookPath` must use a different route. If an existing setup uses `/healthz`, choose another route, update the path in `webhookUrl` and the reverse proxy mapping, then restart OpenClaw.
 
-    In long-polling mode, OpenClaw persists its restart watermark only after an update dispatches successfully; a failed handler leaves that update retryable in the same process instead of marking it completed.
+    In the default isolated long-polling mode, OpenClaw persists its restart watermark after an update is committed to the durable ingress queue. A failed handler remains retryable from that queue. Classic polling (`polling.isolated: false`) advances its watermark after dispatch succeeds.
 
     The local listener binds to `127.0.0.1:8787` by default. For public ingress, put a reverse proxy in front of the local port, or set `webhookHost: "0.0.0.0"` intentionally.
 

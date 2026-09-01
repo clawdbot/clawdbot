@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -49,7 +50,7 @@ import {
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
-import { renderChatVoiceError } from "./chat-voice-activity.ts";
+import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
 
 type ChatComposerViewContext = {
   props: ChatComposerProps;
@@ -182,8 +183,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     state.capabilityMenuView = "root";
   }
   const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
-  const voiceError = showComposerInput
-    ? renderChatVoiceError({
+  const composerAlerts = showComposerInput
+    ? renderChatVoiceStatus({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
         detail: props.realtimeTalkDetail,
         onDismissError: props.realtimeTalkCameraError
@@ -191,12 +192,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           : props.onDismissRealtimeTalkError,
       })
     : nothing;
-  const composerAlerts =
-    voiceError !== nothing
-      ? html`<div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-          ${voiceError}
-        </div>`
-      : nothing;
   const offlineText = props.offline
     ? props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
@@ -258,6 +253,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           activeSession?.startedAt,
           activeSession?.endedAt,
           props.progressCardHasActiveRun,
+          props.collapseTaskProgress,
         )}
       </div>`
     : nothing;
@@ -276,6 +272,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     onQueueEditCancel: props.queuedEdit?.onCancel,
     editingId: props.queuedEdit?.editingId ?? null,
     editingText: props.queuedEdit?.editingText,
+    editingSource: props.queuedEdit?.source,
     onQueueRemove: props.onQueueRemove,
   });
   const goalCard = activeSession?.goal
@@ -408,7 +405,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
-                  .value=${dictationPreviewDraft}
+                  .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
                   dir=${draftDirection}
                   ?disabled=${!canCompose}
                   ?readonly=${dictation?.locksComposer === true || goalComposer.pending}

@@ -2,7 +2,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  loadPublishedGatewayReplyDispatchRuntime,
+  PreparedModelRuntimeOwnerNotPublishedError,
+  type PreparedModelRuntimeLease,
+} from "../../agents/prepared-model-runtime.js";
+import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.owner.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
@@ -97,6 +103,7 @@ export type PreparedCronRunContext = {
   agentDir: string;
   agentSessionKey: string;
   sourceSessionKey?: string;
+  sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
   runSessionId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
@@ -130,6 +137,7 @@ export type PreparedCronRunContext = {
    */
   runTimeoutOverrideMs?: number;
   pluginRegistry?: PluginRegistry;
+  preparedModelRuntimeLease: PreparedModelRuntimeLease;
 };
 
 type CronPreparationResult =
@@ -167,6 +175,19 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
+  const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+    agentId,
+    abortSignal: input.abortSignal ?? input.signal,
+  });
+  if (
+    publishedRuntime &&
+    (publishedRuntime.pluginGeneration.pluginMetadataSnapshot !== modelOwner.metadataSnapshot ||
+      !preparedModelRuntimeConfigsMatch(publishedRuntime.config, modelOwner.config))
+  ) {
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
+      "cron model runtime generation was superseded during preparation",
+    );
+  }
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -226,6 +247,10 @@ export async function prepareCronRunContext(params: {
     forceNew: usesDetachedRunSession,
     hookExternalContentSource,
   });
+  const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
+  const sourceSessionGeneration = sourceEntry
+    ? { sessionId: sourceEntry.sessionId, lifecycleRevision: sourceEntry.lifecycleRevision }
+    : undefined;
   const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
   if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
     throw new Error(
@@ -275,6 +300,7 @@ export async function prepareCronRunContext(params: {
     },
   });
 
+  let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   try {
     const persistCronSessionRow = async ({
       storePath,
@@ -484,16 +510,12 @@ export async function prepareCronRunContext(params: {
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     const originalMessage = resolveCronAgentTurnMessage(input);
-    const sourceSessionEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
     const currentConversationContext =
-      input.job.sessionTarget === "current" &&
-      agentPayload &&
-      sourceSessionKey &&
-      sourceSessionEntry
+      input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
         ? await buildCurrentConversationContextBlock({
             agentId,
-            sourceSessionEntry,
+            sourceSessionEntry: sourceEntry,
             sourceSessionKey,
             storePath: cronSession.storePath,
           })
@@ -572,6 +594,9 @@ export async function prepareCronRunContext(params: {
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,
+      ...(provider === resolvedModelSelection.provider && resolvedModelSelection.configuredProfileId
+        ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+        : {}),
       harnessRuntime: effectiveAgentRuntime,
       agentDir,
       cronSession,
@@ -590,24 +615,34 @@ export async function prepareCronRunContext(params: {
       authProfileId,
       authProfileIdSource: authSelection?.source,
     };
-    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
-      config: cfgWithAgentDefaults,
-      workspaceDir,
-      allowGatewaySubagentBinding: true,
-      // The published owner already selected this run's metadata generation.
-      // Reloading it here re-hashes every installed plugin on each hook/cron run.
-      ...(modelOwner.metadataSnapshot ? { metadataSnapshot: modelOwner.metadataSnapshot } : {}),
-      selections: runtimePluginCandidates.map((candidate) => {
-        const runtime = resolveSessionRuntimeOverrideForProvider({
-          provider: candidate.provider,
-          entry: cronSession.sessionEntry,
-          cfg: cfgWithAgentDefaults,
-        });
-        return runtime
-          ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
-          : { provider: candidate.provider, modelId: candidate.model, agentId };
-      }),
-    });
+    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
+      {
+        // Embedded execution borrows this exact per-agent config projection.
+        // Keep the published generation pinned without dropping cron's defaults.
+        config: cfgWithAgentDefaults,
+        agentId,
+        agentDir,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
+          const runtime = resolveSessionRuntimeOverrideForProvider({
+            provider: candidate.provider,
+            entry: cronSession.sessionEntry,
+            cfg: cfgWithAgentDefaults,
+          });
+          return runtime
+            ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
+            : { provider: candidate.provider, modelId: candidate.model, agentId };
+        }),
+      },
+      {
+        catalogMode: "static",
+        ...(publishedRuntime
+          ? { pluginGeneration: publishedRuntime.pluginGeneration }
+          : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),
+        abortSignal: input.abortSignal ?? input.signal,
+      },
+    );
     const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
           cronSession,
@@ -623,6 +658,8 @@ export async function prepareCronRunContext(params: {
             owner: input.job.owner,
           }),
           scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
+          toolsAllowExecTarget: input.job.toolsAllowExecTarget,
+          toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
@@ -642,6 +679,7 @@ export async function prepareCronRunContext(params: {
         agentDir,
         agentSessionKey,
         sourceSessionKey,
+        sourceSessionGeneration,
         runSessionId,
         currentRunSessionId,
         runSessionKey,
@@ -668,10 +706,12 @@ export async function prepareCronRunContext(params: {
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
-        ...(pluginRegistry ? { pluginRegistry } : {}),
+        pluginRegistry: preparedModelRuntimeLease.snapshot.pluginRegistry,
+        preparedModelRuntimeLease,
       },
     };
   } catch (error) {
+    preparedModelRuntimeLease?.release();
     sessionWorkAdmission.release();
     throw error;
   }

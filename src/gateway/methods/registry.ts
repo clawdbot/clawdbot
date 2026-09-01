@@ -12,7 +12,6 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
-  type GatewayMethodProfileAccess,
   type GatewayMethodRegistryView,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
@@ -105,24 +104,6 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
     };
     return descriptor;
   });
-}
-
-/** Creates a plugin-owned method descriptor with plugin namespace scope normalization. */
-export function createPluginGatewayMethodDescriptor(params: {
-  pluginId: string;
-  name: string;
-  handler: GatewayMethodHandler;
-  scope?: OperatorScope;
-  profileAccess?: GatewayMethodProfileAccess;
-}): GatewayMethodDescriptor {
-  const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
-  return {
-    name: params.name,
-    handler: params.handler,
-    owner: { kind: "plugin", pluginId: params.pluginId },
-    profileAccess: params.profileAccess ?? "required",
-    scope: normalizedScope ?? ADMIN_SCOPE,
-  };
 }
 
 /** Resolves plugin method descriptors, including the legacy handler-only registry shape. */

@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { QueuedCompactionHostOptions } from "../agents/embedded-agent-runner/compact.queued-execution.js";
+import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveManualCompactionCliTarget } from "../agents/session-runtime-compat.js";
@@ -461,7 +463,11 @@ test.each([false, true])(
     });
     const sourceStamp = {
       createdVia: "operator" as const,
-      createdActor: { type: "human" as const, id: "checkpoint-source-owner" },
+      createdActor: {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "checkpoint-source-owner",
+      },
       createdAt: 123,
       ...(!required ? { sandbox: "required" as const } : {}),
     };
@@ -523,7 +529,7 @@ test.each([false, true])(
     const branch = loadSessionEntry({ sessionKey: branched.payload?.key ?? "", storePath });
     expect(branch).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", id: profile.id },
+      createdActor: { type: "human", source: "profile", id: profile.id },
       createdAt: expect.any(Number),
     });
     expect(branch?.createdAt).not.toBe(sourceStamp.createdAt);
@@ -901,6 +907,67 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   ws.close();
 });
 
+test("sessions.compact accounts against the host-accepted successor before returning", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:main";
+  const sessionId = "gateway-compaction-predecessor";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId, { lifecycleRevision: "lifecycle" }),
+    sessionKey,
+    storePath,
+  });
+  await seedTranscriptRows({ sessionId, sessionKey, storePath, totalLines: 3 });
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (_input, hostInput) => {
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    if (!entry) {
+      throw new Error("expected gateway predecessor");
+    }
+    const host = hostInput as QueuedCompactionHostOptions;
+    await acceptCompactionSuccessor({
+      currentTarget: { agentId: "main", sessionId, sessionKey, storePath },
+      expectedEntry: {
+        sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        activeWriterRunId: entry.activeWriterRunId,
+      },
+      assertActive: () => {},
+      result: {
+        ok: true,
+        compacted: true,
+        result: { sessionId: "gateway-compaction-successor", tokensBefore: 120 },
+      },
+      onCommitted: host.onCommitted,
+    });
+    return {
+      ok: true,
+      compacted: true,
+      compactionKind: "context-engine",
+      result: { sessionId: "gateway-compaction-successor", tokensAfter: 42 },
+    };
+  });
+
+  const { ws } = await openClient();
+  try {
+    const response = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+    expect(response.ok, JSON.stringify(response)).toBe(true);
+    expect(response.payload, JSON.stringify(response)).toMatchObject({
+      ok: true,
+      key: sessionKey,
+      compacted: true,
+    });
+    expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "gateway-compaction-successor",
+      lifecycleRevision: "lifecycle",
+      compactionCount: 1,
+      totalTokens: 42,
+    });
+  } finally {
+    ws.close();
+  }
+});
+
 test("sessions.compact records terminal Codex native compaction", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedSessionEntry({
@@ -1055,6 +1122,7 @@ test("sessions.compact targets the persisted native CLI session", async () => {
         cliSessionId: "native-claude-session",
         trigger: "manual",
       }),
+      expect.objectContaining({ onCommitted: expect.any(Function) }),
     );
   } finally {
     ws.close();

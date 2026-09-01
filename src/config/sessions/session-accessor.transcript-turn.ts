@@ -241,6 +241,7 @@ async function appendTranscriptTurnMessages(
       },
     );
     if (result) {
+      options.onMessageCommitted?.(result);
       appendedMessages.push(result);
     }
   }
@@ -334,8 +335,8 @@ async function persistExpectedSessionTranscriptTurn(
       sessionKey: target.sessionKey,
       sessionTarget: target,
     },
-    () =>
-      appendExpectedSessionTranscriptTurn(
+    async () => {
+      const committed = await appendExpectedSessionTranscriptTurn(
         {
           agentId,
           sessionKey: resolved.normalizedKey,
@@ -346,7 +347,9 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision:
-            options.expectedLifecycleRevision ?? inheritedWriterFence?.expectedLifecycleRevision,
+            options.expectedLifecycleRevision !== undefined
+              ? options.expectedLifecycleRevision
+              : inheritedWriterFence?.expectedLifecycleRevision,
           expectedWriterRunId:
             options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
@@ -362,7 +365,13 @@ async function persistExpectedSessionTranscriptTurn(
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
         },
-      ),
+      );
+      // Owned-write teardown can reject after commit; complete custody before that drain.
+      for (const message of committed.appendedMessages) {
+        options.onMessageCommitted?.(message);
+      }
+      return committed;
+    },
   );
 
   if (turn.rejectedReason === "session-rebound") {

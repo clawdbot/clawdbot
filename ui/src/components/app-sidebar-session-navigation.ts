@@ -66,6 +66,7 @@ import {
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
+  loadStoredSidebarSessionsHideEmptyGroups,
   loadStoredSidebarSessionsShowCron,
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
@@ -167,6 +168,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   @state() sessionsShowCron = loadStoredSidebarSessionsShowCron();
   @state() sessionsShowPreview = loadStoredSidebarSessionsShowPreview();
   @state() sessionsShowSystem = loadStoredSidebarSessionsShowSystem();
+  @state() sessionsHideEmptyGroups = loadStoredSidebarSessionsHideEmptyGroups();
   @state() sessionsStatusFilter: SidebarSessionStatusFilter =
     loadStoredSidebarSessionStatusFilter();
   @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -325,7 +327,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       commit: () => {
         this.prepareSessionNavigation(sessionKey, target.options.pathname);
         this.onNavigate?.(face, target.options);
-        this.bindLiteralSession(sessionKey, this.selectedAgentIdForSessions(), target.options);
+        this.bindLiteralSession(sessionKey, navigationState.selectedAgentId, target.options);
         return true;
       },
       face,
@@ -348,8 +350,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
           ? []
           : this.visibleSessionCatalogs().map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
-      hideEmptyOwnerFilteredGroup: (category, rowCount) =>
-        this.sessionOwnerFilterActive && Boolean(category) && rowCount === 0,
+      hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
       visibleSessionLimits: this.sessionData.visibleSessionLimits,
       sortMode: this.effectiveSessionSortMode(),
       statusFilter: this.sessionsStatusFilter,
@@ -368,9 +369,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   }
 
-  reconciledSidebarZone() {
-    const navigationState = this.getSessionNavigationState();
-    const rows = this.selectedAgentSessionRows(navigationState);
+  reconciledSidebarZone(rows = this.selectedAgentSessionRows(this.getSessionNavigationState())) {
     return buildReconciledSidebarZone({
       sidebarEntries: this.sidebarEntries,
       rows,
@@ -400,7 +399,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const navigationState = this.getSessionNavigationState();
     const rows = this.selectedAgentSessionRows(navigationState);
     const { visibleRows } = this.zonedVisibleSections(rows);
-    const { entries, sessionRows } = this.reconciledSidebarZone();
+    const { entries, sessionRows } = this.reconciledSidebarZone(rows);
     const pinnedRows = entries.flatMap((entry) => {
       const row = entry.type === "session" ? sessionRows.get(entry.key) : undefined;
       return row ? [row] : [];
@@ -465,24 +464,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       this.selectedSessionKeys = new Set();
     }
   }
-
-  readonly replaceCurrentSession = (sessionKey: string) => {
-    const row = this.findSidebarSessionByKey(sessionKey);
-    const face = resolveSessionPreferredFace(row);
-    const target = sessionNavigationTarget({
-      face,
-      sessionKey,
-      fallbackAgentId: this.selectedAgentIdForSessions(),
-      basePath: this.basePath,
-      row,
-      mainKey: this.sessionMainKey(),
-      preferenceDerivedFace: true,
-    });
-    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
-    if (isSessionRouteId(this.activeRouteId)) {
-      this.onNavigate?.(face, target.options);
-    }
-  };
 
   /** Chip switching selects the agent and refreshes its session list. */
   protected readonly expandAgent = (agentId: string) => {
@@ -622,6 +603,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       sessionData: this.sessionData,
       selectedAgentId: selected,
       statusFilter: this.sessionsStatusFilter,
+      deletionState: (key, agentId) => this.context?.sessions.deletionState(key, agentId),
       archiveVisibility: (key) => this.context?.sessions.archiveVisibility(key),
     });
     const rowsByKey = new Map(rows.map((row) => [row.key, row]));

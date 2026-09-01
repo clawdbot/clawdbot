@@ -88,23 +88,23 @@ async function settleFanOutDispatches(
   }
 }
 
-function sendAgentDispatchResult(res: ServerResponse, result: HookAgentDispatchResult) {
+function sendAgentResult(
+  res: ServerResponse,
+  result: HookAgentDispatchResult & Partial<WakeResult>,
+) {
   if (result.ok) {
-    sendJson(res, 200, { ok: true, runId: result.runId });
+    sendJson(res, 200, result);
     return;
   }
-  sendJson(res, result.statusCode, {
-    ok: false,
-    error: result.error,
-    ...(result.runId ? { runId: result.runId } : {}),
-  });
+  const { statusCode, ...body } = result;
+  sendJson(res, statusCode, body);
 }
 
-function sendFanOutDispatchResult(res: ServerResponse, settled: FanOutSettled[]) {
+function sendFanOutResult(res: ServerResponse, settled: FanOutSettled[], wake?: WakeResult) {
   const first = settled[0];
   if (settled.length === 1 && first !== undefined && first !== FAN_OUT_PENDING) {
     // Single-item batches keep the exact single-dispatch response shape.
-    sendAgentDispatchResult(res, first);
+    sendAgentResult(res, { ...first, ...wake });
     return;
   }
   const runIds: string[] = [];
@@ -120,7 +120,8 @@ function sendFanOutDispatchResult(res: ServerResponse, settled: FanOutSettled[])
     }
   }
   if (failures.length === 0 && pending === 0) {
-    sendJson(res, 200, { ok: true, runId: runIds[0], runIds, dispatched: runIds.length });
+    const result = { ok: true, runId: runIds[0], runIds, dispatched: runIds.length };
+    sendJson(res, 200, { ...result, ...wake });
     return;
   }
   // A non-2xx makes the producer redeliver the batch; already-dispatched items
@@ -131,6 +132,7 @@ function sendFanOutDispatchResult(res: ServerResponse, settled: FanOutSettled[])
     error: `hook fan-out incomplete: ${runIds.length}/${settled.length} dispatched, ${failures.length} failed, ${pending} pending`,
     runIds,
     ...(failures.length > 0 ? { errors: failures.slice(0, 5).map((entry) => entry.error) } : {}),
+    ...wake,
   });
 }
 
@@ -141,11 +143,13 @@ export type HookClientIpConfig = Readonly<{
 
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
+type WakeResult = { eventOutcome: "queued" | "coalesced" };
+
 type HookDispatchers = {
   dispatchWakeHook: (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
     agentId: string,
-  ) => void;
+  ) => WakeResult;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -396,6 +400,10 @@ export function createHooksRequestHandler(
       headers,
     });
     const now = Date.now();
+    // Later mapped validation errors must report any wake outcome that already occurred.
+    let wakeResult: WakeResult | undefined;
+    const sendHookError = (error: string) =>
+      sendJson(res, 400, { ok: false, error, ...wakeResult });
     const resolveDispatchSessionKeyOrRespond = (
       sessionKeyValue: string,
       targetAgentId: string,
@@ -406,7 +414,7 @@ export function createHooksRequestHandler(
       });
       const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
       if (allowedPrefixes && !isSessionKeyAllowedByPrefix(dispatchSessionKey, allowedPrefixes)) {
-        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+        sendHookError(getHookSessionKeyPrefixError(allowedPrefixes));
         return null;
       }
       return dispatchSessionKey;
@@ -417,23 +425,21 @@ export function createHooksRequestHandler(
     ): Extract<HookTargetAgentResolution, { ok: true }> | null => {
       const resolution = resolveEffectiveHookTargetAgentId(hooksConfig, agentId, source);
       if (!resolution.ok) {
-        sendJson(res, 400, { ok: false, error: resolution.error });
+        sendHookError(resolution.error);
         return null;
       }
       if (!isHookAgentAllowed(hooksConfig, resolution.effectiveAgentId)) {
-        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+        sendHookError(getHookAgentPolicyError());
         return null;
       }
       return resolution;
     };
-    // Dispatches one wake action; returns false when an error response was
-    // already sent. Callers own the success response so fan-out mappings can
-    // dispatch several wakes before answering once.
-    const dispatchWakeActionOrRespond = (
+    // Callers own the success response so mappings can dispatch several wakes first.
+    const dispatchWake = (
       value: Parameters<HookDispatchers["dispatchWakeHook"]>[0],
       targetAgentId: string,
       source: HookSessionKeySource,
-    ): boolean => {
+    ): WakeResult | null => {
       let dispatchSessionKey: string | undefined;
       if (value.sessionKey) {
         const sessionKey = resolveHookSessionKey({
@@ -442,27 +448,20 @@ export function createHooksRequestHandler(
           sessionKey: value.sessionKey,
         });
         if (!sessionKey.ok) {
-          sendJson(res, 400, { ok: false, error: sessionKey.error });
-          return false;
+          sendHookError(sessionKey.error);
+          return null;
         }
         const resolvedSessionKey = resolveDispatchSessionKeyOrRespond(
           sessionKey.value,
           targetAgentId,
         );
         if (resolvedSessionKey === null) {
-          return false;
+          return null;
         }
         dispatchSessionKey = resolvedSessionKey;
       }
-      dispatchWakeHook(
-        {
-          text: value.text,
-          mode: value.mode,
-          ...(dispatchSessionKey ? { sessionKey: dispatchSessionKey } : {}),
-        },
-        targetAgentId,
-      );
-      return true;
+      const dispatchValue = { ...value, sessionKey: dispatchSessionKey };
+      return dispatchWakeHook(dispatchValue, targetAgentId);
     };
 
     if (subPath === "wake") {
@@ -475,10 +474,11 @@ export function createHooksRequestHandler(
       if (!target) {
         return true;
       }
-      if (!dispatchWakeActionOrRespond(normalized.value, target.effectiveAgentId, "request")) {
+      const directWakeResult = dispatchWake(normalized.value, target.effectiveAgentId, "request");
+      if (!directWakeResult) {
         return true;
       }
-      sendJson(res, 200, { ok: true, mode: normalized.value.mode });
+      sendJson(res, 200, { ok: true, mode: normalized.value.mode, ...directWakeResult });
       return true;
     }
 
@@ -542,7 +542,7 @@ export function createHooksRequestHandler(
       });
       const replay = resolveHookReplay(replayKey, now);
       if (replay) {
-        sendAgentDispatchResult(res, await replay);
+        sendAgentResult(res, await replay);
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -563,7 +563,7 @@ export function createHooksRequestHandler(
           externalContentSource: "webhook",
         }),
       );
-      sendAgentDispatchResult(res, dispatched);
+      sendAgentResult(res, dispatched);
       return true;
     }
 
@@ -605,7 +605,7 @@ export function createHooksRequestHandler(
           ): (() => HookAgentDispatchResult | Promise<HookAgentDispatchResult>) | null => {
             const channel = resolveHookChannel(action.channel);
             if (!channel) {
-              sendJson(res, 400, { ok: false, error: getHookChannelError() });
+              sendHookError(getHookChannelError());
               return null;
             }
             const deliver = resolveHookDeliver(action.deliver);
@@ -621,11 +621,9 @@ export function createHooksRequestHandler(
               !action.sessionKey &&
               !hooksConfig.sessionPolicy.defaultSessionKey
             ) {
-              sendJson(res, 400, {
-                ok: false,
-                error:
-                  "sessionKey or hooks.defaultSessionKey is required when mapped hook sessionMode is persistent",
-              });
+              sendHookError(
+                "sessionKey or hooks.defaultSessionKey is required when mapped hook sessionMode is persistent",
+              );
               return null;
             }
             const sessionKey = resolveHookSessionKey({
@@ -634,7 +632,7 @@ export function createHooksRequestHandler(
               sessionKey: action.sessionKey,
             });
             if (!sessionKey.ok) {
-              sendJson(res, 400, { ok: false, error: sessionKey.error });
+              sendHookError(sessionKey.error);
               return null;
             }
             const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -707,9 +705,9 @@ export function createHooksRequestHandler(
           };
 
           // One pass over every action so a per-item transform emitting mixed
-          // kinds loses nothing: wakes enqueue immediately (no replay
+          // kinds loses nothing: wakes dispatch immediately (no replay
           // identity — a producer retry after a partial agent failure
-          // re-enqueues them), agents collect for dispatch.
+          // dispatches them again), agents collect for dispatch.
           const dispatches: Array<
             () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>
           > = [];
@@ -720,13 +718,16 @@ export function createHooksRequestHandler(
               if (!target) {
                 return true;
               }
-              const dispatched = dispatchWakeActionOrRespond(
+              const dispatched = dispatchWake(
                 { text: action.text, mode: action.mode, sessionKey: action.sessionKey },
                 target.effectiveAgentId,
                 action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
               );
               if (!dispatched) {
                 return true;
+              }
+              if (!wakeResult || dispatched.eventOutcome === "queued") {
+                wakeResult = dispatched;
               }
               wakeMode = action.mode;
               continue;
@@ -738,22 +739,20 @@ export function createHooksRequestHandler(
             dispatches.push(prepared);
           }
           if (dispatches.length === 0) {
-            sendJson(res, 200, { ok: true, mode: wakeMode ?? "now" });
+            sendJson(res, 200, { ok: true, mode: wakeMode ?? "now", ...wakeResult });
             return true;
           }
           if (!mapped.fanout) {
             // Non-fanout mappings produce exactly one action.
             const dispatched = await dispatches[0]!();
-            sendAgentDispatchResult(res, dispatched);
+            sendAgentResult(res, { ...dispatched, ...wakeResult });
             return true;
           }
-          sendFanOutDispatchResult(
-            res,
-            await settleFanOutDispatches(
-              dispatches.map((dispatch) => Promise.resolve(dispatch())),
-              fanoutResponseDeadlineMs,
-            ),
+          const settled = await settleFanOutDispatches(
+            dispatches.map((dispatch) => Promise.resolve(dispatch())),
+            fanoutResponseDeadlineMs,
           );
+          sendFanOutResult(res, settled, wakeResult);
           return true;
         }
       } catch (err) {

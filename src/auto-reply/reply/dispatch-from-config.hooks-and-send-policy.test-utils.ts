@@ -59,6 +59,30 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("skips claiming hooks when admitted session settings are restrictive", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "unsafe" });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "embedded reply" }));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        admittedSessionSettings: {
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        },
+      },
+    });
+
+    expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "embedded reply" });
+    expect(result.queuedFinal).toBe(true);
+  });
+
   it("silently short-circuits when hook returns handled without text", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
@@ -1998,66 +2022,97 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("admits an authorized hard reset without pre-unarchiving the restart tombstone", async () => {
-    setNoAbort();
-    const sessionId = "restart-tombstone-session";
-    const sessionKey = "agent:main:matrix:channel:room-a";
-    const archivedAt = Date.now() - 1_000;
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      archivedAt,
-      status: "failed",
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: {
-          reason: "automatic recovery exhausted",
-          recoveredSessionId: "dashboard-successor",
-          recoveredSessionKey: "agent:main:dashboard:successor",
+  it.each<{
+    name: string;
+    commands?: OpenClawConfig["commands"];
+    admitted: boolean;
+  }>([
+    { name: "ordinary channel-authorized reset", admitted: true },
+    {
+      name: "channel-admitted non-owner reset",
+      commands: { ownerAllowFrom: ["owner"] },
+      admitted: true,
+    },
+    {
+      name: "explicit command denial remains authoritative",
+      commands: { ownerAllowFrom: ["owner"], allowFrom: { matrix: [] } },
+      admitted: false,
+    },
+  ])(
+    "gates hard reset admission without pre-unarchiving the tombstone: $name",
+    async ({ commands, admitted }) => {
+      setNoAbort();
+      const sessionId = "restart-tombstone-session";
+      const sessionKey = "agent:main:matrix:channel:room-a";
+      const archivedAt = Date.now() - 1_000;
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        archivedAt,
+        status: "failed",
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: {
+            reason: "automatic recovery exhausted",
+            recoveredSessionId: "dashboard-successor",
+            recoveredSessionKey: "agent:main:dashboard:successor",
+          },
         },
-      },
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => {
-      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
-      expect(sessionStoreMocks.currentEntry).toMatchObject({
-        mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+      };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => {
+        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+        expect(sessionStoreMocks.currentEntry).toMatchObject({
+          mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+        });
+        return { text: "reset handled" } satisfies ReplyPayload;
       });
-      return { text: "reset handled" } satisfies ReplyPayload;
-    });
-    const ctx = buildTestCtx({
-      Provider: "matrix",
-      Surface: "matrix",
-      OriginatingChannel: "matrix",
-      OriginatingTo: "!room-a:example.test",
-      ChatType: "channel",
-      From: "@owner:example.test",
-      To: "!room-a:example.test",
-      AccountId: "default",
-      SessionKey: sessionKey,
-      Body: "/new",
-      CommandBody: "/new",
-      RawBody: "/new",
-      CommandSource: "text",
-      CommandAuthorized: true,
-      InboundAccessAuthorized: true,
-      InboundEventKind: "user_request",
-      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
-    });
+      const ctx = buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        OriginatingChannel: "matrix",
+        OriginatingTo: "!room-a:example.test",
+        ChatType: "channel",
+        SenderId: "guest",
+        From: "@guest:example.test",
+        To: "!room-a:example.test",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "/new",
+        CommandBody: "/new",
+        RawBody: "/new",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+      });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
+      const tombstoneBefore = structuredClone(sessionStoreMocks.currentEntry);
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: { ...emptyConfig, commands },
+        dispatcher,
+        replyResolver,
+      });
+      if (!admitted) {
+        await expect(dispatch).rejects.toMatchObject({
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        });
+        expect(sessionStoreMocks.currentEntry).toEqual(tombstoneBefore);
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await dispatch;
 
-    expect(result.queuedFinal).toBe(true);
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset handled" });
-  });
+      expect(result.queuedFinal).toBe(true);
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset handled" });
+    },
+  );
 
   it("admits an authorized native reset only when it owns the tombstoned source", async () => {
     setNoAbort();
@@ -2196,7 +2251,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     // Binding is still tracked (touch runs before the gate)...
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-deny");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-deny",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     // ...but the plugin claim hook MUST NOT be invoked under deny — the
     // plugin can't be trusted to honor suppressDelivery on its outbound path.
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
@@ -2347,7 +2406,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
         ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
       });
-      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
+      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+        params.bindingId,
+        undefined,
+        expect.objectContaining(params.conversation),
+      );
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
         "openclaw-codex-app-server",
         expect.objectContaining({

@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import {
@@ -9,6 +10,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   loadSessionEntry,
+  onSessionIdentityMutation,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
@@ -28,9 +30,97 @@ afterEach(() => {
 });
 
 describe("SQLite session row persistence", () => {
-  it.each(["async", "sync"] as const)(
-    "protects required provenance during %s replacement",
+  it.each(["committed", "declined", "revoked"] as const)(
+    "records only committed owner facts before cancellation observers (%s)",
     async (mode) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-commit-fact-")),
+      };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:commit-fact" };
+      const skillsSnapshot = {
+        prompt: "Prepared session skills.",
+        skills: [{ name: "existing", requiredEnv: ["EXISTING_ENV"] }],
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "predecessor",
+        updatedAt: 10,
+        skillsSnapshot,
+      });
+      const controller = new AbortController();
+      const cancelled = new Error("cancelled after identity publication");
+      const revoked = new Error("writer revoked before commit");
+      const facts: InternalSessionEntry[] = [];
+      const observed: Array<{ acceptedId?: string; persistedId?: string }> = [];
+      const unsubscribe = onSessionIdentityMutation((mutation) => {
+        if (mutation.previous.sessionId !== "predecessor") {
+          return;
+        }
+        observed.push({
+          acceptedId: facts.at(-1)?.sessionId,
+          persistedId: loadSessionEntry(scope)?.sessionId,
+        });
+        controller.abort(cancelled);
+      });
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      try {
+        const options = {
+          onCommitted: (entry: InternalSessionEntry) => {
+            facts.push(entry);
+          },
+          assertCommitAllowed: () => {
+            if (mode === "revoked") {
+              throw revoked;
+            }
+          },
+        };
+        const pending = patchSessionEntryCore(
+          scope,
+          () => (mode === "declined" ? null : { sessionId: "successor" }),
+          options,
+        );
+        if (mode === "revoked") {
+          await expect(pending).rejects.toBe(revoked);
+        } else {
+          await pending;
+        }
+        if (mode === "committed") {
+          expect(facts).toHaveLength(1);
+          expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
+          expect(controller.signal.reason).toBe(cancelled);
+          // Only caller inputs and retained outputs need copies; decoded identity rows are owned.
+          expect(
+            clone.mock.calls.filter(
+              ([entry]) =>
+                isRecord(entry) &&
+                (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
+            ).length,
+          ).toBeLessThanOrEqual(4);
+          const retainedSkills = facts[0]?.skillsSnapshot?.skills;
+          expect(retainedSkills).toEqual(skillsSnapshot.skills);
+          retainedSkills?.push({ name: "observer-only" });
+          expect((await pending)?.skillsSnapshot).toEqual(skillsSnapshot);
+          expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
+        } else {
+          expect(facts).toEqual([]);
+          expect(observed).toEqual([]);
+          expect(loadSessionEntry(scope)?.sessionId).toBe("predecessor");
+        }
+      } finally {
+        clone.mockRestore();
+        unsubscribe();
+      }
+    },
+  );
+
+  it.each([
+    { mode: "async", sandbox: "required", source: "profile" },
+    { mode: "sync", sandbox: "required", source: "unknown" },
+    { mode: "async", sandbox: undefined, source: "profile" },
+    { mode: "sync", sandbox: undefined, source: "channel" },
+  ] as const)(
+    "protects $source provenance during $mode replacement (sandbox=$sandbox)",
+    async ({ mode, sandbox, source }) => {
       const env = {
         ...process.env,
         OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-stamp-")),
@@ -38,9 +128,9 @@ describe("SQLite session row persistence", () => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:stamp" };
       const stamp = {
         createdVia: "operator" as const,
-        createdActor: { type: "human" as const, id: "profile-creator" },
+        createdActor: { type: "human" as const, source, id: "profile-creator" },
         createdAt: 10,
-        sandbox: "required" as const,
+        ...(sandbox ? { sandbox } : {}),
       };
       await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
       const replacement: InternalSessionEntry = {
@@ -55,7 +145,19 @@ describe("SQLite session row persistence", () => {
           await patchSessionEntryCore(scope, () => replacement, { replaceEntry: true }),
         ).toMatchObject(stamp);
       } else {
-        replaceSessionEntrySync(scope, replacement);
+        const clone = vi.spyOn(globalThis, "structuredClone");
+        try {
+          replaceSessionEntrySync(scope, replacement);
+          expect(
+            clone.mock.calls.filter(
+              ([entry]) =>
+                isRecord(entry) &&
+                (entry.sessionId === "original" || entry.sessionId === "replacement"),
+            ),
+          ).toHaveLength(0);
+        } finally {
+          clone.mockRestore();
+        }
       }
       expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
       const row = openOpenClawAgentDatabase({ agentId: "main", env })
@@ -89,7 +191,7 @@ describe("SQLite session row persistence", () => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:fallback" };
       const stamp = {
         createdVia: "operator" as const,
-        createdActor: { type: "human" as const, id: "profile-creator" },
+        createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
         createdAt: 20,
         sandbox: "required" as const,
       };
@@ -102,7 +204,7 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it("keeps unstamped replacement semantics unchanged", async () => {
+  it("does not mint creator authority when replacing an unstamped node", async () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-unstamped-")),
@@ -116,11 +218,17 @@ describe("SQLite session row persistence", () => {
     });
     await patchSessionEntryCore(
       scope,
-      () => ({ sessionId: "replacement", updatedAt: 20, createdVia: "plugin" }),
+      () => ({
+        sessionId: "replacement",
+        updatedAt: 20,
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "new-profile" },
+      }),
       { replaceEntry: true },
     );
     const persisted = loadSessionEntry(scope);
-    expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "plugin" });
+    expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
+    expect(persisted?.createdActor).toBeUndefined();
     expect(persisted).not.toHaveProperty("sandbox");
     expect(persisted).not.toHaveProperty("label");
   });

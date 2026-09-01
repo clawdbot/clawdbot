@@ -5,7 +5,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
+import {
+  isSessionFileEntry,
+  parseSessionFileEntriesWithWarnings,
+} from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -107,17 +110,6 @@ function normalizeCompleteSessionTarget(
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function isSessionFileEntry(value: unknown): value is FileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
 }
 
 function formatSessionParseWarnings(

@@ -631,6 +631,12 @@ Related:
 
 Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit.
 
+Startup automatically migrates deterministic legacy keys in eligible single-file
+configs and continues only if the entire result validates, including plugins. It
+keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed
+configs, configs written by a newer version, and configs that still fail validation
+require operator repair. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
+
 ```bash
 openclaw logs --follow
 openclaw config file
@@ -650,10 +656,10 @@ Look for:
 <AccordionGroup>
   <Accordion title="What happened">
     - The config did not validate during startup, hot reload, or an OpenClaw-owned write.
-    - Gateway startup fails closed instead of rewriting `openclaw.json`.
+    - Gateway startup leaves `openclaw.json` unchanged and fails closed when safe legacy-key migration cannot produce a fully valid config.
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
-    - `openclaw doctor --fix` owns repair. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
+    - `openclaw doctor --fix` owns repairs beyond automatic legacy-key migration. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
     - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
@@ -677,10 +683,13 @@ Look for:
 
   </Accordion>
   <Accordion title="Fix options">
+    An interactive startup can offer to run `openclaw doctor --fix` and retry once when automatic legacy-key migration is not enough. Non-interactive startup prints the repair command instead.
+
     1. Run `openclaw doctor --fix` to let doctor repair prefixed/clobbered config or restore last-known-good.
     2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
     3. Run `openclaw config validate` before restarting.
     4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.
+
   </Accordion>
 </AccordionGroup>
 

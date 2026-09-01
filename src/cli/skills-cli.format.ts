@@ -312,12 +312,13 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const commandVisible = report.skills.filter((s) => s.commandVisible);
   const disabled = report.skills.filter((s) => s.disabled);
   const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
-  const agentFiltered = report.skills.filter((s) => s.eligible && s.blockedByAgentFilter);
+  // Agent exclusion is independent of readiness; report both when a skill needs setup.
+  const agentFiltered = report.skills.filter((s) => s.blockedByAgentFilter);
   const promptHidden = report.skills.filter(
     (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
   const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.blockedByAgentFilter,
+    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
   const agentId = report.agentId ?? opts.agent;
 

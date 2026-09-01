@@ -11,15 +11,15 @@ enum ExecHostExecutor {
         case let .failure(error):
             return self.errorResponse(error)
         }
-        let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(request.cwd)
-        guard let approvedCwdSnapshot = ExecCommandResolution.captureApprovalCwdSnapshot(effectiveCwd)
+        guard let approvedCwdSnapshot = ExecCommandResolution.captureApprovalCwdSnapshot(request.cwd)
         else {
             return self.errorResponse(
                 code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
-                reason: "approval-required")
+                message: "Working directory does not exist, is inaccessible, or is not a directory.",
+                reason: "cwd-unavailable")
         }
 
+        let effectiveCwd = approvedCwdSnapshot.path
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,

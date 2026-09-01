@@ -340,7 +340,9 @@ export class GatewayProtocolClient<TPlan> {
     this.connectRequestSent = true;
     void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan))
       .then((hello) => {
-        if (!this.isActive(socket, generation)) {
+        // Closing transports remain current until their close callback runs;
+        // a late response must not publish readiness or reset reconnect backoff.
+        if (!this.isActive(socket, generation) || !socket.isOpen()) {
           return;
         }
         this.helloReceived = true;

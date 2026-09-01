@@ -13,6 +13,7 @@ openclaw status
 openclaw status --all
 openclaw status --deep
 openclaw status --usage
+openclaw status --all --usage
 openclaw status --usage --agent work
 ```
 
@@ -29,6 +30,11 @@ openclaw status --usage --agent work
 Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
+
+`--deep` and `--all` also show delivery queue warnings for dead-lettered messages
+and pressured inbound lanes. These warnings include pending, claimed, and blocked
+message counts even when a channel connection is healthy. See
+[Queue warnings](/gateway/health#queue-warnings).
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
 `not checked` instead of unavailable when it skips memory inspection. Heavy
@@ -65,6 +71,7 @@ and `openclaw memory status --deep`.
 ## Usage and quota
 
 - `--usage` prints normalized provider usage windows as `X% left`.
+  It also adds usage snapshots to `--all`; `--agent` keeps the same usage-only scope.
 - In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
   `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
   inspect another agent; without either owner, OpenClaw does not guess one

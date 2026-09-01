@@ -1,6 +1,7 @@
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createEventWebPushDelivery } from "./event-web-push.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
@@ -26,6 +27,7 @@ export function createGatewayConnectionState(params: {
   };
   const sessionEventSubscribers = createSessionEventSubscriberRegistry(isConnectionActive);
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
+  const eventWebPush = createEventWebPushDelivery({ getRuntimeConfig: loadRuntimeConfig });
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -40,6 +42,7 @@ export function createGatewayConnectionState(params: {
         event,
         payload,
       }),
+    onBroadcast: (event, payload, opts) => eventWebPush.handleEvent(event, payload, opts),
   });
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, import("./server-shared.js").DedupeEntry>();

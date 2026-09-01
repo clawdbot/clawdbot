@@ -554,7 +554,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) {
     return;
   }
-  // readResponseText may finish after an abort races with body reading. Recheck
+  // Async fetch, provider, and payload work can finish after an abort. Recheck
   // before wrapping, caching, or returning content from a canceled tool call.
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
@@ -697,20 +697,28 @@ async function buildWebFetchPayload(params: {
 async function maybeFetchProviderWebFetchPayload(
   params: WebFetchRuntimeParams & {
     urlToFetch: string;
-    cacheKey: string;
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
   const providerFallback = await params.resolveProviderFallback();
+  throwIfFetchAborted(params.signal);
   if (!providerFallback) {
     return null;
   }
-  const rawPayload = await providerFallback.definition.execute({
-    url: params.urlToFetch,
-    extractMode: params.extractMode,
-    maxChars: params.maxChars,
-  });
-  const payload = await buildWebFetchPayload({
+  let rawPayload: unknown;
+  try {
+    rawPayload = await providerFallback.definition.execute(
+      { url: params.urlToFetch, extractMode: params.extractMode, maxChars: params.maxChars },
+      { signal: params.signal },
+    );
+  } catch (error) {
+    // A provider failure landing after cancellation must surface the caller's abort
+    // reason, not a late error from fallback work the caller already abandoned.
+    throwIfFetchAborted(params.signal);
+    throw error;
+  }
+  throwIfFetchAborted(params.signal);
+  return await buildWebFetchPayload({
     providerId: providerFallback.provider.id,
     payload: rawPayload,
     requestedUrl: params.url,
@@ -718,11 +726,10 @@ async function maybeFetchProviderWebFetchPayload(
     maxChars: params.maxChars,
     tookMs: params.tookMs,
   });
-  writeCache(FETCH_CACHE, params.cacheKey, payload, params.cacheTtlMs);
-  return payload;
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  throwIfFetchAborted(params.signal);
   const ssrfPolicy = params.ssrfPolicy;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
   let parsedUrl: URL;
@@ -750,14 +757,25 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       ...cacheDiscriminators,
     ].join(":"),
   );
-  const cached = readCache(FETCH_CACHE, cacheKey);
+  const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
 
+  // Preserve the direct fetch's rejection; replacing it with signal.reason would
+  // discard the transport's own error detail.
+  const payload = await fetchWebPayload(params);
+  // Publish only after guard release: cancellation or cleanup failure must not
+  // leave a successful cache entry for a call that never returned its content.
+  throwIfFetchAborted(params.signal);
+  writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  return payload;
+}
+
+async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const start = Date.now();
   let res: Response;
-  let release: (() => Promise<void>) | null;
+  let release: () => Promise<void>;
   let finalUrl = params.url;
   try {
     const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
@@ -767,8 +785,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
       lookupFn: params.lookupFn,
-      useEnvProxy: useTrustedEnvProxy,
-      policy: ssrfPolicy,
+      useEnvProxy: params.useTrustedEnvProxy,
+      policy: params.ssrfPolicy,
       capture: params.headers
         ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
         : undefined,
@@ -791,16 +809,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       );
     }
   } catch (error) {
-    if (error instanceof SsrFBlockedError) {
-      throw error;
-    }
-    if (params.signal?.aborted) {
+    if (error instanceof SsrFBlockedError || params.signal?.aborted) {
       throw error;
     }
     const payload = await maybeFetchProviderWebFetchPayload({
       ...params,
       urlToFetch: finalUrl,
-      cacheKey,
       tookMs: Date.now() - start,
     });
     if (payload) {
@@ -811,13 +825,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
   try {
     if (!res.ok) {
-      if (params.signal?.aborted) {
-        throw params.signal.reason instanceof Error ? params.signal.reason : new Error("aborted");
-      }
+      throwIfFetchAborted(params.signal);
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
         urlToFetch: params.url,
-        cacheKey,
         tookMs: Date.now() - start,
       });
       if (payload) {
@@ -871,11 +882,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             payload = await maybeFetchProviderWebFetchPayload({
               ...params,
               urlToFetch: finalUrl,
-              cacheKey,
               tookMs: Date.now() - start,
             });
           } catch {
-            payload = null;
+            throwIfFetchAborted(params.signal);
           }
           if (payload) {
             return payload;
@@ -900,7 +910,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         const payload = await maybeFetchProviderWebFetchPayload({
           ...params,
           urlToFetch: finalUrl,
-          cacheKey,
           tookMs: Date.now() - start,
         });
         if (payload) {
@@ -920,7 +929,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
     }
 
-    const payload = await buildWebFetchPayload({
+    return await buildWebFetchPayload({
       payload: {
         finalUrl,
         status: res.status,
@@ -936,18 +945,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxChars: params.maxChars,
       tookMs: Date.now() - start,
     });
-    throwIfFetchAborted(params.signal);
-    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
   } finally {
     if (!res.bodyUsed) {
       // Fallbacks and provider failures can abandon the upstream stream. Cancel
       // without awaiting so a stalled cancellation cannot block guard release.
       void res.body?.cancel().catch(() => undefined);
     }
-    if (release) {
-      await release();
-    }
+    await release();
   }
 }
 

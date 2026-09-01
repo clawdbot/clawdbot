@@ -133,7 +133,7 @@ export function createContext(
       },
       refreshList: vi.fn(),
     },
-    agentSelection: { state: { selectedId: "main" } },
+    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     channels: {
       state: channelState,
       refresh: refreshChannels,

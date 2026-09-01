@@ -1,12 +1,21 @@
-// Brave tests cover brave web search provider plugin behavior.
 import fs from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
 import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
+import {
+  mapBraveLlmContextResults,
+  normalizeBraveCountry,
+  normalizeBraveLanguageParams,
+  resolveBraveMode,
+} from "./brave-web-search-provider.shared.js";
 
 const loggerInfoMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
@@ -39,6 +48,7 @@ const braveManifest = JSON.parse(
 };
 
 afterAll(() => {
+  vi.doUnmock("node:dns/promises");
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.resetModules();
 });
@@ -271,7 +281,7 @@ describe("brave web search provider", () => {
 
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
-      testing.normalizeBraveLanguageParams({
+      normalizeBraveLanguageParams({
         search_lang: "en-US",
         ui_lang: "ja",
       }),
@@ -279,11 +289,11 @@ describe("brave web search provider", () => {
       search_lang: "jp",
       ui_lang: "en-US",
     });
-    expect(testing.normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
+    expect(normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
       search_lang: "tr",
       ui_lang: "tr-TR",
     });
-    expect(testing.normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
+    expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
       search_lang: "en",
       ui_lang: "en-US",
     });
@@ -291,27 +301,27 @@ describe("brave web search provider", () => {
 
   it("flags invalid brave language fields", () => {
     expect(
-      testing.normalizeBraveLanguageParams({
+      normalizeBraveLanguageParams({
         search_lang: "xx",
       }),
     ).toEqual({ invalidField: "search_lang" });
-    expect(testing.normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
+    expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
       invalidField: "search_lang",
     });
-    expect(testing.normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
+    expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
       invalidField: "ui_lang",
     });
   });
 
   it("normalizes Brave country codes and falls back unsupported values to ALL", () => {
-    expect(testing.normalizeBraveCountry("de")).toBe("DE");
-    expect(testing.normalizeBraveCountry(" VN ")).toBe("ALL");
-    expect(testing.normalizeBraveCountry("")).toBeUndefined();
+    expect(normalizeBraveCountry("de")).toBe("DE");
+    expect(normalizeBraveCountry(" VN ")).toBe("ALL");
+    expect(normalizeBraveCountry("")).toBeUndefined();
   });
 
   it("defaults brave mode to web unless llm-context is explicitly selected", () => {
-    expect(testing.resolveBraveMode()).toBe("web");
-    expect(testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+    expect(resolveBraveMode()).toBe("web");
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
   });
 
   it("accepts llm-context in the Brave plugin config schema", () => {
@@ -491,6 +501,59 @@ describe("brave web search provider", () => {
     expect(fetchRequestUrl(mockFetch, 1).pathname).toBe("/proxy-two/res/v1/web/search");
   });
 
+  it.each([
+    { mode: "web", cacheTtlMinutes: 0 },
+    { mode: "web", cacheTtlMinutes: 1 },
+    { mode: "llm-context", cacheTtlMinutes: 0 },
+    { mode: "llm-context", cacheTtlMinutes: 1 },
+  ])("honors current $mode cache TTL $cacheTtlMinutes", async ({ mode, cacheTtlMinutes }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    let requestCount = 0;
+    const mockFetch = vi.fn(async () => {
+      const result = { url: `https://example.com/result-${++requestCount}` };
+      return jsonResponse(
+        mode === "web" ? { web: { results: [result] } } : { grounding: { generic: [result] } },
+      );
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+    const cachedTool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode },
+      searchConfig: { cacheTtlMinutes: 15 },
+    });
+    const currentTool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode },
+      searchConfig: { cacheTtlMinutes },
+    });
+    const args = { query: `brave cache TTL ${mode} ${cacheTtlMinutes}` };
+
+    try {
+      const original = await cachedTool.execute(args);
+      expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+      expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      clock.mockReturnValue(now + 60_000);
+      const fresh = await currentTool.execute(args);
+      expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+      expect(fresh).not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        expect(await currentTool.execute(args)).toMatchObject({
+          results: [{ url: "https://example.com/result-3" }],
+        });
+        expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("rejects invalid Brave mode values in the plugin config schema", () => {
     if (!braveManifest.configSchema) {
       throw new Error("Expected Brave manifest config schema");
@@ -523,7 +586,7 @@ describe("brave web search provider", () => {
 
   it("maps llm-context results into wrapped source entries", () => {
     expect(
-      testing.mapBraveLlmContextResults({
+      mapBraveLlmContextResults({
         grounding: {
           generic: [
             {

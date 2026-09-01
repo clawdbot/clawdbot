@@ -115,6 +115,8 @@ vi.mock("../../../config/sessions.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  listSessionEntriesReadOnly: () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({

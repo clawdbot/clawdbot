@@ -27,13 +27,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "custodian panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "dashboard document"
     },
     {
@@ -287,41 +280,6 @@
       "name": "text",
       "path": "ui/src/pages/about/view.ts",
       "text": "v"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateConfiguredUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateRateLimited"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnverified"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateVerified"
     },
     {
       "count": 1,

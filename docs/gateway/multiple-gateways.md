@@ -4,6 +4,7 @@ read_when:
   - Running more than one Gateway on the same machine
   - You need isolated config/state/ports per Gateway
 title: "Multiple gateways"
+doc-schema-version: 1
 ---
 
 Most setups need one Gateway - a single Gateway handles multiple messaging connections and agents. Run separate Gateways with isolated profiles/ports only when you need stronger isolation or redundancy (e.g., a rescue bot).
@@ -94,6 +95,10 @@ Keep these unique per Gateway instance:
 Sharing any of these causes config, state, or port conflicts. Gateway startup
 enforces unique state-directory ownership even when
 `OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config singleton.
+
+<Warning>
+`OPENCLAW_STATE_DIR` alone does not isolate a managed Gateway service. Service names follow the profile, not the state directory. For onboarding or service-install tests, use a dedicated named profile and unique ports, or an isolated machine. Do not install or restart the default service against a temporary state directory.
+</Warning>
 
 ## Port mapping (derived)
 

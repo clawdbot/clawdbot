@@ -49,6 +49,10 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
       if (kind) {
         attachment.kind = kind;
       }
+      const fileName = normalizeOptionalString(fact.fileName);
+      if (fileName) {
+        attachment.fileName = fileName;
+      }
       if (fact.workspaceDir) {
         attachment.workspaceDir = fact.workspaceDir;
       }

@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
@@ -375,6 +376,24 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
       : props.busy
         ? t("pluginsPage.working")
         : t("pluginConsent.enableNamed", { name });
+  const confirmUnavailable =
+    !props.canMutate || props.busy || props.loading || Boolean(props.error) || !inspection;
+  const confirm = html`
+    <button
+      type="button"
+      class="btn primary"
+      ?disabled=${confirmUnavailable && !props.mutationBlockedReason}
+      aria-disabled=${!props.canMutate ? "true" : nothing}
+      @click=${() => {
+        if (confirmUnavailable) {
+          return;
+        }
+        props.onConfirm();
+      }}
+    >
+      ${action}
+    </button>
+  `;
   return html`
     <openclaw-modal-dialog
       label=${name}
@@ -413,19 +432,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
           <button type="button" class="btn" @click=${props.onCancel}>
             ${t("pluginsPage.cancel")}
           </button>
-          <button
-            type="button"
-            class="btn primary"
-            title=${props.mutationBlockedReason ?? ""}
-            ?disabled=${!props.canMutate ||
-            props.busy ||
-            props.loading ||
-            Boolean(props.error) ||
-            !inspection}
-            @click=${props.onConfirm}
-          >
-            ${action}
-          </button>
+          ${renderReasonedDisabledControl(props.mutationBlockedReason, confirm)}
         </footer>
       </section>
     </openclaw-modal-dialog>

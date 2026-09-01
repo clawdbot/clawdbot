@@ -39,13 +39,18 @@ function getSilentTrailingRegex(token: string): RegExp {
   const escaped = escapeRegExp(token);
   // Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
   // can be visible text. Consume repeated tokens only after a real delimiter.
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*$`, "i");
+  // Start at the end so ordinary replies never scan for an absent suffix.
+  const regex = new RegExp(`$(?<=((?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*))`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }
 
 function stripEdgePunctuation(text: string): string {
-  return text.replace(/^\p{P}+|\p{P}+$/gu, "");
+  const start = text.match(/^\p{P}+/u)?.[0].length ?? 0;
+  // Anchor at the end before matching backwards, so ordinary replies do not
+  // get scanned in full while searching for a punctuation suffix.
+  const tail = text.match(/$(?<=(\p{P}+))/u)?.[1]?.length ?? 0;
+  return text.slice(start, text.length - tail);
 }
 
 /** Returns true only for token-only silent replies. */
@@ -234,7 +239,8 @@ export function isSilentReplyPayloadText(
  * If the result is empty, the entire message should be treated as silent.
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
-  return text.replace(getSilentTrailingRegex(token), "").trim();
+  const tail = getSilentTrailingRegex(token).exec(text)?.[1]?.length ?? 0;
+  return text.slice(0, text.length - tail).trim();
 }
 
 const silentLeadingRegexByToken = new Map<string, RegExp>();

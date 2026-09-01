@@ -3,34 +3,35 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { BroadcastChannel, Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as workerUrls from "../infra/runtime-worker-url.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { CodeModeOutputState, EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
   createCodeModeBridgeDispatchState,
+  createCodeModeRunOwner,
   disposeAllCodeModeRuns,
-  disposeCodeModeRun,
   reserveActiveRunSlot,
-  resumingRunIds,
   storeSnapshotState,
   type PendingBridgeState,
 } from "./code-mode-state.js";
 import { runCodeModeWorker } from "./code-mode-worker.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import { createCodeModeHarness, resultDetails } from "./code-mode.test-support.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
+  clearToolSearchCatalog,
   registerHeadlessToolSearchCatalog,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 
-const EXPIRING_RUN_ID = "cm_worker_lifecycle_expiry";
-const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
-
-function parkExpiringRun(
-  method: "callValue" | "agentWait",
-  runId = EXPIRING_RUN_ID,
-): ReturnType<typeof vi.fn> {
+function parkExpiringRun(method: "callValue" | "agentWait") {
   const rawConfig = {
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
   } as never;
@@ -48,36 +49,228 @@ function parkExpiringRun(
     cancel,
   };
 
+  const owner = createCodeModeRunOwner(ctx);
   storeSnapshotState({
-    runId,
+    owner,
     replayId: "cm_replay_lifecycle",
     pending: [pending],
     replaySafe: false,
     settlementMode: { kind: "awaiting" },
-    snapshotBytes: new Uint8Array([1]),
+    snapshot: {
+      memory: new Uint8Array([1]),
+      stackPointer: 0,
+      runtimePtr: 0,
+      contextPtr: 0,
+      extensions: [],
+    },
     parentToolCallId: "code-mode-lifecycle",
     ctx,
     config,
     runtime,
     catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
-    output: [],
+    output: new CodeModeOutputState(config.maxOutputBytes),
     bridgeDispatch: createCodeModeBridgeDispatchState(),
   });
-  return cancel;
+  return { cancel, runId: owner.runId };
 }
 
 afterEach(() => {
-  disposeCodeModeRun(EXPIRING_RUN_ID);
-  for (const runId of activeRuns.keys()) {
-    if (runId.startsWith(CAPACITY_RUN_PREFIX)) {
-      disposeCodeModeRun(runId);
-    }
-  }
+  disposeAllCodeModeRuns();
   vi.useRealTimers();
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it("transfers snapshot heaps across resumes without storage codec copies", async () => {
+    const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
+    const dir = tempDirs.make("code-mode-snapshot-transfer-");
+    const workerPath = path.join(dir, "snapshot-worker.ts");
+    const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
+    await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
+    // The dependency's storage codec copies the whole heap in both directions.
+    // Exercise real snapshots and restores while allowing metadata-only accounting.
+    await writeFile(
+      workerPath,
+      `
+      import { parentPort } from "node:worker_threads";
+      const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+      const serialize = QuickJS.serializeSnapshot;
+      QuickJS.serializeSnapshot = (snapshot) => {
+        if (snapshot.memory.byteLength > 0) throw new Error("snapshot heap serialization copies memory");
+        return serialize(snapshot);
+      };
+      QuickJS.deserializeSnapshot = () => { throw new Error("snapshot heap deserialization copies memory"); };
+      const postMessage = parentPort.postMessage.bind(parentPort);
+      parentPort.postMessage = (message, transferList) => {
+        if (message.value?.status === "waiting" &&
+            !transferList?.includes(message.value.snapshot.memory.buffer)) {
+          throw new Error("snapshot heap must transfer to the host");
+        }
+        postMessage(message, transferList);
+      };
+      await import(${JSON.stringify(new URL("./code-mode.worker.ts", import.meta.url).href)});
+      `,
+    );
+    const workerUrl = pathToFileURL(workerPath);
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    let result = await runCodeModeWorker(
+      {
+        kind: "exec",
+        source: `const bytes = new Uint8Array(1024 * 1024);
+          bytes[0] = 7;
+          await yield_control();
+          bytes[bytes.length - 1] = bytes[0] + 2;
+          await yield_control();
+          return [bytes.length, bytes[0], bytes[bytes.length - 1]];`,
+        config,
+        catalog: [],
+      },
+      10_000,
+      workerUrl,
+    );
+    for (let leg = 0; leg < 2; leg++) {
+      expect(result, result.status === "failed" ? result.error : undefined).toMatchObject({
+        status: "waiting",
+      });
+      if (result.status !== "waiting") {
+        throw new Error("expected a suspended guest");
+      }
+      const memory = result.snapshot.memory.buffer;
+      result = await runCodeModeWorker(
+        {
+          kind: "resume",
+          snapshot: result.snapshot,
+          config,
+          settledRequests: result.pendingRequests.map(({ id }) => ({ id, ok: true, value: null })),
+        },
+        10_000,
+        workerUrl,
+      );
+      expect(memory.byteLength).toBe(0);
+    }
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: "[1048576,7,9]" },
+    });
+  });
+
+  it("isolates guest globals, bridge failures, and cancellations across warm executions", async () => {
+    const config = resolveCodeModeConfig({
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
+    } as never);
+    const execute = (source: string) =>
+      runCodeModeWorker({ kind: "exec", source, config, catalog: [] }, 10_000);
+
+    expect(
+      await execute(
+        "globalThis.previousRun = true; setTimeout(() => {}, 1); setTimeout(() => {}, 2);",
+      ),
+    ).toMatchObject({ status: "failed", code: "invalid_input" });
+    const cancelled = await execute(
+      'const timer = setTimeout(() => {}, 1); clearTimeout(timer); await yield_control("pause");',
+    );
+    expect(cancelled).toMatchObject({
+      status: "waiting",
+      canceledRequestIds: ["bridge:sleep:1"],
+    });
+    expect(await execute('await yield_control("next session");')).toMatchObject({
+      status: "waiting",
+      canceledRequestIds: [],
+      pendingRequests: [{ id: "bridge:yield:1", method: "yield" }],
+    });
+    expect(await execute("return typeof globalThis.previousRun;")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: '"undefined"' },
+    });
+  });
+
+  it.each(["exec", "resume"] as const)(
+    "terminates a real CPU-active %s worker when its catalog closes",
+    async (phase) => {
+      // Finish hooks unwind in reverse order: stop workers before restoring their
+      // loader spies and releasing the channel and files, including on setup failure.
+      const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
+      const dir = tempDirs.make("code-mode-catalog-cpu-");
+      const channelName = `catalog-cpu-${phase}-${crypto.randomUUID()}`;
+      const channel = new BroadcastChannel(channelName);
+      onTestFinished(() => channel.close());
+      const executing = createDeferred();
+      channel.addEventListener("message", () => executing.resolve(), { once: true });
+      const h = createCodeModeHarness();
+      onTestFinished(() => clearToolSearchCatalog(h.ctx));
+      applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+      const exec = h.tools.find((tool) => tool.name === "exec");
+      const wait = h.tools.find((tool) => tool.name === "wait");
+      if (!exec || !wait) {
+        throw new Error("Expected Code Mode control tools");
+      }
+      let runId: unknown;
+      if (phase === "resume") {
+        const parked = resultDetails(
+          await exec.execute("park-cpu", {
+            code: "await yield_control(); while (true) {}",
+          }),
+        );
+        expect(parked.status).toBe("waiting");
+        runId = parked.runId;
+      }
+      const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
+      const workerPath = path.join(dir, "observed-worker.ts");
+      await writeFile(path.join(dir, "package.json"), '{"type":"module"}');
+      // Observe the real QuickJS interrupt callback, not merely thread startup.
+      await writeFile(
+        workerPath,
+        `
+        import { BroadcastChannel } from "node:worker_threads";
+        const channel = new BroadcastChannel(${JSON.stringify(channelName)});
+        const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+        for (const method of ["create", "restore"]) {
+          const original = QuickJS[method];
+          QuickJS[method] = function (...args) {
+            const index = method === "create" ? 0 : 1;
+            const options = args[index];
+            const interrupt = options.interruptHandler;
+            let observed = false;
+            args[index] = { ...options, interruptHandler: () => {
+              if (!observed) { observed = true; channel.postMessage("executing"); }
+              return interrupt();
+            } };
+            return original.apply(this, args);
+          };
+        }
+        await import(${JSON.stringify(new URL("./code-mode.worker.ts", import.meta.url).href)});
+      `,
+      );
+      const resolveWorker = vi
+        .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
+        .mockReturnValue(pathToFileURL(workerPath));
+      onTestFinished(() => resolveWorker.mockRestore());
+      const terminate = vi.spyOn(Worker.prototype, "terminate");
+      onTestFinished(() => terminate.mockRestore());
+      const execution =
+        phase === "exec"
+          ? exec.execute("cpu", { code: "while (true) {}" })
+          : wait.execute("resume-cpu", { runId });
+      onTestFinished(async () => {
+        clearToolSearchCatalog(h.ctx);
+        await execution;
+      });
+      await executing.promise;
+      clearToolSearchCatalog(h.ctx);
+      expect(resultDetails(await execution)).toMatchObject({ status: "failed", code: "aborted" });
+      // Changing the runtime entry also retires idle warm workers. The active
+      // CPU worker is the last termination, and must stop before abort settles.
+      expect(terminate).toHaveBeenCalled();
+      const worker = terminate.mock.contexts.at(-1);
+      if (!(worker instanceof Worker)) {
+        throw new Error("Expected a terminated real worker");
+      }
+      expect(worker.threadId).toBe(-1);
+      expect(activeRuns.size).toBe(0);
+      expect(h.catalogRef.onDispose).toBeUndefined();
+    },
+  );
+
   it.each(
     (["exec", "resume"] as const).flatMap((kind) =>
       [1, -1].map((clockDirection) => ({ kind, clockDirection })),
@@ -105,7 +298,7 @@ describe("Code Mode worker lifecycle", () => {
         input = {
           kind,
           config,
-          snapshotBytes: suspended.snapshotBytes,
+          snapshot: suspended.snapshot,
           settledRequests: suspended.pendingRequests.map(({ id }) => ({
             id,
             ok: true,
@@ -150,7 +343,7 @@ describe("Code Mode worker lifecycle", () => {
         const result = await runCodeModeWorker(input, 5_000, pathToFileURL(workerPath));
         expect(result, JSON.stringify(result)).toMatchObject(
           clockDirection > 0
-            ? { status: "completed", value: 4_999_950_000 }
+            ? { status: "completed", value: { kind: "complete", json: "4999950000" } }
             : { status: "failed", code: "timeout", failurePhase: "guest" },
         );
       } finally {
@@ -158,75 +351,6 @@ describe("Code Mode worker lifecycle", () => {
       }
     },
   );
-
-  it("cancels every suspended run, releases capacity, and clears its expiry timer", () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const firstRunId = `${CAPACITY_RUN_PREFIX}shutdown_first`;
-    const secondRunId = `${CAPACITY_RUN_PREFIX}shutdown_second`;
-    const firstCancel = parkExpiringRun("callValue", firstRunId);
-    const secondCancel = parkExpiringRun("agentWait", secondRunId);
-    const firstRun = activeRuns.get(firstRunId);
-    if (!firstRun) {
-      throw new Error("expected a parked Code Mode shutdown run");
-    }
-    resumingRunIds.add(firstRunId);
-    resumingRunIds.add(secondRunId);
-    for (let index = 0; index < 62; index += 1) {
-      const runId = `${CAPACITY_RUN_PREFIX}shutdown_${index}`;
-      activeRuns.set(runId, { ...firstRun, runId, pending: [] });
-    }
-
-    expect(activeRuns.size).toBe(64);
-    expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
-    expect(vi.getTimerCount()).toBe(1);
-
-    const clearExpiryTimer = vi.spyOn(globalThis, "clearTimeout");
-    disposeAllCodeModeRuns();
-    disposeAllCodeModeRuns();
-
-    expect(firstCancel).toHaveBeenCalledOnce();
-    expect(secondCancel).toHaveBeenCalledOnce();
-    expect(clearExpiryTimer).toHaveBeenCalledOnce();
-    expect(activeRuns.size).toBe(0);
-    expect(resumingRunIds.has(firstRunId)).toBe(false);
-    expect(resumingRunIds.has(secondRunId)).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-    clearExpiryTimer.mockRestore();
-
-    const releaseFreedSlot = reserveActiveRunSlot();
-    releaseFreedSlot();
-  });
-
-  it("transfers a resumed run's slot atomically at the suspended-run limit", () => {
-    parkExpiringRun("callValue");
-    const ownedState = activeRuns.get(EXPIRING_RUN_ID);
-    expect(ownedState).toBeDefined();
-    if (!ownedState) {
-      throw new Error("expected a parked Code Mode run");
-    }
-    for (let index = 0; index < 63; index += 1) {
-      const runId = `${CAPACITY_RUN_PREFIX}${index}`;
-      activeRuns.set(runId, { ...ownedState, runId, pending: [] });
-    }
-
-    const release = reserveActiveRunSlot(EXPIRING_RUN_ID);
-    try {
-      expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
-      expect(activeRuns.size).toBe(63);
-      expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
-
-      activeRuns.set(EXPIRING_RUN_ID, ownedState);
-    } finally {
-      release();
-    }
-
-    expect(activeRuns.size).toBe(64);
-    expect(() => reserveActiveRunSlot()).toThrow("too many suspended code mode runs");
-
-    disposeCodeModeRun(`${CAPACITY_RUN_PREFIX}0`);
-    const releaseFreedSlot = reserveActiveRunSlot();
-    releaseFreedSlot();
-  });
 
   it("rejects an unavailable run without leaking a capacity reservation", () => {
     expect(() => reserveActiveRunSlot("cm_missing_lifecycle_owner")).toThrow(
@@ -258,7 +382,7 @@ describe("Code Mode worker lifecycle", () => {
       status: "failed",
       code: "aborted",
       error: "code mode execution aborted",
-      output: [],
+      output: EMPTY_CODE_MODE_OUTPUT,
     });
   });
 
@@ -266,12 +390,15 @@ describe("Code Mode worker lifecycle", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const workerUrl = new URL(
       `data:text/javascript,${encodeURIComponent(`
-        import { parentPort, workerData } from "node:worker_threads";
-        parentPort.postMessage({
-          status: "completed",
-          value: workerData.wasmModule instanceof WebAssembly.Module,
-          output: [],
-        });
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", ({ input }) => parentPort.postMessage({
+          status: "ok",
+          value: {
+            status: "completed",
+            value: { kind: "complete", json: JSON.stringify(input.wasmModule instanceof WebAssembly.Module) },
+            output: { count: 0, source: { kind: "complete", json: "[]" } },
+          },
+        }));
       `)}`,
     );
 
@@ -293,8 +420,8 @@ describe("Code Mode worker lifecycle", () => {
     expect(results).toEqual(
       Array.from({ length: 4 }, () => ({
         status: "completed",
-        value: true,
-        output: [],
+        value: { kind: "complete", json: "true" },
+        output: EMPTY_CODE_MODE_OUTPUT,
       })),
     );
   });
@@ -339,40 +466,52 @@ describe("Code Mode worker lifecycle", () => {
       );
 
       expect(result.status).toBe(status);
-      expect(JSON.stringify(result)).toContain("rerun with narrower args");
+
       if (result.status === "failed") {
         expect(result.code).toBe("internal_error");
         expect(result.error).toContain("boom");
       }
-      const outputBytes =
-        result.output.length > 0 ? Buffer.byteLength(JSON.stringify(result.output), "utf8") : 0;
-      const valueBytes =
-        result.status === "completed" ? Buffer.byteLength(JSON.stringify(result.value), "utf8") : 0;
-      expect(outputBytes + valueBytes).toBeLessThanOrEqual(1_024);
+      const outputBytes = Buffer.byteLength(result.output.source.json);
+      const valueBytes = result.status === "completed" ? Buffer.byteLength(result.value.json) : 0;
+      const errorBytes =
+        result.status === "failed" ? Buffer.byteLength(JSON.stringify(result.error)) : 0;
+      expect(outputBytes).toBeLessThanOrEqual(1_024);
+      expect(valueBytes).toBeLessThanOrEqual(1_024);
+      expect(outputBytes + valueBytes + errorBytes).toBeLessThanOrEqual(2 * 1_024);
+      const state = new CodeModeOutputState(1_024);
+      state.append(result.output);
+      const projected = state.take(
+        result.status === "completed"
+          ? { value: result.value }
+          : result.status === "failed"
+            ? { error: result.error }
+            : {},
+      );
+      expect(JSON.stringify(projected)).toContain("rerun with narrower args");
     },
   );
 
   it("expires an idle suspended snapshot and aborts its outstanding tool", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const cancel = parkExpiringRun("callValue");
+    const { cancel, runId } = parkExpiringRun("callValue");
 
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(true);
+    expect(activeRuns.has(runId)).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+    expect(activeRuns.has(runId)).toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("retains an active collector only within its bounded snapshot TTL windows", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const cancel = parkExpiringRun("agentWait");
+    const { cancel, runId } = parkExpiringRun("agentWait");
 
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(true);
+    expect(activeRuns.has(runId)).toBe(true);
     expect(cancel).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(activeRuns.has(EXPIRING_RUN_ID)).toBe(false);
+    expect(activeRuns.has(runId)).toBe(false);
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

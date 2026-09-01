@@ -28,7 +28,11 @@ openclaw models set-image <model-or-alias>
 openclaw models scan
 ```
 
-`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`, `set-image`, `scan`, `refresh`, and `aliases` reject `--agent` outright because they are global and never agent-scoped. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
+`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent. Without it, model inspection uses `agents.defaults.systemAgent.agentId` when configured, otherwise the sole configured agent. Auth mutations require `--agent <id>` when multiple agents are configured.
+
+For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory when `--agent` is omitted. A matching configured `agentDir` retains that agent's ownership during credential refresh. An explicit `--agent <id>` takes precedence over the environment override.
+
+`fallbacks`/`image-fallbacks` manage global defaults. `set`, `set-image`, `scan`, `refresh`, and `aliases` also operate globally and reject `--agent`.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
@@ -84,7 +88,7 @@ Options: `--all` (full catalog), `--local` (filter to local models), `--provider
 
 Notes:
 
-- The `Auth` column is read-only. For provider-owned model routes such as OpenAI, it matches each row's API/base-URL route to eligible profiles in effective `auth.order`, env/config credentials, and resolved command-scoped SecretRefs. A concrete OpenAI row stays unknown when its route policy is unavailable instead of borrowing provider-level auth; provider-only legacy checks and other providers retain provider-level behavior. Plugin synthetic-auth metadata is only a runtime-capability hint, not proof of native account authentication, so account-dependent routes remain unknown without positive registry evidence. The command does not load provider runtime, read keychain secrets, call provider APIs, or prove exact execution readiness.
+- The `Auth` column uses read-only checks. For OpenAI routes, it matches each API and base URL to eligible profiles, credentials, and command-scoped SecretRefs. If route policy is unavailable, an OpenAI row stays unknown instead of using provider-level auth. Other providers and legacy checks use provider-level behavior. For a configured native CLI route, a full or provider-filtered list can run the local auth-status check from the provider. That native result is authoritative; a separate provider credential does not prove the CLI login. The default list stays lazy and shows native CLI authentication as unknown. Synthetic-auth metadata does not prove native account authentication. The command does not load the full provider runtime. It does not read keychain secrets or call provider APIs. It does not prove exact execution readiness.
 - `models list --all --provider <id>` can include provider-owned static catalog rows from plugin manifests or bundled provider catalog metadata even when you have not authenticated with that provider yet. Those rows still show as unavailable until matching auth is configured.
 - `models list` keeps the control plane responsive while provider catalog discovery is slow. The default and configured views fall back to configured or synthetic model rows after a short wait and let discovery finish in the background. Use `--all` when you need the exact full discovered catalog and are willing to wait for provider discovery.
 - Broad `models list --all` merges manifest catalog rows over registry rows without loading provider runtime supplement hooks. Provider-filtered manifest fast paths use only providers marked `static`; providers marked `refreshable` stay registry/cache-backed and append manifest rows as supplements, while providers marked `runtime` stay on registry/runtime discovery.
@@ -150,6 +154,8 @@ openclaw models fallbacks clear
 Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list|add|remove|clear` manages the parallel `agents.defaults.imageModel.fallbacks` list with the same subcommand shape.
 
 ## Auth profiles
+
+Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 
 ```bash
 openclaw models auth add

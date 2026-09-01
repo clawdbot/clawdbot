@@ -1,13 +1,13 @@
 // Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  MemorySearchManager,
-  MemorySearchRuntimeDebug,
-  MemorySource,
+import {
+  resolveMemoryIndexIdentityReason,
+  type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
@@ -121,13 +121,7 @@ export async function executeMemorySearchToolQuery(params: {
   }
 
   const status = active.manager.status();
-  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
-  const pausedIndexIdentityReason =
-    indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing"
-      ? typeof indexIdentity.reason === "string" && indexIdentity.reason.trim()
-        ? indexIdentity.reason.trim()
-        : "memory index identity is missing or mismatched"
-      : undefined;
+  const pausedIndexIdentityReason = resolveMemoryIndexIdentityReason(status);
   if (pausedIndexIdentityReason) {
     return {
       status,

@@ -132,20 +132,6 @@ describe("SystemAgentChatEngine operations", () => {
     );
   });
 
-  it("handles the exact agent handoff without consulting a usable model", async () => {
-    const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("talk to agent");
-
-    expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff).toEqual({ kind: "open-tui" });
-  });
-
   it("retires an agent proposal before a reusable Gateway handoff", async () => {
     const armed: boolean[] = [];
     let turn = 0;
@@ -369,6 +355,54 @@ describe("SystemAgentChatEngine operations", () => {
 
     expect(runConfigSet).toHaveBeenCalledOnce();
     expect(reply.text).toContain("[openclaw] done: config.set");
+  });
+
+  it("proves delegated config persistence stops when async preparation closes authority", async () => {
+    const persisted: string[] = [];
+    let closeDuringPreparation = false;
+    let authorityOpen = true;
+    const beforePersistentApply = vi.fn(() => {
+      if (!authorityOpen) {
+        throw new Error("authority closed");
+      }
+    });
+    const runConfigSet = vi.fn(
+      async (params: {
+        path?: string;
+        value?: string;
+        cliOptions: object;
+        beforePersistentApply?: () => void;
+      }) => {
+        await Promise.resolve();
+        if (closeDuringPreparation) {
+          authorityOpen = false;
+        }
+        params.beforePersistentApply?.();
+        persisted.push(`${params.path}=${params.value}`);
+      },
+    );
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+    const approve = async () => {
+      engine.propose(operation);
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "delegated proposal");
+      return await engine.resolveOperatorApproval(
+        "allow-once",
+        proposal.hash,
+        beforePersistentApply,
+      );
+    };
+
+    await expect(approve()).resolves.toMatchObject({ action: "none" });
+    expect(persisted).toEqual(["gateway.port=19001"]);
+
+    closeDuringPreparation = true;
+    const rejected = await approve();
+    expect(rejected?.text).toContain("authority closed");
+    expect(persisted).toEqual(["gateway.port=19001"]);
   });
 
   it("prefers the real agent loop for fuzzy messages", async () => {

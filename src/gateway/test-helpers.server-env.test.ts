@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { drainSystemEvents, enqueueSystemEvent } from "../infra/system-events.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { createGatewayConfigModuleMock } from "./test-helpers.config-runtime.js";
+import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -60,9 +60,8 @@ describe("Gateway test environment lifecycle", () => {
   it.each(["session store", "config mock"])(
     "keeps config readable while the %s fixture publishes an update",
     async (fixture) => {
-      const actual =
-        await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-      const { writeConfigFile } = createGatewayConfigModuleMock(actual);
+      const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+      const { writeConfigFile } = createGatewayConfigOverrides(actual);
       await writeConfigFile({ session: { reset: { idleMinutes: 30 } } });
       const configPath = process.env.OPENCLAW_CONFIG_PATH!;
       const readIdleMinutes = () =>

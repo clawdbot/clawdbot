@@ -504,6 +504,23 @@ export function importAndRecordReceipt(params: {
         }
       } else {
         const parsedAttestation = params.parsed.value;
+        const insertGeneratedHashes = () => {
+          const hashes = [...parsedAttestation.generatedHashes.entries()].toSorted(([a], [b]) =>
+            a.localeCompare(b),
+          );
+          if (hashes.length > 0) {
+            executeSqliteQuerySync(
+              db,
+              kysely.insertInto("workspace_generated_bootstrap_hashes").values(
+                hashes.map(([filename, sha256]) => ({
+                  workspace_key: params.source.workspaceKey,
+                  filename,
+                  sha256,
+                })),
+              ),
+            );
+          }
+        };
         const incomingFingerprint = attestationFingerprint({
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
@@ -549,21 +566,7 @@ export function importAndRecordReceipt(params: {
                 .deleteFrom("workspace_generated_bootstrap_hashes")
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
-            const replacementHashes = [...parsedAttestation.generatedHashes.entries()].toSorted(
-              ([left], [right]) => left.localeCompare(right),
-            );
-            if (replacementHashes.length > 0) {
-              executeSqliteQuerySync(
-                db,
-                kysely.insertInto("workspace_generated_bootstrap_hashes").values(
-                  replacementHashes.map(([filename, sha256]) => ({
-                    workspace_key: params.source.workspaceKey,
-                    filename,
-                    sha256,
-                  })),
-                ),
-              );
-            }
+            insertGeneratedHashes();
           };
           const equivalent =
             existing.attested_at_ms === parsedAttestation.attestedAtMs &&
@@ -621,21 +624,7 @@ export function importAndRecordReceipt(params: {
                 }),
               ),
           );
-          const hashes = [...parsedAttestation.generatedHashes.entries()].toSorted(([a], [b]) =>
-            a.localeCompare(b),
-          );
-          if (hashes.length > 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely.insertInto("workspace_generated_bootstrap_hashes").values(
-                hashes.map(([filename, sha256]) => ({
-                  workspace_key: params.source.workspaceKey,
-                  filename,
-                  sha256,
-                })),
-              ),
-            );
-          }
+          insertGeneratedHashes();
           imported = true;
           resolution = "inserted";
           verifiedFingerprint = incomingFingerprint;

@@ -86,6 +86,12 @@ export function createCodexAppServerAgentHarness(
   );
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
+  let modelCatalog:
+    | ReturnType<
+        typeof import("./src/app-server/model-catalog.js").createCodexAppServerModelCatalog
+      >
+    | undefined;
+  let disposed = false;
   const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
@@ -148,12 +154,16 @@ export function createCodexAppServerAgentHarness(
       });
     },
     loadModelCatalog: async (params) => {
-      const { loadCodexAppServerModelCatalog } = await import("./src/app-server/model-catalog.js");
-      return await loadCodexAppServerModelCatalog(
-        params,
-        resolveAttemptPluginConfig(params.config),
-      );
+      const { createCodexAppServerModelCatalog } =
+        await import("./src/app-server/model-catalog.js");
+      if (disposed) {
+        return [];
+      }
+      modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
+      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
     },
+    readModelCatalogReadiness: (params) =>
+      modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");
@@ -332,7 +342,11 @@ export function createCodexAppServerAgentHarness(
         }
       }
     },
-    dispose: disposeSharedCodexAppServerClients,
+    dispose: async () => {
+      disposed = true;
+      modelCatalog?.dispose();
+      await disposeSharedCodexAppServerClients();
+    },
   };
   return harness;
 }

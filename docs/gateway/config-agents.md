@@ -427,6 +427,7 @@ date context. Falls back to the host timezone.
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `anthropicServerCompaction`, `anthropicCompactThreshold`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
+  - Add `codeMode: true` or `codeMode: false` to an exact `provider/model` entry to override OpenClaw Code Mode activation. Omit it to inherit the global `tools.codeMode` default, including `"auto"`; agent-specific activation settings take precedence. This changes neither runtime selection nor Codex native Code Mode. The Control UI model editor offers **Default**, **On**, and **Off** alongside runtime settings. See [per-model Code Mode](/tools/code-mode#override-one-model) for precedence and an example.
   - Safe metadata edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing entries unless you pass `--replace`.
 - `modelPolicy.allow`: explicit override allowlist. Accepts aliases, exact `provider/model` refs, and trailing prefix wildcards such as `openai/*` or `clawrouter/anthropic/*`. Omit it or use `[]` to allow any model. `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent; an explicit empty list opts that agent into allow-any.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
@@ -666,7 +667,7 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). It defaults to `low`; set `inherit` to reuse the session's current thinking level. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
-- `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
+- `timeoutSeconds`: safety window for each model request in built-in compaction. Multi-stage compaction refreshes the window when its next serial model request starts, so a complete compaction can exceed this value while an unresponsive request is still aborted. Plugin-owned compaction receives one window for the complete operation. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
 - `identifierPolicy`: `strict` (default) or `off`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
@@ -1081,7 +1082,7 @@ for provider examples and precedence.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.
-- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
+- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions. `models["provider/model"].codeMode` accepts `true` or `false` and takes precedence over the agent's `tools.codeMode` activation, the shared model override, and the global default. Omit it to inherit; it does not affect Codex native Code Mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - Local workspace-relative `identity.avatar` image files are limited to 2 MB. `http(s)` URLs and `data:` URIs are not checked against the local file-size limit.
@@ -1275,7 +1276,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     },
     threadBindings: {
       enabled: true,
-      idleHours: 24, // default inactivity auto-unfocus in hours (`0` disables)
+      idleHours: 24, // default inactivity auto-unbind in hours (`0` disables)
       maxAgeHours: 0, // default hard max age in hours (`0` disables)
     },
     sharing: {
@@ -1283,7 +1284,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       suggest: true,
       drafts: true,
     },
-    mainKey: "main", // canonical main-session suffix
     sendPolicy: {
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
       default: "allow",
@@ -1305,11 +1305,11 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`groupScope`**: how groups, rooms, and channels are grouped.
   - `per-group` (default): keep each non-direct peer in its channel-scoped session.
   - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
-- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing. Dock commands such as `/dock_discord` use the same map to switch the active session's reply route to another linked channel peer; see [Channel docking](/concepts/channel-docking).
+- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
-- **`mainKey`**: canonical main-session suffix. Keep it stable unless you intentionally need a custom main-session key.
+- **`mainKey`**: accepted but ignored. The per-agent main-session suffix is always `main`; omit this field. Global session scope uses `global` instead.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
@@ -1324,7 +1324,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with `maxDiskBytes`, not with a zero high-water mark.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master switch for supported channel thread bindings
-  - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)
+  - `idleHours`: default inactivity auto-unbind in hours (`0` disables; providers can override)
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
   - `spawnSessions`: default gate for creating thread-bound work sessions from `sessions_spawn` and ACP thread spawns. Defaults to `true` when thread bindings are enabled; providers/accounts can override.
   - `defaultSpawnContext`: default native subagent context for thread-bound spawns (`"fork"` or `"isolated"`). Defaults to `"fork"`.

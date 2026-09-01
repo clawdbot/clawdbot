@@ -1,7 +1,7 @@
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Mattermost type declarations define plugin contracts.
 import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
-import type { DmPolicy, GroupPolicy } from "../runtime-api.js";
+import type { ContextVisibilityMode, DmPolicy, GroupPolicy } from "../runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
@@ -27,6 +27,8 @@ export type MattermostAccountConfig = {
   dangerouslyAllowNameMatching?: boolean;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Supplemental context visibility policy for inbound context (default: all). */
+  contextVisibility?: ContextVisibilityMode;
   /** If false, do not start this Mattermost account. Default: true. */
   enabled?: boolean;
   /** Bot token for Mattermost. */

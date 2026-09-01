@@ -119,6 +119,7 @@ describe("Gateway pending-profile authorization", () => {
       "artifacts.list",
       "board.event",
       "chat.history",
+      "chat.metadata",
       "controlUi.sessionPreview",
       "exec.approval.resolve",
       "mcp.app.view",
@@ -131,6 +132,11 @@ describe("Gateway pending-profile authorization", () => {
       "sessions.list",
       "taskSuggestions.list",
       "tasks.list",
+      "users.github.status",
+      "users.github.authorize.start",
+      "users.github.authorize.poll",
+      "users.github.authorize.cancel",
+      "users.github.disconnect",
     ];
     for (const method of methods) {
       const client = createPendingProfileClient();

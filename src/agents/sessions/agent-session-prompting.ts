@@ -20,34 +20,97 @@ import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
+function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void {
+  if (failed) {
+    throw error;
+  }
+}
+
+/** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
+export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
+  "openclaw.agent-session.set-prompt-preparation",
+);
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
+  private logicalPromptActive = false;
+  private promptPreparation?: () => Promise<void>;
+
+  [agentSessionSetPromptPreparation](prepare: (() => Promise<void>) | undefined): void {
+    this.promptPreparation = prepare;
+  }
+
+  override dispose(): void {
+    this.promptPreparation = undefined;
+    super.dispose();
+  }
+
   // =========================================================================
   // Prompting
   // =========================================================================
 
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+    if (this.logicalPromptActive) {
+      throw new Error(
+        "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+      );
+    }
+    // Retry and compaction gaps briefly make the core idle, but the logical prompt
+    // still owns continuation and its one terminal fact until this scope closes.
+    this.logicalPromptActive = true;
     let endedForTurnHandoff = false;
     try {
-      await this.agent.prompt(messages);
+      await this.runPreparedAgentLoop(() => this.agent.prompt(messages));
       while (true) {
         const action = await this.handlePostAgentRun();
         if (action !== "continue") {
           endedForTurnHandoff = action === "handoff";
           break;
         }
-        await this.agent.continue();
+        await this.runPreparedAgentLoop(() => this.agent.continue());
       }
     } finally {
       this.systemPromptOverride = undefined;
-      this.flushPendingBashMessages();
-      // Consume handoff state before callbacks can start a nested run and set it again.
-      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
-      this.lastRunEndedForTurnHandoff = false;
-      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
-      if (!endedForTurnHandoff) {
-        await this.currentExtensionRunner.emit({ type: "agent_settled" });
+      let flushFailed = false;
+      let flushError: unknown;
+      try {
+        this.flushPendingBashMessages();
+      } catch (error) {
+        flushFailed = true;
+        flushError = error;
+      }
+      this.logicalPromptActive = false;
+      let terminalFailed = false;
+      let terminalError: unknown;
+      try {
+        // Consume handoff state before callbacks can start a nested run and set it again.
+        endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+        this.lastRunEndedForTurnHandoff = false;
+        // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+        if (endedForTurnHandoff) {
+          this.emit({ type: "agent_handoff" });
+        } else {
+          this.emit({ type: "agent_settled" });
+          await this.currentExtensionRunner.emit({ type: "agent_settled" });
+        }
+      } catch (error) {
+        terminalFailed = true;
+        terminalError = error;
+      }
+      rethrowPromptFinalizationFailure(flushFailed, flushError);
+      rethrowPromptFinalizationFailure(terminalFailed, terminalError);
+    }
+  }
+
+  private async runPreparedAgentLoop(run: () => Promise<void>): Promise<void> {
+    const prepare = this.promptPreparation;
+    if (prepare) {
+      await prepare();
+      if (prepare !== this.promptPreparation) {
+        throw new Error("Session prompt preparation is stale after replacement or disposal.");
       }
     }
+    // Start synchronously after the owner check; disposal must not reopen a core loop.
+    return run();
   }
 
   private async handlePostAgentRun(): Promise<PostAgentRunAction> {
@@ -160,7 +223,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
 
       // If streaming, queue via steer() or followUp() based on option
-      if (this.isStreaming) {
+      if (this.isStreaming || this.logicalPromptActive) {
         if (!options?.streamingBehavior) {
           throw new Error(
             "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -200,6 +263,19 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       const lastAssistant = this.findLastAssistantMessage();
       if (lastAssistant) {
         await this.checkCompaction(lastAssistant, false);
+      }
+
+      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const activeTail = this.agent.state.messages.at(-1);
+      if (
+        persistedUserIdempotencyKey &&
+        activeTail?.role === "user" &&
+        "idempotencyKey" in activeTail &&
+        activeTail.idempotencyKey === persistedUserIdempotencyKey
+      ) {
+        // Compaction can restore the durable current user after the runner removed its replay.
+        // The prompt below supplies that exact turn, so keep one provider-visible copy.
+        this.agent.state.messages = this.agent.state.messages.slice(0, -1);
       }
 
       // Build messages array (custom message if any, then user message)

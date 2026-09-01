@@ -22,7 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,

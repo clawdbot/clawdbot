@@ -105,7 +105,7 @@ describe("handleQaInbound", () => {
         replyToId: "msg-1",
         text: "preview",
         threadId: "42",
-        to: "thread:qa-room/42",
+        to: "thread:/v1/group/qa-room/42",
       }),
     );
     expect(editQaBusMessage).toHaveBeenNthCalledWith(

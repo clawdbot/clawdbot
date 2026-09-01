@@ -120,7 +120,7 @@ extension OnboardingView {
         self.resetGatewayBoundAIState()
         let oldActive = self.activePageIndex
         self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
-        self.startExistingCLIActivationIfNeeded()
+        Task { await self.refreshCLIStatus() }
         self.returnToInferenceSetupIfNeeded()
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)

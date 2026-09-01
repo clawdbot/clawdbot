@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -16,7 +16,12 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is required for active-turn recovery proof at ${executablePath}`,
 });
 
-const proofDir = path.resolve(".artifacts/control-ui-e2e/active-turn-recovery");
+let proofDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    proofDir = createControlUiE2eArtifactDir("active-turn-recovery");
+  }
+});
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type ActiveRunSnapshotOptions = {
   events?: unknown[];
@@ -30,7 +35,6 @@ async function capture(page: Page, name: string): Promise<void> {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ path: path.join(proofDir, `${name}.png`), fullPage: true });
 }
 
@@ -52,7 +56,7 @@ function activeRunSnapshot(
           seq: 1,
           stream: "tool",
           ts: 1_000,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             toolCallId: "tool-active-turn-recovery",
             name: "read",
@@ -90,7 +94,7 @@ function activeRunSnapshot(
     sessionInfo: {
       ...(opts?.sessionAbortable ? {} : { activeRunIds: [runId] }),
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       status: "running",
       updatedAt: 1_000,
@@ -116,7 +120,7 @@ async function startActiveTurn(
     seq: 1,
     stream: "tool",
     ts: 1_000,
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     data: {
       toolCallId: "tool-active-turn-recovery",
       name: "read",
@@ -133,7 +137,7 @@ async function startActiveTurn(
       timestamp: 1_100,
     },
     runId,
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     state: "delta",
   });
   await assertActiveTurnVisible(page, streamText);
@@ -212,7 +216,7 @@ async function finishRecoveredTurn(
     seq: 2,
     stream: "tool",
     ts: 1_200,
-    sessionKey: "main",
+    sessionKey: "agent:main:main",
     data: {
       toolCallId: "tool-active-turn-recovery",
       name: "read",
@@ -381,7 +385,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).click();
 
       const abortRequest = await gateway.waitForRequest("sessions.abort");
-      expect(abortRequest.params).toMatchObject({ key: "main", runId });
+      expect(abortRequest.params).toMatchObject({ key: "agent:main:main", runId });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
@@ -427,7 +431,7 @@ suite.define(() => {
           seq: 1,
           stream: "item",
           ts: fixtureNow + 1_000,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             kind: "preamble",
             itemId: "fixture-preamble-before-steer",
@@ -439,7 +443,7 @@ suite.define(() => {
           seq: 2,
           stream: "tool",
           ts: fixtureNow + 3_000,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             toolCallId: "fixture-active-tool",
             name: "read",
@@ -452,7 +456,7 @@ suite.define(() => {
           seq: 3,
           stream: "item",
           ts: fixtureNow + 4_000,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             kind: "preamble",
             itemId: "fixture-preamble-after-steer",

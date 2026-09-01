@@ -2,12 +2,19 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
+import {
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
+  restoreCronPinnedExecGrant,
+  stripCronPinnedExecGrant,
+} from "../scheduled-tool-policy.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import { deliveryFromJson, deliveryToJson } from "./delivery-codec.js";
 import { normalizeNumber, tryParseJsonObject } from "./scalar-codec.js";
@@ -23,9 +30,20 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
     updatedAtMs: _updatedAtMs,
     ...rest
   } = job;
+  const payload = isRecord(rest.payload) ? rest.payload : undefined;
+  const toolsAllow = Array.isArray(payload?.toolsAllow)
+    ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")
+    : undefined;
+  const storedToolsAllow = stripCronPinnedExecGrant({
+    toolsAllow,
+    requirement: rest.toolsAllowExecTargetRequirement,
+  });
   // Runtime state and authority have separate owners; JSON is canonical for config.
   return {
     ...rest,
+    ...(payload && storedToolsAllow
+      ? { payload: { ...payload, toolsAllow: storedToolsAllow } }
+      : {}),
     ...(rest.delivery ? { delivery: deliveryToJson(rest.delivery) } : {}),
     state: {},
   };
@@ -111,12 +129,33 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   if (!state || getInvalidPersistedCronJobReason(jobJson)) {
     return null;
   }
+  const toolsAllowExecTarget = normalizeCronToolsAllowExecTarget(jobJson.toolsAllowExecTarget);
+  const toolsAllowExecTargetRequirement = normalizeCronToolsAllowExecTargetRequirement(
+    jobJson.toolsAllowExecTargetRequirement,
+  );
   const createdAtMs =
     typeof jobJson.createdAtMs === "number" && Number.isFinite(jobJson.createdAtMs)
       ? jobJson.createdAtMs
       : Date.now();
   // Doctor retains unresolved legacy markers in config JSON; runtime never consumes them.
-  const { notify: _legacyNotify, ...runtimeConfig } = decodeCronJobConfig(jobJson);
+  const {
+    notify: _legacyNotify,
+    toolsAllowExecTarget: _rawToolsAllowExecTarget,
+    toolsAllowExecTargetRequirement: _rawToolsAllowExecTargetRequirement,
+    ...runtimeConfig
+  } = decodeCronJobConfig(jobJson);
+  const payload = isRecord(runtimeConfig.payload) ? runtimeConfig.payload : undefined;
+  const toolsAllow = Array.isArray(payload?.toolsAllow)
+    ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")
+    : undefined;
+  const runtimeToolsAllow = restoreCronPinnedExecGrant({
+    toolsAllow,
+    requirement: toolsAllowExecTargetRequirement,
+    execTarget: toolsAllowExecTarget,
+  });
+  if (payload && runtimeToolsAllow) {
+    runtimeConfig.payload = { ...payload, toolsAllow: runtimeToolsAllow };
+  }
   if (isRecord(runtimeConfig.delivery) && runtimeConfig.delivery.mode === undefined) {
     // Legacy destination-only config remains untouched for doctor; runtime defaults to announce.
     runtimeConfig.delivery = deliveryFromJson({ ...runtimeConfig.delivery, mode: "announce" });
@@ -124,6 +163,8 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   return {
     ...runtimeConfig,
     id: row.job_id,
+    ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
+    ...(toolsAllowExecTargetRequirement ? { toolsAllowExecTargetRequirement } : {}),
     createdAtMs,
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
@@ -157,6 +198,19 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
       .orderBy("updated_at", "asc")
       .orderBy("job_id", "asc"),
   ).rows;
+}
+
+/** Fingerprints definition JSON and order while excluding runtime-owned state. */
+export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): string {
+  const rows = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .select(["job_id", "job_json", "sort_order"])
+      .where("store_key", "=", storeKey)
+      .orderBy("job_id", "asc"),
+  ).rows;
+  return sha256Hex(JSON.stringify(rows));
 }
 
 /** Materializes retired ownership within the caller's write transaction. */
@@ -241,24 +295,46 @@ export function deleteStaleCronJobFamilyRows(
 }
 
 /** Replaces all persisted cron rows and returns the canonical jobs that were written. */
+type CronRowReplaceOptions = {
+  preserveRuntimeState?: boolean;
+};
+
+type CronRowReplaceResult = {
+  existingJobIds: ReadonlySet<string>;
+  jobs: CronStoredJob[];
+  legacyAuthorityJobIds: ReadonlySet<string>;
+};
+
 export function replaceCronRows(
   db: DatabaseSync,
   storeKey: string,
   store: CronStoreFile,
-): CronStoredJob[] {
+  opts?: CronRowReplaceOptions,
+): CronRowReplaceResult {
   const existingRows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select("job_id")
+      .select(["job_id", "job_json"])
       .where("store_key", "=", storeKey),
   ).rows;
   const normalizedJobs: CronStoredJob[] = [];
   for (const [index, job] of store.jobs.entries()) {
-    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index));
+    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index, opts));
   }
   const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
+  const existingJobIds = new Set<string>();
+  const legacyAuthorityJobIds = new Set<string>();
   for (const row of existingRows) {
+    existingJobIds.add(row.job_id);
+    const storedJob = tryParseJsonObject(row.job_json);
+    if (
+      storedJob &&
+      (Object.hasOwn(storedJob, "runtimeAuthority") ||
+        Object.hasOwn(storedJob, "runtimeAuthorityRecoveryRequired"))
+    ) {
+      legacyAuthorityJobIds.add(row.job_id);
+    }
     if (nextJobIds.has(row.job_id)) {
       continue;
     }
@@ -272,7 +348,7 @@ export function replaceCronRows(
         .where("job_id", "=", row.job_id),
     );
   }
-  return normalizedJobs;
+  return { existingJobIds, jobs: normalizedJobs, legacyAuthorityJobIds };
 }
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
@@ -281,18 +357,28 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
+  opts?: CronRowReplaceOptions,
 ): CronStoredJob {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }
   const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  const {
+    state_json: _stateJson,
+    runtime_updated_at_ms: _runtimeUpdatedAtMs,
+    ...definitionValues
+  } = values;
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .insertInto("cron_jobs")
       .values(values)
-      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+      .onConflict((conflict) =>
+        conflict
+          .columns(["store_key", "job_id"])
+          .doUpdateSet(opts?.preserveRuntimeState ? definitionValues : values),
+      ),
   );
   return normalized;
 }

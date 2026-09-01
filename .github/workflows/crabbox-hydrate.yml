@@ -121,7 +121,7 @@ jobs:
           install_args=(
             install
             --prefer-offline
-            --ignore-scripts=false
+            --config.ignore-scripts=false
             --config.engine-strict=false
             --config.enable-pre-post-scripts=true
             --config.side-effects-cache=true
@@ -132,7 +132,7 @@ jobs:
             local option_name="$2"
             local value="${!env_name-}"
             if [ -n "$value" ]; then
-              install_args+=("--${option_name}=${value}")
+              install_args+=("--config.${option_name}=${value}")
             fi
           }
           append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
@@ -555,16 +555,16 @@ jobs:
             "--filter",
             "openclaw",
             "--prefer-offline",
-            "--ignore-scripts=true",
+            "--ignore-scripts",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=false",
             "--config.side-effects-cache=false",
             "--frozen-lockfile",
-            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
-            "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
-            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
-            "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
-            "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            "--config.child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--config.modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
+            "--config.network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--config.store-dir=$env:PNPM_CONFIG_STORE_DIR",
+            "--config.virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
           )
           pnpm @installArgs
           if ($LASTEXITCODE -ne 0) {

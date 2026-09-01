@@ -9,6 +9,7 @@ import {
   resolveCacheTtlMs,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { assertPluginCapabilitySecretAvailable } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
@@ -17,6 +18,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_TAVILY_BASE_URL,
+  TAVILY_API_KEY_CONFIG_PATH,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
@@ -120,24 +122,17 @@ async function postTavilyJson(params: {
       ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) =>
-      readTavilyJsonResponse(response, params.errorLabel, {
+      readProviderJsonResponse<Record<string, unknown>>(response, params.errorLabel, {
         maxBytes: params.responseMaxBytes,
       }),
   );
-}
-
-async function readTavilyJsonResponse(
-  response: Response,
-  label: string,
-  opts?: { maxBytes?: number },
-): Promise<Record<string, unknown>> {
-  return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
 export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
   const apiKey = resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -165,7 +160,11 @@ export async function runTavilySearch(
       excludeDomains: params.excludeDomains,
     }),
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -258,12 +257,7 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(
-    SEARCH_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
 }
 
@@ -271,6 +265,7 @@ export async function runTavilyExtract(
   params: TavilyExtractParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
   const apiKey = resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -412,6 +407,5 @@ export async function runTavilyExtract(
 }
 
 export const testing = {
-  readTavilyJsonResponse,
   resolveEndpoint,
 };

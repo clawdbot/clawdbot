@@ -56,7 +56,16 @@ function runGit(cwd: string, args: string[]): string {
 function createDispatchFixture(
   options: {
     dispatchReturnsRunUrl?: boolean;
-    parentRunStates?: Array<{ conclusion: string | null; status: string }>;
+    parentRunStates?: Array<{
+      conclusion: string | null;
+      status: string;
+      attempt?: number;
+      artifactReady?: boolean;
+      artifacts?: unknown;
+      metadataError?: string;
+      decisionState?: string;
+      decisionAttempt?: number;
+    }>;
     runDiscoveryMisses?: number;
     workflowSource?: string;
   } = {},
@@ -83,9 +92,13 @@ function createDispatchFixture(
     preloadPath,
     `import { appendFileSync } from "node:fs";
 const wait = Atomics.wait;
+const now = Date.now;
+let elapsed = 0;
+Date.now = () => now() + elapsed;
 Atomics.wait = (array, index, value, timeout) => {
   if (timeout === undefined) return wait(array, index, value);
   appendFileSync(process.env.MOCK_WAIT_CALLS, String(timeout) + "\\n");
+  elapsed += timeout;
   return "timed-out";
 };
 `,
@@ -202,9 +215,36 @@ if (args[0] === "workflow" && args[1] === "run") {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.min(index, parentRunStates.length - 1)];
   fs.writeFileSync(parentRunIndexPath, String(index + 1));
-  console.log(JSON.stringify({ ...state, head_sha: process.env.MOCK_WORKFLOW_SHA, run_attempt: 1 }));
+  console.log(JSON.stringify({ ...state, head_sha: process.env.MOCK_WORKFLOW_SHA, run_attempt: state.attempt ?? 1 }));
+} else if (args[0] === "api" && args.at(-1).includes("/artifacts?")) {
+  const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
+  const state = parentRunStates[index];
+  if (state.metadataError) {
+    console.error(state.metadataError);
+    process.exit(1);
+  }
+  console.log(JSON.stringify({ artifacts: state.artifacts ?? (state.artifactReady ? [{
+    name: "full-release-decision-123-" + (state.attempt ?? 1), expired: false,
+  }] : []) }));
+} else if (args[0] === "api" && args.at(-1).includes("/jobs?")) {
+  console.log(JSON.stringify({ jobs: [{ name: "Diagnostic Drain", status: "in_progress" }] }));
 } else if (args[0] === "run" && args[1] === "download") {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
+  const state = parentRunStates[index];
+  if (state.decisionState) {
+    const dir = args[args.indexOf("--dir") + 1];
+    fs.writeFileSync(dir + "/full-release-decision.json", JSON.stringify({
+      kind: "openclaw.full-release-decision", mode: "decision", version: 2,
+      parentRunAttempt: state.decisionAttempt ?? state.attempt ?? 1,
+      sourceParentRunAttempt: 1, parentRunId: "123", activeRunIds: ["101"],
+      blockers: [{ child: "normalCi", job: "test", runId: "101" }],
+      cancellation: { cancelledRunIds: [], requested: false }, children: {}, errors: [],
+      executionPlanSha256: "c".repeat(64), releaseProfile: "stable", rerunGroup: "all",
+      state: state.decisionState, targetSha: "b".repeat(40), workflowRef: "main",
+      workflowSha: process.env.MOCK_WORKFLOW_SHA,
+    }));
+    process.exit(0);
+  }
   console.error(parentRunStates[index]?.status === "queued" ? "no artifact matches any of the names or patterns provided" : "no valid artifacts found");
   process.exit(1);
 } else {
@@ -438,24 +478,28 @@ describe("full-release-validation-at-sha", () => {
         () => true,
       ),
     ).toThrow("does not belong to release branch");
-    expect(
-      verifyTargetRef(
-        "extended-stable/2026.6.33",
-        candidateSha,
-        "2026.6.33",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toBe("extended-stable/2026.6.33");
-    expect(() =>
-      verifyTargetRef(
-        "extended-stable/2026.6.33",
-        candidateSha,
-        "2026.6.33-beta.1",
-        () => branchTipSha,
-        () => true,
-      ),
-    ).toThrow("does not match extended-stable branch");
+    for (const version of ["2026.6.33", "2026.6.34", "2026.6.35"]) {
+      expect(
+        verifyTargetRef(
+          "extended-stable/2026.6.33",
+          candidateSha,
+          version,
+          () => branchTipSha,
+          () => true,
+        ),
+      ).toBe("extended-stable/2026.6.33");
+    }
+    for (const version of ["2026.6.32", "2026.7.35", "2026.6.35-beta.1", "2026.6.35-1"]) {
+      expect(() =>
+        verifyTargetRef(
+          "extended-stable/2026.6.33",
+          candidateSha,
+          version,
+          () => branchTipSha,
+          () => true,
+        ),
+      ).toThrow("does not belong to extended-stable branch");
+    }
     expect(
       verifyTargetRef(
         "v2026.7.1-beta.5",
@@ -605,7 +649,7 @@ describe("full-release-validation-at-sha", () => {
   it("bounds polling for the exact workflow run", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(720);
-    expect(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS).toBe(900_000);
+    expect(FULL_RELEASE_GITHUB_POLL_INTERVAL_MS).toBe(120_000);
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
     expect(source).toContain("return suite;");
     expect(source).toContain("startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000");
@@ -619,7 +663,7 @@ describe("full-release-validation-at-sha", () => {
     expect(source).not.toContain("attempt < 480");
   });
 
-  it("waits 15 minutes between run-discovery attempts and parent polling iterations", () => {
+  it("discovers the run promptly and observes completion within two minutes", () => {
     const fixture = createDispatchFixture({
       dispatchReturnsRunUrl: false,
       parentRunStates: [
@@ -631,7 +675,7 @@ describe("full-release-validation-at-sha", () => {
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
       expect(result.status, result.stderr).toBe(0);
-      expect(fixture.readWaits()).toEqual([900_000, 900_000]);
+      expect(fixture.readWaits()).toEqual([30_000, 120_000]);
       const calls = fixture.readCalls(fixture.ghCallsPath);
       expect(calls.filter((args) => args[0] === "run" && args[1] === "list")).toHaveLength(2);
       expect(
@@ -642,18 +686,18 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("bounds run discovery to one delayed retry", () => {
+  it("bounds run discovery with backoff through cached registration lag", () => {
     const fixture = createDispatchFixture({
       dispatchReturnsRunUrl: false,
-      runDiscoveryMisses: 2,
+      runDiscoveryMisses: 4,
     });
     try {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Could not determine Full Release Validation run id.");
-      expect(fixture.readWaits()).toEqual([900_000]);
+      expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000]);
       const calls = fixture.readCalls(fixture.ghCallsPath);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "list")).toHaveLength(2);
+      expect(calls.filter((args) => args[0] === "run" && args[1] === "list")).toHaveLength(4);
     } finally {
       fixture.cleanup();
     }
@@ -761,7 +805,7 @@ describe("full-release-validation-at-sha", () => {
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");
-    expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(4);
+    expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(5);
     expect(source).toContain('const dispatchOutput = run("gh", dispatchArgs');
   });
 
@@ -944,7 +988,7 @@ describe("full-release-validation-at-sha", () => {
   it("retries an absent decision artifact through a parent status regression", () => {
     const fixture = createDispatchFixture({
       parentRunStates: [
-        { conclusion: null, status: "in_progress" },
+        { conclusion: null, status: "in_progress", artifactReady: true },
         { conclusion: null, status: "queued" },
         { conclusion: null, status: "in_progress" },
         { conclusion: "success", status: "completed" },
@@ -990,7 +1034,213 @@ describe("full-release-validation-at-sha", () => {
       expect(
         calls.filter((args) => args[0] === "api" && args[1]?.endsWith("/actions/runs/123")),
       ).toHaveLength(5);
-      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(5);
+      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(2);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("observes a validated blocker promptly while leaving diagnostic drain and refs intact", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        { conclusion: null, status: "in_progress" },
+        {
+          conclusion: null,
+          status: "in_progress",
+          artifactReady: true,
+          decisionState: "blocked_diagnostics_running",
+        },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("blocked_diagnostics_running");
+      expect(fixture.readWaits()).toEqual([120_000]);
+      const calls = fixture.readCalls(fixture.ghCallsPath);
+      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
+      expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
+      expect(
+        runGit(fixture.origin, [
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/heads/release-ci",
+          "refs/heads/validation",
+        ]).split("\n"),
+      ).toHaveLength(2);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not redownload a validated decision, and resets readiness for a new attempt", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        { conclusion: null, status: "in_progress", artifactReady: true, decisionState: "passed" },
+        { conclusion: null, status: "in_progress", artifactReady: true, decisionState: "passed" },
+        { conclusion: null, status: "queued", attempt: 2 },
+        { conclusion: null, status: "in_progress", attempt: 2, artifactReady: true },
+        {
+          conclusion: null,
+          status: "queued",
+          attempt: 2,
+          decisionState: "blocked_diagnostics_running",
+        },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("blocked_diagnostics_running");
+      expect(fixture.readWaits()).toEqual([120_000, 120_000, 120_000, 120_000]);
+      const downloads = fixture
+        .readCalls(fixture.ghCallsPath)
+        .filter((args) => args[0] === "run" && args[1] === "download");
+      expect(downloads.map((args) => args[args.indexOf("--name") + 1])).toEqual([
+        "full-release-decision-123-1",
+        "full-release-decision-123-2",
+        "full-release-decision-123-2",
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps progress reads sparse while checking unpublished decision metadata", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        ...Array.from({ length: 10 }, () => ({ conclusion: null, status: "in_progress" })),
+        { conclusion: "success", status: "completed" },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(0);
+      const calls = fixture.readCalls(fixture.ghCallsPath);
+      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "api" && args[1]?.includes("/jobs?"))).toHaveLength(
+        1,
+      );
+      expect(
+        calls.filter((args) => args[0] === "api" && args[1]?.includes("/artifacts?")),
+      ).toHaveLength(10);
+      expect(fixture.readWaits()).toEqual(Array(10).fill(120_000));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    { label: "wrong name", artifacts: [{ name: "full-release-decision-999-1", expired: false }] },
+    { label: "expired", artifacts: [{ name: "full-release-decision-123-1", expired: true }] },
+  ])("does not use $label metadata as a release decision", ({ artifacts }) => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        {
+          conclusion: null,
+          status: "in_progress",
+          artifacts,
+          decisionState: "blocked_diagnostics_running",
+        },
+        { conclusion: "failure", status: "completed", decisionState: "blocked_complete" },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("blocked_complete");
+      expect(fixture.readWaits()).toEqual([120_000]);
+      const downloads = fixture
+        .readCalls(fixture.ghCallsPath)
+        .filter((args) => args[0] === "run" && args[1] === "download");
+      expect(downloads).toHaveLength(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    {
+      label: "permanent denial",
+      metadataError: "HTTP 403: Bad credentials",
+      artifacts: undefined,
+      error: "Bad credentials",
+    },
+    {
+      label: "malformed response",
+      metadataError: undefined,
+      artifacts: {},
+      error: "invalid artifacts",
+    },
+  ])(
+    "stops on $label instead of hiding metadata failures as pending",
+    ({ metadataError, artifacts, error }) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [{ conclusion: null, status: "in_progress", metadataError, artifacts }],
+      });
+      try {
+        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(error);
+        expect(fixture.readWaits()).toEqual([]);
+        expect(
+          fixture
+            .readCalls(fixture.ghCallsPath)
+            .some((args) => args[0] === "run" && args[1] === "download"),
+        ).toBe(false);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it("recovers a transient metadata failure without downloading an unpublished artifact", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        { conclusion: null, status: "in_progress", metadataError: "HTTP 503: Server Error" },
+        { conclusion: "success", status: "completed" },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("metadata unavailable this poll");
+      expect(fixture.readWaits()).toEqual([120_000]);
+      expect(
+        fixture
+          .readCalls(fixture.ghCallsPath)
+          .filter((args) => args[0] === "run" && args[1] === "download"),
+      ).toHaveLength(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("rejects a downloaded decision from another attempt despite ready metadata", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        {
+          conclusion: null,
+          status: "in_progress",
+          artifactReady: true,
+          decisionState: "passed",
+          decisionAttempt: 2,
+        },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("binding is invalid");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(
+        runGit(fixture.origin, [
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/heads/release-ci",
+          "refs/heads/validation",
+        ]).split("\n"),
+      ).toHaveLength(2);
     } finally {
       fixture.cleanup();
     }

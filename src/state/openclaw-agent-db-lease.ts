@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import {
   executeSqliteQuerySync,
@@ -26,6 +27,50 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
   scope: "core:agent-database-maintenance",
   key: "global",
 } as const;
+
+export class OpenClawAgentDatabaseLeaseActiveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenClawAgentDatabaseLeaseActiveError";
+  }
+}
+
+const maintenanceAuthority = new AsyncLocalStorage<OpenClawStateLeaseContext>();
+
+export function runWithAgentDatabaseMaintenanceAuthority<T>(
+  authority: OpenClawStateLeaseContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return maintenanceAuthority.run(authority, run);
+}
+
+/** Revalidate the held lease, including immediately before committing a versioned rebuild. */
+export function assertAgentDatabaseMaintenanceAuthority(): void {
+  const authority = maintenanceAuthority.getStore();
+  if (!authority) {
+    throw new Error(
+      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
+    );
+  }
+  authority.assertOwned();
+}
+
+/** Revalidate a maintenance owner when present, without requiring ordinary opens to hold one. */
+export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
+  maintenanceAuthority.getStore()?.assertOwned();
+}
+
+/** Verify the maintenance owner and its independent heartbeat before a synchronous phase. */
+export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
+  const authority = maintenanceAuthority.getStore();
+  if (!authority) {
+    return;
+  }
+  if (!authority.renew) {
+    throw new Error("Agent database maintenance authority cannot renew its lease.");
+  }
+  authority.renew();
+}
 
 export function claimOpenClawAgentDatabaseLease(params: {
   agentId: string;
@@ -166,7 +211,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
     }, options);
     if (leaseStillExists && (!agentId || row.agent_id === agentId)) {
       const remediation = agentId ? "." : "; stop that process and rerun openclaw doctor --fix.";
-      throw new Error(
+      throw new OpenClawAgentDatabaseLeaseActiveError(
         `Agent ${row.agent_id} database is still open in another process${remediation}`,
       );
     }

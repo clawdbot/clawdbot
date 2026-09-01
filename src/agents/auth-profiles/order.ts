@@ -39,49 +39,18 @@ type AuthProfileEligibility = {
 };
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai";
 
-// OpenAI Codex auth can reuse OpenAI API-key credentials. Keep this special
-// case local so generic provider alias resolution stays provider-owned.
-function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
+function isProfileProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
-  credential?: AuthProfileCredential;
-  profileProvider?: string;
-  profileMode?: string;
+  provider: string;
 }): boolean {
-  if (params.providerAuthKey !== OPENAI_CODEX_PROVIDER_ID) {
-    return false;
-  }
-  const providerKey = resolveProviderIdForAuth(params.profileProvider ?? "", {
+  const providerKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
     ...params.authAliasLookupParams,
   });
-  const mode = params.credential?.type ?? params.profileMode;
-  return providerKey === OPENAI_PROVIDER_ID && mode === "api_key";
-}
-
-function isCredentialProviderCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  authAliasLookupParams?: ProviderAuthAliasLookupParams;
-  providerAuthKey: string;
-  credential: AuthProfileCredential;
-}): boolean {
-  const credentialProviderKey = resolveProviderIdForAuth(params.credential.provider, {
-    config: params.cfg,
-    ...params.authAliasLookupParams,
-  });
-  return (
-    credentialProviderKey === params.providerAuthKey ||
-    isOpenAIApiKeyCompatibleWithCodexAuth({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      providerAuthKey: params.providerAuthKey,
-      credential: params.credential,
-      profileProvider: params.credential.provider,
-    })
-  );
+  return providerKey === params.providerAuthKey;
 }
 
 /** Returns true when a stored credential can authenticate the requested provider. */
@@ -91,40 +60,15 @@ export function isStoredCredentialCompatibleWithAuthProvider(params: {
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
-  return isCredentialProviderCompatibleWithAuthProvider({
+  return isProfileProviderCompatibleWithAuthProvider({
     cfg: params.cfg,
     authAliasLookupParams: params.authAliasLookupParams,
     providerAuthKey: resolveProviderIdForAuth(params.provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
     }),
-    credential: params.credential,
+    provider: params.credential.provider,
   });
-}
-
-function isConfiguredProfileCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  authAliasLookupParams?: ProviderAuthAliasLookupParams;
-  providerAuthKey: string;
-  provider: string;
-  mode?: string;
-  credential?: AuthProfileCredential;
-}): boolean {
-  const configProviderKey = resolveProviderIdForAuth(params.provider, {
-    config: params.cfg,
-    ...params.authAliasLookupParams,
-  });
-  return (
-    configProviderKey === params.providerAuthKey ||
-    isOpenAIApiKeyCompatibleWithCodexAuth({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      providerAuthKey: params.providerAuthKey,
-      credential: params.credential,
-      profileProvider: params.provider,
-      profileMode: params.mode,
-    })
-  );
 }
 
 function listProfilesCompatibleWithAuthProvider(params: {
@@ -134,16 +78,16 @@ function listProfilesCompatibleWithAuthProvider(params: {
   provider: string;
   providerAuthKey: string;
 }): string[] {
-  if (params.providerAuthKey !== OPENAI_CODEX_PROVIDER_ID) {
+  if (params.providerAuthKey !== OPENAI_PROVIDER_ID) {
     return listProfilesForProvider(params.store, params.provider);
   }
   return Object.entries(params.store.profiles)
     .filter(([, credential]) =>
-      isCredentialProviderCompatibleWithAuthProvider({
+      isProfileProviderCompatibleWithAuthProvider({
         cfg: params.cfg,
         authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey: params.providerAuthKey,
-        credential,
+        provider: credential.provider,
       }),
     )
     .map(([profileId]) => profileId);
@@ -221,11 +165,11 @@ export function resolveAuthProfileEligibility(params: {
     return { eligible: false, reasonCode: "profile_missing" };
   }
   if (
-    !isCredentialProviderCompatibleWithAuthProvider({
+    !isProfileProviderCompatibleWithAuthProvider({
       cfg: params.cfg,
       authAliasLookupParams: params.authAliasLookupParams,
       providerAuthKey,
-      credential: cred,
+      provider: cred.provider,
     })
   ) {
     return { eligible: false, reasonCode: "provider_mismatch" };
@@ -233,13 +177,11 @@ export function resolveAuthProfileEligibility(params: {
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
   if (profileConfig) {
     if (
-      !isConfiguredProfileCompatibleWithAuthProvider({
+      !isProfileProviderCompatibleWithAuthProvider({
         cfg: params.cfg,
         authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey,
         provider: profileConfig.provider,
-        mode: profileConfig.mode,
-        credential: cred,
       })
     ) {
       return { eligible: false, reasonCode: "provider_mismatch" };
@@ -328,14 +270,12 @@ export function resolveAuthProfileOrderWithMetadata(
     });
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
-        .filter(([profileId, profile]) =>
-          isConfiguredProfileCompatibleWithAuthProvider({
+        .filter(([, profile]) =>
+          isProfileProviderCompatibleWithAuthProvider({
             cfg,
             authAliasLookupParams: params.authAliasLookupParams,
             providerAuthKey,
             provider: profile.provider,
-            mode: profile.mode,
-            credential: store.profiles[profileId],
           }),
         )
         .map(([profileId]) => profileId)

@@ -6,11 +6,11 @@ import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
 import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
 import { listCoreGatewayMethodNames } from "./core-descriptors.js";
+import { createPluginGatewayMethodDescriptor } from "./descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
-  createPluginGatewayMethodDescriptor,
 } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });

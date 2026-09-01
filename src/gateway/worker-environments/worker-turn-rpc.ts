@@ -39,6 +39,10 @@ import {
   serializeWorkerSessionToolResult,
   workerSessionToolErrorResult,
 } from "./worker-session-tool-result.js";
+import {
+  createWorkerComputerRpc,
+  type WorkerComputerExecutor,
+} from "./worker-turn-computer-rpc.js";
 
 type WorkerProcessTurnBinding = {
   turnClaim: WorkerSessionTurnClaim;
@@ -104,6 +108,7 @@ type WorkerTurnRpcOptions = {
   }) => Promise<WorkerTranscriptCommitApplicationResult>;
   liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
   placementStore?: WorkerSessionPlacementGate;
+  executeComputer?: WorkerComputerExecutor;
   executeSessionTool?: (
     params:
       | {
@@ -394,6 +399,30 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       return result;
     });
 
+  const validateTool = (
+    identity: WorkerConnectionIdentity,
+    toolName: WorkerSessionToolName | "computer",
+  ) => {
+    const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+      kind: "session-tool",
+    });
+    if (!requestAdmission.ok) {
+      return "closeReason" in requestAdmission
+        ? requestAdmission
+        : { ok: false as const, closeReason: "placement-mismatch" as const };
+    }
+    const binding = placementClaim(identity);
+    if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
+      return { ok: false as const, closeReason: "method-not-allowed" as const };
+    }
+    return { ok: true as const };
+  };
+
+  const executeComputer = createWorkerComputerRpc({
+    execute: options.executeComputer,
+    validate: (identity) => validateTool(identity, "computer"),
+  });
+
   const executeSessionTool = async (
     identity: WorkerConnectionIdentity,
     toolName: WorkerSessionToolName,
@@ -404,21 +433,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       | WorkerPortalParams,
     signal?: AbortSignal,
   ): Promise<WorkerSessionToolServiceResult> => {
-    const validate = () => {
-      const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
-        kind: "session-tool",
-      });
-      if (!requestAdmission.ok) {
-        return "closeReason" in requestAdmission
-          ? requestAdmission
-          : { ok: false as const, closeReason: "placement-mismatch" as const };
-      }
-      const binding = placementClaim(identity);
-      if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
-        return { ok: false as const, closeReason: "method-not-allowed" as const };
-      }
-      return { ok: true as const };
-    };
+    const validate = () => validateTool(identity, toolName);
     const admitted = validate();
     if (!admitted.ok) {
       return admitted;
@@ -677,6 +692,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     commitTranscript,
     pushLiveEvent,
     executeSessionTool,
+    executeComputer,
     startInference,
     cancelInference,
     cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>

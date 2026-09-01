@@ -144,9 +144,9 @@ Any local process that can connect to the Gateway can impersonate a loopback rev
 
 ### Configure with the wizard
 
-Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering a loopback proxy address (including a CIDR with a loopback base address) shows the security warning above and asks whether to allow loopback authentication. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
+Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering an address or CIDR that matches a loopback source under the Gateway's runtime rules shows the security warning above and asks whether to allow loopback authentication. This includes ranges containing loopback, even when their base address is not loopback. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
 
-When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered proxy address is loopback, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
+When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
 
 ## Per-identity scope grants
 
@@ -440,6 +440,37 @@ If startup fails with an error like `gateway auth mode is trusted-proxy, but a s
 - Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
 
 Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
+
+## Restrict a separate Gateway to one owner
+
+Use a [separate Gateway cell](/gateway/multi-tenant-hosting) when one owner needs a
+different trust boundary. A separate workspace, model picker filter, or Gateway
+process under the same OS user does not isolate its credentials and state from
+other agents running as that user.
+
+Fleet-managed cells currently use token authentication. This trusted-proxy
+procedure requires an independently provisioned cell; do not overwrite Fleet's
+managed auth configuration.
+
+The identity-aware proxy must reject every other user **before forwarding any HTTP
+request or WebSocket upgrade**. Bind that policy to a verified immutable identity,
+such as an issuer-qualified OIDC subject, and overwrite `userHeader` with that
+identity. Set `allowUsers` to the same single value as a second check. Gateway
+`allowUsers` compares the trimmed header value exactly; it does not verify a JWT,
+resolve an account ID, or make an email address immutable. `requiredHeaders` only
+checks that headers are present and non-blank.
+
+Keep the Gateway reachable only from that proxy. Do not rely on `allowUsers` alone
+to revoke access: valid paired-device or bootstrap credentials have their own
+WebSocket authentication paths. Existing connections also require explicit
+revocation or disconnection. Enforce the owner restriction at the proxy for all
+routes, including plugin routes, and do not create an unprotected node route.
+
+For a proxy-only cell, omit both Gateway token and password configuration and
+their environment variables. Keep `allowLoopback: false` when the proxy has a
+separate network identity. The provider credential inside the cell authenticates
+the workload to its provider; it does not authenticate the human using the
+Gateway. The host administrator remains trusted.
 
 ## Security checklist
 

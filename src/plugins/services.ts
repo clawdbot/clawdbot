@@ -15,6 +15,10 @@ import {
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createPluginRuntimeCapabilityLease,
+  type PluginRuntimeCapabilityLease,
+} from "./capability-lease.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
@@ -35,45 +39,6 @@ type TrustedExporterInternalDiagnostics = NonNullable<
   reportExporterHealth: (update: DiagnosticExporterHealthUpdate) => void;
 };
 
-function createPluginServiceCapabilityLease() {
-  let active = true;
-  const cleanups = new Set<() => void>();
-  const assertActive = (capability: string) => {
-    if (!active) {
-      throw new Error(`plugin service ${capability} is no longer active`);
-    }
-  };
-  const retain = (cleanup: () => void): (() => void) => {
-    if (!active) {
-      cleanup();
-      assertActive("capability lease");
-    }
-    const release = () => {
-      if (cleanups.delete(release)) {
-        cleanup();
-      }
-    };
-    cleanups.add(release);
-    return release;
-  };
-  return {
-    isActive: () => active,
-    assertActive,
-    retain,
-    revoke: () => {
-      if (!active) {
-        return;
-      }
-      active = false;
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    },
-  };
-}
-
-type PluginServiceCapabilityLease = ReturnType<typeof createPluginServiceCapabilityLease>;
-
 function createPluginLogger(): PluginLogger {
   return {
     info: (msg) => log.info(msg),
@@ -90,7 +55,7 @@ function createServiceContext(params: {
   service: PluginServiceRegistration;
   serviceHealth: NonNullable<OpenClawPluginServiceContext["serviceHealth"]>;
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
-  lease: PluginServiceCapabilityLease;
+  lease: PluginRuntimeCapabilityLease;
 }): OpenClawPluginServiceContext {
   const isDiagnosticsExporter =
     params.service?.pluginId === params.service?.service.id &&
@@ -148,7 +113,7 @@ function createServiceContext(params: {
 function createScopedGatewayEvents(params: {
   pluginId: string;
   broadcast?: GatewayPluginEventBroadcastFn;
-  lease: PluginServiceCapabilityLease;
+  lease: PluginRuntimeCapabilityLease;
 }): {
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
 } {
@@ -233,7 +198,7 @@ export async function startPluginServices(params: {
     pluginId: string;
     diagnosticsExporter: boolean;
     stop?: () => void | Promise<void>;
-    lease: PluginServiceCapabilityLease;
+    lease: PluginRuntimeCapabilityLease;
   }> = [];
   const runBeforeDeadline = async (
     run: () => void | Promise<void>,
@@ -391,7 +356,7 @@ export async function startPluginServices(params: {
       }
       const service = entry.service;
       const traceName = createPluginServiceTraceName(entry);
-      const lease = createPluginServiceCapabilityLease();
+      const lease = createPluginRuntimeCapabilityLease("plugin service");
       const scopedGatewayEvents = createScopedGatewayEvents({
         pluginId: entry.pluginId,
         broadcast: params.broadcastPluginEvent,

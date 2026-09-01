@@ -2,13 +2,14 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Duplex, Readable } from "node:stream";
 import { toErrorObject } from "../../infra/errors.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { onDecodedOutput } from "../decoded-output.js";
-import { addSecretInputStdio, writeSecretInputToChild } from "../spawn-secret-input.js";
+import { prepareSecretInputStdio } from "../spawn-secret-input.js";
 import { createManagedChildStdin } from "./adapters/child-stdin.js";
 import { toStringEnv } from "./adapters/env.js";
 import {
@@ -125,6 +126,7 @@ function createOutputRelay(stream?: Readable) {
 export async function createServiceChildRelayAdapter(params: {
   command: string;
   args: string[];
+  argv0?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
@@ -136,22 +138,18 @@ export async function createServiceChildRelayAdapter(params: {
   const generation = randomUUID();
   const useWindowsJobAnchor =
     process.platform === "win32" && params.windowsShellCommand !== undefined;
-  const workerUrl = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: useWindowsJobAnchor
-      ? "service-child-windows-job-anchor"
-      : "service-child-relay",
-    distWorkerPath: useWindowsJobAnchor
-      ? "process/supervisor/service-child-windows-job-anchor.js"
-      : "process/supervisor/service-child-relay.js",
-  });
+  const workerUrl = resolveRuntimeWorkerUrl(
+    useWindowsJobAnchor
+      ? runtimeProcessEntrypoints.serviceChildWindowsJobAnchor
+      : runtimeProcessEntrypoints.serviceChildRelay,
+  );
   const stdio: StdioEntry[] = useWindowsJobAnchor
     ? ["ignore", "ignore", "ignore"]
     : [params.stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  if (!useWindowsJobAnchor) {
-    // SAFETY: stdio contains only SpawnStdioEntry values until lifecycle descriptors are reserved.
-    addSecretInputStdio(stdio as Parameters<typeof addSecretInputStdio>[0], params.secretInput);
-  }
+  using secretDelivery = prepareSecretInputStdio(
+    stdio,
+    useWindowsJobAnchor ? undefined : params.secretInput,
+  );
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
@@ -423,6 +421,7 @@ export async function createServiceChildRelayAdapter(params: {
     generation,
     command: params.command,
     args: params.args,
+    argv0: params.argv0,
     cwd: params.cwd,
     env: params.env ? toStringEnv(params.env) : undefined,
     stdinMode: params.stdinMode,
@@ -440,7 +439,7 @@ export async function createServiceChildRelayAdapter(params: {
 
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
-    writeSecretInputToChild(child, params.secretInput),
+    secretDelivery?.deliverTo(child),
   ]);
   const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
   const secretDeliveryError =
@@ -467,7 +466,8 @@ export async function createServiceChildRelayAdapter(params: {
   }
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
-    if (state === "closed" || state === "identity-lost") {
+    // A closing receipt retires cancellation; channel/anchor exit still owns extinction.
+    if (state !== "active") {
       return;
     }
     const normalized = signal === "SIGTERM" ? "SIGTERM" : "SIGKILL";
@@ -479,9 +479,12 @@ export async function createServiceChildRelayAdapter(params: {
       generation,
       sequence: outboundSequence,
       signal: normalized,
-    }).catch((error: unknown) =>
-      loseIdentity(toErrorObject(error, "service child cancellation failed").message),
-    );
+    }).catch((error: unknown) => {
+      // Delivery can fail after the anchor has already sent its closing receipt.
+      if (state === "active") {
+        loseIdentity(toErrorObject(error, "service child cancellation failed").message);
+      }
+    });
   };
 
   return {

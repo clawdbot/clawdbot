@@ -3,10 +3,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import {
-  isPrimarySessionTranscriptFileName,
-  parseUsageCountedSessionIdFromFileName,
-} from "../config/sessions/artifacts.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,15 +59,12 @@ export async function discoverAllSessions(params: {
 
   for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const filePath = file.filePath;
-    const fileName = path.basename(filePath);
-    const sqliteMarker = parseSqliteSessionFileMarker(filePath);
-
-    const sessionId = sqliteMarker?.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
+    const { filePath, sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = sqliteMarker ? true : isPrimarySessionTranscriptFileName(fileName);
+    const isPrimaryTranscript =
+      file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -121,7 +115,7 @@ export async function discoverAllSessions(params: {
     if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
-        sessionFile: filePath,
+        sessionFile,
         mtime: file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
@@ -185,9 +179,9 @@ export async function loadSessionCostSummary(params: {
     return null;
   }
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath).get(
-    currentFile.filePath,
-  );
+  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
+    filePaths: [currentFile.filePath],
+  }).get(currentFile.filePath);
   if (!stored || !isUsageCostRollupFresh({ stored, file: currentFile })) {
     return null;
   }

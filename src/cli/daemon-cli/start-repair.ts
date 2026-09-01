@@ -12,6 +12,7 @@ import {
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { resolveBunRuntimeInfo } from "../../daemon/runtime-paths.js";
 import {
+  assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -29,7 +30,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 type GatewayServiceRepairParams = {
-  service: GatewayService;
+  service: Pick<GatewayService, "install" | "isLoaded" | "readDefinitionMutationCapability">;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
@@ -149,6 +150,13 @@ export async function repairLoadedGatewayServiceForStart(
   loaded: boolean;
 }> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
+  // Repair can persist a generated token; check definition authority before planning it.
+  const capability = await params.service
+    .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
+    .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+  if (capability) {
+    assertServiceDefinitionWritable(capability);
+  }
   if (
     hasGatewayServiceLauncherOverride(params.state.command) ||
     hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
@@ -179,10 +187,13 @@ export async function repairLoadedGatewayServiceForStart(
   const installedRuntime = resolveGatewayDaemonRuntime(managedCommand?.programArguments);
   const installedRuntimePath =
     installedRuntime === "bun" ? managedCommand?.programArguments[0] : undefined;
-  const runtime =
-    installedRuntimePath && (await resolveBunRuntimeInfo(installedRuntimePath)).supported
-      ? "bun"
-      : "node";
+  const runtimeInfo = installedRuntimePath
+    ? await resolveBunRuntimeInfo(installedRuntimePath)
+    : undefined;
+  if (runtimeInfo?.status === "probe-failed") {
+    throw runtimeInfo.error;
+  }
+  const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,

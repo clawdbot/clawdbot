@@ -2,8 +2,24 @@
  * Regression coverage for provider/model failover classification.
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { getFailoverErrorCode } from "./failover/error.js";
+
+// Classification here is message/status table behavior. Provider-attributed
+// structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
+// gate and cold-materialize the full bundled provider runtime, which times the
+// unit test out under CI load (src/agents/CLAUDE.md: no full-runtime cold
+// loads for table coverage). No bundled hook classifies these fixtures anyway.
+vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -11,6 +27,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliTimeoutError,
+  hasProviderRequestSizeCeiling,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -606,7 +623,10 @@ describe("failover-error", () => {
   });
 
   it("classifies a structured prompt error independently of its wording", () => {
-    const promptError = Object.assign(new Error("quota exhausted"), { status: 429 as const });
+    const promptError = attachErrorDiagnostic(
+      Object.assign(new Error("quota exhausted"), { status: 429 as const }),
+      "stderr: authentication failed during an earlier request",
+    );
     const failoverError = coerceToFailoverError(promptError, {
       provider: "openai",
       model: "gpt-5.4",
@@ -615,6 +635,10 @@ describe("failover-error", () => {
     expect(failoverError?.reason).toBe("rate_limit");
     expect(failoverError?.status).toBe(429);
     expect(failoverError?.message).toBe("quota exhausted");
+    expect(failoverError?.rawError).toBe("quota exhausted");
+    expect(formatErrorMessageForDisplay(failoverError)).toContain(
+      "authentication failed during an earlier request",
+    );
   });
 
   it("lets wrapped causes override parent context-overflow classifications", () => {
@@ -640,26 +664,49 @@ describe("failover-error", () => {
     expect(err?.authMode).toBe("oauth");
   });
 
-  it("enriches an existing FailoverError with the active auth mode", () => {
-    const original = new FailoverError("credit balance too low", {
-      reason: "billing",
+  it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
+    const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+    const facts = {
+      reason: "timeout",
       provider: "anthropic",
-      model: "claude-opus-4-6",
+      model: "sonnet-4.6",
       profileId: "anthropic:default",
-      status: 402,
-    });
+      status: 408,
+      rawError: "request timed out",
+      authProfileFailure: { allInCooldown: false },
+      sessionId: "diagnostic-session",
+      lane: "answer",
+      cause,
+      suspend: false,
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 30,
+        observedActivity: true,
+        activeToolCount: 1,
+        backgroundTaskCount: 0,
+      },
+      attempts: [{ provider: "anthropic", model: "sonnet-4.6", reason: "timeout" }],
+      soonestCooldownExpiry: null,
+    } satisfies ConstructorParameters<typeof FailoverError>[1];
+    const original = new FailoverError("request timed out", facts);
+    attachErrorDiagnostic(original, "stderr: Rate limit exceeded during an earlier request");
 
     const err = coerceToFailoverError(original, { authMode: "token" });
 
     expect(err).not.toBe(original);
     expect(err).toMatchObject({
-      reason: "billing",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      profileId: "anthropic:default",
+      ...facts,
       authMode: "token",
-      status: 402,
     });
+    expect(err?.cause).toBe(cause);
+    expect(err?.message).toBe("request timed out");
+    expect(getFailoverErrorCode(err)).toBeUndefined();
+    expect(findCliTimeoutError(err)).toBe(err);
+    expect(err?.requestSizeCeiling).toBe(false);
+    expect(formatErrorMessageForDisplay(err)).toContain(
+      "Rate limit exceeded during an earlier request",
+    );
+    expect(original.authMode).toBeUndefined();
   });
 
   it("preserves raw provider error text for diagnostic logs", () => {
@@ -757,6 +804,22 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
+  it("preserves a selected-profile error code in the auth failover lane", () => {
+    const err = coerceToFailoverError(
+      Object.assign(new Error("selected profile missing"), {
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+      }),
+      { provider: "openai", model: "gpt-5.6-sol" },
+    );
+
+    expect(err).toMatchObject({
+      reason: "auth",
+      status: 401,
+      code: "selected_auth_profile_unavailable",
+    });
+  });
+
   it("permission_error with organization denial stays auth_permanent", () => {
     const err = coerceToFailoverError(
       "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
@@ -793,6 +856,7 @@ describe("failover-error", () => {
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
+      code: "selected_auth_profile_unavailable",
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
@@ -805,6 +869,7 @@ describe("failover-error", () => {
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
     expect(description.status).toBe(429);
+    expect(description.code).toBe("selected_auth_profile_unavailable");
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
@@ -986,5 +1051,65 @@ describe("isSignalTimeoutReason", () => {
   it("returns false for null and undefined", () => {
     expect(isSignalTimeoutReason(null)).toBe(false);
     expect(isSignalTimeoutReason(undefined)).toBe(false);
+  });
+});
+
+describe("hasProviderRequestSizeCeiling", () => {
+  const GROQ_REQUEST_CEILING_413 =
+    "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
+    "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
+    "please reduce your message size and try again.";
+
+  it("reads the fact a failover error recorded from the provider's own text", () => {
+    // The user-facing message no longer states the figures, which is the whole reason the fact
+    // is recorded at construction rather than re-read here.
+    const err = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: GROQ_REQUEST_CEILING_413,
+    });
+    expect(err.requestSizeCeiling).toBe(true);
+    expect(hasProviderRequestSizeCeiling(err)).toBe(true);
+  });
+
+  it("reads an unnormalized error straight from its message", () => {
+    expect(hasProviderRequestSizeCeiling(new Error(GROQ_REQUEST_CEILING_413))).toBe(true);
+  });
+
+  it.each(["error", "cause", "aggregate"])("finds the fact through a %s wrapper", (kind) => {
+    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: GROQ_REQUEST_CEILING_413,
+    });
+    const wrapped =
+      kind === "aggregate"
+        ? new AggregateError([new Error("unrelated"), { cause: ceiling }], "agent run failed")
+        : kind === "cause"
+          ? new Error("agent run failed", { cause: ceiling })
+          : { error: ceiling };
+    expect(hasProviderRequestSizeCeiling(wrapped)).toBe(true);
+  });
+
+  it("is false for throttling that states a requested size within the limit", () => {
+    const throttled =
+      "429 Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): " +
+      "Limit 8000, Used 7500, Requested 1000, please try again in 3.5s.";
+    expect(hasProviderRequestSizeCeiling(new Error(throttled))).toBe(false);
+    expect(
+      new FailoverError("rate limited", { reason: "rate_limit", rawError: throttled })
+        .requestSizeCeiling,
+    ).toBe(false);
+  });
+
+  it("is false for a context overflow no provider ceiling explains", () => {
+    const overflow = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: "400 input is too long for the model",
+    });
+    expect(hasProviderRequestSizeCeiling(overflow)).toBe(false);
+  });
+
+  it("is false for unrelated values", () => {
+    expect(hasProviderRequestSizeCeiling(undefined)).toBe(false);
+    expect(hasProviderRequestSizeCeiling(null)).toBe(false);
   });
 });

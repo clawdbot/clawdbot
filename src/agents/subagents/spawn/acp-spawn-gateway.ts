@@ -20,6 +20,7 @@ export async function launchAcpChildThroughGateway(params: {
   sessionKey: string;
   task: string;
 }) {
+  const promptedAt = Date.now();
   const response = await callSubagentGateway(
     withSubagentGatewayExecutionIdentity(
       {
@@ -48,10 +49,10 @@ export async function launchAcpChildThroughGateway(params: {
     ),
   );
   recordSessionParticipantBestEffort({
-    actor: { type: "agent", id: params.lineage.parentAgentId },
+    promptedAt,
+    identity: { type: "agent", id: params.lineage.parentAgentId },
     agentId: params.lineage.targetAgentId,
     sessionKey: params.sessionKey,
-    source: "agent",
     storePath: params.participantStorePath,
   });
   return response;

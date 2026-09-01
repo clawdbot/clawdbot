@@ -203,6 +203,7 @@ export async function resolveSubagentChildPlan(params: {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
+    agentId: params.requesterAgentId,
   });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
@@ -308,7 +309,7 @@ export async function resolveSubagentChildPlan(params: {
       creationPolicy: inheritSessionCreationPolicy(
         {
           sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
-          createdActor: { type: "human", id: requesterRuntime.sandboxPrincipalId },
+          createdActor: requesterRuntime.createdActor,
         },
         { type: "agent", id: params.requesterAgentId },
       ),

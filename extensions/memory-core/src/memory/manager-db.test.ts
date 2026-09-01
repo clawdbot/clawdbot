@@ -15,7 +15,7 @@ import {
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
 } from "./manager-db.js";
-import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
+import { tryAcquireMemoryReindexLock } from "./manager-reindex-lock.js";
 
 function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true, ftsEnabled = false): void {
   ensureMemoryIndexSchema({
@@ -431,7 +431,10 @@ describe("memory manager database publication", () => {
     await fs.writeFile(lockedShadow, "locked");
     await fs.utimes(lockedShadow, old, old);
 
-    const lock = acquireMemoryReindexLock(databasePath);
+    const lock = tryAcquireMemoryReindexLock(databasePath);
+    if (!lock) {
+      throw new Error("expected test to acquire the memory reindex lock");
+    }
     cleanupAgedMemoryReindexTempFiles(databasePath);
     await expect(fs.access(lockedShadow)).resolves.toBeUndefined();
     lock.release();

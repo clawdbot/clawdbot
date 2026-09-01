@@ -128,11 +128,12 @@ describe("exec security floor", () => {
       ask: "off",
     });
 
-    const result = await tool.execute("call-1", {
+    const modelArgs = {
       command: "echo hello",
       security: "allowlist",
       ask: "off",
-    });
+    };
+    const result = await tool.execute("call-1", modelArgs);
 
     expect(result.content[0]?.type).toBe("text");
     const text = (result.content[0] as { text?: string }).text ?? "";
@@ -148,13 +149,12 @@ describe("exec security floor", () => {
       safeBins: [],
     });
 
-    await expect(
-      tool.execute("call-2", {
-        command: "echo hello",
-        security: "allowlist",
-        ask: "off",
-      }),
-    ).rejects.toThrow(/exec denied: allowlist miss/i);
+    const modelArgs = {
+      command: "echo hello",
+      security: "allowlist",
+      ask: "off",
+    };
+    await expect(tool.execute("call-2", modelArgs)).rejects.toThrow(/exec denied: allowlist miss/i);
   });
 
   it("ignores model-supplied ask overrides when configured ask is off", async () => {
@@ -210,13 +210,12 @@ describe("exec security floor", () => {
       safeBins: [],
     });
 
-    await expect(
-      tool.execute("call-3", {
-        command: "echo hello",
-        security: "deny",
-        ask: "off",
-      }),
-    ).rejects.toThrow(/exec denied: allowlist miss/i);
+    const modelArgs = {
+      command: "echo hello",
+      security: "deny",
+      ask: "off",
+    };
+    await expect(tool.execute("call-3", modelArgs)).rejects.toThrow(/exec denied: allowlist miss/i);
   });
 
   it("ignores model-supplied full security when configured security is deny", async () => {
@@ -225,13 +224,12 @@ describe("exec security floor", () => {
       ask: "off",
     });
 
-    await expect(
-      tool.execute("call-4", {
-        command: "echo hello",
-        security: "full",
-        ask: "off",
-      }),
-    ).rejects.toThrow(/exec denied/i);
+    const modelArgs = {
+      command: "echo hello",
+      security: "full",
+      ask: "off",
+    };
+    await expect(tool.execute("call-4", modelArgs)).rejects.toThrow(/exec denied/i);
   });
 
   it("does not let host approval defaults deny implicit sandbox execution", async () => {
@@ -485,6 +483,33 @@ describe("exec security floor", () => {
     expect((result.content[0] as { text?: string }).text).toContain("session-full-ok");
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "honors ask-only tightening without restoring full-session host floors (approved=%s)",
+    async (approved) => {
+      writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
+      const calls = mockPendingApprovalGateway();
+      if (approved) {
+        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+          calls.push(method);
+          return { decision: "allow-once" };
+        });
+      }
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "always",
+        bypassHostApprovalFloors: true,
+        messageProvider: approved ? "webchat" : undefined,
+        approvalRunningNoticeMs: 0,
+      });
+
+      const result = await tool.execute("call-session-full-tightened-ask", { command: "echo ok" });
+
+      expect(result.details.status).toBe(approved ? "completed" : "approval-pending");
+      expect(calls).toContain("exec.approval.request");
+    },
+  );
 
   it("honors normalized auto mode before elevated full bypass", async () => {
     const calls = mockPendingApprovalGateway();

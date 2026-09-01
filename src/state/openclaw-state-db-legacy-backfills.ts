@@ -132,6 +132,52 @@ type LegacyRetainedResultRow = {
   pending_final_delivery_payload_json?: string | null;
 };
 
+/** Recover the task owner lost by stable steer replacements before runtime hydration. */
+export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs") || !tableExists(db, "task_runs")) {
+    return;
+  }
+  // v2026.6.34 replaced runId/createdAt but retained sessionStartedAt. A reused
+  // child session is not an owner: require one task/run, matching requester and
+  // timing, and no competing binding. Running replacements need repair too.
+  db.exec(`
+    WITH runs AS MATERIALIZED (
+      SELECT run_id, child_session_key, requester_session_key, created_at,
+        CASE WHEN json_valid(payload_json) THEN payload_json ELSE 'null' END AS payload
+      FROM subagent_runs
+    ), bindings AS MATERIALIZED (
+      SELECT run.run_id, task.run_id AS task_run_id
+      FROM runs AS run JOIN task_runs AS task
+        ON task.child_session_key = run.child_session_key
+      WHERE task.runtime = 'subagent'
+        AND task.requester_session_key = run.requester_session_key
+        AND task.run_id <> '' AND trim(task.run_id) = task.run_id
+        AND json_type(run.payload, '$.taskRunId') IS NULL
+        AND json_type(run.payload, '$.completion.required') = 'true'
+        AND json_type(run.payload, '$.sessionStartedAt') IN ('integer', 'real')
+        AND json_extract(run.payload, '$.sessionStartedAt') < run.created_at
+        AND task.created_at BETWEEN json_extract(run.payload, '$.sessionStartedAt')
+          AND run.created_at
+        AND (SELECT count(*) FROM runs AS sibling
+          WHERE sibling.child_session_key = run.child_session_key) = 1
+        AND (SELECT count(*) FROM task_runs AS sibling
+          WHERE sibling.runtime = 'subagent'
+            AND sibling.child_session_key = run.child_session_key) = 1
+        AND (SELECT count(*) FROM task_runs AS sibling
+          WHERE sibling.run_id = task.run_id) = 1
+        AND NOT EXISTS (SELECT 1 FROM runs AS sibling
+          WHERE json_type(sibling.payload) <> 'object' OR coalesce(
+            CASE WHEN json_type(sibling.payload, '$.taskRunId') = 'text'
+              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId')), '') END,
+            sibling.run_id
+          ) = task.run_id)
+    )
+    UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.taskRunId',
+      (SELECT task_run_id FROM bindings WHERE bindings.run_id = subagent_runs.run_id))
+    WHERE run_id IN (SELECT run_id FROM bindings);
+  `);
+}
+
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
   if (!record || !Object.hasOwn(record, key)) {
     return undefined;

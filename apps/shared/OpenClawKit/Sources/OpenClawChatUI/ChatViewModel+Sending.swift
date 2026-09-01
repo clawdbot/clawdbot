@@ -628,17 +628,31 @@ extension OpenClawChatViewModel {
 
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
+        var durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
         do {
-            await waitForPendingSessionSettings(in: sessionKey)
+            if let settingsError = await waitForCapabilitySettingsBarrier(in: sessionKey) {
+                await self.handleLiveSendFailure(
+                    NSError(
+                        domain: "OpenClawChatCapabilitySettings",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: settingsError]),
+                    attempt: attempt,
+                    canPreserveInOutbox: false)
+                return
+            }
             guard isCurrentSession(attempt.draft.session) else { return }
+            let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
+            durableSessionSettingsExpectation = self.durableSessionSettingsExpectation()
             logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
                     + "localRunId=\(attempt.runId)")
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
-                agentID: attempt.draft.session.deliveryAgentID,
-                expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
+                target: OpenClawChatSendTarget(
+                    agentID: attempt.draft.session.deliveryAgentID,
+                    expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
+                    expectedSessionSettings: sendSessionSettingsExpectation),
                 message: attempt.draft.outgoingMessageText,
                 thinking: thinkingLevel,
                 idempotencyKey: attempt.runId,
@@ -646,7 +660,10 @@ extension OpenClawChatViewModel {
             guard isCurrentSession(attempt.draft.session) else { return }
             await self.handleLiveSendResponse(response, attempt: attempt)
         } catch {
-            await self.handleLiveSendFailure(error, attempt: attempt)
+            await self.handleLiveSendFailure(
+                error,
+                attempt: attempt,
+                durableSessionSettingsExpectation: durableSessionSettingsExpectation)
         }
     }
 
@@ -726,9 +743,18 @@ extension OpenClawChatViewModel {
         return reusedRunAlreadyFinal
     }
 
-    private func handleLiveSendFailure(_ error: Error, attempt: LiveSendAttempt) async {
+    private func handleLiveSendFailure(
+        _ error: Error,
+        attempt: LiveSendAttempt,
+        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil,
+        canPreserveInOutbox: Bool = true) async
+    {
         guard isCurrentSession(attempt.draft.session) else { return }
-        if attempt.encodedAttachments.isEmpty, !(error is GatewayResponseError) {
+        if canPreserveInOutbox,
+           let durableSessionSettingsExpectation,
+           attempt.encodedAttachments.isEmpty,
+           !(error is GatewayResponseError)
+        {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
             let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError)
@@ -738,6 +764,7 @@ extension OpenClawChatViewModel {
                 thinking: effectiveThinkingLevelForSend(attempt.storedThinkingLevel),
                 messageID: attempt.userMessageID,
                 session: attempt.draft.session,
+                expectedSessionSettings: durableSessionSettingsExpectation,
                 deliveryIsAmbiguous: deliveryIsAmbiguous)
             if preserved {
                 self.finishAcceptedComposerSend(attempt.draft)

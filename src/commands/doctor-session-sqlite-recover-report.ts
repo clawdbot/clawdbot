@@ -13,21 +13,24 @@ import {
   migrateOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   createSessionSqliteMigrationFailureIssue,
+  writeSessionSqliteMigrationFailureReports,
+} from "./doctor-session-sqlite-failure.js";
+import {
   findLatestFailedSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
-  restoreSessionSqliteMigrationRun,
-  writeSessionSqliteMigrationFailureReports,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
+import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,
@@ -55,7 +58,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   const trustedTargets = resolveRecoverTargets(params.targets, params.env);
   const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
   if (!failedRun) {
-    const recoveredCorruptTargets = recoverCorruptSqliteTargets(params.targets, params.env);
+    const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
+      { env: params.env },
+      async () => recoverCorruptSqliteTargets(params.targets, params.env),
+    );
     if (recoveredCorruptTargets.length > 0) {
       return summarizeRecoverReport(recoveredCorruptTargets);
     }
@@ -66,7 +72,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       ),
     ]);
   }
-  const restore = restoreSessionSqliteMigrationRun({
+  const restore = await restoreSessionSqliteMigrationRun({
+    env: params.env,
     manifestPath: failedRun.manifestPath,
     trustedTargets,
   });

@@ -14,7 +14,7 @@ export {
   type ResolvedMemorySearchSyncConfig,
 } from "./host/openclaw-runtime-agent.js";
 export { parseDurationMs } from "./host/openclaw-runtime-config.js";
-export { loadConfig } from "./host/openclaw-runtime-config.js";
+export { loadConfig } from "./host/openclaw-runtime-session.js";
 export { resolveStateDir } from "./host/openclaw-runtime-config.js";
 export { resolveSessionTranscriptsDirForAgent } from "./host/openclaw-runtime-config.js";
 export {

@@ -3,11 +3,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import {
-  truncateSanitizedExternalContent,
-  wrapExternalContent,
-} from "../security/external-content.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
   getBeforeToolCallFailureDisposition,
@@ -28,6 +24,7 @@ import {
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
+import { renderToolSearchControlText } from "./tool-search-control-result.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -314,8 +311,6 @@ function matchesCachedToolSearchIndex(
 let schemaValidatorModulePromise:
   | Promise<typeof import("../plugins/schema-validator.js")>
   | undefined;
-const catalogSchemaCacheIds = new WeakMap<object, number>();
-let nextCatalogSchemaCacheId = 0;
 
 function getCatalogSchemaCacheKey(
   entry: ToolSearchCatalogEntry,
@@ -323,17 +318,8 @@ function getCatalogSchemaCacheKey(
   schema: unknown,
 ): string {
   const prefix = `tool-${schemaName === "inputSchema" ? "input" : "output"}:${entry.id}`;
-  if (typeof schema !== "object" || schema === null) {
-    return `${prefix}:${String(schema)}`;
-  }
-  let schemaCacheId = catalogSchemaCacheIds.get(schema);
-  if (schemaCacheId === undefined) {
-    schemaCacheId = nextCatalogSchemaCacheId++;
-    catalogSchemaCacheIds.set(schema, schemaCacheId);
-  }
-  // Trusted schemas can be edited in place, so object identity alone cannot
-  // safely reuse a compiled validator after its constraints have changed.
-  return `${prefix}:${schemaCacheId}:${JSON.stringify(schema)}`;
+  // Content keys reuse rebuilt tool schemas while invalidating in-place constraint changes.
+  return `${prefix}:${JSON.stringify(schema)}`;
 }
 
 async function validateCatalogSchemaValue(
@@ -619,14 +605,20 @@ export class ToolSearchRuntime {
         return await params.acceptResultBeforeProjection(result);
       });
     let preExecutionBlocked = false;
+    // Reuse only this call's accepted snapshot; outer schema validation must still run.
+    let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
-      const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      const snapshot =
+        candidate === acceptedSnapshot
+          ? candidate
+          : snapshotToolSearchTargetTranscriptResult(candidate);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
+      acceptedSnapshot = snapshot;
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
@@ -650,6 +642,7 @@ export class ToolSearchRuntime {
           sourceName: entry.sourceName,
           toolCallId,
           parentToolCallId: options?.parentToolCallId,
+          replaySafe: this.isReplaySafeExactId(entry.id),
           input: normalizedInput,
           signal,
           onUpdate: options?.onUpdate,
@@ -710,11 +703,7 @@ export function formatToolSearchControlResult<T>(
   let result: AgentToolResult<T> = jsonResult(payload);
   const content = result.content[0];
   if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
-    const bounded = truncateSanitizedExternalContent(content.text, 20_000);
-    const modelText = bounded.truncated
-      ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
-      : bounded.text;
-    const text = wrapExternalContent(modelText, { source: "api" });
+    const { text } = renderToolSearchControlText(content.text, true);
     result = { ...result, content: [{ ...content, text }] };
   }
   const terminal =

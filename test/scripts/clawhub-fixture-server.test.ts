@@ -87,6 +87,8 @@ function runPrepublishAssertion(
   version?: string,
   securityMode?: "required" | "absent",
   cwd = process.cwd(),
+  attempts?: number | "complete",
+  minimumAttempts?: number,
 ) {
   return spawnSync(
     process.execPath,
@@ -96,7 +98,9 @@ function runPrepublishAssertion(
       baseUrl ?? "",
       packageName ?? "",
       version ?? "",
-      ...(securityMode ? [securityMode] : []),
+      ...(securityMode || attempts ? [securityMode ?? "required"] : []),
+      ...(attempts ? [String(attempts)] : []),
+      ...(minimumAttempts ? [String(minimumAttempts)] : []),
     ],
     { cwd, encoding: "utf8", env: { ...process.env } },
   );
@@ -222,6 +226,16 @@ describe("ClawHub fixture server", () => {
       isolatedCwd,
     );
     expect(runNoRequestsAssertion(baseUrl, isolatedCwd).status).toBe(0);
+    expect(
+      runPrepublishAssertion(
+        baseUrl,
+        "@openclaw/whatsapp",
+        version,
+        "required",
+        isolatedCwd,
+        "complete",
+      ).status,
+    ).toBe(1);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
@@ -307,13 +321,110 @@ describe("ClawHub fixture server", () => {
     expect(
       runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status,
     ).toBe(0);
+    const completeWithMinimum = runPrepublishAssertion(
+      baseUrl,
+      "@openclaw/whatsapp",
+      version,
+      "required",
+      isolatedCwd,
+      "complete",
+      2,
+    );
+    expect(completeWithMinimum.status).toBe(1);
+    expect(completeWithMinimum.stderr).toContain(
+      "expected 2-16 complete ClawHub artifact audit sequences",
+    );
     const unexpectedStartupRequest = runNoRequestsAssertion(baseUrl, isolatedCwd);
     expect(unexpectedStartupRequest.status).toBe(1);
     expect(unexpectedStartupRequest.stderr).toContain("unexpected ClawHub fixture requests");
-    expect((await fetch(`${baseUrl}${whatsappPath}/versions/0.0.0/artifact`)).status).toBe(404);
-    const mismatch = runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version);
-    expect(mismatch.status).toBe(1);
-    expect(mismatch.stderr).toContain("unexpected ClawHub fixture requests");
+    const completeRequestPaths = [
+      whatsappPath,
+      `${whatsappPath}/versions/${version}/artifact`,
+      `${whatsappPath}/versions/${version}/security`,
+      `${whatsappPath}/versions/${version}/artifact/download`,
+    ];
+    for (const requestPath of completeRequestPaths) {
+      const response = await fetch(`${baseUrl}${requestPath}`);
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+    }
+    expect(
+      runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, "required", isolatedCwd, 2)
+        .status,
+    ).toBe(0);
+    for (let attempt = 2; attempt < 4; attempt += 1) {
+      for (const requestPath of completeRequestPaths) {
+        const response = await fetch(`${baseUrl}${requestPath}`);
+        expect(response.status).toBe(200);
+        await response.arrayBuffer();
+      }
+    }
+    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version).status).toBe(1);
+    const complete = runPrepublishAssertion(
+      baseUrl,
+      "@openclaw/whatsapp",
+      version,
+      "required",
+      isolatedCwd,
+      "complete",
+      2,
+    );
+    expect(complete.status, complete.stderr).toBe(0);
+    expect(complete.stdout).toContain("Verified 4 complete ClawHub artifact audit sequence(s).");
+
+    expect((await fetch(`${baseUrl}${whatsappPath}`)).status).toBe(200);
+    const partial = runPrepublishAssertion(
+      baseUrl,
+      "@openclaw/whatsapp",
+      version,
+      "required",
+      isolatedCwd,
+      "complete",
+      2,
+    );
+    expect(partial.status).toBe(1);
+
+    expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fforeign`)).status).toBe(404);
+    for (const requestPath of completeRequestPaths.slice(1, 3)) {
+      expect((await fetch(`${baseUrl}${requestPath}`)).status).toBe(200);
+    }
+    const foreign = runPrepublishAssertion(
+      baseUrl,
+      "@openclaw/whatsapp",
+      version,
+      "required",
+      isolatedCwd,
+      "complete",
+      2,
+    );
+    expect(foreign.status).toBe(1);
+    expect(foreign.stderr).toContain("unexpected ClawHub fixture requests");
+
+    const { baseUrl: maximumBaseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
+    for (let attempt = 0; attempt < 17; attempt += 1) {
+      for (const requestPath of completeRequestPaths) {
+        const response = await fetch(`${maximumBaseUrl}${requestPath}`);
+        expect(response.status).toBe(200);
+        await response.arrayBuffer();
+      }
+    }
+    const aboveMaximum = runPrepublishAssertion(
+      maximumBaseUrl,
+      "@openclaw/whatsapp",
+      version,
+      "required",
+      isolatedCwd,
+      "complete",
+      2,
+    );
+    expect(aboveMaximum.status).toBe(1);
+    expect(aboveMaximum.stderr).toContain(
+      "expected 2-16 complete ClawHub artifact audit sequences",
+    );
   });
 
   it("serves separate plugin-family and skill search fixtures", async () => {

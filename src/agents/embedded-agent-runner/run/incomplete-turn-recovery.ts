@@ -1,5 +1,5 @@
 /** Owns side-effect-sensitive retry and silent-reply recovery policy. */
-import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
+import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
@@ -12,6 +12,7 @@ import {
   hasAsyncActivity,
   hasAttemptTerminalState,
   isCurrentAttemptReplaySafe,
+  resolveCurrentAttemptAssistant,
 } from "./attempt-terminal-evidence.js";
 import {
   hasOnlySilentAssistantReply,
@@ -70,7 +71,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
 
   const assistant = params.assistant;
-  if (!assistant || assistant.stopReason !== "error" || isReplayUnsafeAssistantError(assistant)) {
+  if (!assistant || assistant.stopReason !== "error" || isTerminalAssistantError(assistant)) {
     return false;
   }
 
@@ -95,6 +96,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
+    params.attempt.terminal.kind === "failed" ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
@@ -128,7 +130,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   if (
     params.payloadCount === 0 &&
     assistant?.stopReason !== "error" &&
@@ -176,7 +178,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     return null;
   }
 
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return null;
   }
@@ -269,6 +271,14 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
     ),
   );
+  // ToolErrorSummary has no call id: its owner must match a failed result in the
+  // proven terminal batch, or a stale/unrelated error could authorize continuation.
+  const hasUnsettledToolError = Boolean(
+    attempt.lastToolError &&
+    (assistant?.stopReason !== "toolUse" ||
+      !allToolsProvenSettled ||
+      !failedToolNames.has(attempt.lastToolError.toolName)),
+  );
   const intentionalTermination =
     allToolsProvenSettled &&
     assistant?.stopReason === "toolUse" &&
@@ -287,6 +297,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     allToolsProvenSettled,
     parkedCodeModeRun,
     failedToolNames,
+    hasUnsettledToolError,
     intentionalTermination,
   };
 }
@@ -305,8 +316,13 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const { attempt } = params;
-  const { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination } =
-    resolveSettledToolBatchEvidence(attempt);
+  const {
+    assistant,
+    allToolsProvenSettled,
+    failedToolNames,
+    hasUnsettledToolError,
+    intentionalTermination,
+  } = resolveSettledToolBatchEvidence(attempt);
   const terminal = attempt.terminal;
   const idlePromptTimeout =
     terminal.kind === "timeout" &&
@@ -327,14 +343,6 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
       attempt,
     }),
   );
-  // ToolErrorSummary has no call id: its owner must match a failed result in the
-  // proven terminal batch, or a stale/unrelated error could authorize finalization.
-  const hasUnsettledToolError = Boolean(
-    attempt.lastToolError &&
-    (assistant?.stopReason !== "toolUse" ||
-      !allToolsProvenSettled ||
-      !failedToolNames.has(attempt.lastToolError.toolName)),
-  );
   if (
     params.payloadCount !== 0 ||
     (!params.allowEmptyStopContinuation && hasOnlySilentAssistantReply(attempt.assistantTexts)) ||
@@ -353,7 +361,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (hasCompletedMessagingToolDeliveryEvidence(attempt)) {
+  if (attempt.hasToolMediaBlockReply || hasCompletedMessagingToolDeliveryEvidence(attempt)) {
     return null;
   }
   if (
@@ -398,7 +406,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt) ?? null;
   if (
     assistant?.stopReason === "stop" &&
     isOllamaIncompleteTurnProvider(params.provider) &&

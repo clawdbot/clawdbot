@@ -75,28 +75,31 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect((file as File).name).toBe("voice-note.m4a");
   });
 
-  it("omits the optional prompt field while preserving language hints", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+  it.each([undefined, "ru"])(
+    "omits the optional prompt field with language %j",
+    async (language) => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.ogg",
-      mime: "audio/ogg",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "groq",
-      baseUrl: "https://api.groq.com/openai/v1",
-      defaultBaseUrl: "https://api.groq.com/openai/v1",
-      defaultModel: "whisper-large-v3-turbo",
-      language: "ru",
-    });
+      await transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "note.ogg",
+        mime: "audio/ogg",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "groq",
+        baseUrl: "https://api.groq.com/openai/v1",
+        defaultBaseUrl: "https://api.groq.com/openai/v1",
+        defaultModel: "whisper-large-v3-turbo",
+        language,
+      });
 
-    const form = getRequest().init?.body;
-    expect(form).toBeInstanceOf(FormData);
-    expect((form as FormData).get("language")).toBe("ru");
-    expect((form as FormData).get("prompt")).toBeNull();
-  });
+      const form = getRequest().init?.body;
+      expect(form).toBeInstanceOf(FormData);
+      expect((form as FormData).get("language")).toBe(language ?? null);
+      expect((form as FormData).get("prompt")).toBeNull();
+    },
+  );
 
   it("omits bearer auth for explicit no-auth requests", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });

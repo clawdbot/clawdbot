@@ -105,7 +105,12 @@ describe("AppSidebar project session activity", () => {
               {
                 threadId: "person-thread",
                 name: "Ada's session",
-                createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+                createdActor: {
+                  type: "human",
+                  id: "profile-ada",
+                  label: "Ada",
+                  identity: { type: "profile", id: "profile-ada" },
+                },
                 status: "idle",
                 archived: false,
                 canContinue: true,
@@ -120,7 +125,7 @@ describe("AppSidebar project session activity", () => {
     await sidebar.updateComplete;
 
     const person = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-catalog-project="person:profile-ada"]',
+      '[data-session-catalog-project="person:profile:profile-ada"]',
     );
     expect(person?.getAttribute("aria-expanded")).toBe("false");
     expect(sidebar.querySelector('[data-session-key*="person-thread"]')).toBeNull();
@@ -132,7 +137,7 @@ describe("AppSidebar project session activity", () => {
     await sidebar.updateComplete;
     expect(
       JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
-    ).toEqual(["catalog-person:codex:gateway:local:person:profile-ada"]);
+    ).toEqual(["catalog-person:codex:gateway:local:person:profile:profile-ada"]);
   });
 
   it("preserves catalog menu focus when project groups reorder", async () => {

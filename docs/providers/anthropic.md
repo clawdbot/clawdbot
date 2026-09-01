@@ -227,6 +227,13 @@ Code sessions on the Gateway and on connected node hosts:
 - A CLI-only session has no archive flag, so it remains visible while its
   transcript is present.
 
+Claude Code `/rename` titles take precedence over automatic titles and the first
+prompt. `/color` imports the matching session color; cleared or unrecognized
+colors stay unset. Discovery reads a bounded transcript prefix and tail, so recent
+metadata appended to large transcripts is included without reading the entire
+history. Metadata outside those windows may be unavailable. Desktop rows retain
+their Desktop title and remain colorless.
+
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local `~/.claude/projects/` directory exists.
@@ -265,6 +272,9 @@ creates or reuses a model-locked native session, imports at most 200 visible
 items or 512 KiB, and seeds the Claude CLI binding. The first turn resumes with
 `--fork-session`; Claude assigns the fork a new session ID, so later turns use
 the fork and the source session stays untouched.
+
+The new OpenClaw session starts with the catalog title and color. Continuing an
+already adopted session preserves any title or color changes made in OpenClaw.
 
 A headless node host can also make its Claude CLI rows continuable by enabling
 the node-local setting below and restarting the node host:
@@ -411,7 +421,8 @@ Anthropic has a recommended model for that refusal category.
    are discarded per Anthropic's replay rules (they must not be echoed back or
    executed).
 4. If the recommended model declines as well, the turn surfaces the refusal
-   as an error.
+   as an error. OpenClaw does not retry a final refusal or advance to another
+   configured model.
 
 The fallback happens at the Anthropic API level, so the serving model does not
 need to be in your configured OpenClaw fallback chain.
@@ -646,9 +657,12 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     entries with that value are dropped during request header resolution, and
     unsupported older Claude models stay on their normal context window.
 
-    `params.context1m: true` behaves the same way for the Claude CLI backend
-    (`claude-cli/*`): eligible GA-capable Opus and Sonnet models already get the
-    1M window automatically, so the param is optional there too.
+    Claude CLI (`claude-cli/*`) has its own context budget. For older models
+    such as Sonnet 4.6, API availability does not automatically select the CLI's
+    extended context. OpenClaw uses CLI-owned metadata and configured limits;
+    an eligible `[1m]` model ref or `params.context1m: true` selects a 1M budget.
+    Native extended-context access still depends on the installed CLI and your
+    account; see [Claude Code extended context](https://code.claude.com/docs/en/model-config#extended-context).
 
     <Warning>
     Requires long-context access on your Anthropic credential. OAuth/subscription token auth keeps its required Anthropic beta headers, but OpenClaw strips the retired 1M beta header if it remains in older config.

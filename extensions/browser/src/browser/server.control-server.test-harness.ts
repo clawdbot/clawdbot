@@ -216,6 +216,10 @@ const pwMocks = vi.hoisted(() => {
     })),
     getMainFrameDocumentIdentityViaPlaywright: vi.fn(async () => "pw:test-document"),
     getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
+    getPageTextViaPlaywright: vi.fn(async (_opts?: unknown) => ({
+      text: "Page text",
+      truncated: false,
+    })),
     highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
@@ -238,7 +242,7 @@ const pwMocks = vi.hoisted(() => {
       stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
     })),
     storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
-    storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+    storeSnapshotRefsViaPlaywright: vi.fn(async () => {}),
     traceStartViaPlaywright: vi.fn(async () => {}),
     traceStopViaPlaywright: vi.fn(async (opts: { path: string }) => opts.path),
     takeScreenshotViaPlaywright: vi.fn(async () => ({
@@ -566,6 +570,7 @@ vi.mock("./screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
   normalizeBrowserScreenshot: vi.fn(async (buf: Buffer) => ({
     buffer: buf,
+    sourceDimensions: null,
     contentType: "image/png",
   })),
 }));

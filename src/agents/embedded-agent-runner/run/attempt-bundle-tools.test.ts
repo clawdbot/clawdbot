@@ -3,7 +3,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -164,7 +164,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       input.attempt.disableTools = mode === "disableTools";
       input.isRawModelRun = mode === "raw";
       input.attempt.forceRestartSafeTools = mode === "restart";
-      input.attempt.forceCodeModeReconciliationTools = mode === "reconciliation";
+      if (mode === "reconciliation") {
+        input.attempt.codeModeRecovery = { kind: "inspect", phase: "read-required" };
+      }
       input.preparedToolBase.toolsEnabled = mode !== "model";
 
       await prepareEmbeddedAttemptBundleTools(input);

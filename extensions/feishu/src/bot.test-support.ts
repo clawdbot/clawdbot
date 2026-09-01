@@ -11,6 +11,7 @@ type TestConfigBase = Record<string, unknown> & {
 type FeishuSecretRefPolicyCase = {
   name: string;
   provider: string;
+  defaultEnv?: string;
   providers: NonNullable<NonNullable<ClawdbotConfig["secrets"]>["providers"]>;
   configured: boolean;
 };
@@ -34,13 +35,42 @@ export const feishuSecretRefPolicyCases: FeishuSecretRefPolicyCase[] = [
   {
     name: "provider allowlist excluding the selected credential",
     provider: "corp-env",
+    defaultEnv: "corp-env",
     providers: { "corp-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] } },
     configured: false,
   },
   {
     name: "configured env provider allowing the selected credential",
     provider: "corp-env",
+    defaultEnv: "corp-env",
     providers: { "corp-env": { source: "env", allowlist: [FEISHU_SELECTED_SECRET_ENV] } },
+    configured: true,
+  },
+  {
+    name: "selected env provider with an empty allowlist",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "env", allowlist: [] } },
+    configured: false,
+  },
+  {
+    name: "literal env default shadowing a file provider",
+    provider: "default",
+    providers: { default: { source: "file", path: "/unused" } },
+    configured: true,
+  },
+  {
+    name: "selected env default shadowing an exec provider",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "exec", command: "/unused" } },
+    configured: true,
+  },
+  {
+    name: "selected env default shadowing a store provider",
+    provider: "corp-env",
+    defaultEnv: "corp-env",
+    providers: { "corp-env": { source: "store" } },
     configured: true,
   },
 ];
@@ -58,6 +88,7 @@ export function createFeishuTestConfig(
 export function createFeishuSecretRefPolicyConfig({
   provider,
   providers,
+  defaultEnv,
 }: FeishuSecretRefPolicyCase): ClawdbotConfig {
   return createFeishuTestConfig(
     {
@@ -68,11 +99,19 @@ export function createFeishuSecretRefPolicyConfig({
         },
         sibling: {
           appId: "sibling-app",
-          appSecret: { source: "env", provider: "default", id: FEISHU_SIBLING_SECRET_ENV },
+          appSecret: { source: "env", provider: "sibling-env", id: FEISHU_SIBLING_SECRET_ENV },
         },
       },
     },
-    { secrets: { providers } },
+    {
+      secrets: {
+        defaults: defaultEnv ? { env: defaultEnv } : undefined,
+        providers: {
+          ...providers,
+          "sibling-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] },
+        },
+      },
+    },
   );
 }
 

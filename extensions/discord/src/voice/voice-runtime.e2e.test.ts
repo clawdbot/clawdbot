@@ -37,6 +37,7 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     createFollowManager,
     getSessionEntry,
+    getLastAudioPlayer,
     getVoiceReceive,
     beginSpeakerTurn,
     lastAgentCommandArgs,
@@ -78,7 +79,7 @@ defineDiscordVoiceTests(
         expect.objectContaining({ end: { behavior: "Manual" } }),
       );
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(entry.player.play).toHaveBeenCalledOnce();
+      expect(getLastAudioPlayer().play).toHaveBeenCalledOnce();
       expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
       expect(manager.status()).toEqual([]);
     });
@@ -414,7 +415,7 @@ defineDiscordVoiceTests(
       await entry.playbackQueue;
 
       expect(textToSpeechMock).toHaveBeenCalledOnce();
-      expect(entry.player.play).toHaveBeenCalledOnce();
+      expect(getLastAudioPlayer().play).toHaveBeenCalledOnce();
       expect(
         loggerWarnMock.mock.calls
           .map(([message]) => String(message))
@@ -463,7 +464,7 @@ defineDiscordVoiceTests(
       await entry.processingQueue;
       await entry.playbackQueue;
 
-      expect(entry.player.play).not.toHaveBeenCalled();
+      expect(getLastAudioPlayer().play).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledOnce();
     });
 
@@ -789,7 +790,7 @@ defineDiscordVoiceTests(
       await entry.processingQueue;
 
       expect(transcribeAudioFileMock).not.toHaveBeenCalled();
-      expect(entry.player.play).not.toHaveBeenCalled();
+      expect(getLastAudioPlayer().play).not.toHaveBeenCalled();
     });
 
     it("keeps followed-user voice state last-event-wins across a pending join", async () => {

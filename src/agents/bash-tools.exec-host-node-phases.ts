@@ -226,19 +226,8 @@ function hasNodeAllowAlwaysCommandApproval(params: {
   return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
 }
 
-/** Returns true when local policy allows direct node invoke without prepare/approval. */
-export function shouldSkipNodeApprovalPrepare(params: {
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  strictInlineEval?: boolean;
-}): boolean {
-  return (
-    params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
-  );
-}
-
 /** Formats a raw `node.invoke system.run` response as an exec tool result. */
-export function formatNodeRunToolResult(params: {
+function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
   cwd: string | undefined;
@@ -266,13 +255,14 @@ export function formatNodeRunToolResult(params: {
       : "";
   const output = [stdout, stderr, errorText, outcomeNote].filter(Boolean).join("\n");
   return {
+    // Tool details are UI metadata; the model needs the execution target in content.
     content: [
       {
         type: "text",
-        text: renderExecUpdateText({
+        text: `Node: ${params.nodeId}\n${renderExecUpdateText({
           tailText: output,
           warnings: params.warnings ?? [],
-        }),
+        })}`,
       },
     ],
     details: {
@@ -299,15 +289,9 @@ export async function resolveNodeExecutionTarget(
   }
   // Canonicalize boundNode and requestedNode (which may be display names, IPs,
   // or partial ID prefixes) to full device IDs before comparing.
-  let resolvedBoundNodeId: string | undefined;
-  if (params.boundNode) {
-    try {
-      resolvedBoundNodeId = resolveNodeIdFromList(nodes, params.boundNode);
-    } catch {
-      // boundNode comes from config; if it cannot be resolved, fall through
-      // to the existing nodeQuery resolution which produces a clearer error.
-    }
-  }
+  const resolvedBoundNodeId = params.boundNode
+    ? resolveNodeIdFromList(nodes, params.boundNode)
+    : undefined;
   let resolvedRequestedNodeId: string | undefined;
   if (params.requestedNode) {
     try {
@@ -319,19 +303,18 @@ export async function resolveNodeExecutionTarget(
       );
     }
   }
-  const canonicalBound = resolvedBoundNodeId ?? params.boundNode;
-  if (canonicalBound && resolvedRequestedNodeId && canonicalBound !== resolvedRequestedNodeId) {
+  if (
+    resolvedBoundNodeId &&
+    resolvedRequestedNodeId &&
+    resolvedBoundNodeId !== resolvedRequestedNodeId
+  ) {
     throw new Error(
-      `exec node not allowed (bound to ${canonicalBound}, requested resolved to ${resolvedRequestedNodeId})`,
+      `exec node not allowed (bound to ${resolvedBoundNodeId}, requested resolved to ${resolvedRequestedNodeId})`,
     );
   }
-  // Prefer resolved IDs; fall back to raw boundNode so stale/unresolvable
-  // values still reach resolveNodeIdFromList (which produces a clear
-  // "unknown node" error) instead of silently picking a default node.
-  const nodeQuery = resolvedBoundNodeId || resolvedRequestedNodeId || params.boundNode;
   const nodeInfo = resolveEligibleNodeFromList(
     nodes,
-    nodeQuery,
+    resolvedBoundNodeId ?? resolvedRequestedNodeId,
     (node) => node.connected === true && node.commands?.includes("system.run") === true,
     {
       ineligibleExact: (query, eligibleIds) =>
@@ -347,19 +330,18 @@ export async function resolveNodeExecutionTarget(
     },
   );
   const nodeId = nodeInfo.nodeId;
-  const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
 
   const runTimeoutSec = resolveNodeRunTimeoutSec(params.timeoutSec, params.defaultTimeoutSec);
   const invokeDeadlineMs = resolveNodeInvokeDeadlineMs(runTimeoutSec, params.defaultTimeoutSec);
   return {
     nodeId,
-    platform: nodeInfo?.platform,
-    argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
+    platform: nodeInfo.platform,
+    argv: buildNodeShellCommand(params.command, nodeInfo.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
     invokeDeadlineMs,
     invokeWaitMs: resolveNodeInvokeWaitMs(invokeDeadlineMs),
     runTimeoutSec,
-    supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
+    supportsSystemRunPrepare: nodeInfo.commands?.includes("system.run.prepare") === true,
   };
 }
 
@@ -420,25 +402,19 @@ export function buildNodeSystemRunInvoke(params: {
   };
 }
 
-/** Invokes `system.run` directly when approval policy is fully bypassed. */
-export async function invokeNodeSystemRunDirect(params: {
+/** Dispatches an authorized run and renders its transport or execution outcome. */
+export async function dispatchNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
+  invoke: Record<string, unknown>;
+  scopes?: Parameters<typeof invokeNodeSystemRun>[0]["scopes"];
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
-  const invoke = buildNodeSystemRunInvoke({
-    target: params.target,
-    command: params.target.argv,
-    rawCommand: params.request.command,
-    cwd: params.request.workdir,
-    agentId: params.request.agentId,
-    sessionKey: params.request.sessionKey,
-    notifyOnExit: params.request.notifyOnExit,
-  });
   params.request.signal?.throwIfAborted();
   const result = await invokeNodeSystemRun({
     invokeWaitMs: params.target.invokeWaitMs,
-    invoke,
+    invoke: params.invoke,
+    scopes: params.scopes,
     signal: params.request.signal,
   });
   if (!result.ok) {
@@ -477,6 +453,8 @@ export async function prepareNodeSystemRun(params: {
       command: "system.run.prepare",
       params: {
         command: params.target.argv,
+        security: params.request.security,
+        ask: params.request.ask,
         rawCommand: params.request.command,
         ...(params.request.workdir != null ? { cwd: params.request.workdir } : {}),
         ...(params.target.env !== undefined ? { env: params.target.env } : {}),
@@ -610,6 +588,8 @@ export async function analyzeNodeApprovalRequirement(params: {
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
+      params.prepared.execPolicy?.security === "allowlist" ||
+      params.prepared.execPolicy?.ask === "always" ||
       params.request.autoReview === true) &&
     analysisOk
   ) {

@@ -25,6 +25,7 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -65,11 +66,13 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
+  allowActiveQueueResolution = false,
 ) {
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
   const turnAdoptionLifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  prepareChannelParticipantObservation(ctx);
   const turnAdoptionState = { adopted: false };
   const normalizedParams: DispatchFromConfigParams = {
     ...params,
@@ -386,6 +389,7 @@ export async function gatherDispatchRequest(
   const workspaceDir =
     preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
+    allowActiveQueueResolution,
     agentId: sessionAgentId,
     cfg,
     ctx,
@@ -476,6 +480,7 @@ export async function gatherDispatchRequest(
       stageRemoteInboundMediaIfNeeded({
         ctx: hookCtx,
         cfg,
+        agentId: sessionAgentId,
         sessionKey: acpDispatchSessionKey,
         workspaceDir,
         remoteMediaMode: "cache",

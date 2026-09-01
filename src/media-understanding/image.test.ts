@@ -746,6 +746,7 @@ describe("describeImageWithModelCore", () => {
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
+      { catalogMode: "static" },
     );
     expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
@@ -762,7 +763,6 @@ describe("describeImageWithModelCore", () => {
           workspaceDir: "/tmp/openclaw-workspace",
         }),
         skipAgentDiscovery: true,
-        skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
       },
     );
@@ -779,29 +779,21 @@ describe("describeImageWithModelCore", () => {
     });
   });
 
-  it("applies provider normalization before using a fast image model match", async () => {
+  it("normalizes the image model once before provider dispatch", async () => {
     const authStorage = {
       [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
     };
-    resolveModelAsyncMock
-      .mockResolvedValueOnce({
+    resolveModelAsyncMock.mockImplementation(
+      async (_provider, _modelId, _agentDir, _cfg, options) => ({
         authStorage,
         model: {
           provider: "openai",
           id: "gpt-5.4",
-          api: "openai-completions",
+          api: options?.skipProviderRuntimeHooks ? "openai-completions" : "openai-responses",
           input: ["text", "image"],
         },
-      })
-      .mockResolvedValueOnce({
-        authStorage,
-        model: {
-          provider: "openai",
-          id: "gpt-5.4",
-          api: "openai-responses",
-          input: ["text", "image"],
-        },
-      });
+      }),
+    );
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "openai-responses",
@@ -829,23 +821,7 @@ describe("describeImageWithModelCore", () => {
       model: "gpt-5.4",
     });
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
-      1,
-      "openai",
-      "gpt-5.4",
-      "/tmp/openclaw-agent",
-      {},
-      {
-        allowBundledStaticCatalogFallback: true,
-        authStorage: preparedAuthStorage,
-        modelRegistry: {},
-        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
-        skipAgentDiscovery: true,
-        skipProviderRuntimeHooks: true,
-      },
-    );
-    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
-      2,
+    expect(resolveModelAsyncMock).toHaveBeenCalledExactlyOnceWith(
       "openai",
       "gpt-5.4",
       "/tmp/openclaw-agent",

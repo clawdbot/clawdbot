@@ -5,6 +5,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
@@ -55,6 +56,14 @@ export type McpLoopbackRequestContext = {
    */
   toolsAllow?: string[];
   skillWorkshop?: SkillWorkshopRunOptions;
+  /**
+   * Attempt-local authority to start or redirect delegated work, stamped into
+   * the grant so a fallback completion-report turn running on a CLI backend
+   * gets the same gate as an embedded attempt. The loopback surface enforces
+   * it on both tools/list and tools/call, so CLI-side advisory flags cannot
+   * reopen it. Unset keeps the full delegation surface.
+   */
+  delegationCapability?: DelegationCapability;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-owned creator origin; child MCP request fields cannot widen it. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;

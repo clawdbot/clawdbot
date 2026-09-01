@@ -6,10 +6,14 @@ import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
 import { resolveNodeWorkerContainerEngine } from "../../../../src/node-host/node-worker-container-engine.js";
 import { createDeferred } from "../../../helpers/promise.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -247,6 +251,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
       const published = await createPublishedWireWorkspace(root);
       const engine = await resolveNodeWorkerContainerEngine();
       const approvalEvents: string[] = [];
+      const gatewayOwner = createQaGatewayChild();
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
@@ -258,9 +263,10 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
       let releasePendingCancellation: (() => void) | undefined;
       let sessionKey = SESSION_KEY;
 
-      try {
+      const runProof = async () => {
         expect(engine.id).toBe("docker");
         gateway = await startPairedNodeWorkerGateway({
+          owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
           fullAccess: true,
           useRepoCli: false,
@@ -694,33 +700,39 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
         await expect(
           dockerOutput(["ps", "--all", "--filter", `id=${container.id}`, "--format", "{{.ID}}"]),
         ).resolves.toBe("");
-      } finally {
-        releasePendingCancellation?.();
-        if (controlUiProof) {
-          controlUiProof.fullAccessPatch.release();
-          await controlUiProof.context.close();
-          await controlUiProof.browser.close();
-          console.info(
-            `[node-worker-container-wire] Control UI proof artifacts: ${controlUiProof.artifactDir}`,
+      };
+      await runQaGatewayFixture(
+        runProof,
+        () => releasePendingCancellation?.(),
+        () => controlUiProof?.fullAccessPatch.release(),
+        async () => controlUiProof?.context.close(),
+        async () => controlUiProof?.browser.close(),
+        async () => {
+          const cleanup = await Promise.allSettled([
+            workerNode?.stop() ?? Promise.resolve(),
+            operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
+            stopQaGatewayFixture(gatewayOwner),
+            provider.stop(),
+            closeWireServer(published.server),
+          ]);
+          const failures = cleanup.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
           );
-        }
-        const cleanup = await Promise.allSettled([
-          workerNode?.stop() ?? Promise.resolve(),
-          operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          gateway?.stop() ?? Promise.resolve(),
-          provider.stop(),
-          closeWireServer(published.server),
-        ]);
-        const failures = cleanup.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node worker container wire cleanup failed");
-        }
-      }
+          if (failures.length === 1) {
+            throw failures[0];
+          }
+          if (failures.length > 1) {
+            throw new AggregateError(failures, "node worker container wire cleanup failed");
+          }
+        },
+        () => {
+          if (controlUiProof) {
+            console.info(
+              `[node-worker-container-wire] Control UI proof artifacts: ${controlUiProof.artifactDir}`,
+            );
+          }
+        },
+      );
     },
   );
 });

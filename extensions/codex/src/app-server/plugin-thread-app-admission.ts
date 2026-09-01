@@ -6,11 +6,12 @@ import {
   type CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
-import type {
-  CodexPluginInventory,
-  CodexPluginInventoryRecord,
-  CodexPluginOwnedApp,
-  CodexPluginRuntimeRequest,
+import {
+  resolveOwnedAppReadOnlyToolConfigKeys,
+  type CodexPluginInventory,
+  type CodexPluginInventoryRecord,
+  type CodexPluginOwnedApp,
+  type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import {
   type CodexAppServerRequestResult,
@@ -187,6 +188,7 @@ export function toCodexPluginOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedA
     accessible: app.isAccessible,
     enabled: app.isEnabled,
     needsAuth: !app.isAccessible,
+    ...resolveOwnedAppReadOnlyToolConfigKeys(app),
   };
 }
 

@@ -413,9 +413,7 @@ export interface CurrentConversationBindings {
   parent_conversation_id: string | null;
   record_json: string;
   status: string;
-  target_agent_id: string;
   target_kind: string;
-  target_session_id: string | null;
   target_session_key: string;
   updated_at: number;
 }
@@ -686,6 +684,44 @@ export interface GatewayRestartSentinel {
   ts: number;
   updated_at_ms: number;
   version: number;
+}
+
+export interface GithubPersonalPublicationRequests {
+  agent_id: string;
+  base_branch: string;
+  body: string | null;
+  branch: string;
+  connection_generation: string;
+  created_at_ms: number;
+  effect_state: string | null;
+  error_code: string | null;
+  execution_id: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string;
+  identity_source: string;
+  last_effect: string | null;
+  next_action: string | null;
+  owner_profile_id: string;
+  pull_request_url: string | null;
+  push_repository: string;
+  reported_at_ms: number | null;
+  repository: string;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string;
+  source_index_tree: string;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_tree: string;
+  worktree_id: string;
 }
 
 export interface GithubPublicationRequests {
@@ -1275,14 +1311,25 @@ export interface UserPreferences {
   value_json: string;
 }
 
+export interface WebPushApprovalDeliveries {
+  approval_id: string;
+  device_id: string;
+  prepared_at_ms: number;
+  subscription_id: string;
+  user_profile_id: string | null;
+}
+
 export interface WebPushSubscriptions {
   auth: string;
   created_at_ms: number;
+  device_id: string | null;
   endpoint: string;
   endpoint_hash: string;
   p256dh: string;
+  preferences_json: string | null;
   subscription_id: string;
   updated_at_ms: number;
+  user_profile_id: string | null;
 }
 
 export interface WorkerEnvironmentCredentials {
@@ -1562,6 +1609,7 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  github_personal_publication_requests: GithubPersonalPublicationRequests;
   github_publication_requests: GithubPublicationRequests;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
@@ -1607,6 +1655,7 @@ export interface DB {
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
   user_preferences: UserPreferences;
+  web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;

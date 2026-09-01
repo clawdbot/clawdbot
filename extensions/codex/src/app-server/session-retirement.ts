@@ -21,6 +21,7 @@ import type {
   CodexAppServerThreadBinding,
   CodexSessionGenerationRetirementResult,
 } from "./session-binding.js";
+import { getCodexSessionInitializationRollback } from "./session-initialization.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
@@ -65,12 +66,16 @@ export async function withCodexAppServerSessionDeletion<T>(
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
   };
-  return await bindingStore.withSessionDeletion(
-    identity,
-    assertCurrent,
-    async (binding, mutation) => {
+  const remove = () =>
+    bindingStore.withSessionDeletion(identity, assertCurrent, async (binding, mutation) => {
       assertCurrent();
-      if (binding?.connectionScope === "supervision") {
+      const rollbackInitialization = getCodexSessionInitializationRollback(
+        bindingStore,
+        params,
+        identity,
+        binding,
+      );
+      if (binding?.connectionScope === "supervision" && !rollbackInitialization) {
         throw new Error("Cannot delete a session while its Codex binding is owned by supervision");
       }
       const clientLease = binding?.clientId
@@ -104,6 +109,10 @@ export async function withCodexAppServerSessionDeletion<T>(
         });
       } finally {
         try {
+          if (committed && rollbackInitialization) {
+            assertCurrent();
+            await rollbackInitialization();
+          }
           // An artifact publication failure after COMMIT still ends this subscription;
           // only the session owner's transaction rollback may restore the binding.
           if (committed && binding && clientLease) {
@@ -134,8 +143,8 @@ export async function withCodexAppServerSessionDeletion<T>(
           clientLease?.release();
         }
       }
-    },
-  );
+    });
+  return params.initialization ? await bindingStore.withThreadArchiveFence(remove) : await remove();
 }
 
 /** Retire binding and native subscription under the same generation/physical-client ownership fence. */

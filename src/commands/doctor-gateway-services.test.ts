@@ -105,6 +105,7 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayPathNonMinimal: "gateway-path-nonminimal",
     gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
     gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
+    gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
     gatewayTokenDrift: "gateway-token-drift",
     gatewayTokenEmbedded: "gateway-token-embedded",
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
@@ -601,7 +602,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: "/usr/bin/node",
       version: "20.20.2",
-      supported: false,
+      status: "unsupported",
     });
     mocks.renderSystemNodeWarning.mockReturnValue("duplicate doctor runtime warning");
 
@@ -615,6 +616,45 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "Using /home/test/.nvm/versions/node/v22.22.3/bin/node",
     );
   });
+
+  it.each([false, true])(
+    "reports failed Bun probes without runtime migration (other repairable drift: %s)",
+    async (otherDrift) => {
+      const bunCommand = {
+        programArguments: ["/opt/bun", "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      };
+      mocks.readCommand.mockResolvedValue(bunCommand);
+      mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: false,
+        issues: [
+          {
+            code: "gateway-runtime-probe-failed",
+            message: "Gateway service Bun runtime probe failed.",
+            detail: "/opt/bun (cwd /root): EACCES",
+          },
+          ...(otherDrift
+            ? [{ code: "gateway-path-nonminimal", message: "Gateway PATH should be regenerated" }]
+            : []),
+        ],
+      });
+      const prompter = makeDoctorPrompts();
+
+      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter);
+
+      expectNoteContaining("/opt/bun (cwd /root): EACCES", "Gateway service config");
+      expectNoNoteContaining("unsupported", "Gateway service config");
+      expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+      expect(prompter.confirmRuntimeRepair).toHaveBeenCalledTimes(Number(otherDrift));
+      expect(mocks.install).toHaveBeenCalledTimes(Number(otherDrift));
+      for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
+        expect(options).toEqual(
+          expect.objectContaining({ runtime: "bun", runtimePath: "/opt/bun" }),
+        );
+      }
+    },
+  );
 
   it("preserves a supported Bun runtime when repairing the Gateway service", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
@@ -670,7 +710,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: systemNodePath,
       version: "24.15.0",
-      supported: true,
+      status: "supported",
     });
 
     await runRepair({ gateway: {} });

@@ -15,18 +15,19 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
-import { hasAssistantVisibleReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import {
+  hasAssistantVisibleReply,
+  resolveManagedStreamMediaUrls,
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   buildAssistantStreamData,
+  emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
   isOpenAiCompletionsAssistantMessage,
-  isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
-  scopeAssistantMessageToStreamBlock,
-  shouldSuppressAssistantVisibleOutput,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -34,7 +35,6 @@ import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
   createThinkingTagStreamState,
-  extractAssistantCommentaryText,
   extractAssistantThinking,
   extractAssistantVisibleText,
   extractEmbeddedAssistantText,
@@ -43,6 +43,7 @@ import {
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
+  hasBillableUsage,
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
@@ -56,12 +57,22 @@ export function preservePendingAssistantUsage(
 ): AssistantMessage {
   if (
     isSubscribeTranscriptOnlyOpenClawAssistantMessage(message) ||
-    !hasNonzeroUsage(pendingUsage)
+    !hasBillableUsage(pendingUsage)
   ) {
     return message;
   }
   const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
   if (hasNonzeroUsage(messageUsage)) {
+    if (
+      pendingUsage.cost?.totalOrigin === "provider-billed" &&
+      messageUsage.cost?.totalOrigin !== "provider-billed"
+    ) {
+      message.usage.cost = {
+        ...makeZeroUsageSnapshot().cost,
+        ...message.usage.cost,
+        ...pendingUsage.cost,
+      };
+    }
     return message;
   }
 
@@ -77,12 +88,16 @@ export function preservePendingAssistantUsage(
     output,
     cacheRead,
     cacheWrite,
+    ...(pendingUsage.cacheWrite1h !== undefined ? { cacheWrite1h: pendingUsage.cacheWrite1h } : {}),
     ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
     totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
     ...(pendingUsage.reasoningTokens !== undefined
       ? { reasoningTokens: pendingUsage.reasoningTokens }
       : {}),
   };
+  if (pendingUsage.cost) {
+    Object.assign(message.usage.cost, pendingUsage.cost);
+  }
   return message;
 }
 
@@ -134,8 +149,6 @@ export function handleMessageStart(
   emitAssistantMessageStart(ctx);
 }
 
-/** Handles assistant message deltas, reasoning, directives, and block replies. */
-
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -150,7 +163,7 @@ export function handleMessageEnd(
   ctx.state.assistantTurnCount += 1;
   const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
+  const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
   // Provider completion can omit thinking_end; close the visible lane before final output.
@@ -159,40 +172,17 @@ export function handleMessageEnd(
   }
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
-    const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);
-    const commentaryMessage = isResponsesCommentary
-      ? scopeAssistantMessageToStreamBlock(
-          assistantMessage as AssistantMessage,
-          ctx.state.lastAssistantStreamContentIndex,
-          ctx.state.lastAssistantStreamItemId,
-        )
-      : assistantMessage;
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(commentaryMessage));
-    appendRawStream({
+    appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_message_end",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
-    });
-    const commentaryAlreadyStreamed =
-      isResponsesCommentary &&
-      Boolean(ctx.state.deltaBuffer) &&
-      ctx.state.deltaBuffer === commentaryText;
-    if (commentaryText && !commentaryAlreadyStreamed) {
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({
-          text: commentaryText,
-          replace: true,
-          phase: "commentary",
-          itemId: isResponsesCommentary ? ctx.state.lastAssistantStreamItemId : undefined,
-        }),
-      );
-    }
+    }));
+    emitAssistantCommentaryStreamData(ctx, assistantMessage);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -213,16 +203,18 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceChatContentText(extractEmbeddedAssistantText(assistantMessage));
+  let rawText: string | undefined;
+  const getRawText = () =>
+    (rawText ??= coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
-  appendRawStream({
+  appendRawStream(() => ({
     ts: Date.now(),
     event: "assistant_message_end",
     runId: ctx.params.runId,
     sessionId: (ctx.params.session as { id?: string }).id,
-    rawText,
+    rawText: getRawText(),
     rawThinking: extractAssistantThinking(assistantMessage),
-  });
+  }));
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const visibleText =
     extractStandaloneMessageToolText(rawVisibleText, {
@@ -241,13 +233,14 @@ export function handleMessageEnd(
   const text = finalVisibleText;
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
+      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(getRawText())
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(trimmedText) : null;
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
@@ -306,6 +299,7 @@ export function handleMessageEnd(
       delta: finalStreamDelta,
       replace: shouldReplaceFinalStream,
       mediaUrls,
+      managedMediaUrls,
       phase: assistantPhase,
     });
     ctx.emitAssistantStreamData(data);

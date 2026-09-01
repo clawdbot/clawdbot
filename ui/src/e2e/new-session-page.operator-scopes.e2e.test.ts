@@ -79,7 +79,7 @@ suite.define(() => {
     }
   });
 
-  it("allows write-scoped normal creation while keeping incognito admin-only", async () => {
+  it("allows write-scoped Fast Mode creation while keeping incognito admin-only", async () => {
     const { context, gateway, page } = await openDraft(["operator.read", "operator.write"]);
     try {
       await expect(gateway.waitForRequest("projects.list")).resolves.toMatchObject({
@@ -87,6 +87,7 @@ suite.define(() => {
       });
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
+      const effort = page.locator('[data-chat-thinking-select="true"]');
 
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isEnabled()).toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
@@ -97,10 +98,18 @@ suite.define(() => {
       expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
       expect(await where.locator('[data-value="connect-machine"]').count()).toBe(0);
       await page.keyboard.press("Escape");
+      await effort.click();
+      const fastMode = page.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => fastMode.isEnabled()).toBe(true);
+      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("off");
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await submit.click();
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", message: "scope proof" },
+        params: { agentId: "main", fastMode: true, message: "scope proof" },
       });
     } finally {
       await context.close();

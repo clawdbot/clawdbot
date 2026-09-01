@@ -58,6 +58,10 @@ export type ChannelIngressIdentityAlias = ChannelIngressIdentityField & {
 
 /** Identity contract for a channel resolver. Plugins provide platform normalization here. */
 export type ChannelIngressIdentityDescriptor = {
+  /** Product identity: only when the plugin can prove the remote issuer and identifier kind. */
+  resolveParticipant?: (
+    subject: ChannelIngressIdentitySubjectInput,
+  ) => { domain: string; idKind: string; id: string } | undefined;
   /** Primary stable identity field. Prefer immutable sender ids when the platform has one. */
   primary: ChannelIngressIdentityField;
   /** Additional identifiers that can match legacy or platform-specific allowlist entries. */
@@ -81,7 +85,10 @@ export type ChannelIngressIdentityDescriptor = {
 
 /** Convenience input for defining a stable identity descriptor with optional aliases. */
 export type StableChannelIngressIdentityParams = ChannelIngressIdentityField &
-  Pick<ChannelIngressIdentityDescriptor, "aliases" | "isWildcardEntry" | "matchEntry"> & {
+  Pick<
+    ChannelIngressIdentityDescriptor,
+    "aliases" | "isWildcardEntry" | "matchEntry" | "resolveParticipant"
+  > & {
     /** Prefix used for generated entry ids when `resolveEntryId` is omitted. */
     entryIdPrefix?: string;
     /** Custom entry-id generator used in redacted diagnostics. */
