@@ -275,6 +275,12 @@ function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerC
 
 function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelivery {
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
+  const decisionLabel =
+    view.approvalKind === "system-agent" && view.applicationStatus === "applied"
+      ? "Applied"
+      : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
+        ? "Not applied"
+        : formatDecision(view.decision);
   const card: GoogleChatCardV2 = {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {
@@ -285,7 +291,7 @@ function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelive
             : view.approvalKind === "system-agent"
               ? "OpenClaw Change"
               : "Exec"
-        } Approval: ${formatDecision(view.decision)}`,
+        } Approval: ${decisionLabel}`,
         subtitle: resolvedBy ? `Resolved by ${resolvedBy}` : "Resolved",
       },
       sections: buildMetadataSection(view),

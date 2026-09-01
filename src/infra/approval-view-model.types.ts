@@ -8,7 +8,10 @@ import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
-import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
+import type {
+  SystemAgentApprovalApplicationStatus,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -131,6 +134,7 @@ type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {
   phase: "resolved";
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
+  applicationStatus?: SystemAgentApprovalApplicationStatus;
 };
 
 /** Expired system change approval view without reply actions. */
@@ -160,6 +164,6 @@ export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | Exp
 export type ApprovalRequest = ApprovalRequestInput;
 /** Stored approval resolution variants accepted by resolved view builders. */
 export type ApprovalResolved =
-  | ExecApprovalResolved
-  | PluginApprovalResolved
+  | (ExecApprovalResolved & { applicationStatus?: never })
+  | (PluginApprovalResolved & { applicationStatus?: never })
   | SystemAgentApprovalResolved;

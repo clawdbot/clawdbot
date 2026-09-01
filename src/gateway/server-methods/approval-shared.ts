@@ -620,7 +620,9 @@ export async function handleApprovalResolve<
     record: resolved.snapshot,
     event: resolvedEvent,
   });
-  params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
+  if (params.approvalKind !== "system-agent") {
+    params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
+  }
 
   const followUps = [
     params.forwardResolved

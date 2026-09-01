@@ -140,9 +140,15 @@ export function buildMSTeamsResolvedApprovalCard(
         ? "OpenClaw Change"
         : "Exec";
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
+  const decisionLabel =
+    view.approvalKind === "system-agent" && view.applicationStatus === "applied"
+      ? "Applied"
+      : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
+        ? "Not applied"
+        : formatApprovalDecision(view.decision);
   return buildAdaptiveCard([
     ...buildCardHeading(
-      `${kindLabel} Approval: ${formatApprovalDecision(view.decision)}`,
+      `${kindLabel} Approval: ${decisionLabel}`,
       resolvedBy ? `Resolved by ${resolvedBy}` : "Resolved",
     ),
     ...buildApprovalSubject(view),

@@ -206,7 +206,13 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
           ? "An OpenClaw change needs your approval."
           : "A command needs your approval.";
   } else if (phase === "resolved") {
-    heading = `*${approvalName} approval: ${resolveSlackApprovalDecisionLabel(view.decision)}*`;
+    const decisionLabel =
+      isSystemAgent && view.applicationStatus === "applied"
+        ? "Applied"
+        : isSystemAgent && view.applicationStatus === "not-applied"
+          ? "Not applied"
+          : resolveSlackApprovalDecisionLabel(view.decision);
+    heading = `*${approvalName} approval: ${decisionLabel}*`;
     const resolvedBy = formatSlackApprover(view.resolvedBy);
     description = resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.";
   } else {

@@ -25,12 +25,15 @@ export type SystemAgentApprovalRequest = {
   expiresAtMs: number;
 };
 
+export type SystemAgentApprovalApplicationStatus = "applied" | "not-applied";
+
 export type SystemAgentApprovalResolved = {
   id: string;
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
   ts: number;
   request?: SystemAgentApprovalRequestPayload;
+  applicationStatus?: SystemAgentApprovalApplicationStatus;
 };
 
 export const SYSTEM_AGENT_APPROVAL_TIMEOUT_MS = 10 * 60_000;

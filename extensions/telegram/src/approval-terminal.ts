@@ -152,7 +152,11 @@ export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalVi
   if (view.approvalKind === "system-agent") {
     return view.decision === "deny"
       ? "❌ OpenClaw change denied. No change was made."
-      : `✅ OpenClaw change approved. Applying: ${truncateDetail(view.operationSummary)}`;
+      : view.applicationStatus === "applied"
+        ? `✅ OpenClaw change approved and applied: ${truncateDetail(view.operationSummary)}`
+        : view.applicationStatus === "not-applied"
+          ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
+          : `✅ OpenClaw change approved. Applying: ${truncateDetail(view.operationSummary)}`;
   }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [

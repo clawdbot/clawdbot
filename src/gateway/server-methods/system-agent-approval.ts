@@ -5,16 +5,23 @@ import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import {
   SYSTEM_AGENT_APPROVAL_DECISIONS,
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
+  type SystemAgentApprovalApplicationStatus,
+  type SystemAgentApprovalResolved,
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
-import { buildRequestedApprovalEvent, handlePendingApprovalRequest } from "./approval-shared.js";
+import {
+  broadcastApprovalResolvedEvent,
+  buildRequestedApprovalEvent,
+  handlePendingApprovalRequest,
+} from "./approval-shared.js";
 import type { GatewaySystemAgentSession } from "./shared-types.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -119,6 +126,26 @@ export function queueDelegatedApproval(params: {
   const decisionPromise = manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
   params.session.pendingApproval = { id: record.id, proposalHash: params.proposal.hash };
   const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
+  const publishApplicationResult = (
+    decision: ExecApprovalDecision,
+    applicationStatus: SystemAgentApprovalApplicationStatus,
+  ) => {
+    const resolvedEvent: SystemAgentApprovalResolved = {
+      id: record.id,
+      decision,
+      resolvedBy: record.resolvedBy ?? null,
+      ts: Date.now(),
+      request,
+      applicationStatus,
+    };
+    broadcastApprovalResolvedEvent({
+      approvalKind: "system-agent",
+      context: params.context,
+      record,
+      event: resolvedEvent,
+    });
+    params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
+  };
   void handlePendingApprovalRequest({
     manager,
     record,
@@ -132,33 +159,43 @@ export function queueDelegatedApproval(params: {
     deliverRequest: () => false,
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
-    afterDecision: async (decision) =>
-      await runWithGatewayIndependentRootWorkContinuation(
-        () =>
-          runSystemAgentGatewayTask(async () => {
-            const assertLiveApprovalAuthority = () => {
-              if (
-                decision !== "deny" &&
-                (!record.approvalAuthority || record.approvalAuthority() === false)
-              ) {
-                throw new Error("system-agent approval authority is no longer active");
+    afterDecision: async (decision) => {
+      if (!decision) {
+        return;
+      }
+      try {
+        const reply = await runWithGatewayIndependentRootWorkContinuation(
+          () =>
+            runSystemAgentGatewayTask(async () => {
+              const assertLiveApprovalAuthority = () => {
+                if (
+                  decision !== "deny" &&
+                  (!record.approvalAuthority || record.approvalAuthority() === false)
+                ) {
+                  throw new Error("system-agent approval authority is no longer active");
+                }
+              };
+              assertLiveApprovalAuthority();
+              if (params.sessions.get(params.sessionId) !== params.session) {
+                return null;
               }
-            };
-            assertLiveApprovalAuthority();
-            if (params.sessions.get(params.sessionId) !== params.session) {
-              return;
-            }
-            if (params.session.pendingApproval?.id === record.id) {
-              params.session.pendingApproval = undefined;
-            }
-            await params.session.engine.resolveOperatorApproval(
-              decision,
-              params.proposal.hash,
-              assertLiveApprovalAuthority,
-            );
-          }),
-        "system-agent:task",
-      ),
+              if (params.session.pendingApproval?.id === record.id) {
+                params.session.pendingApproval = undefined;
+              }
+              return await params.session.engine.resolveOperatorApproval(
+                decision,
+                params.proposal.hash,
+                assertLiveApprovalAuthority,
+              );
+            }),
+          "system-agent:task",
+        );
+        publishApplicationResult(decision, reply?.applied === true ? "applied" : "not-applied");
+      } catch (error) {
+        publishApplicationResult(decision, "not-applied");
+        throw error;
+      }
+    },
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });
   return record.id;

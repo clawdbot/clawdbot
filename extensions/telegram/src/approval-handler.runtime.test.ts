@@ -406,7 +406,12 @@ describe("telegramApprovalNativeRuntime", () => {
         accountId: "default",
         context: { token: "tg-token" },
         request,
-        resolved: { id: request.id, decision: "allow-once", ts: 1 },
+        resolved: {
+          id: request.id,
+          decision: "allow-once",
+          ts: 1,
+          applicationStatus: "applied",
+        },
         view: {
           approvalKind: "system-agent",
           approvalId: request.id,
@@ -416,13 +421,14 @@ describe("telegramApprovalNativeRuntime", () => {
           commandText: "set config gateway.port to 19001",
           operationSummary: "set config gateway.port to 19001",
           decision: "allow-once",
+          applicationStatus: "applied",
         },
         entry: { chatId: "9", messageId: "m1" },
       }),
     ).resolves.toEqual({
       kind: "update",
       payload: {
-        text: "✅ OpenClaw change approved. Applying: set config gateway.port to 19001",
+        text: "✅ OpenClaw change approved and applied: set config gateway.port to 19001",
       },
     });
   });

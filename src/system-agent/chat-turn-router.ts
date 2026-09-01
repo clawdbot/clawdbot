@@ -191,7 +191,7 @@ export class ChatTurnRouter {
       },
       denied: () => {
         this.proposalResolution = "declined";
-        return { text: "Denied. No change.", action: "none" as const };
+        return { text: "Denied. No change.", action: "none" as const, applied: false };
       },
     });
   }
@@ -338,6 +338,7 @@ export class ChatTurnRouter {
           `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
         ].join("\n\n"),
         action: "open-tui",
+        applied: true,
         agentDraft: "hatch",
         handoff: {
           kind: "open-tui",
@@ -347,7 +348,7 @@ export class ChatTurnRouter {
         },
       };
     }
-    return { text: baseText, action: "none" };
+    return { text: baseText, action: "none", applied: result?.applied === true };
   }
 
   async resolveAssistantTurn(

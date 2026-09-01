@@ -186,6 +186,7 @@ export function buildResolvedApprovalView(
       ...buildSystemAgentViewBase(normalizedRequest, "resolved"),
       decision: resolved.decision,
       resolvedBy: resolved.resolvedBy,
+      applicationStatus: resolved.applicationStatus,
     };
   }
   if (normalizedRequest.approvalKind === "plugin") {
