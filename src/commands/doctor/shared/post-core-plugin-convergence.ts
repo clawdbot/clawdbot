@@ -143,12 +143,10 @@ function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCore
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Missing-plugin repair failures stay nonblocking:
- * an external package fetch may be transient, and failing the core update
- * would strand the user. Explicit `openclaw update` callers keep reporting
- * payload smoke failures as errors. Gateway startup consumes the same typed
- * failures by quarantining each known plugin owner before any module import,
- * then boots with that plugin marked configured-unavailable.
+ * the gateway is restarted. Transient repair fetch failures stay nonblocking;
+ * consent that prevents activation and payload smoke failures are errors.
+ * Gateway startup quarantines known payload failures before any module import,
+ * then boots with those plugins marked configured-unavailable.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -274,7 +272,7 @@ export async function runPostCorePluginConvergence(params: {
     ],
     notices,
     warnings,
-    errored: smoke.failures.length > 0,
+    errored: repair.capabilityConsentRequired === true || smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };
@@ -290,8 +288,8 @@ export async function runPostCorePluginConvergence(params: {
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
  *  - `errored` boolean that callers translate into `status: "error"`.
- *    Repair warnings are nonblocking; smoke failures remain errors on the
- *    explicit update path even though Gateway startup can quarantine them.
+ *    Pending activation consent and smoke failures remain errors on the
+ *    explicit update path; ordinary repair warnings are nonblocking.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];
