@@ -41,19 +41,43 @@ const declarations = new Map(
 export const VITEST_WORKER_PREPARE_REQUEST = "openclaw:prepare-test-subprocesses";
 export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared";
 
-export function verifyVitestWorkerArtifacts(directory: string, manifest?: VitestWorkerManifest) {
+export async function verifyVitestWorkerArtifacts(
+  directory: string,
+  manifest?: VitestWorkerManifest,
+) {
   const completed: VitestWorkerManifest =
-    manifest ?? JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8"));
-  for (const [filename, expected] of Object.entries(completed.inputs)) {
-    if (hashVitestWorkerArtifact(fs.readFileSync(filename)) !== expected) {
-      throw new Error(`Source changed during compiled subprocess invocation: ${filename}`);
-    }
-  }
-  for (const [name, expected] of Object.entries(completed.outputs)) {
-    if (
-      hashVitestWorkerArtifact(fs.readFileSync(path.join(directory, "dist", name))) !== expected
-    ) {
-      throw new Error(`Compiled subprocess artifact changed: ${name}`);
+    manifest ??
+    JSON.parse(await fs.promises.readFile(path.join(directory, "manifest.json"), "utf8"));
+  const groups = [
+    {
+      files: completed.inputs,
+      root: undefined,
+      changed: "Source changed during compiled subprocess invocation",
+    },
+    {
+      files: completed.outputs,
+      root: path.join(directory, "dist"),
+      changed: "Compiled subprocess artifact changed",
+    },
+  ];
+  const batchSize = 32;
+  for (const { files, root: baseDir, changed } of groups) {
+    const entries = Object.entries(files);
+    for (let offset = 0; offset < entries.length; offset += batchSize) {
+      // Native batches keep pre-install planning dependency-free and signals responsive.
+      // Drain every started read before rejection: the owner may delete files next.
+      const settled = await Promise.allSettled(
+        entries.slice(offset, offset + batchSize).map(async ([name, expected]) => {
+          const filename = baseDir ? path.join(baseDir, name) : name;
+          if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
+            throw new Error(`${changed}: ${name}`);
+          }
+        }),
+      );
+      const failed = settled.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") {
+        throw failed.reason;
+      }
     }
   }
 }
