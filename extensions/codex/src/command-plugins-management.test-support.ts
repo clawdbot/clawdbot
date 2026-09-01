@@ -160,7 +160,7 @@ export const fakeCtx: PluginCommandContext = {
   getCurrentConversationBinding: async () => null,
 };
 
-export function presentationButtons(result: PluginCommandResult) {
+function presentationButtons(result: PluginCommandResult) {
   return (result.presentation?.blocks ?? []).flatMap((block) =>
     block.type === "buttons" ? block.buttons : [],
   );
