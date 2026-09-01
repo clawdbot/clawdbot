@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
   createOpenAIEncryptedToolCallReasoningTracker,
@@ -9,11 +8,9 @@ import {
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
-  clearPendingCommentaryText,
+  finalizeStreamCommentaryPhases,
   rememberPendingCommentaryTags,
-  tagInterruptedTextPhases,
   tagPendingCommentaryText,
-  tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import {
@@ -29,10 +26,10 @@ import {
   createDsmlRecoverer,
   type RecoveredDeepSeekDsmlToolCall,
 } from "./openai-completions-dsml.js";
+import { hasOpenAICompletionsReasoningUsageActivity } from "./openai-completions-stream-reasoning.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   createModelStreamCooperativeScheduler,
-  isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
@@ -42,6 +39,8 @@ import {
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+
+export { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream-reasoning.js";
 
 type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
   // Some compatible providers attach usage per choice instead of per chunk.
@@ -682,53 +681,13 @@ export async function processCompletionsStream(
       });
     },
   });
-  if (
-    confirmedInterruptedTextBlock &&
-    output.stopReason !== "toolUse" &&
-    output.stopReason !== "error" &&
-    output.stopReason !== "aborted"
-  ) {
-    tagInterruptedTextPhases(
-      output.content,
-      confirmedInterruptedTextBlock,
-      explicitVisibleTextBlocks,
-      { commentarySequence },
-    );
-  }
-  if (output.stopReason !== "toolUse") {
-    clearPendingCommentaryText(provisionalCommentaryTags);
-  }
-  if (output.stopReason === "error" || output.stopReason === "aborted") {
-    tagUnresolvedTextAsCommentary(output, { commentarySequence });
-  }
-  if (output.stopReason === "toolUse") {
-    tagPendingCommentaryText(output.content, { commentarySequence });
-  }
-}
-
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
-}
-
-export function shouldEmitOpenAICompletionsReasoning(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-) {
-  if (!model.reasoning) {
-    return false;
-  }
-  const effort = resolveOpenAICompletionsReasoningEffort(options);
-  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
-    return false;
-  }
-  return true;
-}
-
-function hasOpenAICompletionsReasoningUsageActivity(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
-) {
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  return (
-    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
-  );
+  finalizeStreamCommentaryPhases({
+    stopReason: output.stopReason,
+    content: output.content,
+    provisionalCommentaryTags,
+    commentarySequence,
+    confirmedInterruptedTextBlock,
+    explicitVisibleTextBlocks,
+    output,
+  });
 }

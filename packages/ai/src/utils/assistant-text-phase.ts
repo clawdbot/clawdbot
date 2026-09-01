@@ -122,3 +122,42 @@ export function rememberPendingCommentaryTags(
     target.set(block, signature);
   }
 }
+
+/** Applies end-of-stream commentary tagging for completions transports. */
+export function finalizeStreamCommentaryPhases(params: {
+  stopReason: string | undefined;
+  content: ReadonlyArray<unknown>;
+  provisionalCommentaryTags: PendingCommentaryTags;
+  commentarySequence: { next: number };
+  confirmedInterruptedTextBlock?: unknown;
+  explicitVisibleTextBlocks?: ReadonlySet<unknown>;
+  output: {
+    content: ReadonlyArray<unknown>;
+    openclawDelivery?: { textPhaseRequiresTerminal?: true };
+  };
+}): void {
+  if (
+    params.confirmedInterruptedTextBlock &&
+    params.stopReason !== "toolUse" &&
+    params.stopReason !== "error" &&
+    params.stopReason !== "aborted"
+  ) {
+    tagInterruptedTextPhases(
+      params.content,
+      params.confirmedInterruptedTextBlock,
+      params.explicitVisibleTextBlocks,
+      { commentarySequence: params.commentarySequence },
+    );
+  }
+  if (params.stopReason !== "toolUse") {
+    clearPendingCommentaryText(params.provisionalCommentaryTags);
+  }
+  if (params.stopReason === "error" || params.stopReason === "aborted") {
+    tagUnresolvedTextAsCommentary(params.output, {
+      commentarySequence: params.commentarySequence,
+    });
+  }
+  if (params.stopReason === "toolUse") {
+    tagPendingCommentaryText(params.content, { commentarySequence: params.commentarySequence });
+  }
+}

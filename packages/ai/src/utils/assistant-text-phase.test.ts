@@ -28,8 +28,8 @@ describe("assistant text phase tags", () => {
   });
 
   it("assigns monotonic commentary ids across separate tagging passes", () => {
-    const firstMessage = [{ type: "text", text: "Checking inventory." }];
-    const secondMessage = [{ type: "text", text: "Still working." }];
+    const firstMessage: TestTextBlock[] = [{ type: "text", text: "Checking inventory." }];
+    const secondMessage: TestTextBlock[] = [{ type: "text", text: "Still working." }];
     const commentarySequence = { next: 0 };
 
     tagPendingCommentaryText(firstMessage, { commentarySequence });
