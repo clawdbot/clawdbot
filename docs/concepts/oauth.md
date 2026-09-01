@@ -51,11 +51,15 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 - multiple profiles can coexist and route deterministically
 - external CLI reuse is provider-specific: once OpenClaw owns a local OAuth
   profile for a provider, the local refresh token is canonical. If that local
-  refresh token is rejected, OpenClaw reports the profile for
-  re-authentication instead of falling back to external CLI token material.
-  Codex CLI bootstrap is narrower still: it can only seed an empty
-  `openai:default`-style profile before OpenClaw owns OAuth for that
-  provider; after that, OpenClaw-owned refreshes stay canonical
+  refresh token is rejected permanently, OpenClaw retains its fingerprint and
+  reports the profile for re-authentication. The narrow Codex CLI recovery
+  exception can re-seed that exact rejected profile from a different usable
+  grant only when the stored account ID matches. Email from an external CLI ID
+  token is not identity authority here. A missing account ID, a different
+  account, or the same rejected grant stays blocked and
+  requires re-authentication. Before OpenClaw owns OAuth, Codex CLI bootstrap
+  can seed an empty `openai:default`-style profile; after that, OpenClaw-owned
+  refreshes stay canonical
 - status/startup paths scope external CLI discovery to the provider set
   already configured, so an unrelated CLI login store is not probed for a
   single-provider setup
@@ -182,9 +186,12 @@ Profiles store an `expires` timestamp. At runtime:
   token into the secondary agent store
 - externally managed CLI credentials (Claude CLI, narrow Codex CLI bootstrap;
   see [The token sink](#the-token-sink-why-it-exists)) are re-read instead of
-  spending a copied refresh token. If a managed refresh fails, OpenClaw
-  reports the affected profile for re-authentication instead of returning
-  external CLI token material.
+  spending a copied refresh token. If an ordinary or transient managed refresh
+  fails, OpenClaw reports the affected profile for re-authentication instead of
+  returning external CLI token material. A permanently rejected OpenAI profile
+  follows the narrow Codex re-seed exception described in [The token
+  sink](#the-token-sink-why-it-exists): only a different usable grant with the
+  same known account ID can replace it; all other cases remain blocked.
 
 The refresh flow is automatic; you generally do not need to manage tokens manually.
 

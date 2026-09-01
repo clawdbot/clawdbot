@@ -11,7 +11,7 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-identity.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 
 export { normalizeAuthEmailToken, normalizeAuthIdentityToken } from "./oauth-identity.js";
 
@@ -43,6 +43,22 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
+/** Merge provider-returned OAuth fields after a successful refresh. */
+export function mergeSuccessfulOAuthRefreshCredential(
+  credential: OAuthCredential,
+  refreshed: OAuthCredentials,
+): OAuthCredential {
+  const merged = {
+    ...credential,
+    ...refreshed,
+    type: "oauth",
+  } satisfies OAuthCredential;
+  // A successful refresh proves this grant is live. Keeping the tombstone
+  // would let external CLI sync replace the healthy credential on reload.
+  delete merged.refreshDeadAt;
+  return merged;
+}
+
 // Keep newer usable stored credentials over incoming runtime imports to avoid
 // replacing a fresh access token with stale external CLI state.
 function hasNewerStoredOAuthCredential(
@@ -54,9 +70,31 @@ function hasNewerStoredOAuthCredential(
   return Boolean(
     existing &&
     existing.provider === incoming.provider &&
+    hasUsableOAuthCredential(existing, { now: Date.now() }) &&
     existingExpires !== undefined &&
     (incomingExpires === undefined || existingExpires > incomingExpires),
   );
+}
+
+/** Returns true when a stored OAuth credential's refresh grant is known permanently dead. */
+export function isOAuthRefreshDead(credential: OAuthCredential | undefined): boolean {
+  // Only a finite positive timestamp counts: corrupt/coerced values (0, -1,
+  // NaN) must not flag a grant dead and reopen the external re-seed gate.
+  const deadAt = credential?.type === "oauth" ? credential.refreshDeadAt : undefined;
+  return typeof deadAt === "number" && Number.isFinite(deadAt) && deadAt > 0;
+}
+
+/** Returns true when both credentials carry the same non-empty refresh grant. */
+export function isSameOAuthRefreshGrant(
+  a: OAuthCredential | undefined,
+  b: OAuthCredential | undefined,
+): boolean {
+  if (a?.type !== "oauth" || b?.type !== "oauth" || a.provider !== b.provider) {
+    return false;
+  }
+  const aRefresh = typeof a.refresh === "string" ? a.refresh.trim() : "";
+  const bRefresh = typeof b.refresh === "string" ? b.refresh.trim() : "";
+  return aRefresh.length > 0 && aRefresh === bRefresh;
 }
 
 /** Returns true when an incoming OAuth credential should replace stored state. */
@@ -69,6 +107,11 @@ export function shouldReplaceStoredOAuthCredential(
   }
   if (areOAuthCredentialsEquivalent(existing, incoming)) {
     return false;
+  }
+  // A dead refresh grant must never win the "stored is fresher" comparison:
+  // its expiry says nothing once the provider rejected the grant for good.
+  if (isOAuthRefreshDead(existing) && !isSameOAuthRefreshGrant(existing, incoming)) {
+    return true;
   }
   return !hasNewerStoredOAuthCredential(existing, incoming);
 }
@@ -147,10 +190,13 @@ export function shouldBootstrapFromExternalCliCredential(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
-  if (hasUsableOAuthCredential(params.existing, { now })) {
+  if (!hasUsableOAuthCredential(params.imported, { now })) {
     return false;
   }
-  return hasUsableOAuthCredential(params.imported, { now });
+  if (isOAuthRefreshDead(params.existing)) {
+    return !isSameOAuthRefreshGrant(params.existing, params.imported);
+  }
+  return !hasUsableOAuthCredential(params.existing, { now });
 }
 
 /** Overlays runtime external OAuth profiles on a cloned store. */
@@ -176,11 +222,14 @@ export function overlayRuntimeExternalOAuthProfiles(
       .filter((profile) => profile.persistence !== "persisted")
       .map((profile) => profile.profileId),
   );
-  // Preserve previous runtime-only profile ids that still exist so repeated
-  // overlays do not accidentally persist or drop external profile metadata.
-  for (const profileId of store.runtimeExternalProfileIds ?? []) {
-    if (next.profiles[profileId]) {
-      runtimeOnlyProfileIds.add(profileId);
+  if (options?.runtimeExternalProfileIdsAuthoritative !== true) {
+    // Scoped overlays are partial. Preserve previous runtime-only profile ids
+    // that still exist, except profiles the current overlay explicitly marks
+    // persisted. An authoritative overlay is a complete replacement instead.
+    for (const profileId of store.runtimeExternalProfileIds ?? []) {
+      if (next.profiles[profileId] && !overlaidProfileIds.has(profileId)) {
+        runtimeOnlyProfileIds.add(profileId);
+      }
     }
   }
   next.runtimeExternalProfileIds =

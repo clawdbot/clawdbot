@@ -73,6 +73,13 @@ export type OAuthCredential = OAuthCredentials & {
   copyToAgents?: boolean;
   email?: string;
   displayName?: string;
+  /**
+   * Set when a provider permanently rejected this refresh grant
+   * (invalid_grant/revoked). The dead credential stays in place as the
+   * re-import fingerprint so external CLI sync may re-seed the slot without
+   * looping on the same grant; any whole-credential replacement clears it.
+   */
+  refreshDeadAt?: number;
 };
 
 /** Credential variants supported by auth profiles. */

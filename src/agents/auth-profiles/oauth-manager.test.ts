@@ -717,6 +717,264 @@ describe("createOAuthManager", () => {
     });
   });
 
+  it("tombstones an inherited shared credential after a permanent refresh failure", async () => {
+    await withOAuthAgentDirs(
+      "oauth-manager-refresh-dead-mark-",
+      async ({ mainAgentDir, agentDir }) => {
+        const profileId = "openai:user@example.com";
+        const managedCredential = createCredential({
+          access: "dead-expired-access",
+          refresh: "dead-refresh",
+          expires: Date.now() - 60_000,
+          email: "user@example.com",
+          accountId: "acct-123",
+        });
+        saveAuthProfileStore(
+          { version: 1, profiles: { [profileId]: managedCredential } },
+          mainAgentDir,
+          { filterExternalAuthProfiles: false },
+        );
+        const manager = createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          refreshCredential: vi.fn(async () => {
+            throw new Error('OpenAI Codex token refresh failed (401): {"error":"invalid_grant"}');
+          }),
+          readBootstrapCredential: () => null,
+          isRefreshTokenReusedError: () => false,
+        });
+
+        await expect(
+          manager.resolveOAuthAccess({
+            store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+              allowKeychainPrompt: false,
+            }),
+            profileId,
+            credential: managedCredential,
+            agentDir,
+          }),
+        ).rejects.toBeInstanceOf(OAuthManagerRefreshError);
+
+        clearRuntimeAuthProfileStoreSnapshots();
+        for (const ownerDir of [mainAgentDir, agentDir]) {
+          const persisted = ensureAuthProfileStoreWithoutExternalProfiles(ownerDir, {
+            allowKeychainPrompt: false,
+          });
+          // The shared-owner tombstone must survive a disk round-trip and be
+          // inherited by agents or the re-seed gate closes again on reload.
+          expect(persisted.profiles[profileId]).toMatchObject({
+            type: "oauth",
+            refresh: "dead-refresh",
+            refreshDeadAt: expect.any(Number),
+          });
+        }
+      },
+    );
+  });
+
+  it("clears a refreshed tombstone after reload without changing a dead sibling", async () => {
+    await withOAuthAgentDirs("oauth-manager-refresh-dead-clear-", async ({ agentDir }) => {
+      const profileId = "openai:user@example.com";
+      const siblingId = "openai:dead-sibling";
+      const deadAt = Date.now() - 5_000;
+      const tombstonedCredential = createCredential({
+        access: "dead-expired-access",
+        refresh: "dead-target-refresh",
+        expires: Date.now() - 60_000,
+        accountId: "acct-target",
+        refreshDeadAt: deadAt,
+      });
+      const deadSibling = createCredential({
+        access: "dead-sibling-access",
+        refresh: "dead-sibling-refresh",
+        expires: Date.now() - 60_000,
+        accountId: "acct-sibling",
+        refreshDeadAt: deadAt - 1_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: tombstonedCredential,
+            [siblingId]: deadSibling,
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential: vi.fn(async (credential) => {
+          expect(credential.refreshDeadAt).toBe(deadAt);
+          return {
+            access: "fresh-access",
+            refresh: "fresh-refresh",
+            expires: Date.now() + 60_000,
+          };
+        }),
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      const result = await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential: tombstonedCredential,
+        agentDir,
+      });
+
+      expect(result?.credential).toMatchObject({
+        access: "fresh-access",
+        refresh: "fresh-refresh",
+      });
+      expect(result?.credential.refreshDeadAt).toBeUndefined();
+
+      clearRuntimeAuthProfileStoreSnapshots();
+      const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      });
+      expect(persisted.profiles[profileId]).toMatchObject({
+        access: "fresh-access",
+        refresh: "fresh-refresh",
+      });
+      expect((persisted.profiles[profileId] as OAuthCredential).refreshDeadAt).toBeUndefined();
+      expect(persisted.profiles[siblingId]).toMatchObject({
+        access: "dead-sibling-access",
+        refresh: "dead-sibling-refresh",
+        refreshDeadAt: deadAt - 1_000,
+      });
+    });
+  });
+
+  it("uses a safe different external CLI grant after forced refresh tombstones local OAuth", async () => {
+    await withOAuthAgentDirs("oauth-manager-refresh-dead-reseed-", async ({ agentDir }) => {
+      const profileId = "openai-codex:default";
+      const localCredential = createCredential({
+        access: "still-usable-local-access",
+        refresh: "dead-local-refresh",
+        expires: Date.now() + 10 * 60_000,
+        email: "user@example.com",
+        accountId: "acct-123",
+      });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: localCredential } }, agentDir, {
+        filterExternalAuthProfiles: false,
+      });
+
+      let bootstrapCredential: OAuthCredential | null = null;
+      const readBootstrapCredential = vi.fn(() => bootstrapCredential);
+      const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
+        expect(credential.refresh).toBe("dead-local-refresh");
+        throw new Error(
+          'OpenAI Codex token refresh failed (401): {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
+        );
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential,
+        readBootstrapCredential,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      await expect(
+        manager.resolveOAuthAccess({
+          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          }),
+          profileId,
+          credential: localCredential,
+          agentDir,
+          forceRefresh: true,
+        }),
+      ).rejects.toBeInstanceOf(OAuthManagerRefreshError);
+      expect(refreshCredential).toHaveBeenCalledTimes(1);
+
+      clearRuntimeAuthProfileStoreSnapshots();
+      const reloadedStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      });
+      const tombstonedCredential = reloadedStore.profiles[profileId];
+      if (tombstonedCredential?.type !== "oauth") {
+        throw new Error("Expected persisted OAuth credential");
+      }
+      expect(tombstonedCredential).toMatchObject({
+        access: "still-usable-local-access",
+        refresh: "dead-local-refresh",
+        refreshDeadAt: expect.any(Number),
+      });
+
+      bootstrapCredential = createCredential({
+        access: "fresh-cli-access",
+        refresh: "fresh-cli-refresh",
+        expires: Date.now() + 10 * 60_000,
+        email: "user@example.com",
+        accountId: "acct-123",
+      });
+      const result = await manager.resolveOAuthAccess({
+        store: reloadedStore,
+        profileId,
+        credential: tombstonedCredential,
+        agentDir,
+      });
+
+      expect(result?.apiKey).toBe("fresh-cli-access");
+      expect(result?.credential).toMatchObject({
+        access: "fresh-cli-access",
+        refresh: "fresh-cli-refresh",
+      });
+      expect(refreshCredential).toHaveBeenCalledTimes(1);
+      expect(readBootstrapCredential).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          credential: expect.objectContaining({ refreshDeadAt: expect.any(Number) }),
+        }),
+      );
+    });
+  });
+
+  it("does not tombstone the stored credential on transient refresh failures", async () => {
+    await withOAuthAgentDirs("oauth-manager-refresh-transient-", async ({ agentDir }) => {
+      const profileId = "openai:user@example.com";
+      const managedCredential = createCredential({
+        access: "transient-expired-access",
+        refresh: "transient-refresh",
+        expires: Date.now() - 60_000,
+        email: "user@example.com",
+        accountId: "acct-123",
+      });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: managedCredential } }, agentDir, {
+        filterExternalAuthProfiles: false,
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential: vi.fn(async () => {
+          throw new Error("fetch failed: ECONNRESET");
+        }),
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      await expect(
+        manager.resolveOAuthAccess({
+          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          }),
+          profileId,
+          credential: managedCredential,
+          agentDir,
+        }),
+      ).rejects.toBeInstanceOf(OAuthManagerRefreshError);
+
+      clearRuntimeAuthProfileStoreSnapshots();
+      const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      });
+      expect(persisted.profiles[profileId]?.type).toBe("oauth");
+      expect(
+        (persisted.profiles[profileId] as { refreshDeadAt?: number }).refreshDeadAt,
+      ).toBeUndefined();
+    });
+  });
+
   it("redacts the external oauth credential attempted during refresh failures", async () => {
     await withOAuthTempRoot("oauth-manager-refresh-redact-", async (tempRoot) => {
       const agentDir = path.join(tempRoot, "agents", "sub", "agent");

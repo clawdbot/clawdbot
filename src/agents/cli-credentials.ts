@@ -275,6 +275,7 @@ function parseCodexOauthCredential(
   if (expires === undefined) {
     return null;
   }
+  const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
   return {
     type: "oauth",
     provider: "openai" as OAuthProvider,
@@ -282,7 +283,7 @@ function parseCodexOauthCredential(
     refresh: refreshToken,
     expires,
     accountId: typeof tokens?.account_id === "string" ? tokens.account_id : undefined,
-    idToken: typeof tokens?.id_token === "string" ? tokens.id_token : undefined,
+    idToken,
   };
 }
 

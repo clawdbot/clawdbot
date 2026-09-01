@@ -18,7 +18,10 @@ import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
+  isOAuthRefreshDead,
+  isSameOAuthRefreshGrant,
   isSafeToAdoptBootstrapOAuthIdentity,
+  normalizeAuthIdentityToken,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -155,16 +158,50 @@ function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
   );
 }
 
+function hasTombstonedExternalCliIdentityContinuity(
+  existing: OAuthCredential | undefined,
+  imported: OAuthCredential,
+): boolean {
+  if (existing === undefined || !isOAuthRefreshDead(existing)) {
+    return true;
+  }
+  // A permanent failure reopens a previously owned slot. Codex account IDs
+  // are authoritative here; unverified external ID-token email is not.
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
+  return existingAccountId !== undefined && existingAccountId === importedAccountId;
+}
+
 function hasManagedProviderOAuth(
   store: AuthProfileStore,
   providerConfig: ExternalCliSyncProvider,
 ): boolean {
+  // A tombstone still proves OpenClaw owns that provider profile. The exact
+  // dead target is exempted by the caller; ignoring dead siblings here would
+  // let CLI state seed an unrelated empty slot.
   return Object.values(store.profiles).some(
     (credential) =>
       credential?.type === "oauth" &&
       listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
       hasInlineOAuthTokenMaterial(credential),
   );
+}
+
+function shouldBlockBootstrapOnlyExternalCliProfile(params: {
+  store: AuthProfileStore;
+  providerConfig: ExternalCliSyncProvider;
+  existingOAuth?: OAuthCredential;
+}): boolean {
+  if (!params.providerConfig.bootstrapOnly) {
+    return false;
+  }
+  // A dead target is a retained grant fingerprint, not a usable managed
+  // credential. Let only that slot reach the existing identity and
+  // different-grant checks even when another provider profile is healthy.
+  if (params.existingOAuth && isOAuthRefreshDead(params.existingOAuth)) {
+    return false;
+  }
+  return hasManagedProviderOAuth(params.store, params.providerConfig);
 }
 
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
@@ -179,20 +216,59 @@ export function readExternalCliBootstrapCredential(params: {
   if (!provider) {
     return null;
   }
-  if (provider.bootstrapOnly && hasManagedProviderOAuth(params.store, provider)) {
+  if (
+    shouldBlockBootstrapOnlyExternalCliProfile({
+      store: params.store,
+      providerConfig: provider,
+      existingOAuth: params.credential,
+    })
+  ) {
     return null;
   }
   if (
     provider.bootstrapOnly &&
     !params.allowInlineOAuthTokenMaterial &&
-    hasInlineOAuthTokenMaterial(params.credential)
+    hasInlineOAuthTokenMaterial(params.credential) &&
+    !isOAuthRefreshDead(params.credential)
   ) {
     return null;
   }
-  return normalizeExternalCliCredentialProvider(
+  const imported = normalizeExternalCliCredentialProvider(
     provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
     params.credential.provider,
   );
+  // Loop prevention: a dead slot may only re-seed from a DIFFERENT grant.
+  // Re-adopting the same dead refresh token would just fail refresh again.
+  if (
+    imported &&
+    isOAuthRefreshDead(params.credential) &&
+    isSameOAuthRefreshGrant(params.credential, imported)
+  ) {
+    return null;
+  }
+  if (
+    imported &&
+    provider.bootstrapOnly &&
+    !hasTombstonedExternalCliIdentityContinuity(params.credential, imported)
+  ) {
+    return null;
+  }
+  if (!imported || !isSafeToUseExternalCliCredential(params.credential, imported)) {
+    return null;
+  }
+  if (
+    !isSafeToAdoptBootstrapOAuthIdentity(params.credential, imported) &&
+    !areOAuthCredentialsEquivalent(params.credential, imported)
+  ) {
+    return null;
+  }
+  return shouldBootstrapFromExternalCliCredential({
+    existing: params.credential,
+    imported,
+    now: Date.now(),
+  })
+    ? imported
+    : null;
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
@@ -279,30 +355,40 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, providerConfig, store } = params;
-  // Bootstrap-only CLI state must not enter any sibling slot once OpenClaw
-  // owns OAuth for the provider, regardless of how discovery was scoped.
-  if (providerConfig.bootstrapOnly && hasManagedProviderOAuth(store, providerConfig)) {
-    return [];
-  }
-
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
   const matchingRequestedProfileIds = requestedProfileIds.filter((profileId) =>
     externalCliProfileIdMatches(providerConfig, profileId, { allowLegacyNamespace: true }),
   );
-  if (matchingRequestedProfileIds.length > 0) {
-    return matchingRequestedProfileIds;
+  let scopedProfileIds = matchingRequestedProfileIds;
+  if (scopedProfileIds.length === 0) {
+    const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>
+      externalCliProfileIdMatches(providerConfig, profileId),
+    );
+    scopedProfileIds =
+      existingProfileIds.length > 0
+        ? existingProfileIds
+        : options?.providerIds
+          ? [providerConfig.profileId]
+          : [];
   }
-
-  const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>
-    externalCliProfileIdMatches(providerConfig, profileId),
-  );
-  if (existingProfileIds.length > 0) {
-    return existingProfileIds;
-  }
-
-  return options?.providerIds ? [providerConfig.profileId] : [];
+  // Bootstrap-only CLI state must not enter an empty or live sibling slot once
+  // OpenClaw owns OAuth for the provider. A specifically dead target remains
+  // eligible so the later identity and different-grant checks can recover it.
+  return scopedProfileIds.filter((profileId) => {
+    const existing = store.profiles[profileId];
+    const existingOAuth =
+      existing?.type === "oauth" &&
+      listExternalCliProviderIds(providerConfig).includes(existing.provider)
+        ? existing
+        : undefined;
+    return !shouldBlockBootstrapOnlyExternalCliProfile({
+      store,
+      providerConfig,
+      existingOAuth,
+    });
+  });
 }
 
 function backfillExternalCliIdentity(params: {
@@ -318,10 +404,15 @@ function backfillExternalCliIdentity(params: {
   });
   // Matching token material is the only proof the stored profile IS the CLI
   // login; identity fields are absent on the stored side by definition here.
+  const cliRefresh = typeof creds?.refresh === "string" ? creds.refresh.trim() : "";
+  const storedRefresh =
+    typeof params.existingOAuth.refresh === "string" ? params.existingOAuth.refresh.trim() : "";
+  const cliAccess = typeof creds?.access === "string" ? creds.access.trim() : "";
+  const storedAccess = params.existingOAuth.access.trim();
   const sameLogin =
     creds?.email &&
-    (creds.refresh === params.existingOAuth.refresh ||
-      creds.access === params.existingOAuth.access);
+    ((cliRefresh.length > 0 && cliRefresh === storedRefresh) ||
+      (cliAccess.length > 0 && cliAccess === storedAccess));
   return sameLogin ? { ...params.existingOAuth, email: creds.email } : null;
 }
 
@@ -360,7 +451,8 @@ export function resolveExternalCliAuthProfiles(
       if (
         providerConfig.bootstrapOnly &&
         existingOAuth &&
-        hasInlineOAuthTokenMaterial(existingOAuth)
+        hasInlineOAuthTokenMaterial(existingOAuth) &&
+        !isOAuthRefreshDead(existingOAuth)
       ) {
         authProfilesLog.debug("kept local oauth over external cli bootstrap-only provider", {
           profileId,
@@ -396,6 +488,33 @@ export function resolveExternalCliAuthProfiles(
         existingOAuth?.provider ?? providerConfig.provider,
       );
       if (!creds) {
+        continue;
+      }
+      // Loop prevention: a dead slot may only re-seed from a DIFFERENT grant;
+      // re-adopting the same dead refresh token would just fail refresh again.
+      if (
+        existingOAuth &&
+        isOAuthRefreshDead(existingOAuth) &&
+        isSameOAuthRefreshGrant(existingOAuth, creds)
+      ) {
+        authProfilesLog.debug("skipped external cli bootstrap: same dead refresh grant", {
+          profileId,
+          provider: providerConfig.provider,
+        });
+        continue;
+      }
+      if (
+        providerConfig.bootstrapOnly &&
+        existingOAuth &&
+        !hasTombstonedExternalCliIdentityContinuity(existingOAuth, creds)
+      ) {
+        authProfilesLog.warn(
+          "refused tombstoned external cli oauth bootstrap: identity continuity missing; re-authenticate the OpenClaw profile or log the CLI into its bound account",
+          {
+            profileId,
+            provider: providerConfig.provider,
+          },
+        );
         continue;
       }
       if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {

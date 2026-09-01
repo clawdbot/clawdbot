@@ -17,7 +17,10 @@ import {
 } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import {
+  OAuthRefreshFailureError,
+  isPermanentOAuthRefreshFailure,
+} from "./oauth-refresh-failure.js";
 import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,
@@ -25,8 +28,11 @@ import {
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
+  isOAuthRefreshDead,
+  isSameOAuthRefreshGrant,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
+  mergeSuccessfulOAuthRefreshCredential,
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
@@ -277,7 +283,7 @@ export function resolveEffectiveOAuthCredentialCore(params: {
   if (!imported) {
     return params.credential;
   }
-  if (hasUsableOAuthCredential(params.credential)) {
+  if (hasUsableOAuthCredential(params.credential) && !isOAuthRefreshDead(params.credential)) {
     authProfilesLog.debug("resolved oauth credential from canonical local store", {
       profileId: params.profileId,
       provider: params.credential.provider,
@@ -465,6 +471,38 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return result !== null && saved;
   }
 
+  // Tombstone (never delete) a credential whose refresh grant the provider
+  // permanently rejected: the dead grant stays as the fingerprint that stops
+  // external CLI sync from re-importing the very same token, while the
+  // dead-mark opens the bootstrapOnly gate for a genuinely new login.
+  async function markStoredOAuthCredentialRefreshDeadWithStoreLock(params: {
+    agentDir?: string;
+    profileId: string;
+    attempted: readonly OAuthCredential[];
+    deadAt: number;
+  }): Promise<boolean> {
+    let marked = false;
+    const result = await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      updater: (store) => {
+        const existing = store.profiles[params.profileId];
+        if (existing?.type !== "oauth" || existing.refreshDeadAt !== undefined) {
+          return false;
+        }
+        // CAS on the refresh grant, not full equivalence: another writer may
+        // have mirrored a different access token for the same dead grant, but
+        // a NEW grant must never be tombstoned by a stale failure.
+        if (!params.attempted.some((attempt) => isSameOAuthRefreshGrant(existing, attempt))) {
+          return false;
+        }
+        store.profiles[params.profileId] = { ...existing, refreshDeadAt: params.deadAt };
+        marked = true;
+        return true;
+      },
+    });
+    return result !== null && marked;
+  }
+
   async function resolveOAuthCredentialAfterPersistMiss(params: {
     agentDir?: string;
     profileId: string;
@@ -634,13 +672,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               cfg: params.cfg,
               agentDir: params.agentDir,
             });
-            return refreshed
-              ? ({
-                  ...credentialToRefresh,
-                  ...refreshed,
-                  type: "oauth",
-                } satisfies OAuthCredential)
-              : null;
+            if (!refreshed) {
+              return null;
+            }
+            return mergeSuccessfulOAuthRefreshCredential(credentialToRefresh, refreshed);
           },
         );
         if (!refreshedCredentials) {
@@ -851,6 +886,31 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
         } catch {
           // keep the original refresh error below
+        }
+      }
+      if (isPermanentOAuthRefreshFailure(error)) {
+        try {
+          const marked = await markStoredOAuthCredentialRefreshDeadWithStoreLock({
+            agentDir: resolvePersistedAuthProfileOwnerAgentDir({
+              profileId: params.profileId,
+              agentDir: params.agentDir,
+            }),
+            profileId: params.profileId,
+            attempted: [effectiveCredential, ...attemptedCredentials],
+            deadAt: Date.now(),
+          });
+          if (marked) {
+            authProfilesLog.warn(
+              "marked stored OAuth credential refresh-dead after permanent refresh failure; external CLI login can re-seed this profile",
+              { profileId: params.profileId, provider: params.credential.provider },
+            );
+          }
+        } catch (markError) {
+          // Best-effort: the refresh failure below is the actionable signal.
+          authProfilesLog.debug("failed to mark OAuth credential refresh-dead", {
+            profileId: params.profileId,
+            error: formatErrorMessage(markError),
+          });
         }
       }
       throw new OAuthManagerRefreshError({

@@ -66,6 +66,60 @@ describe("persisted auth profile boundary", () => {
     }
   });
 
+  it("keeps valid refreshDeadAt tombstones and drops corrupt ones", () => {
+    const deadAt = Date.now() - 1_000;
+    const store = coercePersistedAuthProfileStore({
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:dead": {
+          type: "oauth",
+          provider: "openai",
+          access: "a",
+          refresh: "r",
+          expires: 1,
+          refreshDeadAt: deadAt,
+        },
+        "openai:corrupt-zero": {
+          type: "oauth",
+          provider: "openai",
+          access: "a",
+          refresh: "r",
+          expires: 1,
+          refreshDeadAt: 0,
+        },
+        "openai:corrupt-negative": {
+          type: "oauth",
+          provider: "openai",
+          access: "a",
+          refresh: "r",
+          expires: 1,
+          refreshDeadAt: -1,
+        },
+        "openai:corrupt-string": {
+          type: "oauth",
+          provider: "openai",
+          access: "a",
+          refresh: "r",
+          expires: 1,
+          refreshDeadAt: "yesterday",
+        },
+      },
+    });
+    if (!store) {
+      throw new Error("expected coerced auth profile store");
+    }
+    expect(store.profiles["openai:dead"]).toMatchObject({ refreshDeadAt: deadAt });
+    for (const profileId of [
+      "openai:corrupt-zero",
+      "openai:corrupt-negative",
+      "openai:corrupt-string",
+    ]) {
+      expect(
+        (store.profiles[profileId] as { refreshDeadAt?: number }).refreshDeadAt,
+      ).toBeUndefined();
+    }
+  });
+
   it("normalizes malformed persisted credentials and state before runtime use", () => {
     const store = coercePersistedAuthProfileStore({
       version: "not-a-version",
