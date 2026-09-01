@@ -243,6 +243,7 @@ export async function syncPluginsForUpdateChannel(params: {
               code: error.capabilityConsent ? PLUGIN_CAPABILITY_CONSENT_REQUIRED : undefined,
             },
             capabilityConsent,
+            installSpec: spec,
           };
         }
         consent.rethrowCallbackError();

@@ -173,6 +173,9 @@ describe("channel migration artifact consent", () => {
         expect(result.summary.errors).toEqual([
           expect.objectContaining({ pluginId, code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }),
         ]);
+        if (source !== "npm") {
+          expect(result.summary.errors[0]?.message).toContain(`(ClawHub clawhub:${pluginId}).`);
+        }
       }
     }
     expect(committed).toBe(review === "accept");
