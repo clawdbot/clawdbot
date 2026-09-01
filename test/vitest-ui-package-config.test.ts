@@ -124,6 +124,10 @@ describe("ui package vitest config", () => {
         "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
       ],
     ],
+    [
+      ["extensions/workboard/browser/catalog.test.ts"],
+      ["extensions/workboard/browser/catalog.test.ts"],
+    ],
     [[], []],
   ])("intersects a repository include list with every project: %j", async (requested, expected) => {
     const includeFile = path.join(tempDirs.make("ui-package-selection-"), "include.json");
@@ -135,8 +139,8 @@ describe("ui package vitest config", () => {
     expect(config.root).toBe(uiRoot);
     const selected = (requireTestConfig(config).projects ?? []).flatMap((project) => {
       const test = requireTestConfig(project);
-      return globSync(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map(
-        (file) => `ui/${file.replaceAll("\\", "/")}`,
+      return globSync(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map((file) =>
+        path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`),
       );
     });
     expect(new Set(selected).size).toBe(selected.length);

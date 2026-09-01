@@ -21,9 +21,11 @@ async function loadWorkboardRoute(
     context.agents.ensureList(),
     sessions.result || sessions.loading ? Promise.resolve() : context.sessions.refresh(),
   ]);
-  return {
-    ...resolveWorkboardRouteLocation(location, context.basePath),
-  };
+  const data = resolveWorkboardRouteLocation(location, context.basePath);
+  if (data.canonicalLocation) {
+    context.replace("workboard", data.canonicalLocation);
+  }
+  return data;
 }
 
 export const page = definePage({
@@ -38,9 +40,13 @@ export const page = definePage({
   },
   loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
   component: () =>
-    import("./workboard-page.ts").then(() => ({
+    import("../plugin/plugin-page.ts").then(() => ({
       header: true,
       render: (data: WorkboardRouteData | undefined) =>
-        html`<openclaw-workboard-page .routeData=${data}></openclaw-workboard-page>`,
+        html`<openclaw-plugin-page
+          .pluginId=${"workboard"}
+          .tabId=${"workboard"}
+          .params=${{ boardId: data?.boardFilter ?? "__all__" }}
+        ></openclaw-plugin-page>`,
     })),
 });

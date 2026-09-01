@@ -6,7 +6,8 @@ import {
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
 } from "../../app-route-paths.ts";
-import { WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+// Existing Workboard URLs persist this value for the all-boards route.
+const WORKBOARD_ALL_BOARDS_FILTER = "__all__";
 
 export type WorkboardRouteData = {
   boardFilter: string;

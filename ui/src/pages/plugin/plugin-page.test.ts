@@ -95,6 +95,7 @@ function externalPluginConfig(
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    pluginAssetsRequireAuth: true,
     pluginFrameGrants,
   };
 }

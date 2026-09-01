@@ -442,6 +442,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
   }>;
   nextConfig: OpenClawConfig;
   recheckStagedActivation?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   writeOptions?: ConfigWriteOptions;
   commit: ConfigCommit;
 }): Promise<{
@@ -455,6 +456,9 @@ async function commitPluginInstallRecordsWithWriter(params: {
     try {
       const storeOptions = { filePath: lease.databasePath };
       const prepared = await params.prepareInstallRecords(storeOptions);
+      // Preparation and lease acquisition can outlive the approving operation.
+      // The index writer below completes its mutation synchronously.
+      await params.beforePersistentEffect?.();
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
         prepared.nextInstallRecords,
         {
@@ -493,6 +497,14 @@ async function commitPluginInstallRecordsWithWriter(params: {
       );
       const writeOptions = copyRuntimeConfigWriteApplication(params.writeOptions, {
         ...params.writeOptions,
+        ...(params.beforePersistentEffect
+          ? {
+              beforeCommit: async () => {
+                await params.writeOptions?.beforeCommit?.();
+                await params.beforePersistentEffect?.();
+              },
+            }
+          : {}),
         ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
           ? {
               afterWrite: {
@@ -544,6 +556,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   nextConfig: OpenClawConfig;
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<void> {
   await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
@@ -553,6 +566,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
       nextInstallRecords: params.nextInstallRecords,
     }),
     nextConfig: params.nextConfig,
+    beforePersistentEffect: params.beforePersistentEffect,
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({

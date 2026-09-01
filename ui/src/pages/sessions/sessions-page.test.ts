@@ -21,13 +21,13 @@ import type {
   SessionDeleteOutcome,
   SessionDeleteTarget,
 } from "../../lib/sessions/session-capability.ts";
-import { getWorkboardState } from "../../lib/workboard/index.ts";
 import {
   createContext,
   createGateway,
   createManagedSessions,
   createRenderedPage,
   createSessions,
+  registerSessionPluginAction,
   type TestSessionsPage,
 } from "./sessions-page.test-support.ts";
 
@@ -35,7 +35,7 @@ vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn(
 
 type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
-  workboard: { captured: boolean; busy: boolean } | null;
+  pluginActions: readonly { id: string; label: string; disabled?: boolean }[];
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -535,79 +535,73 @@ describe("sessions page lifecycle", () => {
     expect(menu.querySelector<HTMLButtonElement>('[value="delete"]')?.disabled).toBe(true);
   });
 
-  it.each([
-    {
-      name: "offers capture when only an archived Workboard card matches",
-      metadata: { archivedAt: 10 },
-      captured: false,
-    },
-    {
-      name: "recognizes an active Workboard card",
-      metadata: undefined,
-      captured: true,
-    },
-  ])("$name", async ({ metadata, captured }) => {
-    const row = { key: "agent:main:captured", kind: "direct" } as GatewaySessionRow;
+  it("projects plugin-owned labels and disabled state into a session menu", async () => {
+    const row = { key: "agent:main:review", kind: "direct" } as GatewaySessionRow;
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const context = createContext(gateway, createSessions());
-    context.runtimeConfig.state.configSnapshot = {
-      config: { plugins: { entries: { workboard: { enabled: true } } } },
-    };
-    context.workboard.state.cards = [
-      {
-        id: "captured-card",
-        title: "Captured session",
-        status: "todo",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 2,
-        sessionKey: row.key,
-        metadata,
-      },
-    ];
-    const result = { count: 1, sessions: [row] } as SessionsListResult;
-    const page = await createRenderedPage(context, result);
-
+    const resolve = vi.fn(() => ({ label: "Open review", disabled: true }));
+    const run = vi.fn();
+    const { entry } = registerSessionPluginAction(context, {
+      id: "review",
+      label: "Create review",
+      placement: "session",
+      resolve,
+      run,
+    });
+    const page = await createRenderedPage(context, {
+      count: 1,
+      sessions: [row],
+    } as SessionsListResult);
     page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
     await page.updateComplete;
-
-    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("Expected sessions page menu");
-    }
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu")!;
     await menu.updateComplete;
-
-    expect(menu.workboard).toEqual({ captured, busy: false });
-    expect(menu.querySelector('[value="workboard"]')?.textContent).toContain(
-      captured ? "Open Workboard card" : "Add to Workboard",
+    expect(resolve).toHaveBeenCalledWith({ sessionKey: row.key, session: row });
+    expect(menu.pluginActions).toEqual([{ id: entry.key, label: "Open review", disabled: true }]);
+    expect(menu.querySelector(`[value="plugin:${entry.key}"]`)?.hasAttribute("disabled")).toBe(
+      true,
     );
+    expect(run).not.toHaveBeenCalled();
   });
 
-  it("disables the Workboard action for every concurrently captured session", async () => {
-    const row = { key: "agent:main:second-capture", kind: "direct" } as GatewaySessionRow;
+  it("dispatches a plugin action with the exact selected session and ignores hidden actions", async () => {
+    const row = {
+      key: "agent:main:review",
+      kind: "direct",
+      sessionId: "review-id",
+    } as GatewaySessionRow;
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const context = createContext(gateway, createSessions());
-    context.runtimeConfig.state.configSnapshot = {
-      config: { plugins: { entries: { workboard: { enabled: true } } } },
-    };
-    context.workboard.state.capturingSessionKeys.add("agent:main:first-capture");
-    context.workboard.state.capturingSessionKeys.add(row.key);
-    const result = { count: 1, sessions: [row] } as SessionsListResult;
-    const page = await createRenderedPage(context, result);
-
+    const run = vi.fn();
+    const resolve = vi.fn(() => ({ hidden: false }));
+    const { entry } = registerSessionPluginAction(context, {
+      id: "review",
+      label: "Open review",
+      placement: "session",
+      resolve,
+      run,
+    });
+    const page = await createRenderedPage(context, {
+      count: 1,
+      sessions: [row],
+    } as SessionsListResult);
     page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
     await page.updateComplete;
-
-    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("Expected sessions page menu");
-    }
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu")!;
     await menu.updateComplete;
-
-    expect(menu.workboard).toEqual({ captured: false, busy: true });
-    expect(menu.querySelector('[value="workboard"]')?.hasAttribute("disabled")).toBe(true);
+    menu.querySelector<HTMLElement>(`[value="plugin:${entry.key}"]`)?.click();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: row.key,
+        session: row,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    resolve.mockReturnValue({ hidden: true });
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+    expect(page.querySelector<TestSessionMenu>("openclaw-session-menu")?.pluginActions).toEqual([]);
   });
 
   it("invalidates checkpoint work and mutation locks on same-client disconnect", async () => {
@@ -997,7 +991,6 @@ describe("sessions page lifecycle", () => {
     const forked = createDeferred<string | null>();
     const branched = createDeferred<{ key: string }>();
     const restored = createDeferred<unknown>();
-    const captured = createDeferred<unknown>();
     const groupsPut = createDeferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const sessions = createSessions({
       deleteMany: vi.fn(() => deleted.promise),
@@ -1011,15 +1004,11 @@ describe("sessions page lifecycle", () => {
       if (method === "chat.history") {
         return Promise.resolve({ messages: [] });
       }
-      if (method === "workboard.cards.captureSession") {
-        return captured.promise;
-      }
       return Promise.resolve({});
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const mutableGateway = createGateway(client);
     const context = createContext(mutableGateway.gateway, sessions);
-    getWorkboardState(context.workboard).loaded = true;
     const page = await createPage(context);
     page.result = {
       count: 1,
@@ -1034,12 +1023,9 @@ describe("sessions page lifecycle", () => {
       page.forkSession("main"),
       page.branchCheckpoint("main", "branch-checkpoint"),
       page.restoreCheckpoint("main", "restore-checkpoint"),
-      page.addToWorkboard({ key: "main" } as GatewaySessionRow),
       page.rememberCustomGroup("Stale group"),
     ];
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("workboard.cards.captureSession", expect.any(Object)),
-    );
+    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
 
     mutableGateway.emit({ phase: "reconnecting", client });
     deleted.resolve({ deleted: ["main"], errors: ["stale delete error"], preservedWorktrees: [] });
@@ -1047,7 +1033,6 @@ describe("sessions page lifecycle", () => {
     forked.resolve("forked");
     branched.resolve({ key: "branched" });
     restored.reject(new Error("stale restore error"));
-    captured.reject(new Error("stale capture error"));
     groupsPut.reject(new Error("stale group error"));
     await Promise.all(requests);
 
@@ -1058,6 +1043,43 @@ describe("sessions page lifecycle", () => {
     expect(page.checkpointBusyKey).toBeNull();
     expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
     expect(context.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each(["disconnect", "detach"])("revokes plugin navigation after %s", async (ending) => {
+    const pending = createDeferred<void>();
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const context = createContext(mutableGateway.gateway, createSessions());
+    const run = vi.fn(
+      async ({
+        host,
+        sessionKey,
+      }: Parameters<
+        import("../../../../src/plugin-sdk/control-ui.js").ControlUiAction["run"]
+      >[0]) => {
+        await pending.promise;
+        host.sessions.open(sessionKey);
+      },
+    );
+    const { entry, open } = registerSessionPluginAction(context, {
+      id: "review",
+      label: "Open review",
+      placement: "session",
+      run,
+    });
+    const page = await createPage(context);
+    const request = page.runPluginAction(entry.key, {
+      key: "agent:main:review",
+    } as GatewaySessionRow);
+    expect(run).toHaveBeenCalledOnce();
+    if (ending === "disconnect") {
+      mutableGateway.emit({ phase: "reconnecting" });
+    } else {
+      page.remove();
+    }
+    pending.resolve();
+    await request;
+    expect(open).not.toHaveBeenCalled();
+    expect(page.error).toBeNull();
   });
 
   it("does not navigate when a mutation completes after the page detaches", async () => {

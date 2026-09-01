@@ -16,7 +16,12 @@ import {
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./session-menu.ts";
 import type { SessionMenuData } from "./session-menu-actions.ts";
-import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "./session-menu.ts";
+import type {
+  PluginSessionMenuAction,
+  SessionMenuAction,
+  SessionMenuActionKind,
+  SessionMenuWork,
+} from "./session-menu.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
@@ -43,7 +48,7 @@ async function mountMenu(
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
     work?: SessionMenuWork | null;
-    workboard?: { captured: boolean; busy: boolean } | null;
+    pluginActions?: readonly PluginSessionMenuAction[];
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
@@ -100,9 +105,7 @@ async function mountMenu(
       .groups=${options.groups ?? []}
       .currentOwner=${options.currentOwner ?? null}
       .work=${options.work ?? null}
-      .workboard=${
-        options.workboard === undefined ? { captured: false, busy: false } : options.workboard
-      }
+      .pluginActions=${options.pluginActions ?? []}
       .onAction=${options.onAction ?? (() => {})}
       .onClose=${options.onClose ?? (() => {})}
     ></openclaw-session-menu>`,
@@ -358,7 +361,6 @@ describe("session menu", () => {
       "Icon & color",
       "Move to group",
       "Assign to…",
-      "Add to Workboard",
       "Fork conversation",
       "Copy",
       "Open in",
@@ -434,7 +436,6 @@ describe("session menu", () => {
   it("omits root placement actions for child sessions", async () => {
     const menu = await mountMenu({
       session: { isChild: true },
-      workboard: null,
     });
 
     expect(menuItemLabels(menu)).toEqual([
@@ -500,10 +501,37 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).not.toContain("Archive 2");
   });
 
-  it("omits Workboard when unavailable", async () => {
-    const menu = await mountMenu({ workboard: null });
+  it("dispatches a namespaced plugin action after closing the menu", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const onClose = vi.fn();
+    const menu = await mountMenu({
+      pluginActions: [{ id: "review/open", label: "Open review" }],
+      onAction,
+      onClose,
+    });
+    menuItem(menu, "Open review").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "plugin", id: "review/open" });
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onAction.mock.invocationCallOrder[0]!);
+  });
 
-    expect(menuItemLabels(menu)).not.toContain("Add to Workboard");
+  it.each([
+    { pluginActions: [{ id: "review/open", label: "Open review", disabled: true }] },
+    {
+      pluginActions: [{ id: "review/open", label: "Open review" }],
+      actionDisabledReasons: { plugin: "Admin access required" },
+    },
+    { pluginActions: [{ id: "review/open", label: "Open review" }], selectionCount: 2 },
+    { pluginActions: [] },
+  ])("does not dispatch an unavailable plugin action: %j", async (options) => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ ...options, onAction });
+    menu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "plugin:review/open" } },
+        bubbles: true,
+      }),
+    );
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it("restores archived sessions while keeping delete enabled and pin disabled", async () => {

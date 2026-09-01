@@ -18,14 +18,12 @@ import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.t
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 
 /** Stable custom-element inputs. Behavior is layered in focused sidebar modules. */
 export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
-  @property({ attribute: false }) activeWorkboardBoardId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) offline = false;
@@ -41,9 +39,6 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
-  @property({ attribute: false }) workboardBoards: readonly SidebarWorkboardBoard[] = [];
-  @property({ attribute: false }) workboardBoardsReady = false;
-  @property({ attribute: false }) workboardRenderers?: SidebarWorkboardRenderers;
   @property({ attribute: false }) sidebarLiveActivity = true;
   /** Agents surfaced first in the chip quick switcher when many exist. */
   @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
@@ -71,6 +66,10 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
 
   @consume({ context: applicationContext, subscribe: true })
   protected context?: ApplicationContext<RouteId>;
+
+  pluginNavigation() {
+    return this.context?.plugins?.registrations("navigation") ?? [];
+  }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {
     const context = this.context;

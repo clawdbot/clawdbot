@@ -1,18 +1,18 @@
 // Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { BrowserContext, Locator, Page } from "playwright";
-import { expect, it } from "vitest";
-import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
-import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
   WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+} from "@openclaw/workboard-contract";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { expect, it } from "vitest";
+import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
@@ -20,6 +20,7 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mocked Gateway E2E",
@@ -80,33 +81,8 @@ function workboardField(scope: Page | Locator, label: string) {
   });
 }
 
-type UpdatingElement = HTMLElement & {
-  requestUpdate?: () => void;
-  updateComplete: Promise<boolean>;
-};
-
-async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
-  await page.locator("openclaw-workboard-page").evaluate(async (element, shouldRequestUpdate) => {
-    const workboardPage = element as UpdatingElement;
-    if (shouldRequestUpdate) {
-      workboardPage.requestUpdate?.();
-    }
-    await workboardPage.updateComplete;
-  }, requestUpdate);
-}
-
 async function waitForWorkboardSelectValue(control: Locator, value: string): Promise<void> {
-  // Web Awesome updates `value` before its deferred `change` event. Wait for
-  // that event's update boundary and the parent render that consumes it.
-  await control.evaluate(async (element) => {
-    await (element as UpdatingElement).updateComplete;
-  });
-  await waitForWorkboardRender(control.page());
-  await expect
-    .poll(() =>
-      control.evaluate((select) => (select as HTMLElement & { value?: string }).value ?? ""),
-    )
-    .toBe(value);
+  await expect.poll(() => control.inputValue()).toBe(value);
 }
 
 async function chooseWorkboardSelectOption(
@@ -122,36 +98,32 @@ async function chooseWorkboardSelectOption(
 async function chooseWorkboardSelectFieldOption(
   field: Locator,
   optionLabel: string,
-  control = field.locator("wa-select"),
+  control = field.locator("select"),
 ): Promise<void> {
-  const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
-    const option = options.find(
-      (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
+  const optionValue = await field.locator("option").evaluateAll((options, optionText) => {
+    const option = options.find((candidate) =>
+      candidate.textContent?.trim().startsWith(optionText),
     );
     return option?.getAttribute("value") ?? null;
   }, optionLabel);
-  expect(optionValue).not.toBeNull();
-  await control.evaluate((select, value) => {
-    (select as HTMLElement & { value: string }).value = String(value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, optionValue);
-  await waitForWorkboardSelectValue(control, optionValue ?? "");
+  const value = expectDefined(optionValue, `Workboard option: ${optionLabel}`);
+  await control.selectOption(value);
+  await waitForWorkboardSelectValue(control, value);
 }
 
 async function expectWorkboardSelectTextFits(control: Locator): Promise<void> {
-  await control.click();
-  await expect.poll(() => control.getAttribute("open")).not.toBeNull();
-  const overflow = await control.evaluate((select) => {
-    const trigger = select.shadowRoot?.querySelector<HTMLElement>('[part="display-input"]');
-    const labels = [...select.querySelectorAll<HTMLElement>(".picker-select__label")];
+  const geometry = await control.evaluate((select) => {
+    const bounds = select.getBoundingClientRect();
+    const parent = select.parentElement!.getBoundingClientRect();
     return {
-      options: labels.map((label) => label.scrollWidth - label.clientWidth),
-      trigger: trigger ? trigger.scrollWidth - trigger.clientWidth : Number.POSITIVE_INFINITY,
+      width: bounds.width,
+      available: parent.width,
+      overflow: select.scrollWidth - select.clientWidth,
     };
   });
-  expect(overflow.trigger).toBeLessThanOrEqual(1);
-  expect(overflow.options.every((value) => value <= 1)).toBe(true);
-  await control.press("Escape");
+  expect(geometry.width).toBeGreaterThan(0);
+  expect(geometry.width).toBeLessThanOrEqual(geometry.available + 1);
+  expect(geometry.overflow).toBeLessThanOrEqual(1);
 }
 
 async function setWorkboardDraftField(
@@ -161,9 +133,6 @@ async function setWorkboardDraftField(
 ): Promise<void> {
   const input = scope.getByLabel(label);
   await input.fill(value);
-  // Prove the delegated input handler reached canonical draft state. A DOM-only
-  // value check can pass even when the next parent render would restore stale data.
-  await waitForWorkboardRender(input.page(), true);
   await expect.poll(() => input.inputValue()).toBe(value);
 }
 
@@ -243,28 +212,6 @@ function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionR
     totalTokens: 0,
     updatedAt: baseTime,
     ...overrides,
-  };
-}
-
-function readOnlyConnectResponse() {
-  return {
-    auth: {
-      deviceToken: "e2e-read-only-device-token",
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    features: { events: [], methods: ["chat.startup"] },
-    protocol: PROTOCOL_VERSION,
-    server: { connId: "control-ui-e2e-read-only", version: "e2e" },
-    snapshot: {
-      sessionDefaults: {
-        defaultAgentId: "main",
-        mainKey: "main",
-        mainSessionKey: "main",
-        scope: "agent",
-      },
-    },
-    type: "hello-ok",
   };
 }
 
@@ -413,6 +360,7 @@ suite.define(() => {
     await writable.page.clock.install();
     try {
       const writableGateway = await installMockGateway(writable.page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
@@ -425,49 +373,24 @@ suite.define(() => {
       await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
 
-      const prioritySelect = writable.page
-        .locator(".workboard-toolbar__filters .workboard-select")
-        .nth(1);
-      const priorityCombobox = prioritySelect.getByRole("combobox");
+      const prioritySelect = writable.page.getByRole("combobox", { name: "All priorities" });
       const directRoutePickerStyles = await prioritySelect.evaluate((select) => {
-        const label = select.querySelector(".picker-select__label");
-        const copy = select.querySelector(".picker-select__copy");
-        if (!label || !copy) {
-          throw new Error("Workboard picker style probe did not render");
-        }
+        const styles = getComputedStyle(select);
         return {
-          copyDisplay: getComputedStyle(copy).display,
-          labelFontWeight: getComputedStyle(label).fontWeight,
+          minHeight: styles.minHeight,
+          paddingRight: styles.paddingRight,
         };
       });
       expect(directRoutePickerStyles).toEqual({
-        copyDisplay: "grid",
-        labelFontWeight: "650",
+        minHeight: "36px",
+        paddingRight: "36px",
       });
-      await priorityCombobox.focus();
-      await writable.page.keyboard.press("ArrowDown");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
-
-      await writable.page.keyboard.press("End");
-      await writable.page.keyboard.press("Enter");
+      await prioritySelect.selectOption("urgent");
       await waitForWorkboardSelectValue(prioritySelect, "urgent");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
-
-      await priorityCombobox.focus();
-      await writable.page.keyboard.press("ArrowDown");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
-      await writable.page.keyboard.press("ArrowUp");
-      await writable.page.keyboard.press("Enter");
+      await prioritySelect.selectOption("high");
       await waitForWorkboardSelectValue(prioritySelect, "high");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
-
-      await priorityCombobox.focus();
-      await writable.page.keyboard.press("ArrowDown");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
-      await writable.page.keyboard.press("Home");
-      await writable.page.keyboard.press("Enter");
+      await prioritySelect.selectOption("all");
       await waitForWorkboardSelectValue(prioritySelect, "all");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await writableGateway.deferNext("workboard.cards.create");
       await writable.page
@@ -475,7 +398,7 @@ suite.define(() => {
         .getByRole("button", { name: /New card/u })
         .click();
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
-      const createForm = writable.page.locator('openclaw-modal-dialog[label="New card"]');
+      const createForm = writable.page.locator(".workboard-draft");
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(createForm, "Title", createdCard.title);
       await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
@@ -530,7 +453,7 @@ suite.define(() => {
         .locator('button[aria-label="Edit card"]')
         .click();
       const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
-      const editForm = writable.page.locator('openclaw-modal-dialog[label="Edit card"]');
+      const editForm = writable.page.locator(".workboard-draft");
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(editForm, "Title", editedCard.title);
       await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
@@ -669,7 +592,7 @@ suite.define(() => {
         listBeforeLiveRefresh,
       );
       await editForm
-        .locator("form > .workboard-modal__actions")
+        .locator(":scope > .workboard-modal__actions")
         .getByRole("button", { name: "Cancel", exact: true })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
@@ -710,8 +633,9 @@ suite.define(() => {
     const readOnly = await newRecordedPage(artifacts, "workboard-read-only");
     try {
       const readOnlyGateway = await installMockGateway(readOnly.page, {
+        ...workboardUi,
+        operatorScopes: ["operator.read"],
         methodResponses: {
-          connect: readOnlyConnectResponse(),
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([
             sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
@@ -780,6 +704,7 @@ suite.define(() => {
     const recorded = await newRecordedPage(artifacts, "workboard-overflow");
     try {
       await installMockGateway(recorded.page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
@@ -829,6 +754,7 @@ suite.define(() => {
     const recorded = await newRecordedPage(artifacts, "workboard-collapsed-columns");
     try {
       const gateway = await installMockGateway(recorded.page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
@@ -958,6 +884,7 @@ suite.define(() => {
   it("keeps touch collapse controls visible and at least 44px", async () => {
     await suite.withPage({ hasTouch: true }, async ({ page }) => {
       await installMockGateway(page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
@@ -1018,6 +945,7 @@ suite.define(() => {
     const recorded = await newRecordedPage(artifacts, "workboard-board-filter");
     try {
       await installMockGateway(recorded.page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
@@ -1027,21 +955,27 @@ suite.define(() => {
         },
       });
 
-      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard?board=ops`);
+      const response = await recorded.page.goto(
+        `${suite.server.baseUrl}workboard?board=ops&agent=main`,
+      );
       expect(response?.status()).toBe(200);
       await cardInColumn(recorded.page, "Todo", opsCard.title).waitFor({ state: "visible" });
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
       await expect.poll(() => recorded.page.getByText(defaultCard.title).count()).toBe(0);
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
 
+      const historyBeforeFilter = await recorded.page.evaluate(() => history.length);
       const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
       await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
       await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard");
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
+      expect(new URL(recorded.page.url()).search).toBe("?agent=main");
 
       await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
+      expect(new URL(recorded.page.url()).search).toBe("?agent=main");
+      expect(await recorded.page.evaluate(() => history.length)).toBe(historyBeforeFilter);
       expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
       expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
       await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");

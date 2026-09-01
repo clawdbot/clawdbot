@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { workboardUi } from "../pages/workboard/workboard.e2e.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -66,6 +67,7 @@ suite.define(() => {
   it("preserves the compact horizontal grid at desktop and mobile widths", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       await installMockGateway(page, {
+        ...workboardUi,
         sessionKey,
         controlUiWidgetKinds: [
           { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },

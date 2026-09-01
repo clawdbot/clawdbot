@@ -23,6 +23,8 @@ import {
 import { formatUiError } from "../../lib/format-error.ts";
 import { showToast } from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import { renderBoardGrantedCapabilities } from "./board-widget-capabilities.ts";
@@ -88,6 +90,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @state() private pluginRendererLabel = "";
   private pluginRendererKind = "";
   private pluginRendererLoadToken: object | null = null;
+  private readonly pluginSubscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.plugins,
+    (plugins, notify) => plugins.subscribe(notify),
+  );
   private readonly appView = new BoardMcpAppLifecycle({
     active: () => this.active,
     connected: () => this.isConnected,
@@ -154,6 +160,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
+    this.pluginSubscriptions.clear();
     this.resetPluginRenderer();
     this.frame.disconnect();
     this.appView.disconnect();
@@ -281,6 +288,28 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return this.frame.render(widget);
     }
     if (widget.contentKind === "plugin") {
+      const pluginId = pluginIdForWidgetKind(widget.pluginKind);
+      const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
+      const key = `${pluginId}/${widget.pluginKind?.slice(pluginId.length + 1)}`;
+      const native = activeKinds.some(
+        (entry) => entry.kind === widget.pluginKind && entry.pluginId === pluginId,
+      )
+        ? this.context?.plugins?.registrations("widgets").find((entry) => entry.key === key)
+        : undefined;
+      if (native) {
+        return renderPluginContribution(
+          "widgets",
+          key,
+          {
+            sessionKey: this.sessionKey,
+            widget: { name: widget.name, props: widget.props },
+            canMutate: this.canMutate,
+            canGrant: this.canGrant,
+          },
+          nothing,
+          this.active,
+        );
+      }
       if (this.pluginRendererError) {
         return renderBoardWidgetError(this.pluginRendererError, () => this.retryPluginRenderer());
       }
@@ -293,8 +322,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           requestUpdate: () => this.requestUpdate(),
         });
       }
-      const pluginId = pluginIdForWidgetKind(widget.pluginKind);
-      const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
       const contribution = getPluginWidgetKindContribution(widget.pluginKind, activeKinds);
       return contribution
         ? html`<p class="board-widget__plugin-loading">${t("board.widget.pluginLoading")}</p>`

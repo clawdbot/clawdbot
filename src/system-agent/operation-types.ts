@@ -35,6 +35,7 @@ export type SystemAgentOperation =
   | { kind: "plugin-list" }
   | { kind: "plugin-search"; query: string }
   | { kind: "plugin-install"; spec: string }
+  | { kind: "plugin-activate-artifact"; path: string; sha256: string }
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
   | {

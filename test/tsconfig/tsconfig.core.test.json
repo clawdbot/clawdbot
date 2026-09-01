@@ -13,6 +13,8 @@
     "../../ui/src/main.ts",
     "../../ui/**/*.test.ts",
     "../../ui/**/*.test.tsx",
+    "../../extensions/*/browser/**/*.test.ts",
+    "../../extensions/*/browser/**/*.test.tsx",
     "../../packages/**/*.d.ts",
     "../../packages/**/*.test.ts",
     "../../packages/**/*.test.tsx"

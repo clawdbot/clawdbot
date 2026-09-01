@@ -24,6 +24,11 @@ Looking for a how-to guide instead? Start with [Building plugins](/plugins/build
 
 ## Import convention
 
+For features with native Control UI, use [Feature plugins](/plugins/feature-plugins):
+`feature-contract` defines shared operations, `feature-plugin` registers their
+backend implementations, and `control-ui` exposes browser contribution and
+replacement contracts.
+
 Always import from a specific subpath:
 
 ```typescript

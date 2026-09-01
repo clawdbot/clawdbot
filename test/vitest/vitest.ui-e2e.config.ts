@@ -7,6 +7,7 @@ import {
 } from "./vitest.pattern-file.ts";
 import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
+import { controlUiE2eTestGlobs } from "./vitest.ui-paths.mjs";
 
 const mediaTranscriptRealGatewayTest =
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
@@ -17,7 +18,7 @@ const openClawDelegationRealGatewayTest =
 const automationManagementRealGatewayTest =
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
 const uiE2eIncludePatterns = [
-  "ui/src/**/*.e2e.test.ts",
+  ...controlUiE2eTestGlobs,
   mediaTranscriptRealGatewayTest,
   sessionHostCommandStateRealGatewayTest,
   openClawDelegationRealGatewayTest,

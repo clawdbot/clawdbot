@@ -117,6 +117,17 @@ describe("changed core test graph selection", () => {
     ]);
   });
 
+  it("selects the UI graph for a plugin browser test", () => {
+    const pluginTest = "extensions/example/browser/page.test.ts";
+    const graphs = inventory();
+    const owner = graphs.find((graph) => graph.name === "core-test-ui-other")!;
+    owner.roots.push(pluginTest);
+    owner.files.push(pluginTest);
+    expect(
+      selectChangedTsgoCoreTestShards([pluginTest], graphs)?.map((shard) => shard.name),
+    ).toEqual(["ui-other"]);
+  });
+
   it.for([
     [],
     ["src/owner.ts"],

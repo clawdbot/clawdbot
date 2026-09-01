@@ -169,7 +169,9 @@ describe("chat pane embedded panels", () => {
       render(definition.loading, mount);
       const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
       await skeleton?.updateComplete;
-      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(expected[definition.slot]);
+      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(
+        expected[definition.slot as keyof typeof expected],
+      );
     }
   });
 

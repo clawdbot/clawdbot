@@ -7,6 +7,7 @@ import {
   expectedMobileScrollGeometry,
   readMobileScrollGeometry,
 } from "./workboard-scroll.e2e.test-support.ts";
+import { workboardUi } from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mobile scroll E2E",
@@ -34,6 +35,7 @@ suite.define(() => {
       const cards = createMobileScrollCards(baseTime);
       await page.setViewportSize({ height: 700, width: 390 });
       await installMockGateway(page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": {

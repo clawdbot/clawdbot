@@ -374,8 +374,6 @@ describe("OpenClaw shell source initialization", () => {
       runtimeConfigClient: null,
       runtimeConfigSource: null,
       sessionKeyClient: null,
-      sidebarWorkboardRuntime: null,
-      syncSidebarWorkboard: vi.fn(),
     } as unknown as ShellGatewayHost;
     const owner = new ShellGatewayOwner(host);
     const reconnecting = {

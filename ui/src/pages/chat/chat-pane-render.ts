@@ -576,10 +576,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: (followUpModeOverride, submissionAction) =>
         catalogKey
-          ? void this.continueCatalogSession(catalogKey)
+          ? this.continueCatalogSession(catalogKey)
           : suggestionViewer
-            ? void this.addCurrentSessionSuggestion()
-            : void state.handleSendChat(
+            ? this.addCurrentSessionSuggestion()
+            : state.handleSendChat(
                 undefined,
                 followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
                 submissionAction,

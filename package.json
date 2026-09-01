@@ -1481,6 +1481,18 @@
       "types": "./dist/plugin-sdk/widget-html.d.ts",
       "default": "./dist/plugin-sdk/widget-html.js"
     },
+    "./plugin-sdk/control-ui": {
+      "types": "./dist/plugin-sdk/control-ui.d.ts",
+      "default": "./dist/plugin-sdk/control-ui.js"
+    },
+    "./plugin-sdk/feature-contract": {
+      "types": "./dist/plugin-sdk/feature-contract.d.ts",
+      "default": "./dist/plugin-sdk/feature-contract.js"
+    },
+    "./plugin-sdk/feature-plugin": {
+      "types": "./dist/plugin-sdk/feature-plugin.d.ts",
+      "default": "./dist/plugin-sdk/feature-plugin.js"
+    },
     "./plugin-sdk/tool-plugin": {
       "types": "./dist/plugin-sdk/tool-plugin.d.ts",
       "default": "./dist/plugin-sdk/tool-plugin.js"

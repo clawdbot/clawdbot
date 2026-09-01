@@ -26,6 +26,7 @@ import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-tele
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
+import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
@@ -161,9 +162,10 @@ function isPathInsideRepo(relativePath: string) {
 }
 
 function isSkippedTrackedTestFile(relativePath: string) {
-  return relativePath
-    .split("/")
-    .some((segment) => segment === "dist" || segment === "node_modules");
+  return (
+    isPluginControlUiPath(relativePath) ||
+    relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules")
+  );
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
@@ -232,6 +234,9 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
+      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+        continue;
+      }
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist") {
           continue;

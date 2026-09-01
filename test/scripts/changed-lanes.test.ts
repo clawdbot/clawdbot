@@ -1525,6 +1525,13 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it.each([
+    { path: "extensions/example/browser/page.ts", ui: true },
+    { path: "extensions/example/browser/page.test.ts", ui: false },
+  ])("selects UI ownership for $path", ({ path: changedPath, ui }) => {
+    expectLanes(detectChangedLanes([changedPath]).lanes, { coreTests: true, ui });
+  });
+
   it("falls back to core lint for a non-lintable core test asset", () => {
     const result = detectChangedLanes([
       "packages/ai/test/fixtures/provider-transport-parity/openai-success.snap.txt",

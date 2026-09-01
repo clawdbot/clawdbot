@@ -203,6 +203,12 @@ describe("scripts/test-extension.mts", () => {
     expect(new Set(chunks.flat()).size).toBe(expectedFiles.length);
   });
 
+  it("excludes plugin browser tests from the server-side extension inventory", () => {
+    const files = listExtensionTestFilesForRoots([bundledPluginRoot("workboard")]);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((file) => file.includes("/browser/"))).toBe(false);
+  });
+
   it("includes newly authored Matrix tests in bounded process targets", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-test-plan-"));
     const relativeRoot = path.relative(process.cwd(), root);

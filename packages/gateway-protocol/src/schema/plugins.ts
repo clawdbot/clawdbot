@@ -43,6 +43,50 @@ export const PluginsUiDescriptorsResultSchema = closedObject({
   descriptors: Type.Array(PluginControlUiDescriptorSchema),
 });
 
+/** One immutable browser build owned by an active native plugin. */
+export const PluginControlUiModuleSchema = closedObject({
+  pluginId: NonEmptyString,
+  name: NonEmptyString,
+  revision: NonEmptyString,
+  entryUrl: NonEmptyString,
+  styles: Type.Array(NonEmptyString, { maxItems: 16 }),
+});
+
+export const PluginControlUiDiagnosticSchema = closedObject({
+  pluginId: NonEmptyString,
+  message: Type.String({ maxLength: 512 }),
+});
+
+/** Lists browser builds; reading this catalog never reloads backend plugin code. */
+export const PluginsControlUiListParamsSchema = closedObject({});
+export const PluginsControlUiReloadParamsSchema = closedObject({
+  pluginId: Type.Optional(NonEmptyString),
+});
+export const PluginsControlUiCatalogSchema = closedObject({
+  revision: NonEmptyString,
+  plugins: Type.Array(PluginControlUiModuleSchema, { maxItems: 64 }),
+  diagnostics: Type.Array(PluginControlUiDiagnosticSchema, { maxItems: 64 }),
+});
+export const PluginsControlUiChangedEventSchema = closedObject({ revision: NonEmptyString });
+export const PluginsControlUiReportParamsSchema = closedObject({
+  pluginId: NonEmptyString,
+  revision: NonEmptyString,
+  status: Type.Union([Type.Literal("activated"), Type.Literal("failed")]),
+  error: Type.Optional(Type.String({ maxLength: 512 })),
+});
+export const PluginsControlUiStatusParamsSchema = closedObject({
+  pluginId: Type.Optional(NonEmptyString),
+});
+export const PluginsControlUiStatusResultSchema = closedObject({
+  clients: Type.Array(
+    closedObject({
+      connId: NonEmptyString,
+      activations: Type.Array(PluginsControlUiReportParamsSchema, { maxItems: 64 }),
+    }),
+    { maxItems: 128 },
+  ),
+});
+
 /** Request payload for invoking one plugin-owned session action. */
 export const PluginsSessionActionParamsSchema = closedObject({
   pluginId: NonEmptyString,
@@ -382,5 +426,10 @@ export type PluginsSetEnabledResult = Static<typeof PluginsSetEnabledResultSchem
 export type PluginControlUiDescriptor = Static<typeof PluginControlUiDescriptorSchema>;
 export type PluginsUiDescriptorsParams = Static<typeof PluginsUiDescriptorsParamsSchema>;
 export type PluginsUiDescriptorsResult = Static<typeof PluginsUiDescriptorsResultSchema>;
+export type PluginControlUiModule = Static<typeof PluginControlUiModuleSchema>;
+export type PluginControlUiDiagnostic = Static<typeof PluginControlUiDiagnosticSchema>;
+export type PluginsControlUiCatalog = Static<typeof PluginsControlUiCatalogSchema>;
+export type PluginsControlUiReloadParams = Static<typeof PluginsControlUiReloadParamsSchema>;
+export type PluginControlUiActivation = Static<typeof PluginsControlUiReportParamsSchema>;
 export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;
 export type PluginsSessionActionResult = Static<typeof PluginsSessionActionResultSchema>;

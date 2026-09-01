@@ -1,11 +1,8 @@
 import { html, nothing } from "lit";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
+import "../plugins/control-ui-contributions.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
-import type {
-  SidebarWorkboardRenderers,
-  SidebarWorkboardSnapshot,
-} from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
@@ -25,6 +22,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
@@ -85,8 +83,6 @@ export interface ShellViewHost {
   readonly settingsSidebarRenderer: SettingsSidebarModule["renderSettingsSidebar"] | null;
   readonly settingsSidebarLoadFailed: boolean;
   readonly settingsSearchQuery: string;
-  readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
-  readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
   readonly devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer(): void;
@@ -302,8 +298,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       activePluginTabId,
       enabledRouteIds: host.enabledRouteIds(),
-      activeWorkboardBoardId:
-        workboardBoardIdFromPath(host.routeState.location?.pathname ?? "", context.basePath) ?? "",
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
@@ -318,9 +312,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
       preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
-      workboardBoards: host.sidebarWorkboardSnapshot.boards,
-      workboardBoardsReady: host.sidebarWorkboardSnapshot.ready,
-      workboardRenderers: host.sidebarWorkboardRenderers,
       sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
       pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
       themeMode: context.theme.mode,
@@ -408,7 +399,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     : host.navigationSidebar;
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
-  return html`
+  const workspace = html`
     ${
       lazyElementState?.status === "loading" &&
       lazyElementState.element === host.commandPaletteElement
@@ -713,4 +704,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-toast-host></openclaw-toast-host>
     </div>
   `;
+  return html`${renderPluginSurface(
+      "workspace",
+      { sessionKey: host.activeSessionKey, routeId: activeRoute },
+      workspace,
+    )}<openclaw-plugin-manager></openclaw-plugin-manager>`;
 }

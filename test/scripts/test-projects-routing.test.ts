@@ -339,6 +339,16 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.ui.config.ts",
     },
     {
+      title: "routes plugin browser tests to the UI owner before extension routing",
+      target: "extensions/workboard/browser/catalog.test.ts",
+      config: "test/vitest/vitest.ui.config.ts",
+    },
+    {
+      title: "routes any plugin browser E2E to the Control UI browser harness",
+      target: "extensions/example/browser/page.e2e.test.ts",
+      config: "test/vitest/vitest.ui-e2e.config.ts",
+    },
+    {
       title: "routes utils targets to the utils config",
       target: "src/utils/path.test.ts",
       config: "test/vitest/vitest.utils.config.ts",
@@ -684,6 +694,18 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.package-docker.config.ts",
         forwardedArgs: [target],
         includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps a plugin browser directory scoped within its UI project", () => {
+    const target = "extensions/workboard/browser";
+    expect(buildVitestRunPlans([target])).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: [`${target}/**/*.test.ts`],
         watchMode: false,
       },
     ]);

@@ -43,6 +43,12 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ## Plugin entry
 
+Native feature authoring uses `plugin-sdk/feature-contract`
+(`defineFeatureContract`, `createFeatureClient`), `plugin-sdk/feature-plugin`
+(`defineFeaturePlugin`), and `plugin-sdk/control-ui` (`defineControlUiPlugin`,
+host and view types). The contract and Control UI subpaths are browser safe;
+`feature-plugin` is backend only. See [Feature plugins](/plugins/feature-plugins).
+
 | Subpath                             | Key exports                                                                                                                                                                                             |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/plugin-entry`           | `definePluginEntry`                                                                                                                                                                                     |

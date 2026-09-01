@@ -21,6 +21,11 @@ import {
   canSplitSessionView,
   runSessionNavigationAction,
 } from "../lib/sessions/session-menu-navigation.ts";
+import { showToast } from "../lib/toast.ts";
+import {
+  pluginSessionMenuActions,
+  runPluginSessionMenuAction,
+} from "../plugins/control-ui-session-actions.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -52,8 +57,7 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
     sidebarEntries: host.sidebarEntries,
     preferencesBrowserOnly: host.preferencesBrowserOnly,
     isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    workboardBoards: host.workboardBoards,
-    workboardRenderers: host.workboardRenderers,
+    pluginNavigation: host.pluginNavigation(),
     onTabAway: () => trigger?.focus(),
     onClose: (restoreFocus) => {
       if (controller.customizeMenuPosition !== position) {
@@ -69,8 +73,8 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
         : [...canonical, entry];
       host.onUpdateSidebarEntries?.(next);
     },
-    onToggleWorkboardBoard: (boardId) => {
-      const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    onTogglePlugin: (key) => {
+      const entry = serializeSidebarEntry({ type: "plugin", key });
       const canonical = host.reconciledSidebarZone().sidebarEntries;
       const next = canonical.includes(entry)
         ? canonical.filter((candidate) => candidate !== entry)
@@ -191,6 +195,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   }
   const context = host.sessionDataContext;
   const currentSession = host.findSidebarSessionByKey(menu.session.key);
+  const pluginSession = host.sessionData.sessionsResult?.sessions.find(
+    (row) => row.key === menu.session.key,
+  );
   // Appearance editing keeps this menu open. Refresh its row without adopting
   // a replacement session that happens to reuse the captured key.
   const session =
@@ -271,7 +278,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .groups=${host.knownSessionGroups()}
         .currentOwner=${session.owner?.actor ?? null}
         .work=${batchRows ? null : controller.sessionMenuWork}
-        .workboard=${null}
+        .pluginActions=${!batchRows && context?.plugins && pluginSession
+          ? pluginSessionMenuActions(context.plugins, pluginSession)
+          : []}
         .onClose=${() => {
           if (controller.sessionMenu === menu) {
             controller.closeSessionMenu();
@@ -332,7 +341,19 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             case "fork":
               void host.sessionOrganizer.forkSession(session);
               break;
-            case "workboard":
+            case "plugin":
+              if (context?.plugins && pluginSession) {
+                void runPluginSessionMenuAction({
+                  runtime: context.plugins,
+                  id: action.id,
+                  session: pluginSession,
+                  signal: controller.pluginActionLifetime.signal,
+                }).catch((error: unknown) => {
+                  if (!controller.pluginActionLifetime.signal.aborted) {
+                    showToast({ message: error instanceof Error ? error.message : String(error) });
+                  }
+                });
+              }
               break;
             case "move-to-group":
               if (action.category === null || session.category !== action.category) {

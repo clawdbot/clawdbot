@@ -5,6 +5,7 @@ import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
+import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import {
   authorizeOperatorScopesForRequiredScope,
   READ_SCOPE,
@@ -160,7 +161,7 @@ export function listControlUiPluginWidgetKinds(
   );
 }
 
-/** Builds least-privilege grants only for visible tabs backed by same-plugin gateway routes. */
+/** Grants read access to active native assets and visible same-plugin Gateway tabs. */
 export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
@@ -169,6 +170,18 @@ export function listControlUiPluginTabAuthGrants(
     return [];
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
+  for (const plugin of registry.plugins) {
+    if (!plugin.enabled || plugin.status !== "loaded" || !plugin.controlUi) {
+      continue;
+    }
+    const assetPath = controlUiPluginAssetPrefix(plugin.id);
+    grants.set(`${plugin.id}\n${assetPath}`, {
+      pluginId: plugin.id,
+      path: assetPath,
+      match: "prefix",
+      scopes: [READ_SCOPE],
+    });
+  }
   for (const tab of projectControlUiPluginTabs(registry.controlUiDescriptors ?? [], callerScopes)) {
     if (!tab.path) {
       continue;

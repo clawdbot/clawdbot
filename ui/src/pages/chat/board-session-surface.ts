@@ -1,16 +1,8 @@
-import { html, nothing } from "lit";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import { html } from "lit";
+import "../../plugins/control-ui-contributions.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
-
-export type WorkboardCardChipProps = {
-  active: boolean;
-  basePath: string;
-  client: GatewayBrowserClient;
-  sessionKey: string;
-};
 
 type BoardSessionSurfaceProps = {
   active: boolean;
@@ -20,17 +12,10 @@ type BoardSessionSurfaceProps = {
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
-  workboardCardChip?: WorkboardCardChipProps | null;
+  sessionKey: string;
 };
 
 let boardViewLoad: Promise<unknown> | null = null;
-
-export function ensureWorkboardCardChipElement(): Promise<void> {
-  return ensureCustomElementDefined(
-    "openclaw-workboard-card-chip",
-    () => import("./workboard-card-chip.runtime.ts"),
-  );
-}
 
 export async function ensureBoardViewElement(): Promise<boolean> {
   if (customElements.get("openclaw-board-view")) {
@@ -46,18 +31,11 @@ export async function ensureBoardViewElement(): Promise<boolean> {
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
-      ${
-        props.workboardCardChip
-          ? html`
-              <openclaw-workboard-card-chip
-                .active=${props.workboardCardChip.active}
-                .basePath=${props.workboardCardChip.basePath}
-                .client=${props.workboardCardChip.client}
-                .sessionKey=${props.workboardCardChip.sessionKey}
-              ></openclaw-workboard-card-chip>
-            `
-          : nothing
-      }
+      <openclaw-plugin-contributions
+        .kind=${"session-header"}
+        .sessionKey=${props.sessionKey}
+        .presented=${props.active}
+      ></openclaw-plugin-contributions>
       <openclaw-board-view
         .active=${props.active}
         .snapshot=${props.snapshot}

@@ -34,7 +34,6 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/new-session/draft-persistence.test.ts",
   "ui/src/pages/sessions/sessions-page.archived.test.ts",
-  "ui/src/pages/workboard/view.test.ts",
 ];
 
 const uiIsolatedTestFileSet = new Set(uiIsolatedTestFiles);

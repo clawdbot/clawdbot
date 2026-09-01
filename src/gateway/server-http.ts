@@ -30,6 +30,7 @@ import {
   type ControlUiResourceRoute,
 } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import { CONTROL_UI_PLUGIN_ASSET_PREFIX } from "./control-ui-plugin-assets-contract.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
@@ -98,6 +99,9 @@ type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) =
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
+const getControlUiPluginAssetsModule = createLazyRuntimeModule(
+  () => import("./control-ui-plugin-assets.js"),
+);
 const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
 const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
@@ -490,6 +494,15 @@ export function createGatewayHttpServer(opts: {
           resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
         }),
       );
+      addAdmittedStage(scopedRequestPath.startsWith(CONTROL_UI_PLUGIN_ASSET_PREFIX), async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        return await (
+          await getControlUiPluginAssetsModule()
+        ).handleControlUiPluginAssetRequest(req, res, routeAuth);
+      });
       const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
         controlUiRouteBasePath,

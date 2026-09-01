@@ -28,10 +28,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
 
-// `route:workboard` shipped in browser and synced preferences before Workboard
-// became plugin-owned. Keep it as a placement slot, but not a customizable core route.
-const PERSISTED_SIDEBAR_ROUTES = ["workboard", ...SIDEBAR_NAV_ROUTES] as const;
-
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
 const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
@@ -53,15 +49,15 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = (typeof PERSISTED_SIDEBAR_ROUTES)[number];
+export type PersistedSidebarRoute = SidebarNavRoute;
 
 export function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
-  return PERSISTED_SIDEBAR_ROUTES.includes(value as PersistedSidebarRoute);
+  return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
 }
 
 export type SidebarZoneEntry =
   | { type: "route"; route: PersistedSidebarRoute }
-  | { type: "workboard"; boardId: string }
+  | { type: "plugin"; key: string }
   | { type: "session"; key: string };
 
 // Keep the highest-value operational destinations visible on first use. Users
@@ -79,6 +75,9 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("route:")) {
     const route = value.slice("route:".length);
+    if (route === "workboard") {
+      return { type: "plugin", key: "workboard/workboard" };
+    }
     return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
   }
   if (value.startsWith("session:")) {
@@ -87,7 +86,16 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
   }
   if (value.startsWith("workboard:")) {
     const boardId = value.slice("workboard:".length).trim();
-    return isValidWorkboardBoardId(boardId) ? { type: "workboard", boardId } : null;
+    // Normalize the shipped Workboard pin format at the preference boundary.
+    return isValidWorkboardBoardId(boardId)
+      ? { type: "plugin", key: `workboard/board-${boardId}` }
+      : null;
+  }
+  if (value.startsWith("plugin:")) {
+    const key = value.slice("plugin:".length);
+    return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(key)
+      ? { type: "plugin", key }
+      : null;
   }
   return null;
 }
@@ -96,7 +104,7 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   if (entry.type === "route") {
     return `route:${entry.route}`;
   }
-  return entry.type === "workboard" ? `workboard:${entry.boardId}` : `session:${entry.key}`;
+  return entry.type === "plugin" ? `plugin:${entry.key}` : `session:${entry.key}`;
 }
 
 /**

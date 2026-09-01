@@ -1,0 +1,83 @@
+openclaw-plugin-session-dashboard {
+  display: block;
+}
+
+.plugin-session-dashboard {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.plugin-session-dashboard__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.plugin-session-dashboard__toggle:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--accent) 68%, transparent);
+  outline-offset: 4px;
+}
+
+.plugin-session-dashboard__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.plugin-session-dashboard__title svg,
+.plugin-session-dashboard__chevron svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.plugin-session-dashboard__chevron {
+  display: inline-flex;
+  transition: transform 140ms ease;
+}
+
+.plugin-session-dashboard__toggle[aria-expanded="true"] .plugin-session-dashboard__chevron {
+  transform: rotate(180deg);
+}
+
+.plugin-session-dashboard__body {
+  min-width: 0;
+  padding-top: 10px;
+}
+
+.plugin-session-dashboard__body[hidden] {
+  display: none;
+}
+
+.plugin-session-dashboard__body .board-view {
+  gap: 9px;
+}
+
+.plugin-session-dashboard__body .board-grid {
+  gap: 8px;
+  grid-auto-rows: 44px;
+}
+
+.plugin-session-dashboard p.plugin-session-dashboard__empty,
+.plugin-session-dashboard p.plugin-session-dashboard__collapsed-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.plugin-session-dashboard p.plugin-session-dashboard__collapsed-empty {
+  margin-top: -2px;
+}

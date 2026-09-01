@@ -24,6 +24,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { pluginTabKey } from "./route.ts";
 
 /**
@@ -97,6 +98,7 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
 export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
+  @property({ attribute: false }) params: Readonly<Record<string, string>> = {};
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
@@ -128,6 +130,10 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     .watch(
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
     );
 
   private readonly handleVisibilityChange = () => {
@@ -580,6 +586,9 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     // Only advertised tabs render: hello omits descriptors whose plugin is
     // inactive or whose required scopes the connection lacks.
     const info = this.tabInfo();
+    if (context.plugins?.registrations("pages").some((entry) => entry.key === this.tabKey())) {
+      return renderPluginContribution("pages", this.tabKey(), this.params);
+    }
     if (info && this.tabKey() in BUNDLED_TAB_VIEWS) {
       const viewState = this.bundledViewState;
       if (viewState.status === "loading") {

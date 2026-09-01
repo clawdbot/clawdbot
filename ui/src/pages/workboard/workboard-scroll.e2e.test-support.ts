@@ -1,5 +1,5 @@
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { Locator } from "playwright";
-import type { WorkboardCard } from "../../lib/workboard/index.ts";
 
 export const expectedMobileScrollGeometry = {
   contentScrolls: true,

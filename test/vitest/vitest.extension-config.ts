@@ -1,6 +1,7 @@
 // Vitest extension config helpers keep extension shard defaults aligned.
 import type { ViteUserConfig } from "vitest/config";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { pluginControlUiPathGlob } from "./vitest.ui-paths.mjs";
 
 type ExtensionVitestConfigOptions = {
   fileParallelism?: boolean;
@@ -22,6 +23,7 @@ export function createExtensionVitestConfig(
       name: `extension-${name}`,
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],
+      exclude: [pluginControlUiPathGlob],
       ...options,
     },
   );
@@ -37,5 +39,6 @@ export function createSingleChannelExtensionVitestConfig(
     name: `extension-${extensionId}`,
     passWithNoTests: true,
     setupFiles: ["test/setup.extensions.ts"],
+    exclude: [pluginControlUiPathGlob],
   });
 }

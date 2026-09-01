@@ -82,12 +82,16 @@ describe("sidebar preference persistence", () => {
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
     expect(loadSettings().sidebarEntries).toEqual([
-      "route:workboard",
+      "plugin:workboard/workboard",
       "route:usage",
       "route:tasks",
     ]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual(["route:workboard", "route:usage", "route:tasks"]);
+    expect(migrated.sidebarEntries).toEqual([
+      "plugin:workboard/workboard",
+      "route:usage",
+      "route:tasks",
+    ]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });

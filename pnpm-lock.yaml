@@ -2257,16 +2257,31 @@ importers:
 
   extensions/workboard:
     dependencies:
-      typebox:
-        specifier: 1.3.18
-        version: 1.3.18
-    devDependencies:
-      '@openclaw/plugin-sdk':
+      '@openclaw/gateway-protocol':
         specifier: workspace:*
-        version: link:../../packages/plugin-sdk
+        version: link:../../packages/gateway-protocol
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../../packages/normalization-core
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../../packages/workboard-contract
+      lit:
+        specifier: 3.3.3
+        version: 3.3.3
+      typebox:
+        specifier: 1.3.18
+        version: 1.3.18
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../../packages/gateway-client
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
       openclaw:
         specifier: workspace:*
         version: link:../..

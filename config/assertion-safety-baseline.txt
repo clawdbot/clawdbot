@@ -1375,6 +1375,15 @@ extensions/whatsapp/src/session-errors.ts	20
 extensions/whatsapp/src/session.ts	6
 extensions/whatsapp/src/setup-finalize.ts	4
 extensions/whatsapp/src/targets-runtime.ts	2
+extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
+extensions/workboard/browser/lib/workboard/normalization.ts	5
+extensions/workboard/browser/lib/workboard/session-card-lookup.ts	2
+extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
+extensions/workboard/browser/pages/workboard/view-card-details.ts	1
+extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
+extensions/workboard/browser/pages/workboard/view-card.ts	1
+extensions/workboard/browser/pages/workboard/view.ts	1
+extensions/workboard/browser/pages/workboard/workboard-select.ts	1
 extensions/workboard/doctor-contract-api.ts	4
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
@@ -3898,8 +3907,6 @@ ui/src/lib/agents/display.ts	6
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	3
 ui/src/lib/board/widget-sandbox-host.ts	1
-ui/src/lib/board/widgets/workboard-card.ts	3
-ui/src/lib/board/widgets/workboard-widget.ts	2
 ui/src/lib/chat/message-extract.ts	5
 ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
@@ -3925,9 +3932,6 @@ ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
 ui/src/lib/sessions/swarm-activity.ts	1
 ui/src/lib/skills/index.ts	1
-ui/src/lib/workboard/metadata-contract-normalization.ts	1
-ui/src/lib/workboard/normalization.ts	5
-ui/src/lib/workboard/session-card-lookup.ts	2
 ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
@@ -4070,10 +4074,4 @@ ui/src/pages/usage/heatmap.ts	1
 ui/src/pages/usage/view-details.ts	7
 ui/src/pages/usage/view-overview.ts	3
 ui/src/pages/usage/view.ts	5
-ui/src/pages/workboard/view-card-actions.ts	2
-ui/src/pages/workboard/view-card-details.ts	1
-ui/src/pages/workboard/view-card-modal.ts	1
-ui/src/pages/workboard/view-card.ts	1
-ui/src/pages/workboard/view.ts	1
-ui/src/pages/workboard/workboard-select.ts	1
 ui/src/pages/worktrees/worktrees-page.ts	3

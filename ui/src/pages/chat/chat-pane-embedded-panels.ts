@@ -2,6 +2,7 @@ import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -13,6 +14,8 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../../lib/keyboard-shortcut-catalog.ts";
+import type { ControlUiRegistration } from "../../plugins/control-ui-runtime.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -65,6 +68,8 @@ type SidebarPanelDefinitionParams = {
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
+  pluginPanels: ControlUiRegistration<ControlUiPanel>[];
+  isPluginPanelPresented: (slot: SidebarSlotId) => boolean;
 };
 
 type SidebarPanelTextKey =
@@ -90,7 +95,7 @@ const SIDEBAR_PANEL_LOADING_VARIANTS = {
   tasks: "tasks",
   terminal: "terminal",
   workspace: "files",
-} satisfies Record<SidebarSlotId, PanelLoadingSkeletonVariant>;
+} satisfies Record<Exclude<SidebarSlotId, `plugin:${string}`>, PanelLoadingSkeletonVariant>;
 
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
@@ -103,7 +108,7 @@ export function sidebarPanelDefinitions(
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
   const definePanel = (
-    slot: SidebarSlotId,
+    slot: Exclude<SidebarSlotId, `plugin:${string}`>,
     textKey: SidebarPanelTextKey,
     icon: TemplateResult,
     content: TemplateResult | typeof nothing | null,
@@ -289,6 +294,24 @@ export function sidebarPanelDefinitions(
     }),
     definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
       available: params?.dashboard !== nothing,
+    }),
+    ...(params?.pluginPanels ?? []).map((entry): SidebarPanelDefinition => {
+      const slot: SidebarSlotId = `plugin:${entry.key}`;
+      return {
+        slot,
+        label: entry.value.label,
+        icon: icons.puzzle,
+        available: true,
+        content: renderPluginContribution(
+          "panels",
+          entry.key,
+          { sessionKey: state?.sessionKey ?? "" },
+          nothing,
+          params?.isPluginPanelPresented(slot),
+        ),
+        loading: renderPanelLoadingSkeleton("files", t("common.loading")),
+        empty: { description: entry.value.label },
+      };
     }),
   ];
 }

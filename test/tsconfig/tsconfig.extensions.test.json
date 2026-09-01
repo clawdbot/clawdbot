@@ -10,5 +10,6 @@
     "../../extensions/**/*.test.ts",
     "../../extensions/**/*.test.tsx",
     "../../packages/**/*.d.ts"
-  ]
+  ],
+  "exclude": ["../../node_modules", "../../dist", "../../**/dist/**", "../../extensions/*/browser/**"]
 }

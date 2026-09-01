@@ -6,6 +6,7 @@ import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
 import type {
   PluginManifestContracts,
+  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestMcpServer,
 } from "./manifest.js";
@@ -43,6 +44,7 @@ export function createPluginRecord(params: {
   configSchema: boolean;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
@@ -100,6 +102,7 @@ export function createPluginRecord(params: {
     configJsonSchema: undefined,
     contracts: params.contracts,
     dashboard: params.dashboard,
+    controlUi: params.controlUi,
     mcpServers: params.mcpServers,
   };
 }

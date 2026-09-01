@@ -46,6 +46,9 @@ Bare package specs still install from npm during the launch cutover. Use the
   <Card title="Tool plugin" icon="wrench" href="/plugins/tool-plugins">
     Register agent tools.
   </Card>
+  <Card title="Feature plugin" icon="panels-top-left" href="/plugins/feature-plugins">
+    Build typed operations, native pages, and Control UI replacements.
+  </Card>
 </CardGroup>
 
 ## Quickstart

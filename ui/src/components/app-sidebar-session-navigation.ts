@@ -385,10 +385,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return buildReconciledSidebarZone({
       sidebarEntries: this.sidebarEntries,
       rows,
-      workboardBoards: this.workboardBoards,
       enabledRouteIds: this.enabledRouteIds,
-      workboardBoardsReady: this.workboardBoardsReady,
-      controlUiTabs: this.context?.gateway.snapshot.hello?.controlUiTabs,
+      pluginNavigationKeys: new Set(this.pluginNavigation().map((entry) => entry.key)),
     });
   }
 

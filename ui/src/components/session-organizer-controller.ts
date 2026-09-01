@@ -193,11 +193,11 @@ export class SessionOrganizerController {
     this.host.requestUpdate();
   }
 
-  startSidebarWorkboardDrag(event: DragEvent, boardId: string) {
+  startSidebarPluginDrag(event: DragEvent, key: string) {
     if (!event.dataTransfer) {
       return;
     }
-    const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    const entry = serializeSidebarEntry({ type: "plugin", key });
     writeSidebarRouteDragData(event.dataTransfer, entry);
     this.draggingSidebarEntry = entry;
     this.host.requestUpdate();
@@ -246,7 +246,7 @@ export class SessionOrganizerController {
       return serializeSidebarEntry(routeEntry);
     }
     const dynamicEntry = parseSidebarEntry(route);
-    if (dynamicEntry?.type === "workboard") {
+    if (dynamicEntry?.type === "plugin") {
       return serializeSidebarEntry(dynamicEntry);
     }
     const sessionKey = readSessionDragData(dataTransfer);
@@ -369,7 +369,7 @@ export class SessionOrganizerController {
     const entry =
       routeEntry?.type === "route"
         ? routeEntry
-        : dynamicEntry?.type === "workboard"
+        : dynamicEntry?.type === "plugin"
           ? dynamicEntry
           : null;
     if (entry) {
