@@ -43,6 +43,7 @@ import {
 } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
+  CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY,
   buildDynamicTools,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
@@ -4464,6 +4465,25 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
   it.each([
+    {
+      name: "keeps creator-authorized Codex apps in default-capped scheduled runs",
+      cachedEnabled: true,
+      cacheKey: ({ appServer, agentDir }: GoogleCalendarCacheKeyInput) =>
+        buildCodexPluginAppCacheKey({
+          appServer,
+          agentDir,
+          runtimeIdentity: getMockRuntimeIdentity(),
+        }),
+      appInventory: () => {
+        throw new Error("App discovery should use the cached creator-authorized app");
+      },
+      configure: (params: EmbeddedRunAttemptParams) => {
+        params.trigger = "cron";
+        params.toolsAllow = [CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY];
+      },
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
+    },
     {
       name: "keys plugin app inventory by the resolved Codex account",
       cachedEnabled: true,

@@ -68,6 +68,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
   "edit",
   "apply_patch",
 ] as const;
+const CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY = "__openclaw_internal_codex_native_surface__";
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?: string }>(
   allTools: T[],
@@ -234,6 +235,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const createOpenClawCodingTools =
     injectedOpenClawCodingToolsFactory ??
     (await loadAgentHarnessModule()).createOpenClawCodingTools;
+  const cronCreatorToolAllowlist: NonNullable<
+    OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"]
+  > = [];
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
@@ -324,6 +328,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+    cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     onYield: (message) => {
       input.onYieldDetected();
       input.onCodexAppServerEvent?.({
@@ -337,6 +342,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     onToolOutcome: params.onToolOutcome,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
+  // Codex owns its shell/files and account apps outside the OpenClaw tool list.
+  // Persist one opaque capability so default cron caps retain that creator surface.
+  if (input.nativeToolSurfaceEnabled) {
+    cronCreatorToolAllowlist.push(CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY);
+  }
   const codexScopedTools = addCodexMessageToolOnlyFinalControl(
     allTools,
     params.sourceReplyDeliveryMode,
@@ -524,11 +534,11 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   }
-  // Codex native code mode exposes its shell/file surface as one app-server
-  // capability, so narrow OpenClaw allowlists must fail closed rather than
-  // widening `message` or `web_search` into shell access.
+  // Codex native code mode exposes its shell/file and app surface as one
+  // app-server capability. Narrow allowlists fail closed unless the creator's
+  // final surface explicitly carried that opaque capability.
   return (
-    hasWildcardCodexToolsAllow(toolsAllow) &&
+    (hasWildcardCodexToolsAllow(toolsAllow) || hasCodexAppServerNativeToolCapability(toolsAllow)) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
 }
@@ -833,6 +843,12 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
 /** Detects the wildcard allowlist marker after Codex tool-name normalization. */
 function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
+}
+/** Detects the creator-captured Codex app-server capability. */
+function hasCodexAppServerNativeToolCapability(toolsAllow: string[]): boolean {
+  return toolsAllow.some(
+    (name) => normalizeCodexDynamicToolName(name) === CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY,
+  );
 }
 /** Forces message delivery through the message tool when the source channel requires it. */
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {

@@ -27,6 +27,8 @@ import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
+const CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY = "__openclaw_internal_codex_native_surface__";
+
 const hoisted = vi.hoisted(() => ({
   resolveWebSearchToolPolicy: vi.fn(),
 }));
@@ -287,6 +289,28 @@ describe("Codex app-server dynamic tool build", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
   });
+
+  it.each([
+    { nativeToolSurfaceEnabled: true, expected: [CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY] },
+    { nativeToolSurfaceEnabled: false, expected: [] },
+  ])(
+    "captures the Codex native capability for cron when nativeToolSurfaceEnabled=$nativeToolSurfaceEnabled",
+    async ({ nativeToolSurfaceEnabled, expected }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      let creatorCap: unknown;
+      setOpenClawCodingToolsFactoryForTests((options) => {
+        creatorCap = options?.cronCreatorToolAllowlistRef;
+        return [createRuntimeDynamicTool("message")];
+      });
+
+      await buildDynamicToolsForTest(params, workspaceDir, { nativeToolSurfaceEnabled });
+
+      expect(creatorCap).toEqual(expected);
+    },
+  );
 
   it("preserves the host-provided OpenClaw tool through the Codex allowlist", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1532,6 +1556,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
 
     params.toolsAllow = ["*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = [CODEX_APP_SERVER_NATIVE_TOOL_CAPABILITY];
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
 
     params.toolsAllow = [];
