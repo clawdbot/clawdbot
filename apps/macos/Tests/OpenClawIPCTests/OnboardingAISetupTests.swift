@@ -778,12 +778,16 @@ private func setupAdmissionBusyResponse(id: String, confirmed: Bool = true) -> D
 private enum AISetupAccessibilityError: Error {
     case requestFailed(attribute: String, code: Int32)
     case invalidValue(attribute: String)
-    case missingWindow
+    case missingWindow(windowsAttributePresent: Bool, windowCount: Int, windowsWithIdentifier: Int)
 }
 
-/// SwiftPM does not run NSApplication.main; finish Cocoa startup once so its AX server can answer.
+/// SwiftPM starts background-only, which AppKit does not permit to own windows.
+/// Initialize a window-capable test process once; never toggle policy across AX awaits.
 @MainActor
-private let aiSetupAccessibilityApplication: Void = NSApplication.shared.finishLaunching()
+private let aiSetupAccessibilityApplication: Void = {
+    #expect(NSApplication.shared.setActivationPolicy(.accessory))
+    NSApplication.shared.finishLaunching()
+}()
 
 private nonisolated func inspectAISetupWindow(identifier: String) throws
 -> (labels: [String], buttons: [String: Bool]) {
@@ -808,11 +812,17 @@ private nonisolated func inspectAISetupWindow(identifier: String) throws
     }
 
     let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-    let windows = try value(application, kAXWindowsAttribute, as: [AXUIElement].self) ?? []
-    guard let window = try windows.first(where: {
-        try value($0, kAXIdentifierAttribute, as: String.self) == identifier
+    let windows = try value(application, kAXWindowsAttribute, as: [AXUIElement].self)
+    var windowsWithIdentifier = 0
+    guard let window = try (windows ?? []).first(where: {
+        let candidateIdentifier = try value($0, kAXIdentifierAttribute, as: String.self)
+        if candidateIdentifier != nil { windowsWithIdentifier += 1 }
+        return candidateIdentifier == identifier
     }) else {
-        throw AISetupAccessibilityError.missingWindow
+        throw AISetupAccessibilityError.missingWindow(
+            windowsAttributePresent: windows != nil,
+            windowCount: windows?.count ?? 0,
+            windowsWithIdentifier: windowsWithIdentifier)
     }
     var labels: [String] = []
     var buttons: [String: Bool] = [:]
@@ -874,7 +884,18 @@ private func inspectAISetupSheet(
         snapshot = try await Task.detached { try inspectAISetupWindow(identifier: identifier) }.value
     } catch {
         // Record the failure without skipping callers' gated wizard-task cleanup.
-        Issue.record(error)
+        // Query AppKit only after failure so diagnostics cannot prime AX discovery.
+        let appKitAXWindows = NSApp.accessibilityWindows()
+        Issue.record(error, """
+        Owned AI setup window: mounted=\(hosting.window === window), visible=\(window.isVisible), \
+        accessible=\(window.isAccessibilityElement()), identifierMatches=\(window
+            .accessibilityIdentifier() == identifier), \
+        appKitListed=\(NSApp.windows.contains { $0 === window }), \
+        appKitAXWindowCount=\(appKitAXWindows?.count ?? 0), \
+        appKitAXListed=\(appKitAXWindows?.contains { ($0 as? NSWindow) === window } ?? false), \
+        canBecomeKey=\(window.canBecomeKey), canBecomeMain=\(window.canBecomeMain), \
+        onActiveSpace=\(window.isOnActiveSpace)
+        """)
         snapshot = ([], [:])
     }
     #expect(snapshot.buttons["Cancel"] != nil)
