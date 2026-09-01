@@ -5,9 +5,9 @@ import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerTaskPool } from "./worker-task-pool.js";
-import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-fixture.js";
+import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
-const workerUrl = new URL("./worker-task-pool.test-fixture.ts", import.meta.url);
+const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
 const pools: WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>[] = [];
 const workers: Worker[] = [];
 const workerChannel = channel("worker_threads");

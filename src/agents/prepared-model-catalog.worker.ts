@@ -1,6 +1,7 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
@@ -235,14 +236,30 @@ export async function runPreparedModelCatalogWorkerRequest(
   }
 }
 
+function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
+  return (
+    isRecord(value) &&
+    (value.kind === "catalog" ||
+      (value.kind === "auth-refresh" &&
+        Array.isArray(value.providerIds) &&
+        value.providerIds.every((providerId) => typeof providerId === "string") &&
+        (value.profileIds === undefined ||
+          (Array.isArray(value.profileIds) &&
+            value.profileIds.every((profileId) => typeof profileId === "string")))))
+  );
+}
+
 if (parentPort) {
   const value = workerData as PreparedModelCatalogWorkerInput;
   let preparedGeneration: ReturnType<typeof prepareWorkerGeneration> | undefined;
-  serveWorkerTasks((request: PreparedModelWorkerRequest) =>
-    runPreparedModelCatalogWorkerRequest(
+  serveWorkerTasks((request) => {
+    if (!isWorkerRequest(request)) {
+      throw new Error("invalid prepared model catalog worker request");
+    }
+    return runPreparedModelCatalogWorkerRequest(
       value,
       request,
       (preparedGeneration ??= prepareWorkerGeneration(value)),
-    ),
-  );
+    );
+  });
 }

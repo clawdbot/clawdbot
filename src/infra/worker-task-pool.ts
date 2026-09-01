@@ -257,16 +257,15 @@ export class WorkerTaskPool<Input, Output> {
 }
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- The handler owns the private input type.
-export function serveWorkerTasks<Input, Output>(
-  handler: (input: Input) => Output | Promise<Output>,
+export function serveWorkerTasks<Output>(
+  handler: (input: unknown) => Output | Promise<Output>,
   options: { transferList?: (value: Output) => Transferable[] } = {},
 ): void {
   const port = parentPort;
   if (!port) {
     return;
   }
-  port.on("message", ({ input }: { input: Input }) => {
+  port.on("message", ({ input }: { input: unknown }) => {
     void Promise.resolve()
       .then(() => handler(input))
       .then((value) =>
