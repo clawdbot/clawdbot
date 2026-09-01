@@ -1511,18 +1511,18 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-recent-sessions__head:hover .sidebar-session-group-actions,
-.sidebar-recent-sessions__head:has(:focus-visible) .sidebar-session-group-actions,
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
-  opacity: 1;
+  opacity: 0.55;
   pointer-events: auto;
 }
 
-.sidebar-session-group-actions:hover,
+.sidebar-session-group-actions:is(:hover, :focus-visible),
 .sidebar-session-group-actions[aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
+  opacity: 1;
 }
 
 .sidebar-session-group-actions svg {
@@ -1547,7 +1547,7 @@ openclaw-settings-save-indicator:empty {
   }
 
   .sidebar-session-group-actions {
-    opacity: 1;
+    opacity: 0.55;
     pointer-events: auto;
   }
 }
