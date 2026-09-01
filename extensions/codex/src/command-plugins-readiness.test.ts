@@ -26,6 +26,7 @@ function fixture(
   options: {
     threadId?: string | null;
     appCount?: number;
+    pluginName?: string;
     disabled?: boolean;
     blocked?: boolean;
     runtime?: v2.InstalledApp[];
@@ -40,18 +41,19 @@ function fixture(
     catalog?: { marketplace: string; kind: string };
   } = {},
 ) {
+  const pluginName = options.pluginName ?? "notes";
   const current = {
     enabled: true,
     plugins: {
       notes: {
         marketplaceName: options.catalog?.marketplace ?? "company-tools",
-        pluginName: options.catalog ? `notes@${options.catalog.marketplace}` : "notes",
+        pluginName: options.catalog ? `${pluginName}@${options.catalog.marketplace}` : pluginName,
         enabled: !options.disabled,
       },
     },
   };
   const summary: v2.PluginSummary = {
-    id: `notes@${options.catalog?.marketplace ?? "company-tools"}`,
+    id: `${pluginName}@${options.catalog?.marketplace ?? "company-tools"}`,
     name: "Notes",
     installed: true,
     enabled: true,
@@ -104,9 +106,10 @@ function fixture(
         break;
       case "plugin/list": {
         const requested = params as v2.PluginListParams;
-        const includesCatalog = requested.marketplaceKinds?.some(
-          (kind) => kind === options.catalog?.kind,
-        );
+        const includesCatalog =
+          options.catalog?.kind === "curated"
+            ? !requested.marketplaceKinds
+            : requested.marketplaceKinds?.some((kind) => kind === options.catalog?.kind);
         response = {
           marketplaces: includesCatalog
             ? [{ name: options.catalog?.marketplace, plugins: [summary] }]
@@ -177,7 +180,7 @@ function fixture(
     withContext: async <T>(run: (value: CodexPluginCommandContext) => Promise<T>): Promise<T> =>
       run(context),
   };
-  return { io, context, runtime, request };
+  return { io, context, current, runtime, request };
 }
 
 describe("Codex plugin status command", () => {
@@ -387,6 +390,45 @@ describe("Codex plugin status command", () => {
     expect(next.text).not.toContain("Private app");
     expect(first.text).not.toContain("another-agent-app");
   });
+
+  it.each([
+    { pluginName: "notes", marketplace: "openai-api-curated", curated: true },
+    { pluginName: "notes", marketplace: "openai-curated-remote", curated: true },
+    { pluginName: "notes.v2", marketplace: "company-tools", curated: false },
+  ])(
+    "resolves generated continuation commands for $pluginName in $marketplace",
+    async ({ pluginName, marketplace, curated }) => {
+      const test = fixture({
+        appCount: 7,
+        pluginName,
+        ...(curated ? { catalog: { marketplace, kind: "curated" } } : {}),
+      });
+      if (curated) {
+        test.current.plugins.notes.marketplaceName = "openai-curated";
+      }
+      const first = await handleCodexPluginsSubcommand(
+        ctx,
+        ["status", "notes"],
+        test.io,
+        test.runtime,
+      );
+      const continuation = first.presentation?.blocks
+        .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+        .find((button) => button.label === "More apps");
+      if (continuation?.action.type !== "command") {
+        throw new Error("Expected the first status page to provide a More apps command");
+      }
+      const next = await handleCodexPluginsSubcommand(
+        ctx,
+        continuation.action.command.split(" ").slice(2),
+        test.io,
+        test.runtime,
+      );
+      expect(next.text).toContain("Apps (page 2/2)");
+      expect(next.text).toContain("Open App 6 in ChatGPT");
+      expect(test.io.mutate).not.toHaveBeenCalled();
+    },
+  );
 
   it("checks owner authority before reading profile-scoped inventory", async () => {
     const test = fixture();

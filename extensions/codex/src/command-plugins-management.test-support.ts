@@ -1,5 +1,7 @@
+import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import type { v2 } from "./app-server/protocol.js";
+import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
 import type { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 
@@ -121,4 +123,51 @@ export function pluginRuntime(params?: {
       }),
     ...(params?.refresh ? { refresh: params.refresh } : {}),
   } satisfies CodexPluginsManagementRuntime;
+}
+
+type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
+
+export function inMemoryIO(
+  initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
+} {
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: structuredClone(initial),
+  };
+  return {
+    current: () => structuredClone(store.plugins ?? {}),
+    currentConfig: () => structuredClone(store),
+    readConfig: () => Promise.resolve(structuredClone(store)),
+    mutate: async (update) => {
+      update(store);
+    },
+  };
+}
+
+export const fakeCtx: PluginCommandContext = {
+  args: "",
+  config: {},
+  channel: "test",
+  isAuthorizedSender: true,
+  senderIsOwner: true,
+  commandBody: "/codex plugins",
+  requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+  detachConversationBinding: async () => ({ removed: false }),
+  getCurrentConversationBinding: async () => null,
+};
+
+export function presentationButtons(result: PluginCommandResult) {
+  return (result.presentation?.blocks ?? []).flatMap((block) =>
+    block.type === "buttons" ? block.buttons : [],
+  );
+}
+
+export function buttonCommands(result: PluginCommandResult): string[] {
+  return presentationButtons(result).flatMap((button) =>
+    button.action?.type === "command" ? [button.action.command] : [],
+  );
 }

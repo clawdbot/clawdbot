@@ -114,6 +114,33 @@ export async function handleCodexPluginsSubcommand(
   }
 
   if (normalized === "status" || normalized === "recheck") {
+    if (normalized === "status" && args.length === 0) {
+      if (!canMutateCodexHost(ctx)) {
+        return {
+          text: "Only an owner or operator.admin gateway client can inspect Codex plugin status.",
+        };
+      }
+      const current = await io.readConfig();
+      const names = Object.keys(current.plugins ?? {}).toSorted();
+      const presentation = buildCodexCommandPickerPresentation(
+        "Configured Codex plugins",
+        names.length === 0
+          ? "No Codex plugins are explicitly configured. Discover a plugin before checking its app access."
+          : "Choose a configured plugin to inspect its app pages and readiness. For additional plugins, use /codex plugins list and /codex plugins status <configured-plugin>.",
+        [
+          ...names.slice(0, 5).map((name) => ({
+            label: formatCodexDisplayText(name.slice(0, 80)),
+            command: `/codex plugins status '${name.replaceAll("'", "'\\''")}'`,
+          })),
+          { label: "Available Codex plugins", command: "/codex plugins available" },
+        ],
+      );
+      return {
+        text: renderMessagePresentationFallbackText({ presentation }),
+        presentation,
+        presentationTextMode: "fallback",
+      };
+    }
     const requestedPlugin = args[0];
     const page = args[1] === undefined ? 1 : Number(args[1]);
     if (
@@ -343,7 +370,7 @@ async function installCodexPlugin(
   const requested = parseCodexPluginMarketplaceId(requestedId);
   if (!requested) {
     return {
-      text: "Invalid plugin identifier. Use /codex plugins install <plugin>@<marketplace> with ASCII letters, digits, underscores, or hyphens.",
+      text: "Invalid plugin identifier. Use /codex plugins install <plugin>@<marketplace>. Both names allow ASCII letters, digits, underscores, and hyphens. Plugin names may also contain dots between nonempty segments.",
     };
   }
 

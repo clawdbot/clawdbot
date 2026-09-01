@@ -20,6 +20,7 @@ import {
   CODEX_PLUGIN_APP_LINK_PAGE_SIZE,
 } from "./command-plugin-app-links.js";
 import {
+  resolveConfiguredPluginIdentity,
   resolveInstalledPluginKey,
   resolveCuratedMarketplaceAliases,
   type CodexPluginsConfigBlock,
@@ -165,16 +166,15 @@ export async function readCodexPluginReadiness(params: {
 }): Promise<CodexPluginReadiness> {
   const { context, current, configKey } = params;
   const entry = current.plugins?.[configKey];
-  if (!entry?.marketplaceName || !entry.pluginName) {
+  const identity = entry ? resolveConfiguredPluginIdentity(entry) : undefined;
+  if (!entry?.marketplaceName || !entry.pluginName || !identity) {
     throw new Error(
       "This configured plugin has no marketplace identity. Check /codex plugins list.",
     );
   }
   const result: CodexPluginReadiness = {
     configKey,
-    commandId: entry.pluginName.endsWith(`@${entry.marketplaceName}`)
-      ? entry.pluginName
-      : `${entry.pluginName}@${entry.marketplaceName}`,
+    commandId: `${identity.pluginName}@${identity.marketplaceName}`,
     openClawEnabled: current.enabled === true && entry.enabled !== false,
     agentId: context.agentId,
     profileId: context.profileId,
