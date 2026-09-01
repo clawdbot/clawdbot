@@ -611,6 +611,20 @@ async function compactCodexNativeThread(
             throw new Error("failed to detach unconfirmed codex app-server thread binding");
           },
         });
+        const threadRouter = getExistingCodexAppServerTurnRouter(client);
+        if (threadRouter) {
+          const threadIdle = await threadRouter.waitForThreadIdle({
+            threadId: binding.threadId,
+            timeoutMs: nativeCompletionTimeoutMs,
+            ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+          });
+          if (!threadIdle) {
+            params.abortSignal?.throwIfAborted();
+            throw new Error(
+              "codex app-server active thread writer did not become idle before native compaction",
+            );
+          }
+        }
         const acquireThreadSubscription = async (timeoutMs?: number) => {
           if (!isIncognitoSessionKey(params.sessionKey)) {
             // Remove any idle ownership first: sibling cleanup must not evict
@@ -703,20 +717,6 @@ async function compactCodexNativeThread(
                   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
                 )
               : undefined;
-            const threadRouter = getExistingCodexAppServerTurnRouter(client);
-            if (threadRouter) {
-              const threadIdle = await threadRouter.waitForThreadIdle({
-                threadId: binding.threadId,
-                timeoutMs: nativeCompletionTimeoutMs,
-                ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-              });
-              if (!threadIdle) {
-                params.abortSignal?.throwIfAborted();
-                throw new Error(
-                  "codex app-server active thread writer did not become idle before native compaction",
-                );
-              }
-            }
             await acquireThreadSubscription(guardedRequestTimeoutMs);
             await clearContextEngineProjectionBeforeNativeCompaction({
               sessionId: params.sessionId,

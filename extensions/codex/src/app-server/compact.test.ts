@@ -235,7 +235,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.completed).toBe(true);
   });
 
-  it("waits for an active native turn route before starting compaction", async () => {
+  it("waits for cleanup to release an active native turn route before starting compaction", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
@@ -252,7 +252,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
     ).toHaveLength(0);
 
-    route.release();
+    const cleanup = testCodexAppServerBindingStore.withLease(
+      sessionBindingIdentity({ sessionId: "session-1", sessionKey: "agent:main:session-1" }),
+      async () => {
+        route.release();
+      },
+    );
+    await expect(cleanup).resolves.toBeUndefined();
     await vi.waitFor(() => {
       expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     });
