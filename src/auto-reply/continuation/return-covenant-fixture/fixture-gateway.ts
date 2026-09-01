@@ -14,7 +14,6 @@ import {
   type ReturnCovenantGatewayBinding,
 } from "./gateway-generation.js";
 import { createReturnCovenantGatewayService } from "./gateway-rpc.js";
-import { createReturnCovenantFixtureConfig } from "./runtime-config.js";
 
 export async function runReturnCovenantFixtureGateway(): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -27,8 +26,7 @@ export async function runReturnCovenantFixtureGateway(): Promise<void> {
     path: configPath,
     raw: rawConfig,
   });
-  const fixtureConfig = createReturnCovenantFixtureConfig(config);
-  setRuntimeConfigSnapshot(fixtureConfig, config);
+  setRuntimeConfigSnapshot(config, config);
   const port = resolveGatewayPort(config, process.env);
   const binding: ReturnCovenantGatewayBinding = {
     bootId: randomUUID(),
@@ -38,7 +36,7 @@ export async function runReturnCovenantFixtureGateway(): Promise<void> {
   };
   const service = createReturnCovenantGatewayService({
     binding,
-    config: fixtureConfig,
+    config,
     env: process.env,
   });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;

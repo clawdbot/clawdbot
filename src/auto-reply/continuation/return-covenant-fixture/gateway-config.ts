@@ -4,6 +4,7 @@ import { applyLegacyDoctorMigrations } from "../../../commands/doctor/shared/leg
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../../config/materialize.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { validateConfigObject } from "../../../config/validation.js";
+import { createReturnCovenantFixtureConfig } from "./runtime-config.js";
 
 /**
  * Apply the same compatibility owner as CLI startup without writing the
@@ -31,9 +32,10 @@ export function createReturnCovenantGatewayConfigSnapshot(params: { path: string
   const config = prepareReturnCovenantGatewayConfig(params.raw);
   const serialized = stableStringify(params.raw);
   const sourceConfig = asResolvedSourceConfig(config);
-  const runtimeConfig = asRuntimeConfig(config);
+  const fixtureConfig = createReturnCovenantFixtureConfig(config);
+  const runtimeConfig = asRuntimeConfig(fixtureConfig);
   return {
-    config,
+    config: fixtureConfig,
     snapshot: {
       path: params.path,
       exists: true,
