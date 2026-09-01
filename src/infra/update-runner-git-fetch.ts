@@ -62,6 +62,17 @@ function isBroadFetchRefspec(refspec: string): boolean {
   return isBroadRefspecMapping(source, destination);
 }
 
+function isPlainMirrorFetchRefspec(refspec: string): boolean {
+  const withoutForce = refspec.trim().replace(/^\+/u, "");
+  const [source = "", destination = ""] = withoutForce.split(":", 2).map((ref) => ref.trim());
+  return source === "refs/*" && destination === "refs/*";
+}
+
+function isFullTagNamespaceExclusion(refspec: string): boolean {
+  const normalized = refspec.trim();
+  return normalized === "^refs/tags" || normalized === "^refs/tags/*";
+}
+
 export type StableGitFetchResult = {
   reason?: "fetch-failed";
   remotes?: string[];
@@ -149,6 +160,12 @@ export async function prepareStableGitFetch(params: {
     // --refmap= ignores remote.*.fetch, so carry configured exclusions into argv explicitly.
     // Git versions without negative-refspec support reject this before any ref mutation.
     const negativeRefspecs = configuredRefspecs?.filter(isNegativeFetchRefspec) ?? [];
+    const needsTagExclusion =
+      configuredRefspecs?.some(isPlainMirrorFetchRefspec) === true &&
+      !negativeRefspecs.some(isFullTagNamespaceExclusion);
+    const explicitNegativeRefspecs = needsTagExclusion
+      ? [...negativeRefspecs, "^refs/tags/*"]
+      : negativeRefspecs;
     const branchRefspecs = configuredRefspecs
       ? [
           ...new Set(
@@ -156,7 +173,7 @@ export async function prepareStableGitFetch(params: {
               if (
                 !isNegativeFetchRefspec(refspec) &&
                 (!isTagFetchRefspec(refspec) ||
-                  (negativeRefspecs.length > 0 && isBroadFetchRefspec(refspec)))
+                  (explicitNegativeRefspecs.length > 0 && isBroadFetchRefspec(refspec)))
               ) {
                 return [refspec];
               }
@@ -179,7 +196,7 @@ export async function prepareStableGitFetch(params: {
       ...(configuredRefspecs ? ["--refmap="] : []),
       "--",
       remote,
-      ...(configuredRefspecs ? [...(branchRefspecs ?? []), ...negativeRefspecs] : []),
+      ...(configuredRefspecs ? [...(branchRefspecs ?? []), ...explicitNegativeRefspecs] : []),
     ];
     const fetchStep = await executeStep(`git fetch ${remote}`, fetchArgv);
     if (fetchStep.exitCode !== 0) {
