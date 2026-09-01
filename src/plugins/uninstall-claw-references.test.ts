@@ -51,4 +51,28 @@ describe("collectClawPluginUninstallWarnings", () => {
       'Warning: plugin "audit" is referenced by Claw: @owner/audit-claw.',
     );
   });
+
+  it("matches a scoped ClawHub spec recorded without a version", () => {
+    readClawPackageRefsMock.mockReturnValue([
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@owner/audit",
+        version: "2.0.1",
+        status: "installed",
+        clawName: "@owner/audit-claw",
+      },
+    ]);
+
+    expect(
+      collectClawPluginUninstallWarnings({
+        pluginId: "audit",
+        installRecord: {
+          source: "clawhub" as const,
+          spec: "clawhub:@owner/audit",
+          version: "2.0.1",
+        },
+      }),
+    ).toContain('Warning: plugin "audit" is referenced by Claw: @owner/audit-claw.');
+  });
 });
