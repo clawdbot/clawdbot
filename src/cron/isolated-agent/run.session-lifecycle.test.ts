@@ -29,6 +29,7 @@ import {
   mockRunCronFallbackPassthrough,
   patchSessionEntryMock,
   preflightCronModelProviderMock,
+  removeCronRunContinuationSessionIfIdleMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
   resolveCronDeliveryPlanMock,
@@ -459,6 +460,52 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     } finally {
       logSessionStateChangeSpy.mockRestore();
     }
+  });
+
+  it("removes the idle exact-run continuation only after releasing its admission", async () => {
+    const sessionKey = "agent:main:cron:test-job";
+    const sessionId = "isolated-session";
+    const storePath = inMemoryStorePath;
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath,
+        initialSessionEntry: undefined,
+        isNewSession: true,
+        sessionEntry: makeCronSessionEntry({ sessionId }),
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue(undefined);
+    let continuationRowExists = true;
+    let admissionActiveDuringRemoval: boolean | undefined;
+    removeCronRunContinuationSessionIfIdleMock.mockImplementationOnce(
+      async (exactRunSessionKey: string) => {
+        expect(exactRunSessionKey).toContain(":run:");
+        admissionActiveDuringRemoval = isSessionWorkAdmissionActive(storePath, [
+          exactRunSessionKey,
+          sessionId,
+        ]);
+        if (!admissionActiveDuringRemoval) {
+          continuationRowExists = false;
+        }
+      },
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          sessionKey: "cron:test-job",
+          job: makeIsolatedAgentJobFixture({
+            sessionTarget: "isolated",
+            delivery: { mode: "none" },
+          }),
+        }),
+      ),
+    ).resolves.toMatchObject({ status: "ok" });
+
+    expect(removeCronRunContinuationSessionIfIdleMock).toHaveBeenCalledTimes(1);
+    expect(admissionActiveDuringRemoval).toBe(false);
+    expect(continuationRowExists).toBe(false);
   });
 
   it.each(["none", "silent", "best-effort", "execution error", "presentation warning"])(
