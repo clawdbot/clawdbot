@@ -269,20 +269,24 @@ export function removeMemoryDatabaseFiles(dbPath: string): void {
   }
 }
 
-/** Remove crash-left shadow databases only when no full reindex is active. */
-export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
+/** Remove crash-left shadow databases only when no full reindex is active.
+ * Returns the shadow base names actually removed, so callers that report
+ * changes (doctor migrations) can say what happened instead of just that
+ * the sweep ran. */
+export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): string[] {
+  const removedShadowBaseNames: string[] = [];
   if (!isRegularFile(dbPath)) {
-    return;
+    return removedShadowBaseNames;
   }
 
   let reindexLock: MemoryReindexLockHandle | undefined;
   try {
     reindexLock = tryAcquireMemoryReindexLock(dbPath);
   } catch {
-    return;
+    return removedShadowBaseNames;
   }
   if (!reindexLock) {
-    return;
+    return removedShadowBaseNames;
   }
 
   try {
@@ -293,7 +297,7 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
-      return;
+      return removedShadowBaseNames;
     }
 
     for (const entry of entries) {
@@ -336,12 +340,14 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
           fs.rmSync(filePath, { force: true });
         } catch {}
       }
+      removedShadowBaseNames.push(shadowBaseName);
     }
   } finally {
     try {
       reindexLock.release();
     } catch {}
   }
+  return removedShadowBaseNames;
 }
 
 export function openMemoryDatabaseAtPath(

@@ -519,6 +519,30 @@ async function migrateLegacyMemorySidecarSource(params: {
   }
 }
 
+// The reindex producer (runInPlaceReindex in manager-db.ts) only ever sweeps
+// aged orphan shadow files beside the *current* per-agent SQLite path -- a
+// deployment that upgraded across the legacy-sidecar-to-per-agent-database
+// change can carry a `.tmp-<uuid>` or `.memory-reindex-<uuid>` orphan beside
+// the *legacy* sidecar path that nothing in the current runtime call chain
+// ever revisits, since `resolveOpenClawAgentSqlitePath` never resolves back
+// to it. This migration is the one place that still knows the legacy path,
+// so it is the only reachable owner for cleaning those orphans up. Must run
+// before archiveLegacyMemorySidecar renames the legacy `.sqlite` file away --
+// cleanupAgedMemoryReindexTempFiles requires the exact dbPath it's given to
+// still be a regular file, and needs it to derive the shadow-file basename.
+async function sweepLegacyMemorySidecarReindexOrphans(
+  legacyPath: string,
+  changes: string[],
+): Promise<void> {
+  const { cleanupAgedMemoryReindexTempFiles } = await import("../memory/manager-db.js");
+  const removed = cleanupAgedMemoryReindexTempFiles(legacyPath);
+  if (removed.length > 0) {
+    changes.push(
+      `Removed ${removed.length} aged Memory Core reindex orphan shadow database(s) beside legacy memory index sidecar ${legacyPath}`,
+    );
+  }
+}
+
 function groupLegacyMemorySidecarSourcesByPath(
   sources: LegacyMemorySidecarSource[],
 ): LegacyMemorySidecarSource[][] {
@@ -561,6 +585,9 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
       }),
     );
     for (const sources of groups) {
+      if (sources[0]) {
+        await sweepLegacyMemorySidecarReindexOrphans(sources[0].legacyPath, changes);
+      }
       let archiveReady = true;
       for (const source of sources) {
         try {
