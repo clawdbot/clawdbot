@@ -222,7 +222,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}agents`);
+        await page.goto(`${suite.server.baseUrl}sessions`);
 
         const shell = page.locator(".shell");
         const header = page.locator(".content:not(.content--chat) .content-header").first();
