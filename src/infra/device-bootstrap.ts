@@ -524,15 +524,25 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
   });
 }
 
-/** Verify a bootstrap token, bind it to the first device identity, and stage requested scopes. */
-export async function verifyDeviceBootstrapToken(params: {
+type VerifiedDeviceBootstrapContext = {
+  profile: DeviceBootstrapProfile;
+  setupId?: string;
+};
+
+type VerifyDeviceBootstrapTokenContextResult =
+  | { ok: true; context: VerifiedDeviceBootstrapContext }
+  | { ok: false; reason: string };
+
+/** Verify a bootstrap token and bind only when the transport can protect first presentation. */
+export async function verifyDeviceBootstrapTokenContext(params: {
   token: string;
   deviceId: string;
   publicKey: string;
   role: string;
   scopes: readonly string[];
+  bindIdentity: boolean;
   baseDir?: string;
-}): Promise<{ ok: true } | { ok: false; reason: string }> {
+}): Promise<VerifyDeviceBootstrapTokenContextResult> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const providedToken = params.token.trim();
@@ -554,6 +564,10 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const allowedProfile = resolvePersistedBootstrapProfile(record);
+    const context = {
+      profile: allowedProfile,
+      ...(record.setupId ? { setupId: record.setupId } : {}),
+    } satisfies VerifiedDeviceBootstrapContext;
     const requestedProfile = resolveRequestedBootstrapProfile({
       role,
       scopes: params.scopes,
@@ -596,7 +610,14 @@ export async function verifyDeviceBootstrapToken(params: {
         lastUsedAtMs: Date.now(),
       };
       persistState(state, params.baseDir);
-      return { ok: true };
+      return { ok: true, context };
+    }
+
+    // On observable transports, an unapproved presenter must not consume the
+    // intended device's first-bind slot. Owner approval pins the device row;
+    // its successful retry consumes the still-unbound bearer.
+    if (!params.bindIdentity) {
+      return { ok: true, context };
     }
 
     state[tokenKey] = {
@@ -608,14 +629,24 @@ export async function verifyDeviceBootstrapToken(params: {
       lastUsedAtMs: Date.now(),
     };
     persistState(state, params.baseDir);
-    return { ok: true };
+    return { ok: true, context };
   });
 }
 
-type BoundDeviceBootstrapContext = {
-  profile: DeviceBootstrapProfile;
-  setupId?: string;
-};
+/** Verify and bind a bootstrap token for callers whose transport policy predates ingress gating. */
+export async function verifyDeviceBootstrapToken(params: {
+  token: string;
+  deviceId: string;
+  publicKey: string;
+  role: string;
+  scopes: readonly string[];
+  baseDir?: string;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const result = await verifyDeviceBootstrapTokenContext({ ...params, bindIdentity: true });
+  return result.ok ? { ok: true } : result;
+}
+
+type BoundDeviceBootstrapContext = VerifiedDeviceBootstrapContext;
 
 /**
  * Reads already-bound bootstrap context for a verified device identity.

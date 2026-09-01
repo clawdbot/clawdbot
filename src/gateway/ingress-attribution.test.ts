@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import {
   createGatewayUnattributableProxyReporter,
+  isGatewayIngressConfidential,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
 } from "./ingress-attribution.js";
@@ -11,14 +12,16 @@ function request(params?: {
   forwardedFor?: string;
   funnel?: boolean;
   login?: string;
+  forwardedProto?: string;
+  encrypted?: boolean;
 }): IncomingMessage {
-  return {
+  const req = {
     socket: { remoteAddress: params?.remoteAddress ?? "127.0.0.1" },
     headers: {
       ...(params?.forwardedFor
         ? {
             "x-forwarded-for": params.forwardedFor,
-            "x-forwarded-proto": "https",
+            "x-forwarded-proto": params.forwardedProto ?? "https",
             "x-forwarded-host": "gateway.tailnet.ts.net",
           }
         : {}),
@@ -26,9 +29,63 @@ function request(params?: {
       ...(params?.login ? { "tailscale-user-login": params.login } : {}),
     },
   } as IncomingMessage;
+  if (params?.encrypted !== undefined) {
+    Object.defineProperty(req.socket, "encrypted", { value: params.encrypted });
+  }
+  return req;
 }
 
 describe("gateway ingress attribution", () => {
+  it.each([
+    ["loopback", request(), undefined, true],
+    ["direct TLS", request({ remoteAddress: "10.0.0.14", encrypted: true }), undefined, true],
+    ["direct cleartext", request({ remoteAddress: "10.0.0.14" }), undefined, false],
+    ["trusted HTTPS proxy", request({ forwardedFor: "10.0.0.14" }), ["127.0.0.1"], true],
+    [
+      "trusted HTTP proxy",
+      request({ forwardedFor: "10.0.0.14", forwardedProto: "http" }),
+      ["127.0.0.1"],
+      false,
+    ],
+    [
+      "remote cleartext HTTPS proxy hop",
+      request({
+        remoteAddress: "192.0.2.10",
+        forwardedFor: "10.0.0.14",
+        forwardedProto: "https",
+      }),
+      ["192.0.2.10"],
+      false,
+    ],
+    [
+      "remote TLS proxy with an external HTTP hop",
+      request({
+        remoteAddress: "192.0.2.10",
+        forwardedFor: "10.0.0.14",
+        forwardedProto: "http",
+        encrypted: true,
+      }),
+      ["192.0.2.10"],
+      false,
+    ],
+  ])("classifies %s confidentiality", (_name, req, trustedProxies, expected) => {
+    const attribution = prepareGatewayIngressAttribution({ req, trustedProxies });
+    if (attribution.kind === "unattributable-proxy") {
+      throw new Error("expected attributed ingress");
+    }
+    expect(isGatewayIngressConfidential({ req, attribution })).toBe(expected);
+  });
+
+  it("treats listener-proven managed Tailscale as confidential", () => {
+    const req = request({ forwardedFor: "100.64.0.10", login: "alice@example.com" });
+    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "serve" });
+    const attribution = prepareGatewayIngressAttribution({ req });
+    if (attribution.kind === "unattributable-proxy") {
+      throw new Error("expected attributed ingress");
+    }
+    expect(isGatewayIngressConfidential({ req, attribution })).toBe(true);
+  });
+
   it("keeps clean headerless loopback on the ordinary listener local", async () => {
     const attribution = prepareGatewayIngressAttribution({ req: request() });
 

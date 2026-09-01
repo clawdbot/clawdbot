@@ -146,7 +146,7 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     }
   });
 
-  test("rejected non-baseline bootstrap request cannot recreate pending node pairing", async () => {
+  test("rejected unbound bootstrap identity cannot consume another device's setup code", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { listDevicePairing, rejectDevicePairing } = await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startProxiedControlUiServer("secret");
@@ -208,12 +208,12 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
       });
       expect(retry.ok).toBe(false);
       expect((retry.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+        ConnectErrorDetailCodes.PAIRING_REQUIRED,
       );
       wsRetry.close();
       expect(
         (await listDevicePairing()).pending.filter((entry) => entry.deviceId === identity.deviceId),
-      ).toEqual([]);
+      ).toHaveLength(1);
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

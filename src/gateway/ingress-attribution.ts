@@ -67,6 +67,30 @@ export type GatewayAttributedIngress = Exclude<
   { kind: "unattributable-proxy" }
 >;
 
+/**
+ * Setup credentials may grant silent pairing only when the listener-owned
+ * ingress proof excludes an on-path plaintext observer.
+ */
+export function isGatewayIngressConfidential(params: {
+  req: IncomingMessage;
+  attribution: GatewayAttributedIngress;
+}): boolean {
+  const socketEncrypted = "encrypted" in params.req.socket && params.req.socket.encrypted === true;
+  switch (params.attribution.kind) {
+    case "direct-local":
+    case "tailscale-serve":
+    case "tailscale-funnel":
+      return true;
+    case "trusted-proxy":
+      return (
+        (socketEncrypted || isLoopbackAddress(params.req.socket?.remoteAddress)) &&
+        headerValue(params.req.headers?.["x-forwarded-proto"])?.trim().toLowerCase() === "https"
+      );
+    case "direct-remote":
+      return socketEncrypted;
+  }
+}
+
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
 const requestTransport = new WeakMap<IncomingMessage, GatewayIngressTransport>();

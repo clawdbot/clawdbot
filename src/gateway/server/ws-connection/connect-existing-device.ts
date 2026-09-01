@@ -1,5 +1,4 @@
 // Gateway WebSocket paired-device connects enforce pinned metadata and approved access.
-import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
@@ -48,6 +47,7 @@ export async function authorizeExistingGatewayDevice(params: {
     deviceAuthPayloadVersion,
     authMethod,
     bootstrapTokenCandidate,
+    issuedBootstrapProfile,
     pairingLocality,
     isControlUi,
     isBrowserOperatorUi,
@@ -125,11 +125,7 @@ export async function authorizeExistingGatewayDevice(params: {
       clientMode: connectParams.client.mode,
     }) &&
     device
-      ? await getBoundDeviceBootstrapProfile({
-          token: bootstrapTokenCandidate,
-          deviceId: device.id,
-          publicKey: devicePublicKey,
-        })
+      ? issuedBootstrapProfile
       : null;
   if (
     retryBootstrapHandoffProfile &&

@@ -93,6 +93,7 @@ export type GatewayConnectPhaseContext = {
   peerLabel: string;
   hasProxyHeaders: boolean;
   isLocalClient: boolean;
+  confidentialTransport: boolean;
   reportedClientIp?: string;
   reportedClientIpSource: NodePairingAutoApproveClientIpSource;
   hasBrowserOriginHeader: boolean;

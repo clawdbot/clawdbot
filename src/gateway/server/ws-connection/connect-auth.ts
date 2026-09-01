@@ -4,11 +4,9 @@ import {
   resolveAuthConnectErrorDetailCode,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  getBoundDeviceBootstrapContext,
-  verifyDeviceBootstrapToken,
-} from "../../../infra/device-bootstrap.js";
+import { verifyDeviceBootstrapTokenContext } from "../../../infra/device-bootstrap.js";
 import { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
@@ -361,6 +359,13 @@ async function authenticateGatewayConnectCore(
     return undefined;
   }
 
+  const approvedBootstrapIdentity =
+    !context.confidentialTransport && bootstrapTokenCandidate && device
+      ? (await getPairedDevice(device.id))?.publicKey === deviceProof.devicePublicKey
+      : false;
+  const verifiedBootstrap: {
+    context: { profile: DeviceBootstrapProfile; setupId?: string } | null;
+  } = { context: null };
   const authDecision = await resolveConnectAuthDecision({
     state: {
       authResult,
@@ -387,13 +392,18 @@ async function authenticateGatewayConnectCore(
       role: roleLocal,
       scopes: scopesLocal,
     }) {
-      return await verifyDeviceBootstrapToken({
+      const result = await verifyDeviceBootstrapTokenContext({
         deviceId,
         publicKey,
         token,
         role: roleLocal,
         scopes: scopesLocal,
+        bindIdentity: context.confidentialTransport || approvedBootstrapIdentity,
       });
+      if (result.ok) {
+        verifiedBootstrap.context = result.context;
+      }
+      return result.ok ? { ok: true } : result;
     },
     async verifyDeviceToken(paramsLocal) {
       return await verifyDeviceToken({
@@ -440,11 +450,7 @@ async function authenticateGatewayConnectCore(
   }
   const boundBootstrapContext =
     authMethod === "bootstrap-token" && bootstrapTokenCandidate && device
-      ? await getBoundDeviceBootstrapContext({
-          token: bootstrapTokenCandidate,
-          deviceId: device.id,
-          publicKey: device.publicKey,
-        })
+      ? verifiedBootstrap.context
       : null;
   if (startupPending && authMethod === "bootstrap-token" && !startupBootstrapConnect) {
     await rejectGatewayStartupConnect(context);

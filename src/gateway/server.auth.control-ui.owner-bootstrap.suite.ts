@@ -18,6 +18,54 @@ import {
 import { writeSessionStore } from "./test-helpers.js";
 
 export function registerControlUiOwnerBootstrapSuite(): void {
+  test("requires owner approval for control ui bootstrap over cleartext", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
+    testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-cleartext-control-ui-",
+    );
+
+    try {
+      const issued = await issueDeviceBootstrapToken({
+        profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+      });
+      const ws = await openWs(port, {
+        origin: "https://localhost",
+        "x-forwarded-for": "203.0.113.49",
+      });
+      const initial = await connectReq(ws, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "operator",
+        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+        client: CONTROL_UI_CLIENT,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(false);
+      expect(initial.error?.details).toMatchObject({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      });
+      ws.close();
+
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+      expect(
+        (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId),
+      ).toMatchObject({
+        role: "operator",
+        roles: ["operator"],
+        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+        silent: false,
+      });
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("silently approves host-authorized control ui owner bootstrap tokens", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
@@ -68,6 +116,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsBootstrap = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
       });
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
@@ -119,6 +168,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsReload = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
       });
       const reload = await connectReq(wsReload, {
         skipDefaultAuth: true,
@@ -194,6 +244,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsBootstrap = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.51",
+        "x-forwarded-proto": "https",
       });
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
@@ -264,6 +315,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsUpgrade = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.52",
+        "x-forwarded-proto": "https",
       });
       const upgraded = await connectReq(wsUpgrade, {
         skipDefaultAuth: true,
@@ -303,6 +355,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsReload = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.52",
+        "x-forwarded-proto": "https",
       });
       const reload = await connectReq(wsReload, {
         skipDefaultAuth: true,
@@ -318,6 +371,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsSecondBrowser = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.53",
+        "x-forwarded-proto": "https",
       });
       const replay = await connectReq(wsSecondBrowser, {
         skipDefaultAuth: true,
@@ -360,6 +414,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsBootstrap = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.51",
+        "x-forwarded-proto": "https",
       });
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
@@ -406,6 +461,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       const wsBootstrap = await openWs(port, {
         origin: "https://localhost",
         "x-forwarded-for": "203.0.113.52",
+        "x-forwarded-proto": "https",
       });
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,

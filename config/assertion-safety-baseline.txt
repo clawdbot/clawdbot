@@ -2961,7 +2961,7 @@ src/gateway/server-startup-post-attach.ts	1
 src/gateway/server-worker-placement-startup.ts	2
 src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	8
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
-src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	7
+src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	6
 src/gateway/server.auth.control-ui.owner-bootstrap.suite.ts	5
 src/gateway/server.auth.control-ui.pairing.suite.ts	6
 src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	5

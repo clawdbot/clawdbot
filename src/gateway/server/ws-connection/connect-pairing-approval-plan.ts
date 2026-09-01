@@ -5,7 +5,6 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import type { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -76,21 +75,21 @@ export type PairingApprovalPlan = {
  * eligibility in one place is what makes a silent policy/caller contradiction
  * (the removed scope-upgrade veto) visible in review.
  */
-export async function resolvePairingApprovalPlan(params: {
+export function resolvePairingApprovalPlan(params: {
   reason: ConnectPairingRequiredReason;
   existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
   state: AuthenticatedGatewayConnect;
   connectParams: GatewayConnectPhaseContext["connectParams"];
   configSnapshot: GatewayConnectPhaseContext["configSnapshot"];
+  confidentialTransport: boolean;
   hasBrowserOriginHeader: boolean;
   reportedClientIp: string | undefined;
   reportedClientIpSource: GatewayConnectPhaseContext["reportedClientIpSource"];
-  deviceId: string;
   devicePublicKey: string;
   scopes: string[];
   hasRequestedScopes: boolean;
   connectionScopeCap: (scopes: string[]) => string[];
-}): Promise<PairingApprovalPlan> {
+}): PairingApprovalPlan {
   const { reason, existingPairedDevice, state, connectParams, configSnapshot, scopes } = params;
   const {
     role,
@@ -101,6 +100,7 @@ export async function resolvePairingApprovalPlan(params: {
     authMethod,
     authResult,
     bootstrapTokenCandidate,
+    issuedBootstrapProfile,
     pairingLocality,
   } = state;
   const allowSilentLocalPairing =
@@ -159,46 +159,44 @@ export async function resolvePairingApprovalPlan(params: {
     isWebchat,
     clientMode: connectParams.client.mode,
   });
-  const allowBoundBootstrapProfileLookup =
+  const allowSetupBootstrapProfile =
     (reason === "not-paired" &&
       !existingPairedDevice &&
       (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
     (reason === "scope-upgrade" &&
       Boolean(existingPairedDevice) &&
       (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator")));
-  const boundBootstrapProfile =
-    authMethod === "bootstrap-token" && bootstrapTokenCandidate && allowBoundBootstrapProfileLookup
-      ? await getBoundDeviceBootstrapProfile({
-          token: bootstrapTokenCandidate,
-          deviceId: params.deviceId,
-          publicKey: params.devicePublicKey,
-        })
+  const setupBootstrapProfile =
+    authMethod === "bootstrap-token" && bootstrapTokenCandidate && allowSetupBootstrapProfile
+      ? issuedBootstrapProfile
       : null;
-  const allowSetupCodeHandoffBootstrapPairing =
-    boundBootstrapProfile !== null &&
+  const setupCodeHandoffBootstrapProfile =
+    setupBootstrapProfile !== null &&
     isSetupCodeMobileNodeConnect &&
     isSetupCodeHandoffBootstrapClient({
-      profile: boundBootstrapProfile,
+      profile: setupBootstrapProfile,
       client: connectParams.client,
-    });
-  const setupCodeHandoffBootstrapProfile = allowSetupCodeHandoffBootstrapPairing
-    ? boundBootstrapProfile
-    : null;
+    })
+      ? setupBootstrapProfile
+      : null;
+  const allowSetupCodeHandoffBootstrapPairing =
+    params.confidentialTransport && setupCodeHandoffBootstrapProfile !== null;
   const allowControlUiOwnerBootstrapPairing =
     reason === "scope-upgrade" &&
     isControlUiOwnerBootstrapProfile({
-      profile: boundBootstrapProfile,
+      profile: setupBootstrapProfile,
       requestedScopes: scopes,
     });
   const allowControlUiOperatorBootstrapPairing =
-    (reason === "not-paired" &&
+    params.confidentialTransport &&
+    ((reason === "not-paired" &&
       isControlUiOperatorBootstrapProfile({
-        profile: boundBootstrapProfile,
+        profile: setupBootstrapProfile,
         requestedScopes: scopes,
       })) ||
-    allowControlUiOwnerBootstrapPairing;
+      allowControlUiOwnerBootstrapPairing);
   const controlUiOperatorBootstrapProfile = allowControlUiOperatorBootstrapPairing
-    ? boundBootstrapProfile
+    ? setupBootstrapProfile
     : null;
   // This is the native QR/setup-code onboarding seam. Mobile clients
   // must prove their canonical client id and platform/family metadata

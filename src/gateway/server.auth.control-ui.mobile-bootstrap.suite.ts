@@ -12,6 +12,11 @@ import {
   rpcReq,
 } from "./server.auth.test-helpers.js";
 
+const CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS = {
+  ...REMOTE_BOOTSTRAP_HEADERS,
+  "x-forwarded-proto": "https",
+};
+
 export function registerControlUiMobileBootstrapSuite(): void {
   const FULL_OPERATOR_SCOPES = [
     "operator.admin",
@@ -32,22 +37,38 @@ export function registerControlUiMobileBootstrapSuite(): void {
       deviceFamily: string;
     };
     limited?: boolean;
+    nodeOnly?: boolean;
+    voice?: boolean;
+    confidentialTransport?: boolean;
     identityFixture?: Awaited<ReturnType<typeof createOperatorIdentityFixture>>;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
-      await import("../shared/device-bootstrap-profile.js");
+    const {
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    } = await import("../shared/device-bootstrap-profile.js");
     const identityFixture =
       params.identityFixture ?? (await createOperatorIdentityFixture(params.identityPrefix));
     const { identityPath, identity } = identityFixture;
     const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     try {
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsBootstrap = await openWs(
+        port,
+        params.confidentialTransport === false
+          ? REMOTE_BOOTSTRAP_HEADERS
+          : CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS,
+      );
       try {
         const issued = await issueDeviceBootstrapToken({
-          profile: params.limited
-            ? PAIRING_SETUP_BOOTSTRAP_PROFILE
-            : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          profile: params.voice
+            ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+            : params.nodeOnly
+              ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+              : params.limited
+                ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+                : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         });
         const initial = await connectReq(wsBootstrap, {
           skipDefaultAuth: true,
@@ -87,7 +108,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       const issued = await issueDeviceBootstrapToken({
         profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       });
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsBootstrap = await openWs(port, CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS);
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,
@@ -137,7 +158,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       expect(paired?.approvedScopes).toEqual(["operator.read", "operator.talk"]);
       wsBootstrap.close();
 
-      const wsNode = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsNode = await openWs(port, CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS);
       const nodeReconnect = await connectReq(wsNode, {
         skipDefaultAuth: true,
         deviceToken: nodeToken,
@@ -149,7 +170,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       expect(nodeReconnect.ok).toBe(true);
       wsNode.close();
 
-      const wsOperator = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsOperator = await openWs(port, CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS);
       const operatorReconnect = await connectReq(wsOperator, {
         skipDefaultAuth: true,
         deviceToken: operatorToken,
@@ -201,7 +222,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       const issued = await issueDeviceBootstrapToken({
         profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       });
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsBootstrap = await openWs(port, CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS);
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,
@@ -258,7 +279,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       expect(paired?.tokens?.operator?.token).toBe(issuedOperatorToken);
       expect(paired?.tokens?.operator?.scopes).toEqual(FULL_OPERATOR_SCOPES);
 
-      const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsReplay = await openWs(port, CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS);
       const replay = await connectReq(wsReplay, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,
@@ -273,7 +294,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       );
       wsReplay.close();
 
-      const wsReconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsReconnect = await openWs(port, CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS);
       const reconnect = await connectReq(wsReconnect, {
         skipDefaultAuth: true,
         deviceToken: issuedDeviceToken,
@@ -402,62 +423,178 @@ export function registerControlUiMobileBootstrapSuite(): void {
     },
   );
 
-  test("limited qr setup keeps the previous bounded operator handoff", async () => {
-    const { identity, initial } = await connectSetupCodeBootstrapNode({
-      identityPrefix: "openclaw-bootstrap-limited-node-",
-      client: {
-        id: "openclaw-ios",
-        version: "2026.7.13",
-        platform: "iOS 26.3.1",
-        mode: "node",
-        deviceFamily: "iPhone",
-      },
-      limited: true,
-    });
-    expect(initial.ok).toBe(true);
-    const payload = initial.payload as
-      | {
-          auth?: {
-            deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
-          };
-        }
-      | undefined;
-    const operatorHandoff = payload?.auth?.deviceTokens?.find((entry) => entry.role === "operator");
-    const operatorToken = operatorHandoff?.deviceToken;
-    if (!operatorToken) {
-      throw new Error("expected handed-off limited operator device token");
-    }
-    expect(operatorHandoff?.scopes).toEqual([
-      "operator.approvals",
-      "operator.questions",
-      "operator.read",
-      "operator.talk.secrets",
-      "operator.write",
-    ]);
-    expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+  test("cleartext limited qr setup requires owner approval", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
+    const attacker = await createOperatorIdentityFixture("openclaw-bootstrap-attacker-");
+    const victim = await createOperatorIdentityFixture("openclaw-bootstrap-victim-");
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.7.13",
+      platform: "iOS 26.3.1",
+      mode: "node" as const,
+      deviceFamily: "iPhone",
+    };
+    const issued = await issueDeviceBootstrapToken({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE });
+    const connectWithSetupCode = async (identityPath: string) => {
+      const ws = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      try {
+        return await connectReq(ws, {
+          skipDefaultAuth: true,
+          bootstrapToken: issued.token,
+          role: "node",
+          scopes: [],
+          client,
+          deviceIdentityPath: identityPath,
+        });
+      } finally {
+        ws.close();
+      }
+    };
 
-    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
-    const { getPairedDevice } = await import("../infra/device-pairing.js");
-    const paired = await getPairedDevice(identity.deviceId);
-    expect(paired?.approvedScopes).not.toContain("operator.admin");
-    expect(paired?.tokens?.operator?.scopes).not.toContain("operator.admin");
-    await expect(
-      verifyDeviceToken({
-        deviceId: identity.deviceId,
-        token: operatorToken,
-        role: "operator",
-        scopes: ["operator.admin"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
-    await expect(
-      verifyDeviceToken({
-        deviceId: identity.deviceId,
-        token: operatorToken,
-        role: "operator",
-        scopes: ["operator.pairing"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    try {
+      const attackerInitial = await connectWithSetupCode(attacker.identityPath);
+      expect(attackerInitial.ok).toBe(false);
+      expect(attackerInitial.error?.message ?? "").toContain("pairing required");
+      expect(attackerInitial.error?.details).toMatchObject({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        pauseReconnect: false,
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+      });
+      expect(await getPairedDevice(attacker.identity.deviceId)).toBeNull();
+
+      const victimInitial = await connectWithSetupCode(victim.identityPath);
+      expect(victimInitial.ok).toBe(false);
+      expect(victimInitial.error?.details).toMatchObject({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      });
+      const pending = (await listDevicePairing()).pending;
+      const victimRequest = pending.find((entry) => entry.deviceId === victim.identity.deviceId);
+      expect(victimRequest).toMatchObject({
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        silent: false,
+      });
+      if (!victimRequest) {
+        throw new Error("expected victim pairing request");
+      }
+      await expect(
+        approveDevicePairing(victimRequest.requestId, { callerScopes: ["operator.admin"] }),
+      ).resolves.toMatchObject({ status: "approved" });
+
+      const victimRetry = await connectWithSetupCode(victim.identityPath);
+      expect(victimRetry.ok).toBe(true);
+      expect(victimRetry.payload).toMatchObject({
+        auth: {
+          deviceTokens: expect.arrayContaining([
+            expect.objectContaining({ role: "operator", deviceToken: expect.any(String) }),
+          ]),
+        },
+      });
+      expect(await getPairedDevice(victim.identity.deviceId)).toMatchObject({
+        roles: ["node", "operator"],
+      });
+
+      const attackerRetry = await connectWithSetupCode(attacker.identityPath);
+      expect(attackerRetry.ok).toBe(false);
+      expect(attackerRetry.error?.details).toMatchObject({
+        code: ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+      });
+      expect(await getPairedDevice(attacker.identity.deviceId)).toBeNull();
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
   });
+
+  test.each([
+    {
+      name: "full mobile",
+      identityPrefix: "openclaw-bootstrap-cleartext-full-node-",
+      client: {
+        id: "openclaw-android",
+        version: "2026.7.13",
+        platform: "Android 16",
+        mode: "node" as const,
+        deviceFamily: "Android",
+      },
+      voice: false,
+      nodeOnly: false,
+      expectedRoles: ["node", "operator"],
+      expectedScopes: FULL_OPERATOR_SCOPES,
+    },
+    {
+      name: "voice node",
+      identityPrefix: "openclaw-bootstrap-cleartext-voice-node-",
+      client: {
+        id: "node-host",
+        version: "2026.7.13",
+        platform: "esp32",
+        mode: "node" as const,
+        deviceFamily: "ESP32",
+      },
+      voice: true,
+      nodeOnly: false,
+      expectedRoles: ["node", "operator"],
+      expectedScopes: ["operator.read", "operator.talk"],
+    },
+    {
+      name: "node-only host",
+      identityPrefix: "openclaw-bootstrap-cleartext-node-host-",
+      client: {
+        id: "node-host",
+        version: "2026.7.13",
+        platform: "linux",
+        mode: "node" as const,
+        deviceFamily: "server",
+      },
+      voice: false,
+      nodeOnly: true,
+      expectedRoles: ["node"],
+      expectedScopes: [],
+    },
+  ])(
+    "cleartext $name setup requires owner approval",
+    async ({ client, identityPrefix, voice, nodeOnly, expectedRoles, expectedScopes }) => {
+      const { identity, initial } = await connectSetupCodeBootstrapNode({
+        identityPrefix,
+        client,
+        voice,
+        nodeOnly,
+        confidentialTransport: false,
+      });
+      expect(initial.ok).toBe(false);
+      expect(initial.error?.details).toMatchObject({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        pauseReconnect: false,
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+      });
+
+      const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+      expect(
+        (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId),
+      ).toMatchObject({
+        role: "node",
+        roles: expectedRoles,
+        scopes: expectedScopes,
+        silent: false,
+      });
+    },
+  );
 
   test("full qr setup upgrades an existing limited mobile pairing", async () => {
     const identityPrefix = "openclaw-bootstrap-limited-upgrade-node-";
