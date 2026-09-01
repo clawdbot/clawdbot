@@ -19,6 +19,7 @@ import {
   recordSessionCreated,
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
 import {
   runSpawnPipeline,
@@ -65,10 +66,7 @@ import {
   createInitialSubagentSession,
   persistInitialChildSessionRuntimeModel,
 } from "./subagent-spawn-session-patch.js";
-import {
-  bindThreadForSubagentSpawn,
-  hasRoutableDeliveryOrigin,
-} from "./subagent-spawn-thread-binding.js";
+import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import {
   buildSubagentSystemPrompt,
   emitSessionLifecycleEvent,
@@ -280,7 +278,7 @@ export async function spawnSubagentDirect(
         };
       }
       threadBindingReady = true;
-      hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+      hasBoundThreadDeliveryOrigin = hasDeliveryTargetFields(bindResult.deliveryOrigin);
       childSessionOrigin =
         mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
     }
