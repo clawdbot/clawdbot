@@ -247,19 +247,6 @@ export type UiSettings = {
   openLinksInControlUiBrowser?: boolean;
 };
 
-type LastActiveSessionHost = {
-  settings: Pick<UiSettings, "lastActiveSessionKey">;
-  applySettings(patch: Partial<UiSettings>): void;
-};
-
-export function setLastActiveSessionKey(host: LastActiveSessionHost, next: string) {
-  const trimmed = next.trim();
-  if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
-    return;
-  }
-  host.applySettings({ lastActiveSessionKey: trimmed });
-}
-
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;

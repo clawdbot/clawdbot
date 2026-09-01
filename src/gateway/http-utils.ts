@@ -185,7 +185,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,

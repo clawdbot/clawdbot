@@ -504,35 +504,58 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
   });
 
-  it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    let details: Record<string, unknown>;
-    try {
-      details = resultDetails(
-        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-          "code-call-yield-overflow",
-          {
-            code: 'await yield_control("pause"); return "done";',
-          },
-        ),
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
+  it.each(["exec", "wait"])(
+    "preserves accepted output when %s snapshot expiry would exceed the Date range",
+    async (mode) => {
+      const { ctx } = createCodeModeHarness();
+      const config = { tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } } };
+      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
+      const fixture = pluginTool("expiry_fixture", "Expiry fixture");
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
+      const exec = expectDefined(tools[0], "exec");
+      const wait = expectDefined(tools[1], "wait");
+      const dateLimit = 8_640_000_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(dateLimit - 1_000);
+      let details: Record<string, unknown>;
+      try {
+        const input = {
+          code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
+            text("accepted first");
+            await expiry_fixture({});
+            text("accepted inline");
+            await yield_control("pause");
+            return "done";`,
+        };
+        const first =
+          mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
+        if (first) {
+          expect(first).toMatchObject({
+            status: "waiting",
+            output: [{ type: "text", text: "delivered" }],
+          });
+        }
+        // Admit wait before the parked run expires. Renewal overflows without
+        // consuming the new call's execution budget before its guest resumes.
+        nowSpy.mockReturnValue(dateLimit - 1);
+        details = resultDetails(
+          await (first
+            ? wait.execute("resume", { runId: first.runId })
+            : exec.execute("code-call-yield-overflow", input)),
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
 
-    expect(details.status).toBe("failed");
-    expect(details.error).toBe("code mode run expiry is unavailable.");
-    expect(testing.activeRuns.size).toBe(0);
-  });
+      expect(details.status).toBe("failed");
+      expect(details.error).toBe("code mode run expiry is unavailable.");
+      expect(details.output).toEqual([
+        { type: "text", text: "accepted first" },
+        { type: "text", text: "accepted inline" },
+      ]);
+      expect(fixture.execute).toHaveBeenCalledOnce();
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
 
   it("expires suspended runs with invalid expiry timestamps", async () => {
     const { tools: codeModeTools } = createCodeModeHarness();

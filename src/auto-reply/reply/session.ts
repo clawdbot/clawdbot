@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -68,7 +69,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -293,7 +294,7 @@ function resolveBoundConversationSessionKey(params: {
     return undefined;
   }
   if (params.touch !== false) {
-    getSessionBindingService().touch(binding.bindingId);
+    getSessionBindingService().touch(binding.bindingId, undefined, binding.conversation);
   }
   // Plugins own their target handoff; escaped commands still initialize the core session.
   return isPluginOwnedSessionBindingRecord(binding) ? undefined : binding.targetSessionKey;
@@ -363,6 +364,7 @@ export function resolveReplySessionPreprocessingState(
       params.cfg.session?.scope ?? "per-sender",
       attemptContext.sessionCtxForState,
       normalizeMainKey(params.cfg.session?.mainKey),
+      attemptContext.agentId,
     ),
   });
   const sessionEntry = loadReplySessionInitializationSnapshot({
@@ -584,10 +586,18 @@ async function initSessionStateAttemptLocked(
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
   // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const relatedSessionKeys = [
+    buildAgentMainSessionKey({ agentId, mainKey }),
+    ctx.ParentSessionKey,
+    ctx.ModelParentSessionKey,
+    ctx.CommandTargetSessionKey,
+    resolveSessionParentSessionKey(sessionKey),
+  ].filter((key): key is string => typeof key === "string");
   const initializationSnapshot = loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
+    relatedSessionKeys,
   });
   if (ingressTimingEnabled) {
     log.info(
@@ -1015,6 +1025,7 @@ async function initSessionStateAttemptLocked(
     agentId,
     archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
+    relatedSessionKeys,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
       log.warn(
@@ -1204,7 +1215,7 @@ async function initSessionStateAttemptLocked(
         onWarn: (message) => log.warn(message),
         onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
       });
-    }).catch((error: unknown) => {
+    }, "session:browser-cleanup").catch((error: unknown) => {
       log.warn(`browser tab cleanup admission failed: ${String(error)}`);
     });
   }
@@ -1240,7 +1251,7 @@ async function initSessionStateAttemptLocked(
         });
         void runWithGatewayIndependentRootWorkContinuation(async () => {
           await hookRunner.runSessionEnd(payload.event, payload.context);
-        }).catch(() => {});
+        }, "hooks:session-end").catch(() => {});
       }
     }
 
@@ -1267,7 +1278,7 @@ async function initSessionStateAttemptLocked(
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         await hookRunner.runSessionStart(payload.event, payload.context);
-      }).catch(() => {});
+      }, "hooks:session-start").catch(() => {});
     }
   }
 

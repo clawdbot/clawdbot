@@ -9,6 +9,7 @@ import {
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
@@ -45,6 +46,7 @@ import {
   buildLineMessageContext,
   buildLinePostbackContext,
   getLineSourceInfo,
+  readLineTextMessageBody,
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
@@ -53,7 +55,7 @@ import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 type FollowEvent = webhook.FollowEvent;
@@ -99,25 +101,6 @@ interface LineHandlerContext {
 
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
-}
-
-function resolveLineGroupConfig(params: {
-  config: ResolvedLineAccount["config"];
-  groupId?: string;
-  roomId?: string;
-}): LineGroupConfig | undefined {
-  return resolveLineGroupConfigEntry(params.config.groups, {
-    groupId: params.groupId,
-    roomId: params.roomId,
-  });
-}
-
-function resolveLineRuntimeGroupPolicy({ cfg, account }: LineHandlerContext) {
-  return resolveAllowlistProviderRuntimeGroupPolicy({
-    providerConfigPresent: cfg.channels?.line !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
-  });
 }
 
 async function sendLinePairingReply(params: {
@@ -179,8 +162,8 @@ async function sendLinePairingReply(params: {
   });
 }
 
-async function shouldProcessLineEvent(
-  event: MessageEvent | PostbackEvent,
+async function resolveLineEventAdmission(
+  event: MessageEvent | PostbackEvent | JoinEvent,
   context: LineHandlerContext,
 ): Promise<{
   access: ResolvedChannelMessageIngress;
@@ -191,12 +174,16 @@ async function shouldProcessLineEvent(
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
-  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+  const groupConfig = resolveLineGroupConfigEntry(account.config.groups, { groupId, roomId });
   const rawText = resolveEventRawText(event);
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy: runtimeGroupPolicy, providerMissingFallbackApplied } =
-    resolveLineRuntimeGroupPolicy(context);
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.line !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
+    });
   const groupPolicy: GroupPolicy =
     runtimeGroupPolicy === "disabled"
       ? "disabled"
@@ -251,7 +238,7 @@ async function shouldProcessLineEvent(
       cfg,
       readStoreAllowFrom: async () =>
         await readChannelAllowFromStore("line", undefined, account.accountId),
-      subject: { stableId: senderId },
+      subject: event.type === "join" ? {} : { stableId: senderId },
       conversation: {
         kind: isGroup ? "group" : "direct",
         id: (groupId ?? roomId ?? senderId) || "unknown",
@@ -269,7 +256,7 @@ async function shouldProcessLineEvent(
               implicitMentionKinds: mentionFacts.implicitMentionKinds,
             }
           : undefined,
-      event: { kind: event.type === "postback" ? "postback" : "message" },
+      event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
       groupPolicy,
       policy: {
@@ -277,6 +264,12 @@ async function shouldProcessLineEvent(
         activation: {
           requireMention: isGroup && event.type === "message" && requireMention,
           allowTextCommands: true,
+          // Apply quote policy in the shared gate, preserving explicit mentions.
+          implicitMentions: resolveChannelImplicitMentions({
+            cfg,
+            channel: "line",
+            accountId: account.accountId,
+          }),
         },
       },
       allowFrom: normalizeStringEntries(account.config.allowFrom),
@@ -293,6 +286,16 @@ async function shouldProcessLineEvent(
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
+
+  if (event.type === "join") {
+    // Joins have no sender to match. A configured audience must still contain
+    // matchable entries after access-group expansion and LINE normalization.
+    const roomAllowed =
+      groupConfig?.enabled !== false &&
+      groupPolicy !== "disabled" &&
+      (groupPolicy !== "allowlist" || access.state.allowlists.group.hasMatchableEntries);
+    return roomAllowed ? { access, resolveBoundAccess: resolveAccess } : null;
+  }
 
   if (
     access.senderAccess.decision === "allow" &&
@@ -368,11 +371,11 @@ function resolveLineQuotedMessageId(message: MessageEvent["message"]): string | 
     : undefined;
 }
 
-function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
+function resolveEventRawText(event: MessageEvent | PostbackEvent | JoinEvent): string {
   if (event.type === "message") {
     const msg = event.message;
     if (msg.type === "text") {
-      return msg.text;
+      return readLineTextMessageBody(msg);
     }
     return "";
   }
@@ -386,14 +389,14 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
 
-  const decision = await shouldProcessLineEvent(event, context);
+  const decision = await resolveLineEventAdmission(event, context);
   if (!decision) {
     return;
   }
 
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
   if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const rawText = message.type === "text" ? message.text : "";
+    const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
     const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
@@ -526,12 +529,7 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
   }
   logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
   const { cfg, account } = context;
-  const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
-  // LINE allowlists authorize human senders, not the bot's own join; only
-  // conversation policy and the room's enabled state apply here.
-  const roomAllowed =
-    resolveLineRuntimeGroupPolicy(context).groupPolicy !== "disabled" &&
-    groupConfig?.enabled !== false;
+  const roomAllowed = Boolean(await resolveLineEventAdmission(event, context));
   await reportChannelRoomJoin({
     cfg,
     channel: "line",
@@ -572,7 +570,7 @@ async function handlePostbackEvent(
   const data = event.postback.data;
   logVerbose(`line: received postback: ${data}`);
 
-  const decision = await shouldProcessLineEvent(event, context);
+  const decision = await resolveLineEventAdmission(event, context);
   if (!decision) {
     return;
   }

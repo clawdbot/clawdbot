@@ -226,6 +226,10 @@ const resolveProviderDeprecatedAuthProfileIdsMock = vi.hoisted(() =>
   ),
 );
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: (params: {
     provider: string;
@@ -260,7 +264,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
       mode: "api-key" as const,
     };
   },
-  resolveExternalAuthProfilesWithPlugins: () => [],
   shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
     provider: string;
     context: { resolvedApiKey?: string };

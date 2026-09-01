@@ -1,5 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
 import { closeDispatcher } from "./ssrf.js";
+
+// Gateway startup imports this module before admitting requests. Pool timers and
+// cleanup must keep that context instead of retaining the last request's stores.
+const runInDispatcherPoolContext = AsyncLocalStorage.snapshot();
 
 export type PinnedDispatcherLease = {
   dispatcher: Dispatcher;
@@ -126,7 +131,9 @@ export class PinnedDispatcherPool {
           await this.startClose(entry);
           return;
         }
-        entry.idleTimer = setTimeout(() => this.retireEntry(entry), this.idleTtlMs);
+        entry.idleTimer = runInDispatcherPoolContext(() =>
+          setTimeout(() => this.retireEntry(entry), this.idleTtlMs),
+        );
         entry.idleTimer.unref?.();
       },
     };
@@ -146,13 +153,11 @@ export class PinnedDispatcherPool {
   }
 
   private startClose(entry: PinnedDispatcherPoolEntry): Promise<void> {
-    if (entry.closePromise) {
-      return entry.closePromise;
-    }
-    const closePromise = closeDispatcher(entry.dispatcher).finally(() => {
-      this.ownedEntries.delete(entry);
-    });
-    entry.closePromise = closePromise;
-    return closePromise;
+    entry.closePromise ??= runInDispatcherPoolContext(() =>
+      closeDispatcher(entry.dispatcher).finally(() => {
+        this.ownedEntries.delete(entry);
+      }),
+    );
+    return entry.closePromise;
   }
 }

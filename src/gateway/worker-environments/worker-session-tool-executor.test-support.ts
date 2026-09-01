@@ -10,13 +10,14 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
 
 export const SOURCE = {
@@ -72,7 +73,12 @@ type WorkerSessionToolTestMocks = {
   scopedSessionAccess: Mock<(params: { run: () => Promise<unknown> }) => Promise<unknown>>;
 };
 
-async function createWorkerSessionToolTestFixture(mocks: WorkerSessionToolTestMocks) {
+type WorkerSessionToolTestOptions = { collectExecutionIdentity?: boolean };
+
+async function createWorkerSessionToolTestFixture(
+  mocks: WorkerSessionToolTestMocks,
+  options: WorkerSessionToolTestOptions,
+) {
   const {
     sessionEntries,
     delivered,
@@ -112,13 +118,25 @@ async function createWorkerSessionToolTestFixture(mocks: WorkerSessionToolTestMo
   const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
   delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
-  bindWorkerTurnExecutionIdentity(
-    placements,
-    sourceClaim,
-    PARENT_EXECUTION_IDENTITY_TOKEN,
-    sourceOperationalRun,
-    { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
-  );
+  let sourceRunActive = true;
+  const rootAdmission = tryBeginGatewayRootWorkAdmission();
+  if (!rootAdmission) {
+    throw new Error("Worker fixture could not admit its parent turn");
+  }
+  await rootAdmission.run(async () => {
+    bindWorkerTurnOwner(
+      placements,
+      sourceClaim,
+      options.collectExecutionIdentity !== false ? PARENT_EXECUTION_IDENTITY_TOKEN : undefined,
+      sourceOperationalRun,
+      { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
+      () => {
+        if (!sourceRunActive) {
+          throw new Error("source worker run ended");
+        }
+      },
+    );
+  });
   const identity: WorkerConnectionIdentity = {
     environmentId: SOURCE.environmentId,
     credentialHash: "credential-hash",
@@ -297,30 +315,42 @@ async function createWorkerSessionToolTestFixture(mocks: WorkerSessionToolTestMo
   }
 
   return {
+    root,
     placements,
     identity,
     execute,
     sourceClaim,
     delegatedAuthorities,
+    closeSourceRun: () => {
+      sourceRunActive = false;
+    },
     spawnState,
     activate,
     setEntry,
     send,
     spawn,
     async dispose() {
+      if (placements.validateTurnClaim(sourceClaim)) {
+        await placements.closeWorkerTurnToolState(sourceClaim);
+        placements.releaseTurn(sourceClaim);
+      }
       for (const authority of delegatedAuthorities) {
         releaseAgentRunDelegatedAuthority(authority);
       }
+      rootAdmission.release();
       closeOpenClawStateDatabaseForTest();
       await fs.rm(root, { recursive: true, force: true });
     },
   };
 }
 
-export function installWorkerSessionToolTestFixture(mocks: WorkerSessionToolTestMocks) {
+export function installWorkerSessionToolTestFixture(
+  mocks: WorkerSessionToolTestMocks,
+  options: WorkerSessionToolTestOptions = {},
+) {
   let fixture: Awaited<ReturnType<typeof createWorkerSessionToolTestFixture>>;
   beforeEach(async () => {
-    fixture = await createWorkerSessionToolTestFixture(mocks);
+    fixture = await createWorkerSessionToolTestFixture(mocks, options);
   });
   afterEach(async () => {
     await fixture.dispose();

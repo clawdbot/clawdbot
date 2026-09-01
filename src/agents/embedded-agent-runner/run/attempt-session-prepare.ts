@@ -19,12 +19,14 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
+import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import {
   type AgentSession,
   type CreateAgentSessionOptions,
@@ -164,6 +166,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     resourceLoader,
     resolveDeferredTool: input.clientToolPreparation.deferredDirectoryToolsCallable
       ? ({ toolCall }) => {
+          const toolAbortSignal =
+            input.clientToolPreparation.getToolAbortSignal?.() ?? input.runAbortSignal;
           const tool = resolveToolSearchCatalogTool(
             {
               config: attempt.config,
@@ -173,13 +177,18 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
               sessionId: attempt.sessionId,
               runId: attempt.runId,
               catalogRef: input.clientToolPreparation.toolSearchCatalogRef,
-              abortSignal: input.runAbortSignal,
+              abortSignal: toolAbortSignal,
             },
             toolCall.name,
           );
-          // Catalog entries already own before_tool_call wrapping.
+          // Catalog entries own hooks; the adapter must carry the captured
+          // generation into them so approvals cannot outlive a permission change.
           const definition = tool
-            ? toToolDefinitions([tool], input.clientToolPreparation.catalogToolHookContext)[0]
+            ? toToolDefinitions(
+                [tool],
+                input.clientToolPreparation.catalogToolHookContext,
+                toolAbortSignal,
+              )[0]
             : undefined;
           const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
           if (hydratedTool) {
@@ -222,9 +231,65 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   input.onSessionCreated(activeSession);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
+  let permissionPreparation:
+    | { prepare: () => Promise<(prompt: string) => string>; controller: AbortController }
+    | undefined;
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
     applySystemPromptToSession(activeSession, nextSystemPrompt);
+    return nextSystemPrompt;
+  };
+  const refreshPermissionPrompt = async (prompt?: string, signal?: AbortSignal) => {
+    const runSignal = signal
+      ? AbortSignal.any([signal, input.runAbortSignal])
+      : input.runAbortSignal;
+    while (true) {
+      runSignal.throwIfAborted();
+      const preparation = permissionPreparation;
+      if (!preparation) {
+        return undefined;
+      }
+      let refresh: (prompt: string) => string;
+      try {
+        refresh = await raceWithAbortSignal(
+          preparation.prepare(),
+          AbortSignal.any([runSignal, preparation.controller.signal]),
+        );
+      } catch (error) {
+        runSignal.throwIfAborted();
+        // Replacement wakes this boundary even if the old plugin never settles.
+        // Its late rejection cannot fail the newer permission generation.
+        if (preparation !== permissionPreparation) {
+          continue;
+        }
+        throw error;
+      }
+      runSignal.throwIfAborted();
+      if (preparation !== permissionPreparation) {
+        continue;
+      }
+      return setActiveSessionSystemPrompt(
+        refresh(prompt ?? activeSession.agent.state.systemPrompt),
+      );
+    }
+  };
+  activeSession[agentSessionSetPromptPreparation](async () => {
+    await refreshPermissionPrompt();
+  });
+  const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
+  activeSession.agent.prepareNextTurn = async (signal) => {
+    const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
+    const refreshedPrompt = await refreshPermissionPrompt(snapshot?.context?.systemPrompt, signal);
+    return snapshot?.context && refreshedPrompt !== undefined
+      ? {
+          ...snapshot,
+          context: {
+            ...snapshot.context,
+            systemPrompt: refreshedPrompt,
+            tools: activeSession.agent.state.tools.slice(),
+          },
+        }
+      : snapshot;
   };
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
@@ -276,6 +341,17 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     },
     setActiveSessionSystemPrompt,
     settingsManager,
+    refreshTools: () => {
+      const currentPrompt = activeSession.agent.state.systemPrompt;
+      preparedClientTools.refreshTools();
+      activeSession.replaceCustomTools(allCustomTools, sessionToolAllowlist);
+      setActiveSessionSystemPrompt(currentPrompt);
+    },
+    setPermissionPromptPreparation: (prepare?: () => Promise<(prompt: string) => string>) => {
+      const previous = permissionPreparation;
+      permissionPreparation = prepare ? { prepare, controller: new AbortController() } : undefined;
+      previous?.controller.abort();
+    },
   };
 }
 
@@ -434,6 +510,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
 }) {
   const { attempt } = input;
   const transcriptState = await resolveExistingAttemptTranscriptState({
+    sessionManager: attempt.sessionManager,
     agentId: input.sessionAgentId,
     config: attempt.config,
     sessionFile: attempt.sessionFile,

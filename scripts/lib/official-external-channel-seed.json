@@ -92,6 +92,9 @@
           "id": "openclaw-qqbot",
           "label": "QQ Bot"
         },
+        "setupFeatures": {
+          "configPromotion": "preserve-root"
+        },
         "contracts": {
           "tools": ["qqbot_platform_api", "qqbot_remind"]
         },
@@ -276,9 +279,9 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.6",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.8",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-qw9k3PLTiMWGNjjsknHgcTManH1w4j+Ji1ArWIaYLKCq3aFRsVwcqnPi127bvOoVMJGW4dbyJ8NECEMgoO+iRw==",
+          "expectedIntegrity": "sha512-hhO9prUQwzfSpIL6XGWazRsxNs89K+Mis3iQW6a8eum4AIDxOUiTFMg4nlNVD/au0SjAx5CcJjo3KYWZqGpgQA==",
           "minHostVersion": ">=2026.5.12"
         }
       }

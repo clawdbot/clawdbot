@@ -508,11 +508,13 @@ when you intentionally want both representations.
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
-`tree` visibility exposes the current session and sessions it spawned. When
-the caller is the canonical main session, it covers every same-agent session.
-Non-main callers require `agent` visibility for unrelated same-agent sessions
-(or `all` when cross-agent recall is also required and agent-to-agent policy
-allows it).
+`agent` visibility exposes same-agent sessions to unsandboxed callers, including
+non-main sessions and conversations with other users sharing the agent. Set
+`tree` explicitly for current plus spawned scope (main still sees all
+same-agent sessions), or `self` for strict current-session access. A per-peer
+DM scope alone does not restrict session-tool recall. Cross-agent recall
+requires `all` and agent-to-agent policy; sandbox clamps and incognito
+exclusions still apply.
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private

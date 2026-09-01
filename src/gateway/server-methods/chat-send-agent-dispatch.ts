@@ -87,6 +87,17 @@ type StartChatDispatchParams = {
   userTurn: ReturnType<typeof createGatewayChatUserTurnController>;
 };
 
+function formatReturnedAgentErrors(messages: string[]): string | undefined {
+  const [primary, ...additional] = [...new Set(messages)];
+  if (!primary || additional.length === 0) {
+    return primary;
+  }
+  if (additional.length === 1) {
+    return `${primary}\n\nAdditional error: ${additional[0]}`;
+  }
+  return `${primary}\n\nAdditional errors:\n${additional.map((message) => `- ${message}`).join("\n")}`;
+}
+
 export function startChatDispatch(params: StartChatDispatchParams): void {
   const {
     admissionStartedAt,
@@ -168,7 +179,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     context,
     runId: clientRunId,
     controller: activeRunAbort.controller,
-    sessionId: admittedSessionId,
+    sessionBinding: admission.sessionBinding,
     sessionKey,
     agentId: selectedAgent.agentId,
     ownerConnId: client?.connId,
@@ -225,8 +236,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     }
     emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
   };
+  const dispatchAdmission = {
+    run: <T>(operation: () => Promise<T>) =>
+      gatewayWorkAdmission.run(() =>
+        userTurnRecorder.withPendingInput
+          ? userTurnRecorder.withPendingInput(operation)
+          : operation(),
+      ),
+  };
   const dispatch = replyDispatch
-    .runAgentMediaTranscript(gatewayWorkAdmission, () =>
+    .runAgentMediaTranscript(dispatchAdmission, () =>
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -281,6 +300,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
                 prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
+                ...(admission.admittedSessionSettings
+                  ? { admittedSessionSettings: admission.admittedSessionSettings }
+                  : {}),
                 runId: clientRunId,
                 skillWorkshopProposalRevision,
                 ...(cronCreatorAuthority
@@ -310,11 +332,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     ? { expectedExistingSessionId: entry.sessionId }
                     : {}),
                 resumeRequestedSession: reconnectResumeRequested,
-                onSessionPrepared: (binding) => {
-                  if (binding.sessionKey === sessionKey) {
-                    userTurn.setAcceptedSessionId(binding.sessionId);
-                  }
-                },
+                onSessionPrepared: admission.onSessionPrepared,
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
@@ -453,10 +471,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             runtimeOutcome?.error ??
-            (returnedAgentErrorPayloads
-              .map((payload) => payload.text?.trim())
-              .filter((text): text is string => Boolean(text))
-              .join(" | ") ||
+            (formatReturnedAgentErrors(
+              returnedAgentErrorPayloads
+                .map((payload) => payload.text?.trim())
+                .filter((text): text is string => Boolean(text)),
+            ) ||
               (runtimeFailed ? "agent run failed" : undefined));
           if (
             !userTurnRecorder.hasPersisted() &&

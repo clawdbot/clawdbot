@@ -1,5 +1,8 @@
 import path from "node:path";
-import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+} from "../../daemon/constants.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
@@ -28,7 +31,7 @@ function applyManagedServiceSelectorEnv(params: {
   return resolved;
 }
 
-function resolveServiceRefreshEnv(
+export function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
 ): NodeJS.ProcessEnv {
@@ -48,6 +51,14 @@ function resolveServiceRefreshEnv(
     }
     resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
   }
+  return resolvedEnv;
+}
+
+export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const resolvedEnv = { ...env };
+  delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
+  delete resolvedEnv.OPENCLAW_SERVICE_KIND;
+  delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   return resolvedEnv;
 }
 

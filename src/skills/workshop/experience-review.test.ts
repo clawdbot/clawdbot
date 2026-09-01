@@ -22,6 +22,7 @@ function completedRun(
     modelIterations?: number;
     success?: boolean;
     error?: string;
+    agentId?: string;
     sessionKey?: string;
     runId?: string;
     mode?: "off" | "propose" | "auto";
@@ -43,7 +44,7 @@ function completedRun(
       ],
     },
     ctx: {
-      agentId: "main",
+      agentId: options.agentId ?? "main",
       runId: options.runId ?? "run-1",
       sessionId: "session-1",
       sessionKey: options.sessionKey ?? "agent:main:main",
@@ -54,7 +55,7 @@ function completedRun(
       modelIterations: options.modelIterations,
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
       foregroundPromptContext: {
-        agentId: "main",
+        agentId: options.agentId ?? "main",
         agentDir: "/agent",
         workspaceDir: "/workspace",
         cwd: "/workspace",
@@ -186,7 +187,10 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("never turns explicitly reported zero-iteration turns into review work", async () => {
+  it.each([
+    { modelIterations: 0, completions: 12 },
+    { modelIterations: 4, completions: 3 },
+  ])("does not pool $modelIterations-iteration turns", async ({ modelIterations, completions }) => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -194,41 +198,8 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    for (let index = 0; index < 12; index += 1) {
-      scheduler.schedule(
-        completedRun({ messages: 10, modelIterations: 0, runId: `run-${String(index)}` }),
-      );
-    }
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(runReview).not.toHaveBeenCalled();
-    scheduler.clear();
-  });
-
-  it("does not infer iterations when a harness reports none", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-
-    scheduler.schedule(completedRun({ messages: 10, modelIterations: 0 }));
-    await vi.runAllTimersAsync();
-
-    expect(runReview).not.toHaveBeenCalled();
-    scheduler.clear();
-  });
-
-  it("does not pool shallow turns", async () => {
-    vi.useFakeTimers();
-    const runReview = vi.fn().mockResolvedValue(undefined);
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-    });
-    for (let index = 0; index < 3; index += 1) {
-      scheduler.schedule(completedRun({ modelIterations: 4, runId: `run-${index}` }));
+    for (let index = 0; index < completions; index += 1) {
+      scheduler.schedule(completedRun({ messages: 10, modelIterations, runId: `run-${index}` }));
     }
     await vi.advanceTimersByTimeAsync(60_000);
     expect(runReview).not.toHaveBeenCalled();
@@ -343,7 +314,10 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("discards a queued candidate when the same run later errors", async () => {
+  it.each([
+    { agentId: "qa", reviewCount: 0 },
+    { agentId: "beta", reviewCount: 1 },
+  ])("limits cancellation by $agentId to its own queued run", async ({ agentId, reviewCount }) => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -351,11 +325,12 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ runId: "retried-run" }));
-    scheduler.schedule(completedRun({ runId: "retried-run", success: false, error: "boom" }));
+    const run = { sessionKey: "global", runId: "retried-run" };
+    scheduler.schedule(completedRun({ ...run, agentId: "qa" }));
+    scheduler.schedule(completedRun({ ...run, agentId, success: false, error: "boom" }));
     await vi.runAllTimersAsync();
 
-    expect(runReview).not.toHaveBeenCalled();
+    expect(runReview).toHaveBeenCalledTimes(reviewCount);
     scheduler.clear();
   });
 
@@ -443,7 +418,18 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("serializes reviews across sessions", async () => {
+  it.each([
+    {
+      name: "distinct session keys",
+      first: { agentId: "main", sessionKey: "agent:main:first" },
+      second: { agentId: "main", sessionKey: "agent:main:second" },
+    },
+    {
+      name: "distinct owners of global",
+      first: { agentId: "qa", sessionKey: "global" },
+      second: { agentId: "beta", sessionKey: "global" },
+    },
+  ])("serializes reviews for $name", async ({ first, second }) => {
     vi.useFakeTimers();
     let finishFirst: (() => void) | undefined;
     const runReview = vi
@@ -459,15 +445,17 @@ describe("skill experience review scheduler", () => {
       runReview,
     });
 
-    scheduler.schedule(completedRun({ sessionKey: "agent:main:first" }));
-    scheduler.schedule(completedRun({ sessionKey: "agent:main:second" }));
+    scheduler.schedule(completedRun(first));
+    scheduler.schedule(completedRun(second));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledOnce();
+    expect(runReview.mock.calls[0]?.[0].ctx).toMatchObject(first);
 
     finishFirst?.();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledTimes(2);
+    expect(runReview.mock.calls[1]?.[0].ctx).toMatchObject(second);
     scheduler.clear();
   });
 
@@ -624,6 +612,30 @@ describe("skill experience review prompt", () => {
 });
 
 describe("skill experience review preparation", () => {
+  it.each([
+    { agentId: "direct", eligible: true },
+    { agentId: "isolated", eligible: false },
+  ])("rechecks $agentId sandbox policy for global reviews", async ({ agentId, eligible }) => {
+    const params = completedRun({ sessionKey: "global" });
+    params.ctx.agentId = agentId;
+    params.ctx.foregroundPromptContext.agentId = agentId;
+    const result = await prepareSkillExperienceReviewCandidate(
+      { ctx: params.ctx },
+      {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            direct: { sandbox: { mode: "off" } },
+            isolated: { sandbox: { mode: "all" } },
+          },
+        },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
+      },
+    );
+
+    expect(result !== undefined).toBe(eligible);
+  });
+
   it("keeps an eligible foreground candidate", async () => {
     const params = completedRun();
     await expect(

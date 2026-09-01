@@ -26,6 +26,7 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
       ["secrets", "/settings/secrets", "", ""],
@@ -116,7 +117,7 @@ describe("settings search target manifest", () => {
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
     ["communications", ["messages", "tts"]],
-    ["appearance", ["__appearance__", "ui", "wizard"]],
+    ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],
     ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
@@ -144,6 +145,7 @@ describe("settings config section ownership", () => {
   });
 
   it("keeps uncurated sections on Advanced", () => {
+    expect(configPageForSection("wizard")).toBe("advanced");
     expect(configPageForSection("secrets")).toBe("advanced");
     expect(configPageForSection("broadcast")).toBe("advanced");
     expect(configPageForSection("models")).toBe("advanced");

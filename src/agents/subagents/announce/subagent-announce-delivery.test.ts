@@ -4496,7 +4496,36 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     reason: "visible_reply_missing",
   } as const;
 
-  it.each([
+  const externalRequesterSettleRoute = {
+    name: "Discord",
+    sessionKey: "agent:main:discord:dm:U123",
+    origin: { channel: "discord", to: "dm:U123", accountId: "acct-1" },
+    agentParams: { deliver: true, channel: "discord", accountId: "acct-1", to: "dm:U123" },
+  };
+  const requesterSettleRoutes = [
+    externalRequesterSettleRoute,
+    {
+      name: "no origin",
+      sessionKey: "agent:main:requester-settle",
+      origin: undefined,
+      agentParams: { deliver: false, channel: undefined, accountId: undefined, to: undefined },
+    },
+    {
+      name: "WebChat",
+      sessionKey: "agent:main:webchat:dm:requester-settle",
+      origin: { channel: "webchat" },
+      agentParams: { deliver: false, channel: "webchat", accountId: undefined, to: undefined },
+    },
+    {
+      name: "nested requester with inherited Discord origin",
+      sessionKey: "agent:main:subagent:requester-settle",
+      origin: externalRequesterSettleRoute.origin,
+      requesterIsSubagent: true,
+      agentParams: { deliver: false, channel: undefined, accountId: undefined, to: undefined },
+    },
+  ];
+
+  const requesterSettleCases = [
     {
       name: "preserves an ordinary non-yielded direct settle turn",
       response: {},
@@ -4511,6 +4540,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester's visible final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "The consolidated answer." }] } },
       requireVisibleReply: true,
       expected: deliveredRequesterFinal,
@@ -4528,54 +4558,65 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "rejects a yielded turn without a result",
+      routes: requesterSettleRoutes,
       response: {},
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn with no response payloads",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only an error",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "tool failed", isError: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only private reasoning",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "thinking", isReasoning: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects pre-tool commentary instead of a final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "working on it", isCommentary: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a compaction notice instead of a final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "compacting", isCompactionNotice: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a provider-fallback notice instead of a final answer",
-      response: { result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] } },
+      routes: requesterSettleRoutes,
+      response: {
+        result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] },
+      },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a transient status notice instead of a final answer",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "still working", isStatusNotice: true }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects supplemental TTS audio instead of a final answer",
+      routes: requesterSettleRoutes,
       response: {
         result: {
           payloads: [
@@ -4603,18 +4644,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "rejects an explicitly hidden assistant payload",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only the silent reply token",
+      routes: requesterSettleRoutes,
       response: { result: { payloads: [{ text: "NO_REPLY" }] } },
       requireVisibleReply: true,
       expected: missingRequesterFinal,
     },
     {
-      name: "rejects a visible final whose external delivery was suppressed",
+      name: "rejects a visible final whose delivery was suppressed",
+      routes: requesterSettleRoutes,
       response: {
         result: {
           payloads: [{ text: "never delivered" }],
@@ -4774,14 +4818,62 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requireVisibleReply: true,
       expected: deliveredRequesterFinal,
     },
-  ])("$name", async ({ response, requireVisibleReply, expected }) => {
+    {
+      name: "rejects terminal text when an external origin cannot be resolved",
+      routes: [
+        {
+          name: "external channel without destination",
+          sessionKey: "agent:main:requester-settle",
+          origin: { channel: "discord" },
+          agentParams: {
+            deliver: false,
+            channel: "discord",
+            accountId: undefined,
+            to: undefined,
+          },
+        },
+        {
+          name: "destination without channel",
+          sessionKey: "agent:main:requester-settle",
+          origin: { to: "dm:U123" },
+          agentParams: {
+            deliver: false,
+            channel: undefined,
+            accountId: undefined,
+            to: undefined,
+          },
+        },
+        {
+          name: "unknown channel",
+          sessionKey: "agent:main:requester-settle",
+          origin: { channel: "unknown-external", to: "dm:U123" },
+          agentParams: {
+            deliver: false,
+            channel: undefined,
+            accountId: undefined,
+            to: undefined,
+          },
+        },
+      ],
+      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+  ];
+
+  it.each(
+    requesterSettleCases.flatMap((testCase) =>
+      (testCase.routes ?? [externalRequesterSettleRoute]).map((route) => ({
+        testCase,
+        route,
+      })),
+    ),
+  )("$route.name: $testCase.name", async ({ testCase, route }) => {
+    const { response, requireVisibleReply, expected } = testCase;
     const callGateway = createGatewayMock(response);
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
-    const origin = {
-      channel: "discord",
-      to: "dm:U123",
-      accountId: "acct-1",
-    };
+    const sendMessage = createSendMessageMock();
+    const origin = route.origin;
     testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
@@ -4790,17 +4882,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
       getRuntimeConfig: () => ({}) as never,
       queueEmbeddedAgentMessageWithOutcome,
+      sendMessage,
     });
 
     const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: "agent:main:discord:dm:U123",
-      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      requesterSessionKey: route.sessionKey,
+      targetRequesterSessionKey: route.sessionKey,
       triggerMessage: "all spawned subagents settled",
       steerMessage: "all spawned subagents settled",
       requesterOrigin: origin,
       requesterSessionOrigin: origin,
       directOrigin: origin,
-      requesterIsSubagent: false,
+      requesterIsSubagent: "requesterIsSubagent" in route && route.requesterIsSubagent === true,
       expectsCompletionMessage: false,
       requireDirectDelivery: true,
       ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
@@ -4809,14 +4902,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(result).toMatchObject(expected);
+    expect(result.requesterVisibleFinalDelivered).toBeUndefined();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
-    const agentParams = expectGatewayAgentParams(callGateway, {
-      deliver: true,
-      channel: "discord",
-      accountId: "acct-1",
-      to: "dm:U123",
-    });
-    expect(agentParams.sourceReplyDeliveryMode).toBe(requireVisibleReply ? "automatic" : undefined);
+    expect(sendMessage).not.toHaveBeenCalled();
+    const agentParams = expectGatewayAgentParams(callGateway, route.agentParams);
+    expect(agentParams.sourceReplyDeliveryMode).toBe(
+      requireVisibleReply && route.agentParams.deliver ? "automatic" : undefined,
+    );
   });
 
   it.each([

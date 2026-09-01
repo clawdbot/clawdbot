@@ -55,7 +55,7 @@ function finishingChatRunId(
   if (producerRunId) {
     return producerRunId === runId ? runId : null;
   }
-  const projected = getChatSessionProjection(state, state.chatMessages, scope).runs[runId]?.message;
+  const projected = getChatSessionProjection(state, scope).runs[runId]?.message;
   const projectedText = extractText(projected)?.trim();
   return projectedText && projectedText === extractText(message)?.trim() ? runId : null;
 }

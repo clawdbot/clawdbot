@@ -42,11 +42,13 @@ const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const defaults: Record<string, string> = {
   CHECKOUT_REPO: "fixture/checkout",
+  CHECKOUT_TOKEN: "",
   CHECKOUT_REF: candidate,
   CHECKOUT_SHA: candidate,
   CHECKOUT_FALLBACK_REF: candidate,
   CHECKOUT_EVENT_REF: "refs/heads/main",
   WORKFLOW_SHA: harness,
+  CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
   DEFAULT_BRANCH: "main",
@@ -115,6 +117,7 @@ export async function runCiGitStep(options: {
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
+  stepOutputs?: Record<string, Record<string, string>>;
   env?: Record<string, string>;
   fetchResults: FetchResult[];
   cloneResults?: FetchResult[];
@@ -168,13 +171,19 @@ export async function runCiGitStep(options: {
       ".github/workflows/macos-release.yml",
       ".github/workflows/npm-placeholder-bootstrap.yml",
     ].includes(options.workflow.file);
+  const pluginRelease =
+    typeof options.workflow === "object" &&
+    [
+      ".github/workflows/plugin-clawhub-release.yml",
+      ".github/workflows/plugin-npm-release.yml",
+    ].includes(options.workflow.file);
   const publisher = options.action === "publish-generated-pr";
   const externalOwner =
     options.workflow || options.action === "mantis-validate-trusted-ref" || publisher;
   const clock = {
     ...options,
     realDrain:
-      options.realDrain || options.cancelDuringCleanup || options.scenario?.startsWith("cancel-"),
+      options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || options.realDrain,
   };
   const step: (Step & { run: string }) | undefined = options.action
     ? (
@@ -277,6 +286,9 @@ export async function runCiGitStep(options: {
           mkdirSync(path.join(directory, ".git"), { recursive: true });
           writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
+        if (pluginRelease) {
+          writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
+        }
       }
       if (options.startupDelay?.tree) {
         writeFileSync(
@@ -293,7 +305,7 @@ export async function runCiGitStep(options: {
         );
         if (
           action === "git-owner" &&
-          (publisher || maturity || releaseAdmission || options.performance)
+          (publisher || maturity || pluginRelease || releaseAdmission || options.performance)
         ) {
           source = source.replace(
             "def main():",
@@ -383,6 +395,7 @@ def main():`,
           docsAgent,
           docsPublish,
           maturity,
+          pluginRelease,
           releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
@@ -399,6 +412,11 @@ def main():`,
         }),
       );
       let run = renderGitTestClock(step.run, clock);
+      for (const [stepId, outputs] of Object.entries(options.stepOutputs ?? {})) {
+        for (const [name, value] of Object.entries(outputs)) {
+          run = run.replaceAll(`\${{ steps.${stepId}.outputs.${name} }}`, value);
+        }
+      }
       if (externalOwner) {
         const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
           runs: { steps: { run?: string }[] };
@@ -475,7 +493,7 @@ ${run}`;
       console.log(
         `${typeof options.workflow === "object" ? `${options.workflow.file}/${options.workflow.job}/${options.workflow.step}` : `${options.workflow ?? options.action ?? options.job}/${options.step ?? "Checkout"}`}: ${JSON.stringify(report)}`,
       );
-      expect(result, stderr).toEqual({ code: 0, signal: null });
+      expect(result, `${stderr}\n${report.error ?? ""}`).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
       expectCiCheckoutCleanup(report);
       if (docsAgent) {
@@ -531,6 +549,7 @@ ${run}`;
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),
         performance: performanceFixture?.inspect(),
+        pluginSourcePackage: pluginRelease ? readOutput("temp/fixture-source-package.json") : "",
         pushLog: readOutput("runner-temp/generated-pr-push.log"),
         workspace,
         githubOutput: readOutput("github-output"),

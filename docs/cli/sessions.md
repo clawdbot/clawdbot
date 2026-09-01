@@ -186,8 +186,9 @@ openclaw sessions --all-agents tail --follow
 progress lines. Without `--session-key`, it tails running sessions first, then
 the latest stored session. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
-`--follow` keeps watching the selected SQLite-backed session or an explicit
-legacy trajectory file.
+`--follow` keeps watching the selected SQLite-backed sessions. Session keys use
+fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
+so CJK characters, combining accents, and joined emoji keep progress lines aligned.
 
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
@@ -231,7 +232,8 @@ openclaw sessions cleanup --json
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
-  session rows are preserved.
+  session rows are preserved. Eligible empty files count as removed artifacts
+  in both dry-run and applied summaries, even though they free zero bytes.
 - Cleanup reports short-lived Gateway model-run probe cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
@@ -269,6 +271,13 @@ resources are reclaimed with the deleted rows, even if the agent now uses a
 different model. Explicitly disabled or untrusted plugins are not run. If their
 resources may remain, cleanup prints a warning on stderr without changing the
 JSON result. Dry runs do not load harness plugins.
+
+Applied artifact cleanup counts only successful file removals. If a file cannot
+be deleted, it contributes no freed bytes and remains part of disk usage.
+Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
+other eligible files. Canonical SQLite archive pruning stops after a deletion
+error to retain its database recovery copy. If usage stays above the target,
+check filesystem permissions and retry after resolving the deletion failure.
 
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 

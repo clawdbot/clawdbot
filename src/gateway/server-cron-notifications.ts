@@ -328,7 +328,10 @@ function dispatchDetachedCronNotification(params: {
   logger: CronLogger;
   deliver: () => Promise<void>;
 }): void {
-  void runWithGatewayIndependentRootWorkContinuation(params.deliver).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(
+    params.deliver,
+    "cron:notification-delivery",
+  ).catch((err: unknown) => {
     params.logger.warn(
       { jobId: params.jobId, err: formatErrorMessage(err) },
       "cron: detached notification delivery failed",
@@ -340,7 +343,7 @@ function dispatchDetachedCronNotification(params: {
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
   await runWithGatewayIndependentRootWorkContinuation(async () => {
     await sendGatewayCronFailureAlertUnderAdmission(params);
-  });
+  }, "cron:failure-alert");
 }
 
 async function sendGatewayCronFailureAlertUnderAdmission(

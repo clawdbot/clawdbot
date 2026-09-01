@@ -105,7 +105,7 @@ describe("failed Responses loopback SSE", () => {
             messages: [{ role: "user", content: "Report failed usage", timestamp: 0 }],
             tools: [],
           },
-          { apiKey: "test-key", maxRetries: 0 },
+          { apiKey: "test-key" },
         );
         const events = [];
         for await (const event of stream) {

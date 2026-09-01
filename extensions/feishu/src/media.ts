@@ -24,12 +24,13 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import { toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import { sendReplyOrFallbackDirect } from "./send.js";
 
@@ -596,7 +597,7 @@ async function sendImageFeishu(params: {
     "Feishu image send failed",
     { includeNestedErrorLogId: true },
   );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  assertFeishuApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId, "media", "Feishu image send failed");
 }
 

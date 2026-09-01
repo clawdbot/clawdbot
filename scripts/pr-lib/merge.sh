@@ -37,7 +37,7 @@ record_crabbox_landing_parent_audit() {
     echo "merge completed; post-merge audit failed: unable to prepare the landing parent artifact." >&2
     return 1
   fi
-  if ! gh_plain api "repos/{owner}/{repo}/commits/$landed_sha" >"$commit_file"; then
+  if ! gh_plain api "repos/$MERGE_REPO_NAME/commits/$landed_sha" >"$commit_file"; then
     rm -f "$audit_tmp"
     echo "Crabbox landing parent audit failed after merge: unable to read landed commit $landed_sha." >&2
     return 1
@@ -88,6 +88,39 @@ record_crabbox_landing_parent_audit() {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
 # shellcheck source=scripts/pr-lib/merge-outcome.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh"
+
+fetch_clawsweeper_review_comments() {
+  local pr="$1" repo_name="$2" repo_host="$3"
+  if ! CLAWSWEEPER_REVIEW_COMMENTS=$(gh_plain api --hostname "$repo_host" --paginate --slurp \
+    "repos/$repo_name/issues/$pr/comments?per_page=100" \
+    -H 'Cache-Control: max-age=0'); then
+    echo "ClawSweeper review gate failed: unable to read current issue comments." >&2
+    return 1
+  fi
+}
+
+validate_clawsweeper_review_comments() {
+  local pr="$1" head_sha="$2" evidence
+  if ! evidence=$(printf '%s\n' "$CLAWSWEEPER_REVIEW_COMMENTS" |
+    node "$script_parent_dir/pr-lib/clawsweeper-review-gate.mjs" "$pr" "$head_sha"); then
+    unset CLAWSWEEPER_REVIEW_COMMENTS
+    return 1
+  fi
+  unset CLAWSWEEPER_REVIEW_COMMENTS
+  CLAWSWEEPER_REVIEW_EVIDENCE="$evidence"
+  echo "ClawSweeper completed review: comment $(printf '%s\n' "$evidence" | jq -r .commentId), reviewed $(printf '%s\n' "$evidence" | jq -r .reviewedAt)"
+}
+
+require_clawsweeper_review() {
+  local pr="$1" head_sha="$2" repo_name="${3:-}" repo_host="${4:-}" repo_json
+  if [ -z "$repo_name" ] || [ -z "$repo_host" ]; then
+    repo_json=$(gh_plain repo view --json nameWithOwner,url) || return 1
+    repo_name=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and length > 0)') || return 1
+    repo_host=$(printf '%s\n' "$repo_json" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
+  fi
+  fetch_clawsweeper_review_comments "$pr" "$repo_name" "$repo_host" || return 1
+  validate_clawsweeper_review_comments "$pr" "$head_sha"
+}
 
 mainline_drift_requires_sync() {
   local mainline_base="$1"
@@ -193,6 +226,8 @@ merge_verify() {
     exit 1
   fi
 
+  require_clawsweeper_review "$pr" "$pr_head_sha" \
+    "${MERGE_REPO_NAME:-}" "${MERGE_REPO_HOST:-}" || return 1
   mark_pr_operation_side_effects_started || return 1
   if [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
     # The stamp selects the owner, not proof. Revalidate before skipping the
@@ -433,6 +468,28 @@ merge_run() {
       ;;
   esac
 
+  if [ "$merge_method" = "squash" ]; then
+    case "${PREP_REPLACED_HOSTED_ANCESTRY:-}" in
+      true | false) ;;
+      *)
+        echo "Missing or invalid squash ancestry provenance; re-run scripts/pr prepare-run $pr."
+        return 1
+        ;;
+    esac
+    case "${PREP_AUTHOR_ACCESS:-}" in
+      maintainer | external | unknown) ;;
+      *)
+        echo "Missing or invalid PR author access provenance; re-run scripts/pr prepare-run $pr."
+        return 1
+        ;;
+    esac
+    if [ "$PREP_REPLACED_HOSTED_ANCESTRY" = "true" ] && [ "$PREP_AUTHOR_ACCESS" != "maintainer" ]; then
+      echo "Refusing to squash a contributor-owned PR after maintainer ancestry replacement."
+      echo "Create a maintainer-owned replacement PR, link the original, and preserve public noreply co-author credit."
+      return 1
+    fi
+  fi
+
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ] && [ "$merge_method" != "squash" ]; then
     echo "Crabbox infrastructure bypass requires the pinned squash merge method."
     exit 2
@@ -535,7 +592,7 @@ merge_run() {
     fi
   fi
   if [ -n "$recovery_oid" ]; then
-    recovery_actor=$(gh_plain api --hostname "$MERGE_REPO_HOST" user --jq '.login | select(type == "string" and length > 0)') || return 1
+    recovery_actor=$(gh_plain api --hostname "$MERGE_REPO_HOST" graphql -f 'query=query { viewer { login } }' --jq '.data.viewer.login | select(type == "string" and length > 0)') || return 1
     [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
   merge_outcome_stable "$pr" || return 1
@@ -546,12 +603,20 @@ merge_run() {
       merge_outcome_stop "main changed during final admin admission"; return 1;
     }
   fi
+  fetch_clawsweeper_review_comments "$pr" "$MERGE_REPO_NAME" "$MERGE_REPO_HOST" || return 1
+  if ! merge_outcome_stable "$pr"; then
+    unset CLAWSWEEPER_REVIEW_COMMENTS
+    return 1
+  fi
+  validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
-    --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" '
+    --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" \
+    --argjson review "$CLAWSWEEPER_REVIEW_EVIDENCE" '
     {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
-     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
+     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null,
+     clawsweeperReview:$review}
   ') || return 1
   if [ -n "$recovery_oid" ]; then
     # This records a new operator decision, not proof that the prior request failed.
@@ -626,8 +691,8 @@ merge_run() {
   # Only this uninterrupted completion path owns cleanup. The exact-head lease
   # protects advanced/different-head recreations, but cannot detect same-SHA recreation.
   local head_json head_ref head_repo cleanup_complete=true
-  if head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefName,headRepository,headRepositoryOwner) &&
-    head_ref=$(printf '%s\n' "$head_json" | jq -er '.headRefName | select(type == "string" and length > 0)') &&
+  if head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefOid,headRefName,headRepository,headRepositoryOwner) &&
+    head_ref=$(printf '%s\n' "$head_json" | jq -er --arg head "$PREP_HEAD_SHA" 'select(.headRefOid == $head) | .headRefName | select(type == "string" and length > 0)') &&
     head_repo=$(printf '%s\n' "$head_json" | jq -er '.headRepositoryOwner.login + "/" + .headRepository.name | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') &&
     git check-ref-format "refs/heads/$head_ref"; then
     local cleanup_error ref_status=0

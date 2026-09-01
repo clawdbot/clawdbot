@@ -61,7 +61,7 @@ export class LineWebhookTerminalDeliveryError extends Error {
 }
 
 type LineWebhookSpool = {
-  accept: (body: webhook.CallbackRequest) => Promise<void>;
+  accept: (body: webhook.CallbackRequest) => Promise<"durable" | "ignored">;
   start: () => void;
   stop: () => Promise<void>;
 };
@@ -249,14 +249,16 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
 
   return {
     accept: async (body) => {
-      const events = body.events ?? [];
+      // Standby deliveries belong to the channel holding LINE chat control.
+      const events = (body.events ?? []).filter((event) => event.mode !== "standby");
       if (events.length === 0) {
-        return;
+        return "ignored";
       }
-      await monitor.admitBatch(
+      const admissions = await monitor.admitBatch(
         events.map((event) => ({ event, destination: body.destination ?? "" })),
         { receivedAt: Date.now() },
       );
+      return admissions.some((admission) => admission.kind === "durable") ? "durable" : "ignored";
     },
     start: () => {
       if (!stopTask) {

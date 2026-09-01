@@ -6,7 +6,7 @@ read_when:
   - You need the Cerebras API key env var or CLI auth choice
 ---
 
-[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin ships a static three-model catalog (no live discovery).
+[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The plugin discovers native model metadata and pricing, with a bundled catalog for offline fallback.
 
 | Property        | Value                                                     |
 | --------------- | --------------------------------------------------------- |
@@ -57,7 +57,7 @@ export CEREBRAS_API_KEY=csk-...
     openclaw models list --provider cerebras
     ```
 
-    Lists all three static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    Lists the configured Cerebras models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -71,21 +71,54 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --cerebras-api-key "$CEREBRAS_API_KEY"
 ```
 
+## Discovery and pricing
+
+When Cerebras auth is configured and the inference base URL is the canonical
+`https://api.cerebras.ai/v1`, OpenClaw reads
+[`GET /public/v1/models`](https://inference-docs.cerebras.ai/api-reference/models/public-models).
+This request uses public headers only: inference API keys and discovery
+credentials are never sent to the metadata endpoint. A custom base URL skips
+this public discovery rather than mixing a proxy's catalog with Cerebras metadata.
+Without a Cerebras credential, the runtime provider stays inactive. Public
+metadata listing does not establish account entitlement.
+
+Live rows supply the native context and completion limits, reasoning and vision
+capabilities, and prompt/completion prices. Cerebras returns those prices as USD
+per-token strings; OpenClaw converts them to USD per million tokens. The public
+feed does not provide cache tariffs. Zero cache fields in OpenClaw's runtime
+estimate are not a claim about enterprise caching or billing.
+
+Successful catalogs are cached for 60 seconds. If discovery fails, returns an
+empty catalog, or has no usable model rows, OpenClaw uses the bundled offline
+seed. In the default `models.mode: "merge"`, fresh onboarding does not copy
+generated model rows or prices into your config, allowing prices to refresh.
+Explicitly authored model rows and costs remain intact. In
+`models.mode: "replace"`, discovery is disabled and onboarding keeps the offline
+seed as explicit config instead.
+
 ## Built-in catalog
 
-All three models have a 131,072-token context window and a 40,960-token max output.
+The three offline fallback models have a 131,072-token context window and a
+40,960-token max output. Prices for models still present in the native
+[public feed](https://api.cerebras.ai/public/v1/models) were refreshed from its
+August 31, 2026 response; absent legacy references retain their seed snapshots.
 
-| Model ref               | Name         | Reasoning | Notes                                     |
-| ----------------------- | ------------ | --------- | ----------------------------------------- |
-| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Scheduled for deprecation August 17, 2026 |
-| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model                |
-| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Default; preview; text-and-image input    |
+| Model ref               | Name         | Reasoning | Notes                                                     |
+| ----------------------- | ------------ | --------- | --------------------------------------------------------- |
+| `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Deprecated August 17, 2026; retained for explicit configs |
+| `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model                                |
+| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Default; preview; text-and-image input                    |
+
+Cerebras's [deprecation notice](https://inference-docs.cerebras.ai/support/deprecation)
+marks `zai-glm-4.7` deprecated without naming a replacement. OpenClaw keeps the
+shipped reference rather than deleting it or rewriting existing selections;
+retention does not guarantee upstream availability.
 
 Fresh onboarding follows Cerebras's current [Gemma 4 recommendation](https://www.cerebras.ai/blog/gemma-4-on-cerebras-the-fastest-inference-is-now-multimodal). Cerebras describes Gemma 4 31B as its reference medium-size model for equal-or-higher intelligence than GPT OSS, with multimodal agentic support. It is a public-preview model and may change or be discontinued on shorter notice than the production GPT OSS endpoint; existing OpenClaw configurations keep their selected model.
 
 ## Manual config
 
-Most setups only need the API key. Use explicit `models.providers.cerebras` config to override model metadata or run in `mode: "merge"` against the static catalog:
+Most setups only need the API key. Use explicit `models.providers.cerebras` config to override model metadata in `mode: "merge"`; leave `models` empty to use discovered rows without pinning generated prices:
 
 ```json5
 {
@@ -102,11 +135,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
         baseUrl: "https://api.cerebras.ai/v1",
         apiKey: "${CEREBRAS_API_KEY}",
         api: "openai-completions",
-        models: [
-          { id: "zai-glm-4.7", name: "Z.ai GLM 4.7" },
-          { id: "gpt-oss-120b", name: "GPT OSS 120B" },
-          { id: "gemma-4-31b", name: "Gemma 4 31B" },
-        ],
+        models: [],
       },
     },
   },

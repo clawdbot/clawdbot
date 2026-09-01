@@ -325,6 +325,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "share-build"),
     sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
@@ -397,7 +398,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: strin
   return {
     name: "control-ui-service-worker-build-id",
     apply: "build",
-    closeBundle() {
+    writeBundle() {
       const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(publicSwPath, "utf8");
@@ -417,15 +418,36 @@ function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
     name: "control-ui-precompressed-assets",
     apply: "build",
     writeBundle(_options, bundle) {
+      const logger = this.environment.logger;
+      let completed = 0;
+      let sidecars = 0;
+      let lastProgressAt = performance.now();
+      logger.info("Control UI precompression: starting");
       for (const output of Object.values(bundle)) {
         // Vite's post-build import analysis rewrites lazy preload markers in a
         // later generateBundle hook. Read from disk here so sidecars always
         // encode the exact final bytes that the identity response serves.
         const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
+        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
+        if (variants.length === 0) {
+          continue;
+        }
+        for (const variant of variants) {
           fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
         }
+        // Only completed writes renew activity; a blocked compression/write must
+        // remain silent so the caller's existing watchdog can still terminate it.
+        completed++;
+        sidecars += variants.length;
+        const now = performance.now();
+        if (now - lastProgressAt >= 10_000) {
+          logger.info(
+            `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
+          );
+          lastProgressAt = now;
+        }
       }
+      logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
     },
   };
 }
@@ -465,7 +487,9 @@ function controlUiAssetManifestPlugin(buildOutDir: string): Plugin {
   return {
     name: "control-ui-asset-manifest",
     apply: "build",
-    closeBundle() {
+    // Rolldown runs writeBundle hooks sequentially; this plugin follows precompression.
+    // closeBundle can run again without an error after a failed build, masking its diagnostic.
+    writeBundle() {
       const assets = collectControlUiAssetManifestEntries(buildOutDir);
       const manifest = {
         version: CONTROL_UI_ASSET_MANIFEST_VERSION,

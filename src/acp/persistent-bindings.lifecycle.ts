@@ -67,6 +67,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
   try {
     const resolution = acpManager.resolveSession({
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
     });
     if (
@@ -85,6 +86,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
         if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
           currentOptions = await acpManager.setSessionConfigOption({
             cfg: params.cfg,
+            agentId: params.spec.agentId,
             sessionKey,
             key,
             value,
@@ -100,6 +102,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
     if (resolution.kind !== "none") {
       await acpManager.closeSession({
         cfg: params.cfg,
+        agentId: params.spec.agentId,
         sessionKey,
         reason: "config-binding-reconfigure",
         clearMeta: false,
@@ -110,6 +113,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
 
     await acpManager.initializeSession({
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,

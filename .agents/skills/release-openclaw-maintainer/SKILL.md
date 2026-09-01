@@ -152,9 +152,10 @@ a workflow fix that the existing parent run cannot consume.
   extra fixes during an active release unless the operator explicitly asks for
   that audit. Operators may authorize up to 4 autonomous beta attempts; after
   4 failed beta attempts, stop and report.
-- As soon as the Code SHA exists, dispatch `OpenClaw Performance`
-  with `target_ref=<code-sha>` in parallel with the other release work. Do
-  not wait for full release validation to start the performance signal.
+- An early standalone `OpenClaw Performance` run with `target_ref=<code-sha>`
+  is optional beta confidence and may overlap other release work. Do not add
+  a duplicate mandatory prepublish wait. Stable/full Full Release Validation
+  retains its required blocking performance child.
 - Before publish/closeout, compare available product performance metrics with
   earlier releases: Kova agent-turn/resource metrics, gateway startup
   ready/listen/RSS/CPU metrics, and CLI startup metrics from release evidence
@@ -774,13 +775,24 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`
 - Release validation phases:
   - `beta-publish`: `release_profile=beta`, `run_release_soak=false`. This is
-    the bounded prepublish gate; it excludes broad live/E2E, QA-live, and
-    Parallels confidence work.
+    the bounded prepublish gate. An `all` run for an actual beta package on its
+    matching canonical release branch or beta tag records
+    `coveragePolicy=npm-beta-v1`: native app CI, performance, and
+    published-package Telegram move to confidence. Linux/macOS/Windows Node,
+    Control UI, plugin, package, install/update, cross-OS, QA parity,
+    runtime-pair/restart, and tool-coverage gates remain. Beta `all` without
+    soak also defers Package Acceptance Telegram, broad live/E2E, QA-live, and
+    Parallels. Package Telegram deferral also applies to beta-profile `main`
+    or alpha checks; those targets do not qualify for `npm-beta-v1`.
   - `postpublish-confidence`: run against the exact published beta package with
     `run_release_soak=true` or explicit focused groups. This is the default home
-    for QA-live, broad Docker/live E2E, mobile, and Parallels.
+    for native apps, performance, Telegram, QA-live, broad Docker/live E2E, and
+    Parallels. Deferred checks are not run, never passed. Focused groups and
+    soak retain existing coverage; every selected child needs terminal evidence.
   - `stable-publish`: `release_profile=stable`; require the stable publish
-    roster and accepted confidence evidence.
+    roster and accepted confidence evidence. Stable/full retain soak and
+    blocking performance. Native artifact publication retains its own build,
+    signing, notarization, and promotion gates.
 - Post-published beta verification roster:
   - `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <beta-version>`
   - install/update smoke against the published beta channel
@@ -1020,18 +1032,21 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 6. Make every repo version location match the beta tag. Apply only explicitly
    selected backports or release fixes. Make a pre-publish main change only
    under the active release scope lock. Freeze the result as the Code SHA.
-7. Immediately dispatch Actions > `OpenClaw Performance` from the pinned
-   trusted workflow source with `target_ref=<code-sha>`, `profile=release`,
-   `repeat=3`, deep profiling off, live OpenAI off, and `fail_on_regression`
-   matching Full Release Validation's profile gate: `true` for stable,
-   `false` for beta. Let it run in parallel with Code SHA validation.
+7. If early beta performance confidence is useful, dispatch Actions >
+   `OpenClaw Performance` from the pinned trusted workflow source with
+   `target_ref=<code-sha>`, `profile=release`, `repeat=3`, deep profiling off,
+   live OpenAI off, and `fail_on_regression=false`. This optional run may
+   overlap Code SHA validation; it adds no mandatory beta prepublish wait.
+   Stable/full validation retains its blocking performance child.
 8. Run the deterministic source preflight, then Full Release Validation against
    the exact Code SHA with
    `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`.
    Reuse the recorded full Tooling SHA for every later release validation; do
    not refresh it from moving `main`.
    For beta-publish, keep `release_profile=beta` and
-   `run_release_soak=false`. Record the Validation SHA + Tooling SHA tuple
+   `run_release_soak=false`. Confirm `coveragePolicy=npm-beta-v1` for the
+   matching canonical beta target; policy absence retains historical full
+   behavior. Record the Validation SHA + Tooling SHA tuple
    (Validation SHA is the Code SHA in this phase) and use one transition
    watcher. Product failures return to step 6 with a new Code SHA;
    tooling/harness/provenance, infrastructure/credential, and wrapper failures
@@ -1067,6 +1082,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     option when it reported none. This consumes the existing reused full
     evidence and exact Release SHA preflight instead of dispatching either
     again. It completes package/install proof and prints the publish command.
+    Admitted `npm-beta-v1` evidence records the helper's Telegram package check
+    as `deferred-postpublish`; other evidence keeps the existing check. The
+    focused `npm-telegram` and postpublish `release:beta-smoke` paths remain.
     Beta and alpha candidates defer Parallels to postpublish
     `pnpm release:beta-smoke` by default; stable/full candidates run it
     prepublish. Use `--run-parallels` or `--skip-parallels` only for an explicit

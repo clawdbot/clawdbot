@@ -34,6 +34,14 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+Agent schema 19 records collected input consumption in the nullable
+`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
+first-use ensure add it when needed; the schema version stays 19. The supported
+beta upgrade runs Doctor from the upcoming release. Intermediate builds that
+already validate the optional pending-input table may reject the added column
+despite sharing version 19. Consumed source receipts remain until their session
+window is deleted, so rewriting a transcript cannot make an old input runnable again.
+
 The placement-move table uses this same-version rule for its nullable bare
 `abandon_source INTEGER` column. The feature lazily ensures the column on first
 move use. `NULL` means ordinary reconcile-first movement; `1` records the
@@ -263,6 +271,13 @@ Act on the install root, not the version. One release version string spans many 
 When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+
+Config reads also save health fingerprints to this database. If that write fails,
+`Config health-state write failed` reports the first failure for that database
+in the current process. Repeated identical failures are suppressed while writes
+continue to be attempted. A different error, or a failure after a successful
+health-state write, is reported again. Suppressing duplicates does not resolve
+the underlying database error.
 
 ### A database is quarantined after integrity verification failed
 

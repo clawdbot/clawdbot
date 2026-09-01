@@ -14,6 +14,7 @@ type PermissionSelection = SessionPermissionMode | null;
 
 export type ChatPermissionPickerProps = {
   canSelectFull: boolean;
+  applying?: boolean;
   disabled?: boolean;
   disabledReason?: string;
   mode?: SessionPermissionMode;
@@ -90,8 +91,13 @@ function permissionSelection(value: string | undefined): PermissionSelection | u
 }
 
 export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
+  const disabled = params.disabled || params.applying;
+  const fullAccess = (params.mode ?? params.defaultMode) === "full" && !params.applying;
+  const label = params.applying
+    ? t("chat.permissionControls.applying")
+    : modeLabel(params.mode, params.defaultMode);
   const selectMode = (mode: PermissionSelection) => {
-    if (params.disabled || (mode === "full" && !params.canSelectFull)) {
+    if (disabled || (mode === "full" && !params.canSelectFull)) {
       return;
     }
     if (mode !== (params.mode ?? null)) {
@@ -114,28 +120,29 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
       <button
         slot="trigger"
         type="button"
-        class="chat-controls__inline-select-trigger chat-controls__permission-trigger ${params.disabled
+        class="chat-controls__inline-select-trigger chat-controls__permission-trigger ${disabled
           ? "chat-controls__inline-select-trigger--disabled"
-          : ""} ${params.mode ? "" : "chat-controls__permission-trigger--default"} ${params.mode ===
-        "full"
+          : ""} ${params.mode ? "" : "chat-controls__permission-trigger--default"} ${fullAccess
           ? "chat-controls__permission-trigger--full"
           : ""}"
         data-chat-permission-select="true"
         data-chat-select-value=${params.mode ?? ""}
-        aria-label=${`${t("chat.permissionControls.label")}: ${modeLabel(params.mode, params.defaultMode)}`}
-        aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason ?? t("chat.permissionControls.help")}
-        ?disabled=${params.disabled}
+        aria-label=${`${t("chat.permissionControls.label")}: ${label}`}
+        aria-disabled=${disabled ? "true" : "false"}
+        aria-busy=${params.applying ? "true" : "false"}
+        title=${params.disabledReason ??
+        (params.applying ? label : t("chat.permissionControls.help"))}
+        ?disabled=${disabled}
       >
         <span class="chat-controls__permission-icon" aria-hidden="true"
-          >${modeIcon(params.mode ?? null)}</span
+          >${params.applying ? icons.loader : modeIcon(params.mode ?? null)}</span
         >
         <span
-          class="chat-controls__inline-select-label ${params.mode === "full"
+          class="chat-controls__inline-select-label ${fullAccess
             ? "chat-controls__permission-label--full"
             : ""}"
         >
-          ${modeLabel(params.mode, params.defaultMode)}
+          ${label}
         </span>
       </button>
       <div class="chat-controls__popover-title chat-controls__permission-heading">
@@ -166,7 +173,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
               ? `${modeLabel(mode, params.defaultMode)}. ${t("chat.permissionControls.fullRequiresAdmin")}`
               : modeLabel(mode, params.defaultMode)}
             title=${locked ? t("chat.permissionControls.fullRequiresAdmin") : nothing}
-            ?disabled=${params.disabled || locked}
+            ?disabled=${disabled || locked}
           >
             <span slot="icon" class="chat-controls__permission-option-icon" aria-hidden="true"
               >${modeIcon(mode)}</span

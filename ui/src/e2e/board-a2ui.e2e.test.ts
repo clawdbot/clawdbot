@@ -9,6 +9,7 @@ import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -266,8 +267,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       expect(scrollbar.ratio).toBeLessThan(0.2);
       if (scrollbarProofLabel) {
         const screenshotPath = path.resolve(
-          process.cwd(),
-          ".artifacts/control-ui-e2e/widget-scrollbar",
+          createControlUiE2eArtifactDir("widget-scrollbar"),
           `${scrollbarProofLabel}-${colorScheme}.png`,
         );
         await mkdir(path.dirname(screenshotPath), { recursive: true });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  claimAgentRunApprovalAuthority,
   claimAgentRunDelegatedAuthority,
   releaseAgentRunContext,
   releaseAgentRunDelegatedAuthority,
@@ -42,7 +43,7 @@ function createAuthorityHarness(
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
     channelManager: {
-      startChannel: async () => {},
+      startChannel: async () => new Map(),
       stopChannel: async () => {},
       isManuallyStopped: () => false,
       resolveRuntimeAccountId: (_channel, accountId) => accountId,
@@ -75,6 +76,38 @@ describe("gateway auxiliary authority lifecycle", () => {
     expect(second.execApprovalManager.runtimeEpoch).toBe(second.pluginApprovalManager.runtimeEpoch);
     expect(first.execApprovalManager.runtimeEpoch).not.toBe(
       second.execApprovalManager.runtimeEpoch,
+    );
+  });
+
+  it("cancels generation approvals without closing whole-run capabilities", async () => {
+    const onAgentRunAuthorityClosed = vi.fn();
+    const gatewayAux = createAuthorityHarness({
+      onAgentRunAuthorityClosed,
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+    });
+    const operationalRunInstance = Object.freeze({
+      instanceId: "egress-proxy-instance",
+      runId: "egress-proxy-run",
+    });
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const generation = new AbortController();
+    const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
+    const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
+    record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
+    const pending = gatewayAux.execApprovalManager.register(record, 2_000);
+
+    generation.abort();
+
+    await expect(pending).resolves.toBeNull();
+    expect(gatewayAux.execApprovalManager.getSnapshot(record.id)?.status).toBe("cancelled");
+    expect(onAgentRunAuthorityClosed).not.toHaveBeenCalled();
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+
+    releaseAgentRunDelegatedAuthority(authority);
+
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
+      expect.objectContaining({ operationalRunInstance }),
     );
   });
 

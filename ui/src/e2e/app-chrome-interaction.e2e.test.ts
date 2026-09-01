@@ -1,8 +1,8 @@
 // Control UI tests cover the canonical scrollbar profile and native-style text selection.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
@@ -17,12 +17,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "app-chrome-interaction",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("app-chrome-interaction");
+  }
+});
 
 async function dragAcross(page: Page, locator: Locator): Promise<string> {
   await locator.scrollIntoViewIfNeeded();
@@ -52,7 +52,6 @@ async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(uiProofArtifactDir, fileName),
@@ -61,9 +60,6 @@ async function captureUiProof(page: Page, fileName: string) {
 
 suite.define(() => {
   it("keeps canonical scrollbars without horizontal model-picker overflow and preserves selection", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     await suite.withPage(
       {
         locale: "en-US",
@@ -78,7 +74,12 @@ suite.define(() => {
           historyMessages: [
             {
               role: "assistant",
-              content: [{ type: "text", text: "Selectable transcript content" }],
+              content: [
+                {
+                  type: "text",
+                  text: "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
+                },
+              ],
             },
           ],
           models: [
@@ -135,6 +136,10 @@ suite.define(() => {
         });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
+        const fileLink = page.getByRole("button", { name: "example.ts", exact: true });
+        expect(await fileLink.evaluate((element) => getComputedStyle(element).userSelect)).toBe(
+          "text",
+        );
         const thread = page.locator(".chat-thread");
         expect(await readFocusOutline(thread)).toMatchObject({
           focusVisible: false,
@@ -193,7 +198,7 @@ suite.define(() => {
         });
         expect(settingsStyles).toEqual({
           contentScrollbar: "12px",
-          contentSelection: "none",
+          contentSelection: "auto",
           inputSelection: "text",
           sidebarScrollbar: "12px",
           sidebarSelection: "none",
@@ -201,6 +206,11 @@ suite.define(() => {
 
         await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
         expect(await dragAcross(page, settingsTitle)).toBe("");
+        const sectionTitle = page.locator(".settings-section__heading").first();
+        expect(await dragAcross(page, sectionTitle)).not.toBe("");
+        const toggleRow = page.locator(".settings-row--toggle").first();
+        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
+        expect(await dragAcross(page, toggleRow.locator(".settings-row__title"))).toBe("");
         await settingsSearch.selectText();
         expect(
           await settingsSearch.evaluate(
@@ -244,9 +254,6 @@ suite.define(() => {
   });
 
   it("resolves the scrollbar thumb from theme tokens and captures dark/light proof", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
-    }
     const thumbColorByScheme: Record<"dark" | "light", string> = { dark: "", light: "" };
     for (const colorScheme of ["dark", "light"] as const) {
       await suite.withPage(

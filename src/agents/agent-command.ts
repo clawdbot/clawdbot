@@ -678,7 +678,6 @@ async function agentCommandFromIngressInternal(
   return generation && runtimeContext
     ? await withPluginRuntimeGenerationScope(
         {
-          config: runtimeContext.config,
           metadataSnapshot: generation.pluginMetadataSnapshot,
           pluginRegistry: generation.pluginRegistry,
         },

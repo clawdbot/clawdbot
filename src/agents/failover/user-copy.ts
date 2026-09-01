@@ -38,6 +38,13 @@ export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Authentication failed (provider returned HTTP 401). " +
   "Your provider token may have expired — try the request again in a moment. " +
   "If the failure persists, re-authenticate this provider.";
+const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
+  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
+  code === "selected_auth_profile_unavailable"
+    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+    : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
@@ -259,21 +266,8 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return Boolean(
     status &&
     status.code >= 400 &&
-    (classifyFailoverReason(raw) !== null ||
+    (classifyFailoverReason(raw, { providerPlugin: null }) !== null ||
       classifyProviderRequestFacets({ status: status.code, message: raw }) !== null),
-  );
-}
-
-function shouldRewriteContextOverflowText(raw: string): boolean {
-  if (classifyFailoverReason(raw) !== "context_overflow") {
-    return false;
-  }
-  const status = extractLeadingHttpStatus(raw);
-  return (
-    isRawApiErrorPayload(raw) ||
-    Boolean(status && status.code >= 400) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -318,10 +312,18 @@ export function renderSanitizedUserFacingText(
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
   }
-  if (shouldRewriteContextOverflowText(trimmed)) {
+  const reason = classifyFailoverReason(trimmed, { providerPlugin: null });
+  const status = extractLeadingHttpStatus(trimmed);
+  const rawPayload = isRawApiErrorPayload(trimmed);
+  if (
+    reason === "context_overflow" &&
+    (rawPayload ||
+      (status && status.code >= 400) ||
+      ERROR_PREFIX_RE.test(trimmed) ||
+      CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
+  ) {
     return renderFailoverBaseCopy("context_overflow") ?? trimmed;
   }
-  const reason = classifyFailoverReason(trimmed);
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
   }
@@ -331,8 +333,7 @@ export function renderSanitizedUserFacingText(
   if (isInvalidStreamingEventOrderError(trimmed)) {
     return "LLM request failed: provider returned an invalid streaming response. Please try again.";
   }
-  const status = extractLeadingHttpStatus(trimmed);
-  if (isRawApiErrorPayload(trimmed) || (status && status.code >= 400 && reason)) {
+  if (rawPayload || (status && status.code >= 400 && reason)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
   if (isStreamingJsonParseError(trimmed)) {
@@ -424,7 +425,6 @@ export function resolveProviderRequestFailureCopy(params: {
     code,
     userMessage,
     technicalMessage: params.technicalMessage,
-    ...(params.facet === "provider-internal-503" ? { allowTransientHttpRetry: true as const } : {}),
   };
 }
 

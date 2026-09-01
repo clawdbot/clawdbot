@@ -32,8 +32,9 @@ export function stripModelSpecialTokens(text: string): string {
       out += matched;
     } else if (
       // Retained text handles adjacent tokens; two code units preserve astral letters.
+      // Keep alternation: Node 26.5's V8 misses astral letters in `$`-anchored `u` classes.
       // A following combining mark stays attached, and punctuation needs no separator.
-      /[\p{L}\p{M}\p{N}]$/u.test(out.slice(-2)) &&
+      /(?:\p{L}|\p{M}|\p{N})$/u.test(out.slice(-2)) &&
       /^[\p{L}\p{N}]/u.test(text.slice(end, end + 2))
     ) {
       out += " ";

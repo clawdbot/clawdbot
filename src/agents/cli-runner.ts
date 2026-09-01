@@ -270,16 +270,12 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
-  // Prior turn maintenance can rewrite transcript entries after finalization.
-  // Reads for the next same-session inference must observe that rewrite.
-  if (!turnSideEffectsDisabled) {
+  // Durable reads must observe prior deferred rewrites. Caller-owned memory is
+  // independent of durable work sharing its correlation key.
+  if (!turnSideEffectsDisabled && !params.sessionManager) {
     await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   }
-  const historyMessages = needsHookHistory
-    ? await loadCliSessionHistoryMessages({
-        sessionTarget: params.sessionTarget,
-      })
-    : [];
+  const historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
   const promptForHooks = context.promptForHooks ?? params.prompt;
   const llmInputEvent = {
     runId: params.runId,
@@ -515,6 +511,7 @@ export async function runPreparedCliAgent(
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
+      sessionManager: params.sessionManager,
       config: context.contextEngineConfig,
       contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
         backendId: context.backendResolved.id,
@@ -524,9 +521,7 @@ export async function runPreparedCliAgent(
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine
-      ? await loadCliSessionContextEngineMessages({
-          sessionTarget: params.sessionTarget,
-        })
+      ? await loadCliSessionContextEngineMessages(params)
       : [];
     const finishCliAttempt = async (
       result: Awaited<ReturnType<typeof executeCliAttempt>>,

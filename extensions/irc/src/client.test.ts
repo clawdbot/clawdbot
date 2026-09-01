@@ -1,7 +1,7 @@
 // Irc tests cover client plugin behavior.
-import net from "node:net";
 import { describe, expect, it } from "vitest";
 import { connectIrcClient } from "./client.js";
+import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 
 type LoopbackIrcServer = {
   port: number;
@@ -21,62 +21,24 @@ async function startLoopbackIrcServer(options?: {
   rejectInitialNick?: boolean;
 }): Promise<LoopbackIrcServer> {
   const lines: string[] = [];
-  const sockets = new Set<net.Socket>();
-  const server = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.setEncoding("utf8");
-    let buffer = "";
+  const server = await startIrcTestServer((socket) => {
     let awaitingFallbackNick = false;
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).replace(/\r$/, "");
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        lines.push(line);
-        if (line.startsWith("USER ")) {
-          if (options?.rejectInitialNick) {
-            awaitingFallbackNick = true;
-            socket.write(":server 433 * bot :Nickname in use\r\n");
-          } else {
-            socket.write(":server 001 bot :welcome\r\n");
-          }
-        } else if (awaitingFallbackNick && line.startsWith("NICK ")) {
-          awaitingFallbackNick = false;
-          socket.write(`:server 001 ${line.slice("NICK ".length)} :welcome\r\n`);
+    onIrcTestLine(socket, (line) => {
+      lines.push(line);
+      if (line.startsWith("USER ")) {
+        if (options?.rejectInitialNick) {
+          awaitingFallbackNick = true;
+          socket.write(":server 433 * bot :Nickname in use\r\n");
+        } else {
+          socket.write(":server 001 bot :welcome\r\n");
         }
+      } else if (awaitingFallbackNick && line.startsWith("NICK ")) {
+        awaitingFallbackNick = false;
+        socket.write(`:server 001 ${line.slice("NICK ".length)} :welcome\r\n`);
       }
     });
-    socket.on("close", () => {
-      sockets.delete(socket);
-    });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback IRC server to bind a TCP port");
-  }
-  return {
-    port: address.port,
-    lines,
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
-  };
+  return { ...server, lines };
 }
 
 async function connectAndCollectRegistration(params: {
@@ -85,44 +47,46 @@ async function connectAndCollectRegistration(params: {
 }): Promise<{ lines: string[]; errors: Error[] }> {
   const server = await startLoopbackIrcServer();
   const errors: Error[] = [];
-  const client = await connectIrcClient({
-    host: "127.0.0.1",
-    port: server.port,
-    tls: false,
-    nick: "bot",
-    username: "bot",
-    realname: "OpenClaw Bot",
-    nickserv: params.nickserv,
-    onError: (error) => errors.push(error),
-  });
+  let client: Awaited<ReturnType<typeof connectIrcClient>> | undefined;
   try {
+    client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+      nickserv: params.nickserv,
+      onError: (error) => errors.push(error),
+    });
     await waitForIrcCondition(
       () => params.done(server.lines, errors),
       "expected IRC registration outcome",
     );
     return { lines: [...server.lines], errors };
   } finally {
-    client.close();
+    client?.close();
     await server.close();
   }
 }
 
 async function connectAfterNickCollision(nick: string): Promise<string> {
   const server = await startLoopbackIrcServer({ rejectInitialNick: true });
-  const client = await connectIrcClient({
-    host: "127.0.0.1",
-    port: server.port,
-    tls: false,
-    nick,
-    username: "bot",
-    realname: "OpenClaw Bot",
-  });
+  let client: Awaited<ReturnType<typeof connectIrcClient>> | undefined;
   try {
+    client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick,
+      username: "bot",
+      realname: "OpenClaw Bot",
+    });
     const nickLines = server.lines.filter((line) => line.startsWith("NICK "));
     expect(nickLines).toHaveLength(2);
     return nickLines[1]!.slice("NICK ".length);
   } finally {
-    client.close();
+    client?.close();
     await server.close();
   }
 }
@@ -144,48 +108,22 @@ async function waitForIrcCondition(
 }
 
 async function startHangingIrcServer(): Promise<HangingIrcServer> {
-  const sockets = new Set<net.Socket>();
   let acceptedCount = 0;
   let closedCount = 0;
-  const server = net.createServer((socket) => {
+  const server = await startIrcTestServer((socket) => {
     acceptedCount += 1;
-    sockets.add(socket);
-    socket.setEncoding("utf8");
     socket.on("data", () => {});
     socket.on("close", () => {
-      sockets.delete(socket);
       closedCount += 1;
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback IRC server to bind a TCP port");
-  }
   return {
-    port: address.port,
+    ...server,
     get acceptedCount() {
       return acceptedCount;
     },
     get closedCount() {
       return closedCount;
-    },
-    openSocketCount: () => sockets.size,
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
     },
   };
 }

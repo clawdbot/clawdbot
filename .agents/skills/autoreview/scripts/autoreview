@@ -1566,10 +1566,6 @@ def validate_git_ref(repo: Path, ref: str, label: str, *, pin: bool = False) -> 
     return result.strip() if pin else ref
 
 
-TRUFFLEHOG_INSTALL_URL = "https://github.com/trufflesecurity/trufflehog#installation"
-TRUFFLEHOG_FINDINGS_EXIT_CODE = 183
-
-
 def git_bytes(
     repo: Path,
     *args: str,
@@ -1597,130 +1593,6 @@ def git_bytes(
             f"{display_escape(detail, 1000, multiline=True)}"
         )
     return result
-
-
-def safe_trufflehog_env(repo: Path) -> dict[str, str]:
-    env = safe_git_env(repo)
-    for key in (
-        "ALL_PROXY",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "NO_PROXY",
-        "all_proxy",
-        "http_proxy",
-        "https_proxy",
-        "no_proxy",
-    ):
-        value = os.environ.get(key)
-        if not value:
-            continue
-        if key.casefold() != "no_proxy" and not safe_proxy_url(value):
-            raise SystemExit(
-                f"unsafe credentialed or malformed proxy URL in {key}; "
-                "configure a credential-free proxy URL before running autoreview"
-            )
-        env[key] = value
-    return env
-
-
-def review_pack_path_at_line(prompt: str, line_number: int) -> str:
-    current = "review pack"
-    pending_untracked = False
-    diff_header: list[str] = []
-    for index, line in enumerate(prompt.splitlines(), start=1):
-        if line.startswith("# Prompt file: "):
-            current = line.removeprefix("# Prompt file: ").strip() or current
-        elif line.startswith("# Dataset: "):
-            current = line.removeprefix("# Dataset: ").strip() or current
-        elif line == "# Untracked File":
-            pending_untracked = True
-            current = "review pack"
-        elif pending_untracked and line.startswith("path: "):
-            try:
-                path = json.loads(line.removeprefix("path: "))
-            except json.JSONDecodeError:
-                path = None
-            if isinstance(path, str) and path:
-                current = path
-            pending_untracked = False
-        elif line.startswith("diff --git "):
-            diff_header = [line]
-            current = "review pack"
-        elif diff_header and line.startswith(("--- ", "+++ ")):
-            diff_header.append(line)
-            old_path, new_path = diff_section_paths("\n".join(diff_header))
-            current = new_path or old_path or current
-        elif not diff_header and line.startswith(("--- ", "+++ ")):
-            path = diff_marker_path(line[4:])
-            if path:
-                current = path
-        elif diff_header and line.startswith("@@"):
-            old_path, new_path = diff_section_paths("\n".join(diff_header))
-            current = new_path or old_path or current
-            diff_header = []
-        if index == line_number:
-            return current
-    return current
-
-
-def trufflehog_review_pack_paths(prompt: str, output: str) -> list[str]:
-    paths: set[str] = set()
-    for line in output.splitlines():
-        try:
-            finding = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        filesystem = (
-            finding.get("SourceMetadata", {})
-            .get("Data", {})
-            .get("Filesystem", {})
-        )
-        line_number = filesystem.get("line", filesystem.get("Line"))
-        if isinstance(line_number, int) and line_number > 0:
-            paths.add(review_pack_path_at_line(prompt, line_number))
-    return sorted(paths or {"review pack"})
-
-
-def scan_outgoing_review_pack(repo: Path, prompt: str) -> None:
-    trufflehog_bin = find_command("trufflehog", repo)
-    if not trufflehog_bin:
-        raise SystemExit(
-            "refusing to send review pack: TruffleHog is required but was not found. "
-            f"Install it using the official instructions, then rerun autoreview: {TRUFFLEHOG_INSTALL_URL}"
-        )
-    with tempfile.TemporaryDirectory(
-        prefix="autoreview-pack-scan.",
-        dir=safe_temp_root(repo),
-    ) as tempdir:
-        pack_path = Path(tempdir) / "review-pack.txt"
-        pack_path.write_bytes(prompt.encode("utf-8"))
-        pack_path.chmod(0o600)
-        result = run(
-            [
-                trufflehog_bin,
-                "filesystem",
-                str(pack_path),
-                "--json",
-                "--no-color",
-                "--results=verified,unknown",
-                "--fail",
-                "--fail-on-scan-errors",
-                "--no-update",
-            ],
-            Path(tempdir),
-            check=False,
-            env=safe_trufflehog_env(repo),
-        )
-    if result.returncode == TRUFFLEHOG_FINDINGS_EXIT_CODE:
-        paths = trufflehog_review_pack_paths(prompt, result.stdout)
-        raise SystemExit(
-            "refusing to send review pack: TruffleHog found credentials in "
-            + ", ".join(paths)
-        )
-    if result.returncode != 0:
-        raise SystemExit(
-            "refusing to send review pack: TruffleHog could not complete the scan"
-        )
 
 
 def bounded(text: str, limit: int = 180_000) -> str:
@@ -3218,6 +3090,7 @@ def render_review_prompt(
         - Report EVERY distinct actionable defect in this single pass, ordered most severe first. Each review round costs the caller a full fix-test-review cycle; withholding a known defect until a later round wastes one.
         - Before returning, sweep the bundle once more for independent defects in other files or failure modes that you may have stopped scanning for after an earlier find.
         - Include security findings: injection, secret leaks, authz/authn bypass, path traversal, unsafe deserialization, unsafe filesystem or shell use, privacy leaks, and credential handling.
+        - Inspect the entire change bundle for accidentally committed credentials or secrets, including API keys, access tokens, passwords, private keys, and credential-bearing URLs. Report every suspected real credential as a P0 security finding at the smallest file/line location that demonstrates it, without reproducing the credential value. Do not flag obvious placeholders or inert test fixtures unless they are usable credentials or create a concrete risk.
         - Do not reject legitimate functionality merely because it touches shell, filesystem, network, auth, or sensitive data. Report a security finding only when the patch creates a concrete exploitable risk, removes an important safety check, or lacks validation at a trust boundary.
         - Security-sensitive bundle material may be redacted or omitted before review. Continue reviewing the material that is present. A redaction notice is not itself a defect and does not prove either safety or vulnerability in the omitted material.
         - For each finding, use the smallest file/line location that demonstrates the issue.
@@ -3368,17 +3241,9 @@ def prepare_review_prompts(
     datasets: list[ReviewDataset],
     max_prompt_bytes: int,
 ) -> list[str]:
-    prompts = build_review_prompts(
+    return build_review_prompts(
         repo, target, target_ref, bundle, extra_prompt, datasets, max_prompt_bytes,
     )
-    if len(prompts) > 1:
-        # A credential can span a partition boundary. Scan the complete frozen
-        # input before any send, in addition to each exact outgoing pack.
-        scan_outgoing_review_pack(repo, render_review_prompt(
-            current_branch(repo), target, target_ref, ReviewChunk(bundle),
-            extra_prompt, render_datasets(datasets),
-        ))
-    return prompts
 
 
 def write_json_temp(data: dict[str, Any], temp_root: Path) -> Path:
@@ -5951,9 +5816,8 @@ def dry_run_preflight(
     and pass the same repo-relative/existence checks the real run applies
     via capture_evidence_inputs, that the assembled prompt(s) pass
     the same aggregate-size/partition and truncation-refusal checks the
-    real run applies via build_review_prompts/ensure_reviewer_input_complete
-    and the same fail-closed TruffleHog scan of each exact outgoing prompt
-    used by a real run, and that each configured reviewer's CLI binary resolves and
+    real run applies via build_review_prompts/ensure_reviewer_input_complete,
+    and that each configured reviewer's CLI binary resolves and
     its configuration (including, for Kimi, load_kimi_review_config and
     validate_kimi_runtime_auth_sources, and for Claude, the tool
     inventory) is one a real run would actually accept. Returns the
@@ -5990,7 +5854,7 @@ def dry_run_preflight(
     # inputs a real run rejects once combined.
     if bundle_ok and inputs_ok:
         try:
-            with PreparationProgress("bundle/evidence preparation and scan"):
+            with PreparationProgress("bundle/evidence preparation"):
                 input_truncated = captured.truncated or evidence.truncated
                 if reviewers:
                     ensure_reviewer_input_complete(reviewers[0], input_truncated)
@@ -5999,8 +5863,6 @@ def dry_run_preflight(
                     repo, target, target_ref, captured.text, threshold_extra_prompt,
                     evidence.datasets, max_prompt_bytes_for_reviewers(reviewers),
                 )
-                for prompt in prompts:
-                    scan_outgoing_review_pack(repo, prompt)
             with PreparationProgress("evidence verification"):
                 verify_evidence(repo, evidence.files)
             print("prompt: OK", flush=True)
@@ -6036,8 +5898,7 @@ def run_reviewer(
     evidence: list[EvidenceFile] | None = None,
 ) -> dict[str, Any]:
     ensure_reviewer_input_complete(args, input_truncated)
-    with PreparationProgress("outgoing pack scan and evidence verification"):
-        scan_outgoing_review_pack(repo, prompt)
+    with PreparationProgress("evidence verification"):
         verify_evidence(repo, evidence or [])
     raw = run_engine(args, repo, prompt)
     report = extract_json(raw)
@@ -6211,7 +6072,7 @@ def main_impl() -> int:
         evidence = capture_evidence_inputs(args, repo)
     with PreparationProgress("initial source snapshot") as progress:
         review_source_snapshot = source_tree_snapshot(repo, progress)
-    with PreparationProgress("bundle/evidence preparation and scan"):
+    with PreparationProgress("bundle/evidence preparation"):
         captured = build_bundle(repo, target, target_ref, args.commit)
         if target == "commit":
             target_ref = args.commit

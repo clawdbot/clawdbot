@@ -1,7 +1,10 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import { chatOutboxDeliveryKey, type StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -11,19 +14,16 @@ import {
   normalizeAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
   removeDeliveredQueuedChatSendForRun,
-  sameQueuedDeliveryVersion,
-  updateQueuedMessageForSession,
+  updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import { admitChatSubmission, shouldDisplayChatSubmission } from "./history-merge.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,
@@ -31,10 +31,6 @@ import {
 } from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
-
-type ChatSendSupportHost = ChatState & {
-  sessionsResult?: SessionsListResult | null;
-};
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -65,95 +61,39 @@ export function formatTerminalChatSendAckError(
       : "The run ended before the message was accepted.";
 }
 
-export function chatMessagesContainQueuedSend(
-  messages: unknown,
-  item: ChatQueueItem,
-  userRoleOnly = false,
-): boolean {
-  return findQueuedSendMessageIndex(messages, item, userRoleOnly) >= 0;
-}
-
-function findQueuedSendMessageIndex(
-  messages: unknown,
-  item: ChatQueueItem,
-  userRoleOnly = false,
-): number {
-  if (!item.sendRunId) {
-    return -1;
-  }
-  return (Array.isArray(messages) ? messages : []).findIndex((message) => {
-    if (!isRecord(message)) {
-      return false;
-    }
-    // Render retirement requires a user-role entry: an assistant entry can
-    // carry the same run key without proving the queued turn is visible.
-    if (userRoleOnly && message.role !== "user") {
-      return false;
-    }
-    const markerIdempotencyKey = asOptionalRecord(message["__openclaw"])?.idempotencyKey;
-    const idempotencyKey = markerIdempotencyKey ?? message.idempotencyKey;
-    return idempotencyKey === item.sendRunId || idempotencyKey === `${item.sendRunId}:user`;
-  });
-}
-
-function durableDeliveredAttachments(
-  attachments: readonly ChatAttachment[] | undefined,
-): ChatAttachment[] | null {
-  const pinned: ChatAttachment[] = [];
-  for (const attachment of attachments ?? []) {
-    const dataUrl = getChatAttachmentDataUrl(attachment);
-    if (!dataUrl) {
-      return null;
-    }
-    pinned.push({ ...attachment, dataUrl, previewUrl: dataUrl });
-  }
-  return pinned;
-}
-
-function preserveQueuedUserTurn(state: ChatSendSupportHost, item: ChatQueueItem): void {
-  const runId = item.sendRunId;
-  const sessionKey = item.sessionKey ?? state.sessionKey;
-  const attachments = durableDeliveredAttachments(item.attachments);
-  if (!runId || !attachments) {
+function preserveDeliveredUserTurn(
+  state: ChatState,
+  submission: RetainedChatSubmission | undefined,
+): void {
+  if (submission?.kind !== "delivered" || !submission.pending) {
     return;
   }
-  const userMessage = buildLocalUserMessage({
-    text: item.text,
-    attachments,
-    createdAt: item.createdAt,
-    runId,
-    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
-    ...(item.sender ? { sender: item.sender } : {}),
-  });
-  if (!userMessage) {
-    return;
-  }
-  if (visibleSessionMatches(state, sessionKey, item.agentId)) {
-    if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
-      const scope = readChatSessionProjectionScope(state, {
-        sessionKey,
-        agentId: item.agentId,
-      });
-      reduceChatSessionProjection(
-        state,
-        { type: "sendPending", runId, message: userMessage },
-        { scope },
-      );
+  const { sessionKey, agentId, message } = submission;
+  if (visibleSessionMatches(state, sessionKey, agentId)) {
+    if (
+      !submission.sessionId ||
+      !state.currentSessionId ||
+      submission.sessionId === state.currentSessionId
+    ) {
+      admitChatSubmission(state, submission);
     }
     return;
   }
-  if (!state.chatMessagesBySession) {
-    return;
-  }
-  const target = { sessionKey, agentId: item.agentId };
-  const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
-  if (!chatMessagesContainQueuedSend(cached, item, true)) {
-    appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
+  if (state.chatMessagesBySession) {
+    const target = { sessionKey, agentId };
+    const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
+    if (
+      state.chatSubmissions &&
+      shouldDisplayChatSubmission(
+        submission,
+        findChatSubmissionMessage(cached, submission.pendingRunId, true),
+      )
+    ) {
+      appendChatMessageToCache(state.chatMessagesBySession, state, target, message);
+    }
   }
 }
 
-const MAX_REMEMBERED_DELIVERED_QUEUE_TURNS = 64;
-const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueItem>>();
 type DeliveredTurnRetirement = "retired" | "retained" | "stale";
 
 /** Transfer every byte to the transcript/cache before retiring its durable owner. */
@@ -164,19 +104,13 @@ export function retireDeliveredQueuedUserTurn(
 ): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
   const client = host.client;
   const owner = client ?? host;
-  const turns = deliveredQueueTurnsByClient.get(owner) ?? new Map<string, ChatQueueItem>();
-  deliveredQueueTurnsByClient.set(owner, turns);
-  const deliveryKey = JSON.stringify([
-    host.settings.gatewayUrl,
-    client?.recoveryScope,
-    storedChatOutboxScopeKey(scope),
-    runId,
-  ]);
+  const submissions = host.chatSubmissions;
+  const deliveryKey = chatOutboxDeliveryKey(host, scope, runId);
   const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
   if (!stored) {
-    const remembered = turns.get(deliveryKey);
+    const remembered = submissions.readDelivered(deliveryKey, owner);
     if (remembered) {
-      preserveQueuedUserTurn(host, remembered);
+      preserveDeliveredUserTurn(host, remembered);
     }
     return "retired";
   }
@@ -188,30 +122,40 @@ export function retireDeliveredQueuedUserTurn(
     host.connectionEpoch === connectionEpoch &&
     payloadOwnerIsCurrent();
   const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
-  const commit = (item: ChatQueueItem): DeliveredTurnRetirement => {
+  const commit = (
+    message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
+  ): DeliveredTurnRetirement => {
     if (!isCurrent()) {
       return "stale";
     }
     const current = currentItem();
     if (!current) {
-      const remembered = turns.get(deliveryKey);
+      const remembered = submissions.readDelivered(deliveryKey, owner);
       if (!remembered) {
         return "stale";
       }
-      preserveQueuedUserTurn(host, remembered);
+      preserveDeliveredUserTurn(host, remembered);
       return "retired";
     }
     if (!sameQueuedDeliveryVersion(current, stored)) {
       return "stale";
     }
-    preserveQueuedUserTurn(host, item);
-    // Every pane receives the terminal. Retain the complete, independent handoff
-    // before the first pane removes the queue and releases its Blob/preview URLs.
-    turns.delete(deliveryKey);
-    turns.set(deliveryKey, item);
-    if (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
-      turns.delete(turns.keys().next().value!);
+    if (!stored.sendRunId) {
+      return "stale";
     }
+    // Every pane receives the terminal. Retain complete message bytes before
+    // the first pane removes the outbox item and releases its Blob/preview URLs.
+    const submission = submissions.retain({
+      kind: "delivered",
+      deliveryKey,
+      owner,
+      sessionKey: stored.sessionKey ?? scope.sessionKey,
+      agentId: stored.agentId,
+      sessionId: stored.sessionId,
+      pendingRunId: stored.sendRunId,
+      message,
+    });
+    preserveDeliveredUserTurn(host, submission);
     const beforeRemoval = currentItem();
     if (!isCurrent() || !beforeRemoval || !sameQueuedDeliveryVersion(beforeRemoval, stored)) {
       return "stale";
@@ -225,27 +169,31 @@ export function retireDeliveredQueuedUserTurn(
     live.attachments?.length === stored.attachments?.length
       ? live
       : stored;
-  const attachments =
-    durableDeliveredAttachments(source.attachments) ??
-    durableDeliveredAttachments(stored.attachments);
+  const buildMessage = (attachments: readonly ChatAttachment[] | undefined) =>
+    buildLocalUserMessage(
+      {
+        ...stored,
+        attachments,
+        runId: stored.sendRunId,
+      },
+      "complete",
+    );
+  const message = buildMessage(source.attachments) ?? buildMessage(stored.attachments);
   if (
-    attachments &&
-    ((!stored.attachmentPayload && !stored.attachmentStorageError) || attachments.length > 0)
+    message &&
+    ((!stored.attachmentPayload && !stored.attachmentStorageError) ||
+      (stored.attachments?.length ?? 0) > 0)
   ) {
-    return commit({ ...stored, attachments, attachmentStorageError: undefined });
+    return commit(message);
   }
   return prepareOutboxPayload(host, stored, "handoff").then((result): DeliveredTurnRetirement => {
     if (!isCurrent()) {
       return "stale";
     }
     if (result.status === "ready") {
-      const hydratedAttachments = durableDeliveredAttachments(result.item.attachments);
-      if (hydratedAttachments) {
-        return commit({
-          ...stored,
-          attachments: hydratedAttachments,
-          attachmentStorageError: undefined,
-        });
+      const hydrated = buildMessage(result.update.attachments ?? stored.attachments);
+      if (hydrated) {
+        return commit(hydrated);
       }
     }
     const current = currentItem();
@@ -255,12 +203,8 @@ export function retireDeliveredQueuedUserTurn(
     const reason = result.status === "failed" ? result.reason : "missing";
     // Delivery proof must never become a fresh-send retry because local bytes
     // were unavailable. Keep the same run identity and its no-replay barrier.
-    updateQueuedMessageForSession(
-      host,
-      scope.sessionKey,
-      stored.id,
-      (item) => failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
-      scope.agentId,
+    updateQueuedMessage(host, stored.id, (item) =>
+      failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
     );
     return "retained";
   });

@@ -526,6 +526,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
+      signal?.throwIfAborted();
       runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);

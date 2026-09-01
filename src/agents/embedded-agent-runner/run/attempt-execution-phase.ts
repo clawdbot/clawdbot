@@ -4,6 +4,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -60,10 +61,19 @@ export async function runEmbeddedAttemptExecutionPhase(
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
   const { nestedToolActivities } = toolBase;
+  // Preparation can retire admission; never install an unfenced memory compactor.
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    input.runAbortController.signal,
+  );
+  if (!assertActive) {
+    input.runAbortController.signal.throwIfAborted();
+    throw new Error("embedded attempt requires an active admitted run");
+  }
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
-  });
+  }, assertActive);
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
@@ -190,6 +200,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    applyPermissionMode: input.lifecycle.applyPermissionMode,
     activeSession,
     runAbortController: input.runAbortController,
     abortRun,

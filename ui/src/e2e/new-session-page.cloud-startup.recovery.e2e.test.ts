@@ -16,10 +16,6 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
-  "cloud-session-recovery",
-);
 
 suite.define(() => {
   it("retries an ambiguous cloud create with the same session key and machine class", async () => {
@@ -274,7 +270,14 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
-        ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
+        ...(captureUiProof
+          ? {
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "cloud-session-recovery"),
+                size: viewport,
+              },
+            }
+          : {}),
       });
       const page = await context.newPage();
       const message = "restart this interrupted cloud task";
@@ -353,9 +356,12 @@ suite.define(() => {
         await expect.poll(() => composer.isDisabled()).toBe(true);
         await expect.poll(() => start.isDisabled()).toBe(true);
         if (captureUiProof) {
-          await mkdir(proofDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "cloud-session-recovery"), { recursive: true });
           await page.screenshot({
-            path: path.join(proofDir, "01-interrupted.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "cloud-session-recovery"),
+              "01-interrupted.png",
+            ),
             fullPage: true,
           });
         }
@@ -369,7 +375,13 @@ suite.define(() => {
         await expect.poll(() => start.isEnabled()).toBe(true);
         expect(await readRecovery()).toBeNull();
         if (captureUiProof) {
-          await page.screenshot({ path: path.join(proofDir, "02-recovered.png"), fullPage: true });
+          await page.screenshot({
+            path: path.join(
+              path.join(suite.artifactDir, "cloud-session-recovery"),
+              "02-recovered.png",
+            ),
+            fullPage: true,
+          });
         }
 
         const previousCreateCount = (await gateway.getRequests("sessions.create")).length;
@@ -552,9 +564,18 @@ suite.define(() => {
       await checkDelivery.waitFor({ state: "visible" });
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await checkDelivery.click();
-      expect(await gateway.waitForRequest("chat.history", { after: historyCount })).toMatchObject({
-        params: { sessionKey, limit: 1000 },
-      });
+      // Background history loads may arrive before this action's request.
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
+        .toContainEqual(
+          expect.objectContaining({
+            params: {
+              sessionKey,
+              limit: 1000,
+              inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
+            },
+          }),
+        );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await retainedTurn
         .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)

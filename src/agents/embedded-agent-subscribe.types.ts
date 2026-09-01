@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
-import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
+import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
 import type {
@@ -22,6 +22,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
@@ -109,8 +110,10 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
-  compactionCountOwner?: RunEmbeddedAgentInternalParams["compactionCountOwner"];
-  onContextAccountingEvent?: RunEmbeddedAgentInternalParams["onContextAccountingEvent"];
+  /** Prepared endpoint ownership can differ from the assistant's provider route ID. */
+  providerOwner?: PreparedProviderFailoverOwner;
+  compactionCountOwner?: EmbeddedRunAttemptInternalParams["compactionCountOwner"];
+  onContextAccountingEvent?: EmbeddedRunAttemptInternalParams["onContextAccountingEvent"];
   sessionPersistence?: EmbeddedRunAttemptParams["sessionPersistence"];
   sessionKey?: string;
   /** Current transport channel resolved for this run. */

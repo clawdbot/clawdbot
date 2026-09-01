@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -921,32 +923,169 @@ describe("release candidate checklist", () => {
     ).toThrow("missing dependency tarball metadata");
   });
 
-  it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {
-    const workflowSha = "a".repeat(40);
-    const isTrustedWorkflowAncestor = vi.fn(() => true);
-
-    expect(
-      validateNpmPreflightRunSource({
-        workflowRun: { headSha: workflowSha },
-        workflowRef: "main",
-        isTrustedWorkflowAncestor,
-      }),
-    ).toEqual({
-      status: "passed",
-      headSha: workflowSha,
+  describe("npm preflight source", () => {
+    const repo = "openclaw/openclaw";
+    const headSha = "a".repeat(40);
+    const protectedRef = `release-publish/${headSha.slice(0, 12)}-123`;
+    const workflowRun = {
+      databaseId: 456,
+      runAttempt: 2,
+      repository: repo,
+      workflowName: "OpenClaw NPM Release",
+      workflowPath: ".github/workflows/openclaw-npm-release.yml",
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: "main",
+      headSha,
+    };
+    const source = {
+      repository: repo,
+      runId: "456",
       workflowRef: "main",
-    });
-    expect(isTrustedWorkflowAncestor).toHaveBeenCalledWith(workflowSha, "refs/remotes/origin/main");
-  });
-
-  it("rejects npm preflight workflow code outside the trusted ref", () => {
-    expect(() =>
-      validateNpmPreflightRunSource({
-        workflowRun: { headSha: "a".repeat(40) },
-        workflowRef: "main",
-        isTrustedWorkflowAncestor: () => false,
+      workflowRun,
+      isTrustedWorkflowAncestor: () => true,
+    };
+    const tagRef = {
+      ref: `refs/tags/${protectedRef}`,
+      object: { type: "commit", sha: headSha },
+    };
+    const api = (tag: unknown = tagRef, branches: unknown = []) => ({
+      token: "",
+      fetchImpl: vi.fn(async (url: string) => {
+        if (url.includes(`/repos/${repo}/git/ref/tags/`)) return jsonResponse(tag);
+        if (url.includes(`/repos/${repo}/git/matching-refs/heads/`)) return jsonResponse(branches);
+        throw new Error(`unexpected request: ${url}`);
       }),
-    ).toThrow("is not reachable from trusted main");
+    });
+
+    it.each(["main", "tideclaw/alpha/2026-07-10-1200Z"])(
+      "retains the exact %s npm workflow source",
+      async (workflowRef) => {
+        const isTrustedWorkflowAncestor = vi.fn(() => true);
+        expect(
+          await validateNpmPreflightRunSource({
+            ...source,
+            workflowRef,
+            workflowRun: { ...workflowRun, headBranch: workflowRef },
+            isTrustedWorkflowAncestor,
+          }),
+        ).toEqual({ status: "passed", headSha, workflowRef });
+        expect(isTrustedWorkflowAncestor).toHaveBeenCalledWith(
+          headSha,
+          `refs/remotes/origin/${workflowRef}`,
+        );
+      },
+    );
+
+    it("accepts and records a protected npm preflight tag from trusted main", async () => {
+      const validated = await validateNpmPreflightRunSource(
+        { ...source, workflowRun: { ...workflowRun, headBranch: protectedRef } },
+        api(),
+      );
+      expect(validated).toEqual({ status: "passed", headSha, workflowRef: protectedRef });
+      expect(buildPublishCommand(parseArgs(["--tag", "v2026.7.1-beta.3"]), validated)).toContain(
+        `'--ref' '${protectedRef}'`,
+      );
+    });
+
+    it.each([
+      ["moved", { ...tagRef, object: { type: "commit", sha: "b".repeat(40) } }],
+      ["annotated", { ...tagRef, object: { type: "tag", sha: headSha } }],
+      ["missing", null],
+    ])("rejects a %s protected npm preflight tag", async (_label, tag) => {
+      await expect(
+        Promise.resolve().then(() =>
+          validateNpmPreflightRunSource(
+            {
+              ...source,
+              workflowRun: { ...workflowRun, headBranch: protectedRef },
+            },
+            api(tag),
+          ),
+        ),
+      ).rejects.toThrow("protected release tooling tag");
+    });
+
+    it("rejects a same-name branch instead of inferring tag provenance", async () => {
+      await expect(
+        Promise.resolve().then(() =>
+          validateNpmPreflightRunSource(
+            {
+              ...source,
+              workflowRun: { ...workflowRun, headBranch: protectedRef },
+            },
+            api(tagRef, [{ ref: `refs/heads/${protectedRef}` }]),
+          ),
+        ),
+      ).rejects.toThrow("ambiguous");
+    });
+
+    it.each([{}, [{}], [{ ref: 42 }]])(
+      "rejects malformed branch lookup data %j",
+      async (branches) => {
+        await expect(
+          validateNpmPreflightRunSource(
+            {
+              ...source,
+              workflowRun: { ...workflowRun, headBranch: protectedRef },
+            },
+            api(tagRef, branches),
+          ),
+        ).rejects.toThrow("ambiguous");
+      },
+    );
+
+    it.each([404, 503])("rejects unreadable tag provenance with HTTP %s", async (status) => {
+      await expect(
+        validateNpmPreflightRunSource(
+          {
+            ...source,
+            workflowRun: { ...workflowRun, headBranch: protectedRef },
+          },
+          { token: "", fetchImpl: async () => jsonResponse({}, { status }) },
+        ),
+      ).rejects.toThrow(`failed with ${status}`);
+    });
+
+    it.each([
+      { databaseId: 457 },
+      { runAttempt: 0 },
+      { repository: "other/openclaw" },
+      { workflowName: "Other workflow" },
+      { workflowPath: ".github/workflows/unrelated.yml" },
+      { event: "push" },
+      { status: "in_progress" },
+      { conclusion: "failure" },
+      { headSha: "not-a-sha" },
+      { headBranch: "release/2026.7.1" },
+      { headBranch: `release-publish/${"b".repeat(12)}-123` },
+      { headBranch: `release-publish/${"a".repeat(12)}-0` },
+      { workflowPath: ".github/workflows/openclaw-npm-release.yml@refs/heads/other" },
+    ])("rejects mismatched npm preflight identity %j", async (override) => {
+      await expect(
+        Promise.resolve().then(() =>
+          validateNpmPreflightRunSource(
+            {
+              ...source,
+              workflowRun: { ...workflowRun, ...override },
+            },
+            api(),
+          ),
+        ),
+      ).rejects.toThrow();
+    });
+
+    it("rejects npm preflight workflow code outside the trusted ref", async () => {
+      await expect(
+        Promise.resolve().then(() =>
+          validateNpmPreflightRunSource({
+            ...source,
+            isTrustedWorkflowAncestor: () => false,
+          }),
+        ),
+      ).rejects.toThrow("is not reachable from trusted main");
+    });
   });
 
   it("requires run ids when dispatch is disabled", () => {
@@ -1091,6 +1230,96 @@ describe("release candidate checklist", () => {
     ).not.toThrow();
   });
 
+  it.each([
+    {
+      profile: "beta",
+      coveragePolicy: "npm-beta-v1",
+      skipTelegram: false,
+      expected: "deferred-postpublish",
+    },
+    { profile: "beta", coveragePolicy: "npm-beta-v1", skipTelegram: true, expected: "skipped" },
+    { profile: "beta", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
+    { profile: "stable", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
+    { profile: "full", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
+  ])(
+    "records candidate Telegram $expected for $profile qualification ($coveragePolicy)",
+    async ({ profile, coveragePolicy, skipTelegram, expected }) => {
+      const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+      const telegramOwner = source.match(/^async function runTelegramIfNeeded\([\s\S]*?^\}/mu)?.[0];
+      const telegramCall = source.match(
+        /const npmTelegram = await runTelegramIfNeeded\([\s\S]*?\);/u,
+      )?.[0];
+      expect(telegramOwner).toBeDefined();
+      expect(telegramCall).toBeDefined();
+      const options = {
+        ...parseArgs([
+          "--tag",
+          profile === "beta" ? "v2026.7.1-beta.4" : "v2026.7.1",
+          ...(profile === "beta" ? [] : ["--windows-node-tag", "v0.6.3"]),
+        ]),
+        releaseProfile: profile,
+        npmPreflightRunId: "222",
+        skipTelegram,
+      };
+      const dispatchWorkflow = vi.fn(() => "333");
+      const waitForSuccessfulRun = vi.fn(async () => ({
+        run: { url: "https://github.com/openclaw/openclaw/actions/runs/333" },
+      }));
+      // Execute the private owner and its real caller without exporting a test-only API.
+      const result = (await runInNewContext(
+        stripTypeScriptTypes(
+          `async function fixture() {\n${telegramOwner}\n${telegramCall}\nreturn npmTelegram;\n}\nfixture();`,
+        ),
+        {
+          buildTelegramArtifactInputs,
+          dispatchWorkflow,
+          waitForSuccessfulRun,
+          options,
+          npmArtifact: {
+            id: 9,
+            name: "npm-package",
+            digest: `sha256:${"a".repeat(64)}`,
+            workflowRunId: 222,
+          },
+          npmManifest: {
+            tarballName: "openclaw.tgz",
+            tarballSha256: "b".repeat(64),
+            packageVersion: options.tag.slice(1),
+          },
+          npmRun: { runAttempt: 1 },
+          targetSha: "c".repeat(40),
+          fullValidationEvidence: { coveragePolicy },
+        },
+      )) as { status: string; runId?: string };
+      expect(result.status).toBe(expected);
+      if (expected !== "passed") {
+        expect(result).toEqual({ status: expected });
+        expect(dispatchWorkflow).not.toHaveBeenCalled();
+        expect(waitForSuccessfulRun).not.toHaveBeenCalled();
+        expect(buildPublishCommand({ ...options, npmTelegramRunId: result.runId })).not.toContain(
+          "npm_telegram_run_id",
+        );
+      } else {
+        expect(result.runId).toBe("333");
+        expect(dispatchWorkflow).toHaveBeenCalledOnce();
+        expect(dispatchWorkflow).toHaveBeenCalledWith(
+          options.repo,
+          "npm-telegram-beta-e2e.yml",
+          options.workflowRef,
+          expect.objectContaining({
+            package_artifact_id: 9,
+            package_artifact_run_id: "222",
+            package_source_sha: "c".repeat(40),
+          }),
+        );
+        expect(waitForSuccessfulRun).toHaveBeenCalledWith(options.repo, "333", {
+          workflowName: "NPM Telegram Beta E2E",
+          workflowRef: options.workflowRef,
+        });
+      }
+    },
+  );
+
   it("binds SHA-pinned full validation evidence through its manifest", () => {
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
 
@@ -1099,6 +1328,7 @@ describe("release candidate checklist", () => {
       "const fullValidationEvidence = validateFullReleaseValidationEvidence({",
     );
     expect(source).toContain("runStrictReleaseEvidenceValidation({ repository, runId })");
+    expect(source).toContain("expectedReleaseTag: options.tag");
     expect(source).toContain("refs/heads/main:refs/remotes/origin/main");
     expect(source).toContain(
       'fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha',

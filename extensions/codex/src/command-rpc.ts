@@ -54,7 +54,12 @@ export type CodexControlRequestOptions = {
   isolated?: boolean;
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
-  beforeRequest?: (request: CodexAppServerScopedRequest) => Promise<void>;
+  assertCurrent?: () => void;
+  beforeRequest?: (
+    request: CodexAppServerScopedRequest,
+    client: CodexAppServerClient,
+    scope: { assertCurrent: () => void },
+  ) => Promise<void>;
   onResponse?: (
     response: unknown,
     client: CodexAppServerClient,
@@ -210,6 +215,7 @@ export async function codexControlRequest(
   const auth = await prepareControlAuth(options, startOptions);
   const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
+    assertCurrent: options.assertCurrent,
     startOptions,
     config: options.config,
     sessionKey: options.sessionKey,
@@ -222,7 +228,7 @@ export async function codexControlRequest(
     return await withCodexAppServerJsonClient(
       controlRequestOptions,
       async (request, client, scope) => {
-        await options.beforeRequest?.(request);
+        await options.beforeRequest?.(request, client, scope);
         scope.assertCurrent();
         let response: unknown;
         if (method === "thread/resume") {

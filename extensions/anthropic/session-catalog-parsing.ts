@@ -13,7 +13,7 @@ import type {
 
 const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 100;
-export const DEFAULT_TRANSCRIPT_LIMIT = 20;
+const DEFAULT_TRANSCRIPT_LIMIT = 20;
 export const MAX_TRANSCRIPT_LIMIT = 50;
 export const MAX_HOSTS = 100;
 const MAX_SEARCH_LENGTH = 500;

@@ -1,5 +1,8 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
@@ -685,24 +688,88 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
+      const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
+        await import("../../infra/diagnostics-timeline.js");
+      const tempDirs = createTempDirTracker();
+      const timelinePath = join(tempDirs.make("openclaw-gateway-stop-"), "timeline.jsonl");
+      let timelineAtLogFlush: string | undefined;
+      close.mockImplementationOnce(async () => {
+        emitDiagnosticsTimelineEvent(
+          { type: "mark", name: "gateway.stop" },
+          {
+            env: {
+              OPENCLAW_DIAGNOSTICS: "timeline",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+            },
+          },
+        );
+      });
       flushLogger.mockImplementationOnce(async () => {
         expect(runtime.exit).not.toHaveBeenCalled();
+        timelineAtLogFlush = existsSync(timelinePath)
+          ? readFileSync(timelinePath, "utf8")
+          : undefined;
       });
 
-      sigterm();
+      try {
+        sigterm();
 
-      await expect(exited).resolves.toBe(0);
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway stopping",
-        restartExpectedMs: null,
+        await expect(exited).resolves.toBe(0);
+        expect(close).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+        expect(start).toHaveBeenCalledWith({
+          processStartedAt: expect.any(Number),
+          startupStartedAt: expect.any(Number),
+          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(flushLogger).toHaveBeenCalledOnce();
+        expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
+        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      } finally {
+        flushDiagnosticsTimeline();
+        tempDirs.cleanup();
+      }
+    });
+  });
+
+  it("passes the process origin to the initial startup only", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce(createGatewayServer(closeFirst))
+        .mockResolvedValueOnce(createGatewayServer(closeSecond));
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      expect(start).toHaveBeenCalledWith({
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 1,
+        "expected initial gateway start",
+      );
+
+      expect(start.mock.calls[0]?.[0]).toMatchObject({
+        processStartedAt: expect.any(Number),
         startupStartedAt: expect.any(Number),
-        requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
       });
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-      expect(flushLogger).toHaveBeenCalledOnce();
-      expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+
+      captureSignal("SIGUSR1")();
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 2,
+        "expected restart gateway start",
+      );
+      expect(start.mock.calls[1]?.[0]).not.toHaveProperty("processStartedAt");
+
+      captureSignal("SIGINT")();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

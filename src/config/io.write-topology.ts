@@ -6,6 +6,7 @@ import { pinSurvivorWorkspaceForRosterCollapse } from "./agent-workspace-roster-
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { prepareAuthInheritanceOwnerForWrite } from "./io.auth-inheritance-owner.js";
 import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
+import { coerceConfig } from "./io.read-helpers.js";
 import { prepareSessionStoreOwnershipForWrite } from "./io.session-store-owner.js";
 import type {
   ConfigWriteOptions,
@@ -55,6 +56,12 @@ export function prepareConfigWriteTopology(
   const stampOwnership =
     (persistOwnership || keepOwnership) && nextConfig.agents?.ownership === undefined;
   if (stampOwnership) {
+    if (nextEntries.some((entry) => entry.default === true)) {
+      // This writer owns role transitions; retire only the submitted roster marker.
+      nextConfig = coerceConfig(
+        migratePersistedImplicitMainRoster(nextConfig, { materializeRoles: false }).config,
+      );
+    }
     nextConfig = {
       ...nextConfig,
       agents: { ...nextConfig.agents, ownership: "explicit" },
@@ -117,7 +124,8 @@ export function prepareConfigWriteTopology(
       : []),
     ...ownershipMaterialization.insertedPaths.concat(workspaceCollapse.insertedPaths),
     ...authInheritanceOwnership.insertedPaths, // Persisting explicit ownership must replace the authored legacy roster too.
-    ...(persistOwnership ? [["agents", "entries"]] : []), // Otherwise projection restores the retired default marker.
+    ...sessionStoreOwnership.ownershipPaths, // Parent writes must not restore a removed fixed-store owner.
+    ...(persistOwnership || stampOwnership ? [["agents", "entries"]] : []), // Otherwise projection restores the retired default marker.
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 

@@ -220,7 +220,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) {
       return;
     }
-    this.hovercard.schedulePointerExit(event, target);
+    this.hovercard.schedulePointerExit();
   };
 
   private readonly handleFocusIn = (event: FocusEvent) => {

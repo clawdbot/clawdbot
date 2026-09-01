@@ -17,6 +17,7 @@ export function createSubscribedCodeModeHarness(params: {
   onToolResult?: EmbeddedRunAttemptParams["onToolResult"];
   onBlockReply?: EmbeddedRunAttemptParams["onBlockReply"];
   onPartialReply?: EmbeddedRunAttemptParams["onPartialReply"];
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   timeoutMs?: number;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
   onToolStreamBoundary?: EmbeddedRunAttemptParams["onToolStreamBoundary"];
@@ -50,6 +51,7 @@ export function createSubscribedCodeModeHarness(params: {
       observeToolTerminal: params.observeToolTerminal,
       onToolStreamBoundary: params.onToolStreamBoundary,
       onPartialReply: params.onPartialReply,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       blockReplyBreak: "message_end",
     } as never,
     activeSession: activeSession as never,

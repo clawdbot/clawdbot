@@ -4,7 +4,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/des
 import { formatUiError } from "../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
-import { openRealtimeTalkCamera, RealtimeTalkInputController } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera } from "./realtime-talk-input.ts";
 import {
   type RealtimeTalkWebRtcSdpSessionResult,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -21,6 +21,7 @@ import {
 import { captureRealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 import {
   RealtimeTalkWebRtcOfferExchange,
+  realtimeTalkTranscriptItem,
   RealtimeTalkResponseOutcomeOwner,
   realtimeTalkDataChannelMaxMessageSize,
   realtimeTalkImageEvent,
@@ -44,7 +45,7 @@ const cancelledSetup = Symbol("cancelledSetup");
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
-  private readonly input = new RealtimeTalkInputController((detail) => this.failConnection(detail));
+  private readonly input = this.ctx.input;
   private audio: HTMLAudioElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
@@ -77,7 +78,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   async start(): Promise<RealtimeTalkTransportStartResult> {
-    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
+    if (typeof RTCPeerConnection === "undefined") {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
@@ -115,10 +116,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         event.track.addEventListener("unmute", () => play(true), { once: true });
       }
     });
-    const media = await this.awaitSetupStep(peer, this.input.open(this.ctx.inputDeviceId));
-    if (media === cancelledSetup || !this.isCurrentPeer(peer)) {
-      return this.cancelledStart();
-    }
+    const media = this.input.adopt((detail) => this.failConnection(detail));
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(media);
@@ -295,6 +293,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     } catch {
       return;
     }
+    const transcriptItem = realtimeTalkTranscriptItem(event);
+    if (transcriptItem) {
+      this.ctx.callbacks.onTranscriptItem?.(transcriptItem);
+      if (this.closed) {
+        return;
+      }
+    }
     switch (event.type) {
       case "input_transcript.added":
         this.emitFramelessTranscript("user", event.item?.text, false, event.item?.id);
@@ -321,8 +326,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       case "conversation.item.input_audio_transcription.completed":
-        if (event.transcript) {
-          this.ctx.callbacks.onTranscript?.({ role: "user", text: event.transcript, final: true });
+        if (typeof event.transcript === "string") {
+          this.ctx.callbacks.onTranscript?.({
+            role: "user",
+            text: event.transcript,
+            final: true,
+            itemId: event.item_id,
+          });
           if (this.closed) {
             return;
           }
@@ -420,11 +430,16 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       case "error":
-        this.responseCreateInFlight = false;
+      case "conversation.item.input_audio_transcription.failed":
+        // ASR runs independently; its failure cannot settle a pending response request.
+        if (event.type === "error") {
+          this.responseCreateInFlight = false;
+        }
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
         this.emitTalkEvent({
           type: "session.error",
           final: true,
+          itemId: event.item_id,
           payload: { message: this.extractErrorDetail(event.error) },
         });
 
@@ -434,13 +449,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 
   private emitAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {
     const text = final ? (event.transcript ?? event.text) : event.delta;
-    if (!text) {
+    if (typeof text !== "string") {
       return;
     }
     this.ctx.callbacks.onTranscript?.({
       role: "assistant",
       text,
       final,
+      itemId: event.item_id,
     });
     if (this.closed) {
       return;
@@ -483,10 +499,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private extractErrorDetail(error: unknown): string {
-    if (!error || typeof error !== "object") {
-      return "Realtime provider error";
-    }
-    const record = error as Record<string, unknown>;
+    const record = isRecord(error) ? error : {};
     const message = typeof record.message === "string" ? record.message.trim() : "";
     const code = typeof record.code === "string" ? record.code.trim() : "";
     const type = typeof record.type === "string" ? record.type.trim() : "";

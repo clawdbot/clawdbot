@@ -45,6 +45,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   getPostCompactionAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
+  permissionChange?: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["permissionChange"];
 }) {
   const {
     runInput,
@@ -179,7 +180,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimePlan,
   });
   const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
+    runtime.agentHarness.id === CODEX_HARNESS_ID &&
+    !params.disableTrajectory &&
+    params.sessionPersistence !== "detached"
       ? createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
@@ -233,6 +236,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
     codeModeRecovery: codeModeRecovery.kind === "idle" ? undefined : codeModeRecovery,
+    permissionChange: input.permissionChange,
     runStartedAtMs: runInput.startedAtMs,
     transcriptOwnership: params.sessionManager
       ? { kind: "caller-owned", sessionManager: params.sessionManager }

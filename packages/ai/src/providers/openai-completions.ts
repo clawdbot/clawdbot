@@ -132,7 +132,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        maxRetries: options?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(
@@ -344,6 +344,7 @@ function createClient(
     baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });

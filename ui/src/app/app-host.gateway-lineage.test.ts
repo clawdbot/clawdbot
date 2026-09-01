@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayBrowserClient,
@@ -8,6 +7,7 @@ import type {
   GatewayHelloOk,
 } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import {
@@ -194,7 +194,7 @@ describe("Control UI Gateway target lineage", () => {
       const composer = document.createElement("div");
       try {
         expect(
-          admitQueuedMessageForSession(state, sessionKey, {
+          admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {
             id: "owner-row",
             text: "Original queued message",
             createdAt: 1000,

@@ -19,13 +19,12 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
+import { parsePositiveInt, readPositiveEnvInt } from "./lib/numeric-options.mjs";
 
 // Two concurrent plans halve the serial tail of packed jobs. Children run with
 // inner test-projects parallelism 1 so a job never exceeds two Vitest runs;
 // stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
 const PLAN_CONCURRENCY = 2;
-const PLAN_CONCURRENCY_ENV_KEY = "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
 const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
@@ -64,9 +63,14 @@ function isShardGroupConfig(value: unknown): value is ShardGroupConfig {
   return isRecord(value) && isStringArray(value.configs);
 }
 
-function parseJsonEnv(env: NodeJS.ProcessEnv, name: string, fallback: unknown = null): unknown {
+function parseJsonEnv(
+  env: Record<string, unknown>,
+  name: string,
+  fallback: unknown = null,
+): unknown {
   try {
-    return JSON.parse(env[name] ?? "null") ?? fallback;
+    const value = env[name];
+    return typeof value === "string" ? (JSON.parse(value) ?? fallback) : fallback;
   } catch {
     return fallback;
   }
@@ -308,13 +312,14 @@ function runChild(args: string[], childEnv: NodeJS.ProcessEnv, label: string) {
 
 export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions = {}) {
   const baseEnv = options.env ?? process.env;
-  const parsedVitestExtraArgs = parseJsonEnv(baseEnv, VITEST_EXTRA_ARGS_ENV_KEY, []);
-  const vitestExtraArgs = isStringArray(parsedVitestExtraArgs) ? parsedVitestExtraArgs : [];
-  const requestedConcurrency = options.concurrency ?? PLAN_CONCURRENCY;
-  if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1) {
-    throw new Error("Shard plan concurrency must be a positive safe integer");
-  }
-  const concurrency = Math.min(requestedConcurrency, Math.max(1, plans.length));
+  // Respect serial timing-sensitive bins and never clone cache slots that
+  // cannot receive a plan.
+  const concurrency = Math.min(
+    plans.length,
+    options.concurrency === undefined
+      ? readPositiveEnvInt("OPENCLAW_NODE_TEST_PLAN_CONCURRENCY", baseEnv, PLAN_CONCURRENCY)
+      : parsePositiveInt(options.concurrency, "Shard plan concurrency"),
+  );
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
@@ -345,10 +350,15 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         }
         continue;
       }
+      const vitestExtraArgs = [
+        baseEnv,
+        entry.kind === "group" ? entry.plan.env : undefined,
+      ].flatMap((env) => {
+        const value = parseJsonEnv(env ?? {}, VITEST_EXTRA_ARGS_ENV_KEY, []);
+        return isStringArray(value) ? value : [];
+      });
       const args =
-        Array.isArray(vitestExtraArgs) && vitestExtraArgs.length > 0
-          ? [...targetArgs, "--", ...vitestExtraArgs]
-          : targetArgs;
+        vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
       const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
         serial: concurrency === 1,
         cacheSlot,
@@ -393,15 +403,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plans = resolveShardPlans();
-  // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
-  // the planner; overlapping them with a sibling Vitest run causes flakes.
-  const planConcurrency = readPositiveEnvInt(
-    PLAN_CONCURRENCY_ENV_KEY,
-    process.env,
-    PLAN_CONCURRENCY,
-  );
   process.exitCode = await runShardPlans(plans, {
-    concurrency: planConcurrency,
     continueOnFailure: process.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
   });
 }

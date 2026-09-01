@@ -466,15 +466,14 @@ export function detectSharedAuthStoreMigration(params: {
     return { sourcePath, hasLegacy: false };
   }
   const ownership = resolveSharedAuthStoreOwnership(env);
-  const sourceRows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
-  return {
-    sourcePath,
-    hasLegacy:
-      ownership.location === "legacy-main" ||
-      sourceRows.store !== null ||
-      sourceRows.state !== null ||
-      hasPendingSharedAuthCleanup(env, sourcePath),
-  };
+  const hasLegacy =
+    ownership.location === "legacy-main" || hasPendingSharedAuthCleanup(env, sourcePath);
+  if (hasLegacy) {
+    // Once shared ownership moves, main-agent rows are ordinary per-agent overrides.
+    // Only the ownership marker or a pending receipt authorizes inspecting them as migration input.
+    inspectSharedAuthLegacyRowsReadOnly(sourcePath);
+  }
+  return { sourcePath, hasLegacy };
 }
 
 /** Converge copy, ownership, and cleanup while excluding live Gateway writers. */
