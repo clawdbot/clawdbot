@@ -761,6 +761,46 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("surfaces the dry-run delivery route on cron.add", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-add-preview-",
+      sessionConfig: { mainKey: "primary" },
+      cronEnabled: false,
+    });
+
+    const cronEvents = createCronEventCollector();
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
+
+    try {
+      const addRes = await directCronReq(cronState, "cron.add", {
+        name: "isolated announce",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "announce" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobId = (addRes.payload as { id?: unknown } | null)?.id;
+      expect(typeof jobId).toBe("string");
+      const previews = (
+        addRes.payload as {
+          deliveryPreviews?: Record<string, { label?: unknown; detail?: unknown }>;
+        } | null
+      )?.deliveryPreviews;
+      expect(previews?.[String(jobId)]).toMatchObject({
+        label: "announce -> last",
+        detail: expect.stringContaining("fail-closed"),
+      });
+    } finally {
+      await cleanupCronTestRun({
+        cronState,
+        prevSkipCron,
+        clearSessionConfig: true,
+      });
+    }
+  });
+
   test("routes forced cron runs to the configured session", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-route-",

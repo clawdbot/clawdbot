@@ -971,6 +971,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       declarationKey: job.declarationKey,
       schedule: jobCreate.schedule,
     });
+    // Surface the same dry-run delivery route the list/show surfaces already
+    // compute, so a default isolated `last` announce that will fail closed is
+    // visible at creation instead of only after the run's outcome is inspected.
+    const deliveryPreviews = await resolveCronDeliveryPreviews({
+      cfg: context.getRuntimeConfig(),
+      defaultAgentId: context.cron.getDefaultAgentId(),
+      jobs: [job],
+    });
     respond(
       true,
       "job" in result
@@ -978,8 +986,9 @@ export const cronHandlers: GatewayRequestHandlers = {
             created: result.created,
             ...(result.updated === undefined ? {} : { updated: result.updated }),
             job: cronJobReadView(job),
+            deliveryPreviews,
           }
-        : cronJobReadView(job),
+        : { ...cronJobReadView(job), deliveryPreviews },
       undefined,
     );
   },
