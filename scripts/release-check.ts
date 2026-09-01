@@ -45,6 +45,7 @@ import {
   listPluginSdkDistArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mts";
+import { listStaticExtensionAssetOutputs } from "./lib/static-extension-assets.mts";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -55,7 +56,6 @@ import {
   normalizeInstalledBinaryVersion,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
-import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
