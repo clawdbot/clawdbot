@@ -146,7 +146,7 @@ describe("migrateLegacyDevicePairingStore", () => {
     expect((await getPairedDevice("device-a", baseDir))?.publicKey).toBe("pk-current");
   });
 
-  test("imports valid paired rows while skipping pending-shaped entries in paired.json", async () => {
+  test("imports valid paired rows while skipping records SQLite cannot persist", async () => {
     const baseDir = await suiteRootTracker.make("contaminated-paired");
     const devicesDir = await writeLegacyFiles(baseDir, {
       paired: {
@@ -160,6 +160,13 @@ describe("migrateLegacyDevicePairingStore", () => {
         "invalid-timestamp": legacyPairedDevice("invalid-timestamp", {
           createdAtMs: 1e100,
         }),
+        "invalid-last-seen": legacyPairedDevice("invalid-last-seen", {
+          lastSeenAtMs: 1e100,
+        }),
+        "invalid-text": {
+          ...legacyPairedDevice("invalid-text"),
+          displayName: { value: "Device" },
+        },
       },
     });
     const warnings: string[] = [];
@@ -171,7 +178,7 @@ describe("migrateLegacyDevicePairingStore", () => {
 
     expect(result).toEqual({ imported: 1, skippedExisting: 0 });
     expect((await getPairedDevice("device-a", baseDir))?.publicKey).toBe("pk-device-a");
-    expect(warnings).toEqual(["device pairing store migration skipped 2 invalid paired record(s)"]);
+    expect(warnings).toEqual(["device pairing store migration skipped 4 invalid paired record(s)"]);
     expect(await listDeviceFiles(devicesDir)).toEqual(["paired.json.migrated"]);
   });
 

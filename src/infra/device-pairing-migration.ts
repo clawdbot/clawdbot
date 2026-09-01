@@ -8,6 +8,7 @@
 // setup codes are reissued.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withPairedDeviceRecords, type PairedDevice } from "./device-pairing.js";
 import {
   coercePairingStateRecord,
@@ -20,19 +21,36 @@ type LegacyDevicePairingMigrationResult = {
   skippedExisting: number;
 };
 
-function isValidLegacyPairedDevice(record: unknown): record is PairedDevice {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
+const SQLITE_TEXT_FIELDS = [
+  "displayName",
+  "operatorLabel",
+  "platform",
+  "deviceFamily",
+  "clientId",
+  "clientMode",
+  "browserOrigin",
+  "role",
+  "remoteIp",
+  "approvedVia",
+  "lastSeenReason",
+] as const satisfies readonly (keyof PairedDevice)[];
+
+function isPersistableLegacyPairedDevice(record: PairedDevice): boolean {
+  if (!isRecord(record)) {
     return false;
   }
-  // SAFETY: the object/array guard makes this a safe property-read view; each field is checked below.
-  const candidate = record as Partial<PairedDevice>;
   return (
-    typeof candidate.publicKey === "string" &&
-    candidate.publicKey.trim().length > 0 &&
-    typeof candidate.createdAtMs === "number" &&
-    Number.isSafeInteger(candidate.createdAtMs) &&
-    typeof candidate.approvedAtMs === "number" &&
-    Number.isSafeInteger(candidate.approvedAtMs)
+    typeof record.publicKey === "string" &&
+    record.publicKey.trim().length > 0 &&
+    typeof record.createdAtMs === "number" &&
+    Number.isSafeInteger(record.createdAtMs) &&
+    typeof record.approvedAtMs === "number" &&
+    Number.isSafeInteger(record.approvedAtMs) &&
+    (record.lastSeenAtMs === undefined ||
+      (typeof record.lastSeenAtMs === "number" && Number.isSafeInteger(record.lastSeenAtMs))) &&
+    SQLITE_TEXT_FIELDS.every(
+      (field) => record[field] === undefined || typeof record[field] === "string",
+    )
   );
 }
 
@@ -79,7 +97,7 @@ export async function migrateLegacyDevicePairingStore(params?: {
     return null;
   }
 
-  const legacyPaired = coercePairingStateRecord<unknown>(pairedRaw);
+  const legacyPaired = coercePairingStateRecord<PairedDevice>(pairedRaw);
   let imported = 0;
   let skippedExisting = 0;
   let skippedInvalid = 0;
@@ -87,7 +105,7 @@ export async function migrateLegacyDevicePairingStore(params?: {
     await withPairedDeviceRecords(params?.baseDir, (pairedByDeviceId) => {
       for (const [rawDeviceId, record] of Object.entries(legacyPaired)) {
         const deviceId = rawDeviceId.trim();
-        if (!deviceId || !isValidLegacyPairedDevice(record)) {
+        if (!deviceId || !isPersistableLegacyPairedDevice(record)) {
           skippedInvalid += 1;
           continue;
         }
