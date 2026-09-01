@@ -1,5 +1,6 @@
 // Turn-path thinking reuses published facts before manifest/scoped discovery fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
 const scopedStaticMock = vi.fn(
@@ -93,6 +94,38 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
   });
+
+  it.each(["thinking", "input"] as const)(
+    "reuses completed owner catalogs for runtime-only %s capabilities",
+    async (capability) => {
+      const entry: ModelCatalogEntry = {
+        ...ollamaEntry,
+        api: "ollama",
+        baseUrl: "https://ollama.invalid",
+        input: ["text", "image"],
+      };
+      const completed: ModelCatalogSnapshot = { entries: [entry], routeVariants: [entry] };
+      publishedSnapshotMock.mockImplementation((input: unknown) => ({
+        config: (input as { config: unknown }).config,
+        modelCatalog: { entries: [], routeVariants: [] },
+        readFullModelCatalog: () => completed,
+      }));
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const catalog = await loadProviderScopedThinkingCatalog({
+        config: {},
+        provider: entry.provider,
+        model: entry.id,
+        ...(capability === "input"
+          ? { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } }
+          : {}),
+      });
+
+      expect(catalog).toEqual([expect.objectContaining(entry)]);
+      expect(manifestCatalogMock).not.toHaveBeenCalled();
+      expect(scopedStaticMock).not.toHaveBeenCalled();
+      expect(scopedLiveMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves manifest-backed models without any scoped catalog build", async () => {
     manifestCatalogMock.mockReturnValue([

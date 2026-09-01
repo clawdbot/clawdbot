@@ -88,8 +88,10 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override updated(): void {
     const store = this.store;
-    if (store.canSend && !store.hasUnresolvedQuestion()) {
-      custodianAlertStore.askIfReady((question) => void store.send(question));
+    if (store.canSend && !store.sensitive && !store.hasUnresolvedQuestion()) {
+      custodianAlertStore.askIfReady(
+        (question, admission, display) => void store.send(question, display, false, admission),
+      );
     }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
     if (transcript) {

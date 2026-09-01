@@ -202,6 +202,46 @@ describe("native owner content records", () => {
     expect(changed.stdout).toContain("TS2322");
   });
 
+  it("ignores pnpm store metadata while rejecting installed dependency drift", () => {
+    const f = fixture();
+    const manifest = (storeDir: string, prunedAt: string) =>
+      JSON.stringify({ layoutVersion: 5, nodeLinker: "hoisted", prunedAt, storeDir });
+    f.write(
+      "node_modules/.modules.yaml",
+      manifest("/workspace/.cache/openclaw-pnpm-store/v11", "producer"),
+    );
+    f.write(
+      "node_modules/fixture-package/package.json",
+      '{"name":"fixture-package","type":"module","exports":"./value.js","types":"./value.d.ts"}',
+    );
+    f.write("node_modules/fixture-package/value.js", "export const value = 1;");
+    f.write("node_modules/fixture-package/value.d.ts", "export declare const value: 1;");
+    f.write("src/api.ts", 'export { value } from "fixture-package";');
+    const record = f.seal(f.prepare());
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+        f.outputRoot,
+      );
+
+    expect(matches()).toBe(true);
+    f.write(
+      "node_modules/.modules.yaml",
+      manifest("/home/runner/.local/share/pnpm/store/v11", "consumer"),
+    );
+    expect(matches()).toBe(true);
+
+    f.write("node_modules/fixture-package/value.d.ts", "export declare const value: 2;");
+    expect(matches()).toBe(false);
+    f.write("node_modules/fixture-package/value.d.ts", "export declare const value: 1;");
+    expect(matches()).toBe(true);
+    f.write("node_modules/fixture-package/value.ts", "export const value = 3;");
+    expect(matches()).toBe(false);
+  });
+
   it.each(["node_modules", "package", "source"])(
     "invalidates new resolution candidates behind linked %s directories",
     (layout) => {
@@ -339,25 +379,58 @@ describe("native owner content records", () => {
     expect(compiled.stdout).toContain("TS2322");
   });
 
-  it("ignores root CI helper churn while retaining explicit and nested inputs", () => {
-    const f = fixture(true);
-    const declaredInput = ".ci-harness/declared/value.ts";
-    f.write(declaredInput, "export const value = 1;");
-    const signature = () =>
-      new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [declaredInput]);
-    const first = signature();
+  it.each([
+    ["CI helper", ".ci-harness"],
+    ["pnpm store", ".cache/openclaw-pnpm-store"],
+  ])(
+    "ignores root %s churn while retaining explicit, installed, aliased, and nested inputs",
+    (_, ignoredRoot) => {
+      const f = fixture(true);
+      const declaredInput = `${ignoredRoot}/declared/value.ts`;
+      const installedSource = `${ignoredRoot}/objects/installed.d.ts`;
+      const installedInput = "node_modules/installed/value.d.ts";
+      const aliasedSource = `${ignoredRoot}/links/fixture-package/value.d.ts`;
+      const aliasedInput = "node_modules/fixture-package/value.d.ts";
+      f.write(declaredInput, "export const value = 1;");
+      f.write(installedSource, "export declare const installed: 1;");
+      f.write(aliasedSource, "export declare const aliased: 1;");
+      fs.mkdirSync(path.join(f.root, "node_modules/installed"), { recursive: true });
+      fs.linkSync(path.join(f.root, installedSource), path.join(f.root, installedInput));
+      fs.symlinkSync(
+        `../${ignoredRoot}/links/fixture-package`,
+        path.join(f.root, "node_modules/fixture-package"),
+        "dir",
+      );
+      const signature = () =>
+        new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [
+          declaredInput,
+          installedInput,
+          aliasedInput,
+        ]);
+      const first = signature();
 
-    f.write(".ci-harness/.github/actions/setup-node-env/helper.mjs", "export default {};");
-    expect(signature()).toBe(first);
+      f.write(`${ignoredRoot}/cache/metadata-v1.3/registry.example/package.json`, "{}");
+      expect(signature()).toBe(first);
 
-    f.write(declaredInput, "export const value = 2;");
-    expect(signature()).not.toBe(first);
-    f.write(declaredInput, "export const value = 1;");
-    expect(signature()).toBe(first);
+      f.write(declaredInput, "export const value = 2;");
+      expect(signature()).not.toBe(first);
+      f.write(declaredInput, "export const value = 1;");
+      expect(signature()).toBe(first);
 
-    f.write("nested/.ci-harness/candidate.ts", "export {};");
-    expect(signature()).not.toBe(first);
-  });
+      f.write(installedInput, "export declare const installed: 2;");
+      expect(signature()).not.toBe(first);
+      f.write(installedInput, "export declare const installed: 1;");
+      expect(signature()).toBe(first);
+
+      f.write(aliasedSource, "export declare const aliased: 2;");
+      expect(signature()).not.toBe(first);
+      f.write(aliasedSource, "export declare const aliased: 1;");
+      expect(signature()).toBe(first);
+
+      f.write(`nested/${ignoredRoot}/candidate.ts`, "export {};");
+      expect(signature()).not.toBe(first);
+    },
+  );
 
   it("propagates non-ENOENT link resolution errors", () => {
     const f = fixture(true);

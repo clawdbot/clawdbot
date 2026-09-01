@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Readable } from "node:stream";
+import type { TriageUpdateFailure } from "../commands/triage-update.js";
 
 type ManagedSystemdPostExitState = {
   activeState: string;
@@ -29,9 +30,14 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdStopDelayMs?: number;
   updaterExitCode?: number;
   updaterSignal?: NodeJS.Signals;
+  updaterSkippedReason?: "dirty" | "already-current" | "managed-service-handoff-cancelled";
+  triageExitCode?: number;
+  triageHang?: boolean;
+  triageMissing?: boolean;
   recoveryExitCode?: number;
   recoveryHang?: boolean;
   recoverySentinel?: "retained" | "consumed" | "replaced";
+  recordedFailure?: TriageUpdateFailure;
 };
 
 export type ManagedServiceCommandTiming = {
@@ -46,6 +52,9 @@ export type ManagedServiceManagerBoundaryResult = {
   state: Record<string, unknown>;
   sentinel: unknown;
   commandTimings: ManagedServiceCommandTiming[];
+  helperLog: string;
+  savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
+  sensitiveFilesRemoved: boolean;
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -271,7 +280,7 @@ export function registerManagedLaunchdHandoffRestorationTests(
       expect(parentSignal).toBe("parentExitTimeoutMs" in options ? "SIGKILL" : null);
       expect(sentinel).toMatchObject({
         payload: {
-          status: "error",
+          status: updaterRan ? "error" : "skipped",
           stats: {
             reason: updaterRan
               ? "managed-service-handoff-failed"
@@ -345,7 +354,7 @@ export function registerManagedLaunchdHandoffRestorationTests(
       expect(state).toEqual({});
       expect(sentinel).toMatchObject({
         payload: {
-          status: "error",
+          status: "skipped",
           stats: { reason: "managed-service-handoff-cancelled" },
         },
       });
@@ -570,6 +579,16 @@ export function createManagedServiceUpdateCommandFixture(params: {
             ]
           : []),
         `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
+        ...(options?.updaterSkippedReason
+          ? [
+              `const { DatabaseSync } = require("node:sqlite");`,
+              `const db = new DatabaseSync(${JSON.stringify(params.stateDatabasePath)});`,
+              `const payload = JSON.parse(db.prepare("SELECT payload_json FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").get().payload_json);`,
+              `payload.status = "skipped"; payload.stats.reason = ${JSON.stringify(options.updaterSkippedReason)};`,
+              `db.prepare("UPDATE gateway_restart_sentinel SET status = 'skipped', payload_json = ?, stats_json = ?, updated_at_ms = updated_at_ms + 1 WHERE sentinel_key = 'current'").run(JSON.stringify(payload), JSON.stringify(payload.stats));`,
+              `db.close();`,
+            ]
+          : []),
         options?.updaterSignal
           ? `process.kill(process.pid, ${JSON.stringify(options.updaterSignal)});`
           : `process.exit(${options?.updaterExitCode ?? 80});`,
@@ -635,6 +654,40 @@ export function createManagedServiceUpdateCommandFixture(params: {
       "--preserve-definition",
       "--json",
     ],
+    triageCommandArgv: options?.triageMissing
+      ? [path.join(root, "missing-triage")]
+      : [
+          process.execPath,
+          "-e",
+          [
+            `const fs = require("node:fs");`,
+            `const args = process.argv.slice(1);`,
+            `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));`,
+            `const contextPath = args[args.indexOf("--update-result") + 1];`,
+            `state.triageCalls = (state.triageCalls || 0) + 1;`,
+            `state.triageArgs = args;`,
+            `state.triageInput = JSON.parse(fs.readFileSync(contextPath, "utf8"));`,
+            `state.triageInputMode = fs.statSync(contextPath).mode & 0o777;`,
+            `state.triageObservedRestored = state.restored === true;`,
+            `state.triageObservedRecovery = Array.isArray(state.guardedRestart);`,
+            `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+            ...(options?.triageHang
+              ? [
+                  `const { spawn } = require("node:child_process");`,
+                  `state.triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+                  `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
+                  `setInterval(() => {}, 1000);`,
+                ]
+              : [
+                  `console.log(JSON.stringify({ promptPath: "triage-prompt.md", bundlePath: "support.zip" }));`,
+                  `process.exit(${options?.triageExitCode ?? 0});`,
+                ]),
+          ].join(""),
+          "--",
+          "triage",
+          "--json",
+          "--non-interactive",
+        ],
   };
 }
 

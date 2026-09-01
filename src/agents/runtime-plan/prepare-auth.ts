@@ -283,7 +283,7 @@ export function prepareAgentRuntimeAuth(
   const providerBindingSuppressesProfiles =
     (providerBinding.kind === "literal" && explicitConfigApiKeyAuth) ||
     providerHasUsableMarker ||
-    (providerHasApiKeySecretRef && explicitConfigApiKeyAuth);
+    providerHasApiKeySecretRef;
   const providerBindingNeedsNonProfileFallback =
     providerHasDirectMaterial && !providerBindingSuppressesProfiles;
   // Explicit auth owns the physical route; apiKey is only its bearer material.

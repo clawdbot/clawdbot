@@ -1,8 +1,10 @@
 import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasNativeUpdateBridge } from "../../app/native-link-routing.ts";
-import { confirmAndStartUpdate } from "../../app/update-confirmation.ts";
-import { createUpdateProgressWatcher } from "../../app/update-overlay-helpers.ts";
+import {
+  confirmAndStartUpdate,
+  createUpdateProgressWatcher,
+} from "../../app/update-confirmation.ts";
 import type {
   CustodianAlert,
   CustodianAlertAction,

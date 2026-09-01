@@ -3229,8 +3229,8 @@ jobs:
             echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
-            # Older targets build this boundary through their candidate-owned
-            # runner, but cannot produce the v2 cache fingerprint safely.
+            # Historical targets without this preparer retain their own
+            # declaration setup and do not consume the shared archive.
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -3394,12 +3394,18 @@ jobs:
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
               lint_args=(--threads=8)
+              hosted_extension_stripe=""
               if [ "$HOSTED_RUNNER_STRIPES" = "true" ]; then
-                # Five dedicated hosted jobs own the aggregated core Programs. Keep
-                # extension preparation in this sixth lane except when the exact
-                # merge-tree release lint job already owns it.
+                # Five dedicated hosted jobs own the aggregated core Programs.
+                # Historical and hybrid targets keep extension ownership here.
                 lint_args=(--only=extensions --only=scripts --threads=1)
                 if [ "$RELEASE_GATE" = "true" ]; then
+                  lint_args=(--only=scripts --threads=1)
+                elif [ "$RUNNER_PROFILE" = "github" ] &&
+                  grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+                  # Six existing hosted lint jobs divide the independently bounded
+                  # extension Programs without running two Programs concurrently.
+                  hosted_extension_stripe="6/6"
                   lint_args=(--only=scripts --threads=1)
                 fi
                 export GOMAXPROCS=2
@@ -3417,11 +3423,17 @@ jobs:
                 # The candidate's older shard runner owns all three source
                 # groups; do not split core stripes it cannot represent.
                 pnpm lint
-              elif [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
-                pnpm lint "${lint_args[@]}"
               else
-                echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
+                if [ -n "$hosted_extension_stripe" ]; then
+                  node --import tsx scripts/run-oxlint-shards.mts \
+                    --only=extensions --extension-stripe="$hosted_extension_stripe" --threads=1
+                fi
+                if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
+                  pnpm lint "${lint_args[@]}"
+                else
+                  echo "[skip] changed scope cannot affect control-UI i18n catalogs"
+                  node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
+                fi
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -3564,10 +3576,41 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        if: needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/prepare-extension-package-boundary-artifacts.mts ]]; then
+            fingerprint="$(git rev-parse HEAD)"
+            echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            # Historical targets without this preparer retain their own
+            # declaration setup and do not consume the shared archive.
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache extension package boundary artifacts for hosted core lint
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate && steps.extension-boundary-inputs.outputs.enabled == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/plugin-sdk/dist
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v4-
+
       - name: Run hosted core lint stripe
         env:
           GOMAXPROCS: "2"
           OPENCLAW_LOCAL_CHECK: "0"
+          RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
         run: |
           set -euo pipefail
           # Older candidates run their complete lint set in check-lint; their
@@ -3578,6 +3621,11 @@ jobs:
           fi
           node --import tsx scripts/run-oxlint-shards.mts \
             --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
+          if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
+            grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+            node --import tsx scripts/run-oxlint-shards.mts \
+              --only=extensions --extension-stripe=${{ matrix.stripe }}/6 --threads=1
+          fi
 
   # The github/hybrid planner profile stripes the 14 serial core test-type
   # graphs (~34-42s per graph on either runner class; tsgo saturates a machine
@@ -3709,8 +3757,8 @@ jobs:
             echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
-            # Older targets build this boundary through their candidate-owned
-            # runner, but cannot produce the v2 cache fingerprint safely.
+            # Historical targets without this preparer retain their own
+            # declaration setup and do not consume the shared archive.
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 

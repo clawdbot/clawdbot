@@ -21,8 +21,10 @@ private actor AsyncTimeoutRace<T: Sendable> {
         }
     }
 
-    private func resolve(_ outcome: Outcome) {
+    private func resolve(_ outcome: @autoclosure () -> Outcome) {
+        // Timeout factories can log; only evaluate the winner's outcome.
         guard self.outcome == nil else { return }
+        let outcome = outcome()
         self.outcome = outcome
         self.tasks.forEach { $0.cancel() }
         self.tasks.removeAll()
@@ -36,8 +38,8 @@ private actor AsyncTimeoutRace<T: Sendable> {
         self.resolve(.success(value))
     }
 
-    func resolveFailure(_ error: any Error) {
-        self.resolve(.failure(error))
+    func resolveFailure(_ error: @autoclosure @Sendable () -> any Error) {
+        self.resolve(.failure(error()))
     }
 
     private func resume(_ continuation: CheckedContinuation<T, any Error>, with outcome: Outcome) {

@@ -659,14 +659,14 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   }, 30_000);
 
-  it("holds real native declaration preparation through lint consumption and canonical cleanup", async ({
+  it("holds real SDK declaration preparation through lint consumption and canonical cleanup", async ({
     signal,
   }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
       installCompiler(root);
-      // Entrypoints resolve this fixture as their checkout; the compiler graph
-      // contains one SDK interface and one source per required preparation lane.
+      // Entrypoints resolve this fixture as their checkout. SDK and plugin
+      // sources let the lint consumer distinguish the narrow preparation mode.
       installScripts(root, [
         "run-oxlint.mts",
         "run-tsgo.mts",
@@ -709,7 +709,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const fs = require('node:fs');
         const sdk = 'packages/plugin-sdk/dist/src/plugin-sdk/qa-channel-protocol.d.ts';
         if (!fs.readFileSync(sdk, 'utf8').includes('interface Channel')) process.exit(2);
-        if (!fs.readFileSync('.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts', 'utf8').includes('interface Plugin')) process.exit(3);
+        if (fs.existsSync('.artifacts/extension-package-boundary/plugins')) process.exit(3);
         ${checkpoint("lint-consuming")}
       `,
       );
@@ -728,12 +728,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           "utf8",
         ),
       ).toContain("interface Channel");
-      expect(
-        fs.readFileSync(
-          path.join(root, ".artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts"),
-          "utf8",
-        ),
-      ).toContain("interface Plugin");
+      expect(fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/plugins"))).toBe(
+        false,
+      );
       const build = start(root, path.join(sourceRoot, "scripts/tsdown-build.mts"), buildArgs);
       await Promise.race([build.waiting, waitEvent("lint-build-started"), build.done]);
       expect(

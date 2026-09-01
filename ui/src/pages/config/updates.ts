@@ -11,7 +11,7 @@ import type {
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
-} from "../../app/update-overlay-helpers.ts";
+} from "../../app/update-schedule-projection.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -142,7 +142,8 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
       stacked: true,
       control: html`<details class="updates-attempt-details">
         <summary>${t("updates.page.showCliFallback")}</summary>
-        <pre><code>openclaw update status --json
+        <pre><code>openclaw triage
+openclaw update status --json
 openclaw update</code></pre>
       </details>`,
     }),
