@@ -1,6 +1,14 @@
 // Changed Lanes tests cover changed lanes script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -135,6 +143,61 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 }
 
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+
+function createRootTestLintFixture() {
+  const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-root-lint-");
+  git(dir, ["init", "-q", "--initial-branch=main"]);
+  writeRepoFile(dir, "README.md", "Synthetic changed-check fixture.\n");
+  commitAll(dir, "fixture base");
+  for (const file of [
+    ".oxlintrc.json",
+    "tsconfig.json",
+    "test/tsconfig.json",
+    "test/tsconfig/tsconfig.test.json",
+    "test/tsconfig/tsconfig.test.root.json",
+    "test/vitest/vitest.test-shards.d.mts",
+  ]) {
+    writeRepoFile(dir, file, readFileSync(path.join(repoRoot, file), "utf8"));
+  }
+  for (const [file, source] of Object.entries({
+    "src/plugin-sdk/discovery.ts":
+      "export function work(): Promise<void> { return Promise.resolve(); }",
+    "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
+    "ui/contracts.d.ts": "declare function fromUi(): Promise<void>;",
+    "packages/contracts.d.ts": "declare function fromPackage(): Promise<void>;",
+  })) {
+    writeRepoFile(dir, file, source);
+  }
+  symlinkSync(path.join(repoRoot, "node_modules"), path.join(dir, "node_modules"), "junction");
+  mkdirSync(path.join(dir, "scripts"));
+  for (const script of ["run-oxlint.mjs", "report-test-temp-creations.mjs"]) {
+    symlinkSync(path.join(repoRoot, "scripts", script), path.join(dir, "scripts", script));
+  }
+  // Stub unrelated package gates at the executable boundary: real pnpm could
+  // reconcile the linked toolchain. The CLI and source-only lint wrapper stay real.
+  const binDir = path.join(dir, "bin");
+  for (const bin of ["pnpm", "corepack"]) {
+    writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");
+    chmodSync(path.join(binDir, bin), 0o755);
+    writeRepoFile(dir, `bin/${bin}.cmd`, "@echo off\r\nexit /b 0\r\n");
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...createNestedGitEnv(),
+    OXC_LOG: "debug",
+    PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+  };
+  delete env.OPENCLAW_TESTBOX;
+  delete env.OPENCLAW_OXLINT_SKIP_PREPARE;
+  return {
+    dir,
+    run: (script: string, args: string[]) =>
+      spawnSync(process.execPath, [path.join(repoRoot, script), ...args], {
+        cwd: dir,
+        encoding: "utf8",
+        env,
+      }),
+  };
+}
 
 // Executes the exact "format changed files" plan command with the repo-pinned oxfmt,
 // reconstructing `pnpm format:check <plan args>`. Guards the runtime verdict, not just
@@ -515,6 +578,7 @@ describe("scripts/changed-lanes", () => {
       "pnpm tsgo:test:root",
       "pnpm check:coercion-helpers",
       "pnpm lint:scripts",
+      "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
     ]);
   });
 
@@ -684,6 +748,157 @@ describe("scripts/changed-lanes", () => {
 
     const result = runChangedFormatLaneWithRepoOxfmt(dir, ["src/deleted.ts", "src/kept.ts"]);
     expect(result.status).toBe(0);
+  });
+
+  it.each([
+    { name: "a root test", count: 1, extension: "ts", otherPaths: [] },
+    {
+      name: "an all-lane mixed diff",
+      count: 1,
+      extension: "tsx",
+      otherPaths: ["vitest.config.ts"],
+    },
+    { name: "the ninth root test", count: 9, extension: "ts", otherPaths: [] },
+  ])(
+    "fails real changed-check lint for $name and passes after repair",
+    ({ count, extension, otherPaths }) => {
+      const { dir, run } = createRootTestLintFixture();
+      const targets = Array.from(
+        { length: count },
+        (_, index) => `test/root-lint-${index}.test.${extension}`,
+      );
+      const broken = targets[count - 1]!;
+      const violation = [
+        'import { work } from "openclaw/plugin-sdk/discovery";',
+        "export function run(ready: boolean) {",
+        "  if (ready) return;",
+        "  work(); fromCore(); fromUi(); fromPackage();",
+        "}",
+        "run(false);",
+        "",
+      ].join("\n");
+      for (const target of targets) {
+        writeRepoFile(dir, target, "export const ready = true;\n");
+      }
+      writeRepoFile(dir, broken, violation);
+      // Neither excluded fixtures nor unchanged tests may be swept into targeted lint.
+      writeRepoFile(dir, "test/fixtures/invalid.ts", violation);
+      writeRepoFile(dir, "test/unchanged.test.ts", violation);
+      const paths = [...targets, "test/fixtures/invalid.ts", "test/deleted.test.ts", ...otherPaths];
+      const failed = run("scripts/check-changed.mjs", ["--base", "HEAD", "--", ...paths]);
+      const diagnostics = failed.stdout + failed.stderr;
+      expect(failed.error, diagnostics).toBeUndefined();
+      expect(failed.status, diagnostics).toBe(1);
+      expect(diagnostics).toContain("eslint(curly)");
+      expect(
+        diagnostics.match(/typescript\(no-floating-promises\)/gu) ?? [],
+        diagnostics,
+      ).toHaveLength(4);
+      expect(diagnostics).toContain(broken);
+      expect(failed.stderr.trim().split("\n").at(-1)).toBe("[check:changed] FAILED (exit 1)");
+
+      writeRepoFile(
+        dir,
+        broken,
+        violation
+          .replace("if (ready) return;", "if (ready) { return; }")
+          .replace(
+            "work(); fromCore(); fromUi(); fromPackage();",
+            "void work(); void fromCore(); void fromUi(); void fromPackage();",
+          ),
+      );
+      const passed = run("scripts/check-changed.mjs", ["--base", "HEAD", "--", ...paths]);
+      expect(passed.error, passed.stdout + passed.stderr).toBeUndefined();
+      expect(passed.status, passed.stdout + passed.stderr).toBe(0);
+      const planned = run("scripts/check-changed.mjs", [
+        "--dry-run",
+        "--base",
+        "HEAD",
+        "--",
+        ...paths,
+      ]);
+      expect(planned.status, planned.stderr).toBe(0);
+      const lintPrefix =
+        "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json ";
+      const batches = planned.stderr
+        .split("\n")
+        .filter((line) => line.includes(lintPrefix))
+        .map((line) => line.slice(line.indexOf(lintPrefix) + lintPrefix.length).split(" "));
+      expect(batches.map((batch) => batch.length)).toEqual(count === 9 ? [8, 1] : [1]);
+      expect(batches.flat()).toEqual(targets);
+    },
+  );
+
+  it("discovers the canonical root test program and preserves ambient and source-alias types", () => {
+    const { dir, run } = createRootTestLintFixture();
+    const sources = ["test/discovery.test.ts", "test/component.test.tsx"];
+    const declarations = ["test/vitest/vitest.test-shards.d.mts", "test/vitest/common.d.cts"];
+    const modules = ["test/plain.mts", "test/plain.cts"];
+    for (const file of sources) {
+      writeRepoFile(
+        dir,
+        file,
+        'import { work } from "openclaw/plugin-sdk/discovery";\nwork(); fromCore(); fromUi(); fromPackage();\n',
+      );
+    }
+    writeRepoFile(dir, declarations[1]!, "export declare function work(): Promise<void>;\n");
+    for (const file of modules) {
+      writeRepoFile(dir, file, "void Promise.resolve();\n");
+    }
+    const selected = [...sources, ...declarations, ...modules];
+    const result = run("scripts/run-oxlint.mjs", [
+      "--tsconfig",
+      "test/tsconfig/tsconfig.test.root.json",
+      "--format",
+      "json",
+      ...selected,
+    ]);
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      number_of_files: number;
+      diagnostics: { filename: string; code: string }[];
+    };
+    expect(report.number_of_files).toBe(selected.length);
+    for (const file of selected) {
+      // Ordinary .mts/.cts are deliberately outside the canonical root program;
+      // declarations with those suffixes are existing program roots.
+      const project = modules.includes(file) ? "<none>" : path.join(dir, "test/tsconfig.json");
+      expect(result.stderr.replaceAll("\\", "/"), result.stdout).toContain(
+        `Got tsconfig for file ${path.join(dir, file).replaceAll("\\", "/")}: ${project.replaceAll("\\", "/")}`,
+      );
+    }
+    for (const file of sources) {
+      expect(
+        report.diagnostics
+          .filter((diagnostic) => diagnostic.filename === file)
+          .map((diagnostic) => diagnostic.code),
+        result.stdout,
+      ).toEqual(Array.from({ length: 4 }, () => "typescript(no-floating-promises)"));
+    }
+    const config = run("scripts/run-tsgo.mjs", ["--showConfig", "-p", "test/tsconfig.json"]);
+    expect(config.error, config.stderr).toBeUndefined();
+    expect(config.status, config.stdout + config.stderr).toBe(0);
+    const project = JSON.parse(config.stdout) as {
+      files: string[];
+      compilerOptions: { types: string[] };
+    };
+    const roots = project.files.map((file) => path.resolve(dir, "test", file));
+    expect(roots).toEqual(
+      expect.arrayContaining(
+        [
+          ...sources,
+          ...declarations,
+          "src/contracts.d.ts",
+          "ui/contracts.d.ts",
+          "packages/contracts.d.ts",
+        ].map((file) => path.join(dir, file)),
+      ),
+    );
+    for (const file of modules) {
+      expect(roots).not.toContain(path.join(dir, file));
+    }
+    expect(project.compilerOptions.types).toEqual(expect.arrayContaining(["node", "vitest"]));
   });
 
   it("uses the merge commit first parent instead of a stale PR payload base", () => {
@@ -872,11 +1087,12 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("targets mixed core, extension, and script lint without full-owner fan-out", () => {
+  it("targets mixed core, extension, script, and root test lint without full-owner fan-out", () => {
     const result = detectChangedLanes([
       "src/gateway/node-registry.ts",
       "extensions/lmstudio/src/models.fetch.ts",
       "scripts/check-changed.mjs",
+      "test/helpers/temp-dir.ts",
     ]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 
@@ -907,6 +1123,15 @@ describe("scripts/changed-lanes", () => {
             "--tsconfig",
             "config/tsconfig/oxlint.scripts.json",
             "scripts/check-changed.mjs",
+          ],
+        }),
+        expect.objectContaining({
+          name: "lint test root changed file",
+          args: [
+            "scripts/run-oxlint.mjs",
+            "--tsconfig",
+            "test/tsconfig/tsconfig.test.root.json",
+            "test/helpers/temp-dir.ts",
           ],
         }),
       ]),
@@ -1084,22 +1309,64 @@ describe("scripts/changed-lanes", () => {
   });
 
   it.each([
+    ["test/ordinary.test.ts", true, true],
+    ["test/scripts/owner.test.ts", true, true],
+    ["test/helpers/support.ts", true, true],
+    ["test/component.test.tsx", true, true],
     ["test/vitest/foo.config.ts", true, true],
     ["test/vitest/vitest-runtime-helper.d.mts", true, true],
-    ["test/fixtures/foo.ts", false, true],
-    ["test/foo.mjs", false, true],
-    ["test/tsconfig/tsconfig.test.root.json", true, true],
+    ["test/vitest/vitest-runtime-helper.d.cts", true, true],
+    ["test/plain.mts", true, false],
+    ["test/plain.cts", true, false],
+    ["test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts", true, false],
+    ["test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts", true, false],
+    ["test/deleted.test.ts", true, false],
+    ["test/fixtures/foo.ts", false, false],
+    ["test/foo.mjs", false, false],
+    ["test/tsconfig/tsconfig.test.root.json", true, false],
+    ["test/tsconfig.json", true, false],
   ])(
-    "routes %s to testRoot=%s and tooling=%s",
-    (changedPath, expectedTestRoot, expectedTooling) => {
-      const result = detectChangedLanes([changedPath]);
-      const plan = createChangedCheckPlan(result);
-
-      expect(result.lanes.testRoot).toBe(expectedTestRoot);
-      expect(result.lanes.tooling).toBe(expectedTooling);
-      expect(plan.commands.map((command) => command.args[0]).includes("tsgo:test:root")).toBe(
-        expectedTestRoot,
+    "routes %s to root typecheck=%s and targeted lint=%s",
+    (changedPath, expectedTestRoot, expectedLint) => {
+      const { dir, run } = createRootTestLintFixture();
+      if (!changedPath.endsWith(".json")) {
+        writeRepoFile(
+          dir,
+          changedPath,
+          expectedLint
+            ? "export const ready = true;\n"
+            : 'if (true) console.log("excluded");\nPromise.resolve();\n',
+        );
+      }
+      if (changedPath === "test/deleted.test.ts") {
+        unlinkSync(path.join(dir, changedPath));
+      }
+      const result = run("scripts/check-changed.mjs", [
+        "--dry-run",
+        "--base",
+        "HEAD",
+        "--",
+        changedPath,
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr.includes("would run: pnpm tsgo:test:root")).toBe(expectedTestRoot);
+      if (!expectedLint) {
+        const excluded = run("scripts/check-changed.mjs", ["--base", "HEAD", "--", changedPath]);
+        expect(excluded.error, excluded.stderr).toBeUndefined();
+        expect(excluded.status, excluded.stdout + excluded.stderr).toBe(0);
+        expect(excluded.stderr).not.toContain("lint test root changed");
+      }
+      const lintCommands = result.stderr
+        .split("\n")
+        .filter((line) => line.includes("would run:") && line.includes("run-oxlint.mjs"));
+      expect(lintCommands).toEqual(
+        expectedLint
+          ? [
+              `[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json ${changedPath}`,
+            ]
+          : [],
       );
+      expect(result.stderr).not.toContain("would run: pnpm lint\n");
     },
   );
 

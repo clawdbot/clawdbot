@@ -7,6 +7,7 @@ import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -16,7 +17,6 @@ import {
   chatModelUnavailableMessage,
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -30,7 +30,6 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { getChatHistoryVersion } from "./chat-history-state.ts";
@@ -100,18 +99,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
-    const publishClient = state.client;
     const placement = selectedSession?.placement;
-    const publicationHasDirectPlacement = !placement || placement.state === "local";
-    const cloudIdlePublication =
-      Boolean(placement) && placement?.state !== "local" && !hasAbortableSessionRun(state);
-    const canPublishPullRequest =
-      Boolean(publishClient) &&
-      Boolean(selectedSession?.key && !selectedSessionArchived) &&
-      !hasAbortableSessionRun(state) &&
-      publicationHasDirectPlacement &&
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.github.publish") === true;
     const diskSpace = placement?.state === "active" ? placement.diskSpace : undefined;
     const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
     const placementFailureReason =
@@ -296,6 +284,50 @@ export class ChatPane extends ChatPaneLayoutRender {
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
           onModelSetup: () => this.context.navigate("model-setup"),
         });
+    const publicationScope = this.captureConnectionScope();
+    const publicationOwnerKey = () =>
+      JSON.stringify([
+        resolveCurrentSelfUser({
+          snapshotUser: this.context.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
+        })?.identity ?? null,
+        this.context.gateway.snapshot.hello?.auth?.role,
+        this.context.gateway.snapshot.hello?.auth?.scopes,
+        selectedChatSessionRow(state)?.sessionId,
+        selectedChatSessionRow(state)?.sharingRole,
+        selectedChatSessionRow(state)?.visibility,
+        this.isCurrentSessionArchived(state),
+        sessionParticipationBlocked,
+      ]);
+    const publicationOwner = publicationOwnerKey();
+    const publicationAvailable = Boolean(
+      publicationScope &&
+      selectedSession?.key &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") === true,
+    );
+    this.githubPublication.sync(
+      publicationAvailable && publicationScope && selectedSession
+        ? {
+            client: publicationScope.client,
+            key: `${publicationScope.generation}:${selectedSession.key}:${publicationOwner}`,
+            sessionKey: selectedSession.key,
+            canWrite:
+              !selectedSessionArchived &&
+              !sessionParticipationBlocked &&
+              hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
+            personalReady:
+              !hasAbortableSessionRun(state) &&
+              !isCloudWorkerPlacementState(placement?.state) &&
+              !workspaceConflict,
+            isCurrent: () =>
+              this.presented &&
+              this.isConnectionScopeCurrent(publicationScope) &&
+              selectedChatSessionRow(state)?.key === selectedSession.key &&
+              publicationOwnerKey() === publicationOwner,
+          }
+        : null,
+    );
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
@@ -478,61 +510,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.requestUpdate();
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
-      githubPublicationBusy: this.githubPublicationBusy,
-      githubPublicationResult: this.githubPublicationResult,
-      githubPublicationError: this.githubPublicationError,
-      githubPublicationGuidance: cloudIdlePublication
-        ? t("chat.pullRequests.cloudPublicationGuidance")
-        : undefined,
-      onPublishPullRequest: canPublishPullRequest
-        ? () => {
-            if (this.githubPublicationBusy || !selectedSession?.key) {
-              return;
-            }
-            const scope = this.captureConnectionScope();
-            if (!scope) {
-              return;
-            }
-            const sessionKey = selectedSession.key;
-            const idempotencyKey = this.githubPublicationIdempotencyKey ?? generateUUID();
-            this.githubPublicationIdempotencyKey = idempotencyKey;
-            const requestVersion = ++this.githubPublicationRequestVersion;
-            const ownsResult = () =>
-              this.presented &&
-              this.githubPublicationRequestVersion === requestVersion &&
-              this.isConnectionScopeCurrent(scope) &&
-              selectedChatSessionRow(scope.state)?.key === sessionKey;
-            this.githubPublicationBusy = true;
-            this.githubPublicationError = null;
-            this.requestUpdate();
-            void import("./chat-github-publication.ts")
-              .then(({ requestGitHubPublication }) =>
-                requestGitHubPublication(scope.client, {
-                  sessionKey,
-                  idempotencyKey,
-                }),
-              )
-              .then((result) => {
-                if (ownsResult()) {
-                  this.githubPublicationResult = result;
-                  if (result.status === "published" || result.status === "failed") {
-                    this.githubPublicationIdempotencyKey = null;
-                  }
-                }
-              })
-              .catch((error: unknown) => {
-                if (ownsResult()) {
-                  this.githubPublicationError = formatUiError(error);
-                }
-              })
-              .finally(() => {
-                if (ownsResult()) {
-                  this.githubPublicationBusy = false;
-                  this.requestUpdate();
-                }
-              });
-          }
-        : undefined,
+      githubPublication: this.githubPublication.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),

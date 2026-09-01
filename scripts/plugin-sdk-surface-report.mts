@@ -198,7 +198,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      147,
+      // +1: restore the shipped read-only conversation-binding inspection facade.
+      148,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -331,7 +332,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical diagnostic flag checker through its focused subpath.
       // +3: typed system-agent approval request, payload, and resolution contracts for channel plugins.
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      4359,
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      // +2: shipped conversation-binding inspection function and result type.
+      4364,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -439,7 +443,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical diagnostic flag checker through its focused subpath.
       // +1: shared approval expiry formatter for native channel prompts.
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      2594,
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      // +1: shipped read-only conversation-binding inspection function.
+      2598,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

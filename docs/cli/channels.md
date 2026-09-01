@@ -169,6 +169,8 @@ If your config was already in a mixed state (named accounts present and top-leve
 
 ## Login and logout (interactive)
 
+Before `channels add` or `channels login` writes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+
 ```bash
 openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp

@@ -35,11 +35,12 @@ function jsonValuesEqual(left: object, right: object): boolean {
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
-  // Instructions are rebuilt and sent on every request; exclude them from history matching.
+  // Instructions and tools apply to the current response and remain on every wire request.
   const {
     input: _input,
     previous_response_id: _previousResponseId,
     instructions: _instructions,
+    tools: _tools,
     ...rest
   } = request;
   if (!isRecord(rest.metadata)) {

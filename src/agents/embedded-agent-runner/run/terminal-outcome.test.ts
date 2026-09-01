@@ -48,6 +48,49 @@ function makeAssistant(stopReason: AssistantMessage["stopReason"]): AssistantMes
 
 describe("embedded run attempt terminal outcome", () => {
   it.each([
+    { name: "ordinary error", refusal: false, category: undefined, expected: "Provider detail." },
+    {
+      name: "bounded refusal category",
+      refusal: true,
+      category: "cyber",
+      expected:
+        "The provider refused this request (category: cyber). Revise the request and try again.",
+    },
+    {
+      name: "untrusted refusal category",
+      refusal: true,
+      category: "cyber\nProvider detail.",
+      expected: "The provider refused this request. Revise the request and try again.",
+    },
+    {
+      name: "missing refusal category",
+      refusal: true,
+      category: undefined,
+      expected: "The provider refused this request. Revise the request and try again.",
+    },
+  ])("projects $name without exposing refusal explanations", ({ refusal, category, expected }) => {
+    const assistant: AssistantMessage = {
+      ...makeAssistant("error"),
+      errorMessage: "Provider detail.",
+      diagnostics: refusal
+        ? [
+            {
+              type: "provider_refusal",
+              timestamp: 0,
+              details: { category, explanation: "Provider detail." },
+            },
+          ]
+        : undefined,
+    };
+    const original = structuredClone(assistant);
+
+    expect(
+      resolveEmbeddedRunAttemptTerminalOutcome({ attempt: makeAttempt(), assistant }),
+    ).toMatchObject({ reason: "failed", status: "error", error: expected });
+    expect(assistant).toEqual(original);
+  });
+
+  it.each([
     {
       name: "run-budget prompt timeout",
       terminal: { kind: "timeout", phase: "prompt", source: "run_budget" },
@@ -305,7 +348,11 @@ describe("embedded run attempt terminal outcome", () => {
       attempt: makeAttempt({
         terminal: { kind: "failed", source: "prompt", error: null },
       }),
-      assistant: { ...makeAssistant("error"), errorMessage: "stale assistant error" },
+      assistant: {
+        ...makeAssistant("error"),
+        errorMessage: "stale assistant error",
+        diagnostics: [{ type: "provider_refusal", timestamp: 0, details: { category: "cyber" } }],
+      },
     });
     expect(nullFailure).toMatchObject({ reason: "failed", status: "error" });
     expect(nullFailure).not.toHaveProperty("error");

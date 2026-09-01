@@ -824,6 +824,17 @@ count.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set
   `replace=true` and use `deltaText` as the replacement text.
+  Failed runs (`state: "error"`) may include `errorDetail` alongside the coarse
+  `errorKind` and human-readable `errorMessage`. This closed object has seven
+  optional fields: `provider`, `model`, `failoverReason`,
+  `providerRuntimeFailureKind`, `providerErrorType`, `httpStatus`, and
+  `providerErrorMessagePreview`. Strings are capped at 300 characters; `httpStatus`
+  is an integer from 100 through 599. Details come from the failed attempt's
+  sanitized provider observation, not from reparsing the user-facing message.
+  The preview is credential-redacted and may be shorter than the protocol cap.
+  Raw bodies, raw previews, and diagnostic hashes are never included in
+  `errorDetail`. Runs without provider observations omit it; successful and
+  canceled events do not carry it. This is an additive protocol-v4 field.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an

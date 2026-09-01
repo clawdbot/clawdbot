@@ -8,9 +8,9 @@ title: "Text-to-speech"
 sidebarTitle: "Text to speech (TTS)"
 ---
 
-OpenClaw converts outbound replies into audio across **14 speech providers**:
-native voice messages on Feishu, Matrix, Telegram, and WhatsApp; audio
-attachments everywhere else; and PCM/Ulaw streams for telephony and Talk.
+OpenClaw converts outbound replies into native voice messages on Feishu, Matrix,
+Telegram, and WhatsApp; audio attachments everywhere else; and PCM/Ulaw streams
+for telephony and Talk.
 
 TTS is the speech-output half of Talk's `stt-tts` mode (`talk.speak` calls this
 same synthesis path). Provider-native `realtime` Talk sessions synthesize
@@ -1006,7 +1006,7 @@ and resolved values still fail startup or reject the update.
     <ParamField path="command" type="string">Local executable or command string for CLI TTS.</ParamField>
     <ParamField path="args" type="string[]">Command arguments. Supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, `{{OutputBase}}` placeholders.</ParamField>
     <ParamField path="outputFormat" type='"mp3" | "opus" | "wav"'>Expected CLI output format. Default `mp3` for audio attachments.</ParamField>
-    <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
+    <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Overrides the resolved TTS request timeout when set. When omitted, follows the request timeout; the plugin default is `120000`.</ParamField>
     <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
 

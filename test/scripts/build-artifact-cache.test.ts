@@ -339,6 +339,26 @@ describe("native owner content records", () => {
     expect(compiled.stdout).toContain("TS2322");
   });
 
+  it("ignores root CI helper churn while retaining explicit and nested inputs", () => {
+    const f = fixture(true);
+    const declaredInput = ".ci-harness/declared/value.ts";
+    f.write(declaredInput, "export const value = 1;");
+    const signature = () =>
+      new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [declaredInput]);
+    const first = signature();
+
+    f.write(".ci-harness/.github/actions/setup-node-env/helper.mjs", "export default {};");
+    expect(signature()).toBe(first);
+
+    f.write(declaredInput, "export const value = 2;");
+    expect(signature()).not.toBe(first);
+    f.write(declaredInput, "export const value = 1;");
+    expect(signature()).toBe(first);
+
+    f.write("nested/.ci-harness/candidate.ts", "export {};");
+    expect(signature()).not.toBe(first);
+  });
+
   it("propagates non-ENOENT link resolution errors", () => {
     const f = fixture(true);
     fs.symlinkSync("loop", path.join(f.root, "loop"));

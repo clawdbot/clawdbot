@@ -944,7 +944,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          # Artifact validation reads the immutable tuple, not source history.
+          fetch-depth: ${{ needs.resolve_target.outputs.package_mode == 'artifact' && 1 || 0 }}
           filter: blob:none
 
       - name: Validate release package source metadata

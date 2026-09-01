@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -61,6 +62,20 @@ type ClassifiedAssistantErrorFacts = {
   reason: FailoverReason | null;
   status?: number;
 };
+export function formatProviderRefusalText(message: { diagnostics?: unknown }): string | undefined {
+  const refusal = Array.isArray(message.diagnostics)
+    ? message.diagnostics.find(
+        (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
+      )
+    : undefined;
+  if (!refusal) {
+    return undefined;
+  }
+  const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
+  const safeCategory =
+    typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
+}
 function classifyAssistantErrorFacts(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
@@ -99,6 +114,10 @@ export function formatAssistantErrorText(
   const raw = (msg.errorMessage ?? "").trim();
   if (msg.stopReason !== "error" && !raw) {
     return undefined;
+  }
+  const providerRefusalText = formatProviderRefusalText(msg);
+  if (providerRefusalText) {
+    return providerRefusalText;
   }
   const formatCopy = renderFormatErrorCopy(raw);
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);

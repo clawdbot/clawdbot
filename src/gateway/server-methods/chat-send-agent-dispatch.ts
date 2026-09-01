@@ -9,6 +9,7 @@ import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -454,17 +455,22 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Delivered warnings or source replies cannot replace either authoritative result.
           const runtimeClassification = runtimeOutcome
             ? classifyAgentRunTerminalOutcome(runtimeOutcome)
-            : recordedOutcome === "failed"
-              ? "failure"
-              : recordedOutcome === "completed"
-                ? "success"
-                : undefined;
+            : recordedOutcome && (recordedOutcome === "failed" ? "failure" : "success");
           const runtimeCancelled = runtimeClassification === "cancellation";
           const runtimeFailed =
             runtimeClassification === "failure" || runtimeClassification === "timeout";
           const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
             .map((entryInner) => entryInner.payload)
             .filter((payload) => payload.isError);
+          // Native streams cannot publish a host-authored warning. Give a warning-only
+          // turn the normal reply owner without reclassifying the runtime outcome.
+          const hasOnlyFinalWarnings =
+            returnedAgentErrorPayloads.length > 0 &&
+            replyDispatch.deliveredReplies.every(
+              ({ kind, payload }) =>
+                (kind === "final" && payload.isError === true) ||
+                isReplyPayloadStatusNotice(payload),
+            );
           const hasReturnedAgentError = runtimeClassification
             ? runtimeFailed
             : returnedAgentErrorPayloads.length > 0 &&
@@ -491,7 +497,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // A dispatched runtime owns its persisted turn; this owner projects
           // only settled, post-hook replies. Native runtimes project their own stream.
           if (
-            (!agentRunStarted || replyDispatchRun) &&
+            (!agentRunStarted || replyDispatchRun || hasOnlyFinalWarnings) &&
             !queuedFollowup.isEnqueued() &&
             !hasReturnedAgentError &&
             !context.chatRunState.hasAbortMarker(clientRunId)
