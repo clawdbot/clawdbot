@@ -79,7 +79,10 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
   };
 };
 
-const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
+const parseChunk = (
+  raw: string,
+  options?: { silentToken?: string; final?: boolean },
+): ParsedChunk => {
   let text = raw ?? "";
   const replyParsed = parseInlineDirectives(text, {
     stripAudioTag: true,
@@ -90,8 +93,13 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
   }
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
+  // A prefix-only fragment (e.g. a streamed `N`) is held silent while more text
+  // may still arrive, but at terminal completion a non-exact fragment is ordinary
+  // output the model emitted and must not be dropped. Only an exact token stays
+  // silent at finalization.
   const isSilent =
-    isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
+    isSilentReplyText(text, silentToken) ||
+    (!options?.final && isSilentReplyPrefixText(text, silentToken));
   if (isSilent) {
     text = "";
   } else if (startsWithSilentToken(text, silentToken)) {
@@ -115,6 +123,7 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
   let pendingSeparator = "";
+  let pendingSilentPrefix = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let hasReturnedText = false;
@@ -122,6 +131,7 @@ export function createStreamingDirectiveAccumulator() {
   const reset = () => {
     pendingTail = "";
     pendingSeparator = "";
+    pendingSilentPrefix = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
     hasReturnedText = false;
@@ -130,9 +140,17 @@ export function createStreamingDirectiveAccumulator() {
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
     const hadPendingTail = pendingTail.length > 0;
     const heldSeparator = pendingSeparator;
-    let combined = `${pendingTail}${raw ?? ""}`;
+    const heldSilentPrefix = pendingSilentPrefix;
+    const heldTail = pendingTail;
+    pendingSilentPrefix = "";
     pendingTail = "";
     pendingSeparator = "";
+    // Terminal flushes re-feed whole assistant text that already opens with the
+    // held fragment; composing it again would duplicate those characters. Only
+    // a continuation delta still needs the held prefix prepended.
+    const composingSilentPrefix =
+      heldSilentPrefix.length > 0 && !(raw ?? "").startsWith(heldSilentPrefix);
+    let combined = `${composingSilentPrefix ? heldSilentPrefix : ""}${heldTail}${raw ?? ""}`;
 
     if (!options.final) {
       const split = splitTrailingDirective(combined);
@@ -152,7 +170,10 @@ export function createStreamingDirectiveAccumulator() {
       return null;
     }
 
-    const parsed = parseChunk(combined, { silentToken: options.silentToken });
+    const parsed = parseChunk(combined, {
+      silentToken: options.silentToken,
+      final: options.final,
+    });
     if (hadPendingTail && heldSeparator && parsed.text.startsWith("[")) {
       parsed.text = `${heldSeparator}${parsed.text}`;
     }
@@ -181,6 +202,12 @@ export function createStreamingDirectiveAccumulator() {
           sawCurrent,
           hasTag,
         };
+      }
+      // A still-silent fragment (a streamed `N`, `NO`, or exact token) is
+      // pending input, not consumed output: hold it so the next delta continues
+      // the token instead of leaking the remainder as visible text.
+      if (!options.final && parsed.isSilent) {
+        pendingSilentPrefix = combined;
       }
       return null;
     }

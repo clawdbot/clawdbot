@@ -325,9 +325,6 @@ export function isSilentReplyPrefixText(
   if (trimmed !== normalized) {
     return false;
   }
-  if (normalized.length < 2) {
-    return false;
-  }
   if (!tokenUpper.startsWith(normalized)) {
     return false;
   }
@@ -345,5 +342,8 @@ export function isSilentReplyPrefixText(
   if (/[^A-Z_]/.test(tokenUpper)) {
     return /[^A-Z_]/.test(normalized);
   }
-  return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
+  // A lone uppercase `N` is the first streamed delta of NO_REPLY: returning true
+  // holds it as a pending lead fragment until the next delta disambiguates it,
+  // instead of leaking it into the visible reply.
+  return tokenUpper === SILENT_REPLY_TOKEN && (normalized === "N" || normalized === "NO");
 }

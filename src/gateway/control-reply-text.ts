@@ -11,7 +11,12 @@ const SUPPRESSED_CONTROL_REPLY_TOKENS = [
 const MIN_BARE_PREFIX_LENGTH_BY_TOKEN: Readonly<
   Record<(typeof SUPPRESSED_CONTROL_REPLY_TOKENS)[number], number>
 > = {
-  [SILENT_REPLY_TOKEN]: 2,
+  // Hold a lone `N` (first NO_REPLY delta) as a pending lead fragment so it
+  // cannot flash on delta-rendering channels. SILENT_REPLY_TOKEN skips the
+  // case guard below so a mixed-case "No" lead is also held pending (it may
+  // still grow into NO_REPLY); the final payload renders "No" if the turn
+  // resolves to natural language. Length-1 floor is safe for this token only.
+  [SILENT_REPLY_TOKEN]: 1,
   ANNOUNCE_SKIP: 3,
   REPLY_SKIP: 3,
 };
