@@ -16,6 +16,7 @@ import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-co
 import {
   exitCodeFromFindings,
   runDoctorLintChecks,
+  selectUpdateReadinessChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
 import { listExtensionHealthChecksForDoctor } from "../flows/health-check-registry.js";
@@ -33,6 +34,7 @@ import {
 } from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
@@ -42,6 +44,7 @@ interface DoctorLintCliOptions {
   readonly allowExec?: boolean;
   readonly deep?: boolean;
   readonly includeAllChecks?: boolean;
+  readonly updateReadiness?: "post-plugin";
 }
 
 type DoctorLintStateView = {
@@ -114,10 +117,12 @@ async function prepareDoctorLintExecution(
   }
   maybeLoadDotEnvForConfig(process.env);
   const sourceEnv = { ...process.env };
-  const pluginStateMode = resolveBundledHealthCheckPluginStateMode(opts);
+  const updateReadiness = isPostCoreConvergencePass(sourceEnv) ? "post-plugin" : undefined;
+  const effectiveOpts: DoctorLintCliOptions = updateReadiness ? { ...opts, updateReadiness } : opts;
+  const pluginStateMode = resolveBundledHealthCheckPluginStateMode(effectiveOpts);
   let execution: DoctorLintExecution;
   if (pluginStateMode === "direct") {
-    execution = await executeDoctorLint(runtime, opts, sevMin, {
+    execution = await executeDoctorLint(runtime, effectiveOpts, sevMin, {
       pluginMetadataEnv: sourceEnv,
       readConfigSnapshot: () => readConfigFileSnapshot({ observe: false }),
       sourceEnv,
@@ -132,7 +137,7 @@ async function prepareDoctorLintExecution(
       observe: false,
       pluginValidation: "core-only",
     });
-    execution = await executeDoctorLint(runtime, opts, sevMin, {
+    execution = await executeDoctorLint(runtime, effectiveOpts, sevMin, {
       pluginMetadataEnv: sourceEnv,
       readConfigSnapshot: () => configIo.readConfigFileSnapshot(),
       sourceEnv,
@@ -148,7 +153,7 @@ async function prepareDoctorLintExecution(
           configPath: sourceConfigPath,
           observe: false,
         });
-        return await executeDoctorLint(runtime, opts, sevMin, {
+        return await executeDoctorLint(runtime, effectiveOpts, sevMin, {
           pluginMetadataEnv,
           readConfigSnapshot: () => configIo.readConfigFileSnapshot(),
           sourceEnv,
@@ -159,7 +164,7 @@ async function prepareDoctorLintExecution(
       if (!(error instanceof DoctorLintStateSnapshotError)) {
         throw error;
       }
-      execution = createStateSnapshotFailureExecution(runtime, opts, sevMin, error);
+      execution = createStateSnapshotFailureExecution(runtime, effectiveOpts, sevMin, error);
     }
   }
   return execution;
@@ -213,6 +218,7 @@ async function executeDoctorLint(
     cwd: ctx.cwd,
     env: stateView.pluginMetadataEnv,
     runWithPluginStateSnapshot: stateView.runWithPluginStateSnapshot,
+    updateReadiness: opts.updateReadiness,
   });
   const registeredExtensionChecks = listExtensionHealthChecksForDoctor([]);
   const onlyRegisteredExtensionChecks =
@@ -233,9 +239,15 @@ async function executeDoctorLint(
     runWithPrivateStateSnapshot,
   };
 
+  const checks = [
+    ...coreChecks.map((check) => withCoreLintContext(check, coreCtx)),
+    ...extensionChecks,
+  ];
   const runOpts: DoctorLintRunOptions = {
-    checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
-    includeAllChecks: opts.includeAllChecks === true,
+    checks: opts.updateReadiness
+      ? selectUpdateReadinessChecks(checks, opts.updateReadiness)
+      : checks,
+    includeAllChecks: opts.updateReadiness !== undefined || opts.includeAllChecks === true,
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };

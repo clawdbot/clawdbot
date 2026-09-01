@@ -870,7 +870,11 @@ through OpenClaw.
 
 By default, the plugin starts OpenClaw's managed Codex binary locally with
 stdio transport. Set `appServer.command` only to intentionally run a
-different executable. Codex classifies WebSocket transport as experimental
+different executable. Verified setup accepts a native Codex executable or the
+official `@openai/codex` npm entrypoint, including its installed symlink or
+Windows npm launcher. Arbitrary wrapper scripts cannot be verified because
+their native target is unknown; select the native executable or official npm
+launcher instead. Codex classifies WebSocket transport as experimental
 and unsupported; use it only for non-production testing against an app-server
 already running elsewhere:
 

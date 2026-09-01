@@ -799,7 +799,7 @@ describe("pw-session ensurePageState", () => {
 
     const consoleEntry = state.console.at(-1);
     const errorEntry = state.errors.at(-1);
-    const request = state.requests.at(-1);
+    const request = [...state.requests.values()].at(-1);
     for (const value of [
       consoleEntry?.type,
       consoleEntry?.text,
@@ -829,7 +829,7 @@ describe("pw-session ensurePageState", () => {
     expect(state2).not.toBe(state1);
     expect(state2.console).toStrictEqual([]);
     expect(state2.errors).toStrictEqual([]);
-    expect(state2.requests).toStrictEqual([]);
+    expect(state2.requests).toStrictEqual(new Map());
   });
 
   it.each([

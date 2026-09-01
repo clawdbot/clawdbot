@@ -73,6 +73,7 @@ export async function runConfigSet(opts: {
   value?: string;
   cliOptions: ConfigSetOptions;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
@@ -85,6 +86,7 @@ export async function runConfigSet(opts: {
       }),
       options: opts.cliOptions,
       successMode: "set",
+      ...(opts.beforePersistentApply ? { beforePersistentApply: opts.beforePersistentApply } : {}),
     });
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: opts.cliOptions });

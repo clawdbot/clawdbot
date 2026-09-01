@@ -19,6 +19,7 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import {
   resolveRuntimeModelAttempt,
@@ -31,10 +32,7 @@ import {
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import {
-  copyAttemptDeliveryState,
-  resolveSettledTurnFinalizationRequest,
-} from "./terminal-resolution.js";
+import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];

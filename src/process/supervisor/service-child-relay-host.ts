@@ -464,7 +464,8 @@ export async function createServiceChildRelayAdapter(params: {
   }
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
-    if (state === "closed" || state === "identity-lost") {
+    // A closing receipt retires cancellation; channel/anchor exit still owns extinction.
+    if (state !== "active") {
       return;
     }
     const normalized = signal === "SIGTERM" ? "SIGTERM" : "SIGKILL";
@@ -476,9 +477,12 @@ export async function createServiceChildRelayAdapter(params: {
       generation,
       sequence: outboundSequence,
       signal: normalized,
-    }).catch((error: unknown) =>
-      loseIdentity(toErrorObject(error, "service child cancellation failed").message),
-    );
+    }).catch((error: unknown) => {
+      // Delivery can fail after the anchor has already sent its closing receipt.
+      if (state === "active") {
+        loseIdentity(toErrorObject(error, "service child cancellation failed").message);
+      }
+    });
   };
 
   return {

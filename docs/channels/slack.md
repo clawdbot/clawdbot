@@ -2043,6 +2043,11 @@ openclaw logs --follow
 openclaw doctor
 ```
 
+    When preparation rejects an inbound event, the info-level log records
+    `Slack inbound event rejected during preparation` with a reason and routing IDs.
+    Records describe attempts: a rejected `message` event can still be followed by a
+    successful `app_mention` event for the same post. Self-message loop prevention stays quiet.
+
   </Accordion>
 
   <Accordion title="DM messages ignored">

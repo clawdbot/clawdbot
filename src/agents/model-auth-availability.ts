@@ -745,14 +745,19 @@ export function createModelAuthAvailabilityResolver(
       provider === OPENAI_PROVIDER_ID &&
       synthetic.has("codex") &&
       (target.authRequirement === "subscription" || target.api === OPENAI_CODEX_RESPONSES_API);
-    if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
-      return { availability: undefined, evidence: "synthetic" };
-    }
-    if (
+    const hasDeclaredSyntheticAuth =
       synthetic.has(normalizeProviderIdForAuth(provider)) ||
-      synthetic.has(normalizeProvider(provider)) ||
-      hasCompatibleCodexSyntheticAuth
+      synthetic.has(normalizeProvider(provider));
+    if (
+      hasSyntheticLocalProviderAuthConfig({
+        cfg: params.cfg,
+        provider,
+        route: hasDeclaredSyntheticAuth ? target : undefined,
+      })
     ) {
+      return { availability: true, evidence: "synthetic" };
+    }
+    if (hasDeclaredSyntheticAuth || hasCompatibleCodexSyntheticAuth) {
       return params.preparedSyntheticAuthComplete
         ? { availability: false, evidence: "synthetic", unavailableReason: "missing-auth" }
         : { availability: undefined, evidence: "synthetic" };

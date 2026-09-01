@@ -283,6 +283,18 @@ vi.mock("../process/exec.js", () => ({
   })),
 }));
 
+vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./update-cli/update-command-post-plugin-readiness.js")>();
+  return {
+    ...actual,
+    applyPostPluginUpdateReadiness: vi.fn(
+      async (params: Parameters<typeof actual.applyPostPluginUpdateReadiness>[0]) =>
+        params.pluginUpdate,
+    ),
+  };
+});
+
 vi.mock("../utils.js", async (importOriginal) => {
   const [actual, { isRecord }] = await Promise.all([
     importOriginal<typeof import("../utils.js")>(),

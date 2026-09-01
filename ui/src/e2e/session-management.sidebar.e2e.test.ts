@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
@@ -22,6 +23,19 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+
+function sessionActionPresentation(button: Locator) {
+  return button.evaluate((element) => {
+    const icon = element.querySelector("svg");
+    if (!icon) {
+      throw new Error("expected session action icon");
+    }
+    return {
+      color: getComputedStyle(element).color,
+      fill: getComputedStyle(icon).fill,
+    };
+  });
+}
 
 suite.define(() => {
   it("expands and manages child sessions inline before opening a child chat", async () => {
@@ -600,8 +614,9 @@ suite.define(() => {
     }
   });
 
-  it("does not duplicate the active chat when its only session is pinned", async () => {
+  it("keeps the only pinned chat unique and presents its pin state", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -629,6 +644,26 @@ suite.define(() => {
         .toEqual(["Pinned only"]);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+      const pin = pinnedEntry.getByRole("button", { name: "Unpin session" });
+      const menu = pinnedEntry.getByRole("button", { name: "Open session menu" });
+      await pinnedEntry.hover();
+      await captureUiProof(suite, page, "pinned-session-icon.png");
+      const revealedPin = await sessionActionPresentation(pin);
+      const revealedMenu = await sessionActionPresentation(menu);
+      expect(revealedPin.color).toBe(revealedMenu.color);
+      expect(revealedPin.fill).toBe(revealedPin.color);
+
+      await pin.hover();
+      await expect
+        .poll(async () => (await sessionActionPresentation(pin)).color)
+        .not.toBe(revealedPin.color);
+      await expect
+        .poll(async () => {
+          const hoveredPin = await sessionActionPresentation(pin);
+          return hoveredPin.fill === hoveredPin.color;
+        })
+        .toBe(true);
+
       // The empty Threads section only materializes after dragstart. Move the
       // real pointer first so Playwright does not wait for a hidden target.
       const pinnedRow = pinnedEntry.locator(".sidebar-recent-session");

@@ -5,8 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  createSourceRuntime,
-  runSourceRuntime,
+  createBuiltRuntime,
+  runBuiltRuntime,
   seedV17AdditiveRepairDatabase,
 } from "./doctor-config-preflight.process.test-support.js";
 
@@ -22,8 +22,8 @@ describe("doctor schema-17 repair atomicity", () => {
     const databasePath = seedV17AdditiveRepairDatabase(stateDir, {
       participantDependency: true,
     });
-    const runtimeRoot = createSourceRuntime(root);
-    const result = runSourceRuntime(
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = runBuiltRuntime(
       runtimeRoot,
       {
         ...process.env,
@@ -33,14 +33,7 @@ describe("doctor schema-17 repair atomicity", () => {
         OPENCLAW_TEST_FAST: "1",
         NO_COLOR: "1",
       },
-      [
-        path.join(runtimeRoot, "src", "entry.ts"),
-        "doctor",
-        "--fix",
-        "--non-interactive",
-        "--yes",
-        "--no-workspace-suggestions",
-      ],
+      ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"],
       60_000,
     );
     const output = `${result.stdout}\n${result.stderr}`;

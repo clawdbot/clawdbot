@@ -4,7 +4,10 @@ import type { CiTestTimings } from "./ci-test-timings-schema.mts";
 export type CiTimingRun = {
   id: number;
   createdAt: string;
-  logs: ({ kind: "uiE2e"; text: string } | { kind: "compact"; text: string; labels: string[] })[];
+  logs: (
+    | { kind: "uiE2e" | "repoE2e"; text: string }
+    | { kind: "compact"; text: string; labels: string[] }
+  )[];
 };
 
 type Samples = Map<string, number[]>;
@@ -28,11 +31,11 @@ function seconds(value: string, unit: string): number {
   return Number(value) / (unit === "ms" ? 1000 : 1);
 }
 
-function readUiLog(text: string, samples: Samples, overhead: number[]) {
+function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   const files = new Map<string, number>();
   for (const line of text.split("\n")) {
     const file =
-      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:\|ui-e2e\||ui-e2e)\s+(\S+\.e2e\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
+      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:(?:\|ui-e2e\||ui-e2e)\s+)?(\S+\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
         line,
       );
     if (file) {
@@ -46,7 +49,7 @@ function readUiLog(text: string, samples: Samples, overhead: number[]) {
       }
       const value =
         (seconds(summary[1]!, summary[2]!) - seconds(summary[3]!, summary[4]!)) / files.size;
-      if (Number.isFinite(value)) {
+      if (overhead && Number.isFinite(value)) {
         overhead.push(value);
       }
       files.clear();
@@ -112,11 +115,13 @@ function refitMap(samples: Samples, previous: Record<string, number> = {}, contr
 export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) {
   const samples = {
     uiE2e: new Map<string, number[]>(),
+    repoE2e: new Map<string, number[]>(),
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
   };
   const contributingRuns = {
     uiE2e: new Set<number>(),
+    repoE2e: new Set<number>(),
     blacksmith: new Set<number>(),
     github: new Set<number>(),
   };
@@ -124,19 +129,20 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
   for (const run of runs) {
     const current = {
       uiE2e: new Map<string, number[]>(),
+      repoE2e: new Map<string, number[]>(),
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
       const text = stripVTControlCharacters(log.text);
-      if (log.kind === "uiE2e") {
-        readUiLog(text, current.uiE2e, overhead);
-      } else {
+      if (log.kind === "compact") {
         readCompactLog(text, log.labels, current);
+      } else {
+        readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
     }
     // Retries or duplicate reporter lines in one run must not satisfy the two-run minimum.
-    for (const profile of ["uiE2e", "blacksmith", "github"] as const) {
+    for (const profile of ["uiE2e", "repoE2e", "blacksmith", "github"] as const) {
       // Missing or unparseable profile logs are not evidence that its keys disappeared.
       if (current[profile].size > 0) {
         contributingRuns[profile].add(run.id);
@@ -167,7 +173,12 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
         contributingRuns.github.size,
       ),
     },
-    source: `median of ${runIds.length} successful main CI runs: ${runIds.join(", ")}`,
+    repoE2eFileSeconds: refitMap(
+      samples.repoE2e,
+      previous?.repoE2eFileSeconds,
+      contributingRuns.repoE2e.size,
+    ),
+    source: `median of ${runIds.length} successful CI and release-check runs: ${runIds.join(", ")}`,
     uiE2e: {
       fileSeconds: refitMap(
         samples.uiE2e,
@@ -200,6 +211,7 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       previous?.compactGroupSeconds.github,
     ],
     ["uiE2e.fileSeconds", timings.uiE2e.fileSeconds, previous?.uiE2e.fileSeconds],
+    ["repoE2eFileSeconds", timings.repoE2eFileSeconds, previous?.repoE2eFileSeconds],
     [
       "uiE2e",
       { perFileOverheadSeconds: timings.uiE2e.perFileOverheadSeconds },

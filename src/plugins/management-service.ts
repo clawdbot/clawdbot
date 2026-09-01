@@ -32,7 +32,6 @@ import {
   prepareManagedPluginArtifactConsentHandler,
   resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
-  resolvePluginInstallRecordTrust,
   type PluginCapabilityConsentAcknowledgment,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
@@ -42,6 +41,7 @@ import {
   formatPluginCapabilityConsentRequired,
   resolveAcceptedSurfaceCurrent,
   resolvePluginInstallRecordIntegrity,
+  resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
@@ -92,6 +92,7 @@ import {
   withPluginInstallRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import {
   resolveInstalledPluginLifecycleOwnership,
@@ -925,7 +926,13 @@ export const listManagedPlugins = withManagedPluginCache(
       const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
       const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
-      if (enabled && record.origin !== "bundled" && ownership.ok && installRecord) {
+      if (
+        enabled &&
+        record.origin !== "bundled" &&
+        !manifest?.trustedOfficialInstall &&
+        ownership.ok &&
+        installRecord
+      ) {
         const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
         if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
           capabilityConsentDiagnostics.push({
@@ -1369,6 +1376,7 @@ async function persistManagedSourceInstall(params: {
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
   successMessage?: string;
+  beforePersistentApply?: () => void;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   const warnings: string[] = [];
   let committed = false;
@@ -1380,6 +1388,7 @@ async function persistManagedSourceInstall(params: {
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
+      beforePersistentApply: params.beforePersistentApply,
       // Only the persistence owner can distinguish rejection from a late refresh failure.
       onCommitted: () => {
         committed = true;
@@ -1475,6 +1484,7 @@ type ManagedPluginSourceInstallParams = {
   invalidateRuntimeCache?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentApply?: () => void;
 };
 
 /**
@@ -1619,6 +1629,7 @@ async function installResolvedManagedPluginSource(
         : completed.install(installed),
       transaction,
       successMessage: completed.successMessage,
+      beforePersistentApply: params.beforePersistentApply,
     });
     return {
       ...installed,
@@ -2069,7 +2080,12 @@ export async function uninstallManagedPlugin(params: {
     const channelIds =
       ownedManifests.length > 0
         ? uniqueStrings(ownedManifests.flatMap((manifest) => manifest.channels))
-        : undefined;
+        : ownership.value.kind === "orphan" &&
+            createInstalledPluginIndexScopeLookup(metadata.index).hasChannelContributionOwners([
+              installOwner,
+            ])
+          ? []
+          : undefined;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
     const initialPlan = planPluginUninstall(
       recordPluginPackageUninstallPlan(

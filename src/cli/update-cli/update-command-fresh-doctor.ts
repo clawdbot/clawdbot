@@ -1,4 +1,4 @@
-// Runs the post-plugin migration pass without retaining pre-update plugin modules.
+// Runs post-plugin convergence checks without retaining pre-update plugin modules.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
@@ -13,6 +13,7 @@ import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
@@ -218,6 +219,15 @@ async function applyFreshPostPluginDoctor(params: {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }
   const configValid = await validatePostPluginConfigInFreshProcess({ ...params, entryPath });
+  if (configValid) {
+    pluginUpdate = await applyPostPluginUpdateReadiness({
+      root: params.root,
+      entryPath,
+      pluginUpdate,
+      timeoutMs: params.timeoutMs,
+      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
+    });
+  }
   return { pluginUpdate, configValid };
 }
 
@@ -248,6 +258,13 @@ export async function completePostCorePluginUpdate(params: {
     });
     pluginUpdate = freshResult.pluginUpdate;
     freshConfigValid = freshResult.configValid;
+  } else if (pluginUpdate.status !== "error") {
+    pluginUpdate = await applyPostPluginUpdateReadiness({
+      root: params.root,
+      pluginUpdate,
+      timeoutMs: params.timeoutMs,
+      ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
+    });
   }
 
   const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());

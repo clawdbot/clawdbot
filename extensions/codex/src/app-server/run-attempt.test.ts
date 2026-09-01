@@ -22,7 +22,7 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
@@ -46,7 +46,7 @@ import {
   consumeCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { CodexAppServerRpcError, CodexAppServerClient } from "./client.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
@@ -120,7 +120,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
-import { createCodexTestModel } from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnStartParams,
@@ -6990,7 +6990,26 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("uses a supervised native model for review policy despite an outer Anthropic default", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const codexHome = path.join(tempDir, "review-codex-home");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const rolloutPath = path.join(codexHome, "sessions", "thread-existing.jsonl");
+    await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+    await fs.writeFile(
+      rolloutPath,
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: "thread-existing", model_provider: "openai", dynamic_tools: [] },
+      }) + "\n",
+    );
+    const pluginConfig = {
+      appServer: {
+        mode: "guardian",
+        command: process.execPath,
+        args: ["app-server"],
+      },
+      supervision: { enabled: true },
+    };
     await writeExistingBinding(sessionFile, workspaceDir, {
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-existing",
@@ -6998,32 +7017,65 @@ describe("runCodexAppServerAttempt", () => {
       modelProvider: "openai",
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
+      dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
+      rolloutPath,
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
+        agentDir,
+      ),
     });
-    const nativeResponse = threadStartResult("thread-existing");
-    nativeResponse.model = "gpt-5.5";
-    nativeResponse.modelProvider = "openai";
-    nativeResponse.thread.modelProvider = "openai";
-    const harness = createAppServerHarness(async (method) => {
-      if (method === "config/read") {
-        return { config: { model_provider: "openai" }, origins: {} };
-      }
-      if (method === "thread/read") {
-        return { thread: nativeResponse.thread };
-      }
-      if (method === "thread/resume") {
-        return nativeResponse;
-      }
-      if (method === "turn/start") {
-        return turnStartResult();
-      }
-      return {};
+    const nativeResponse = {
+      ...threadStartResult("thread-existing", { cwd: workspaceDir }),
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      approvalsReviewer: "auto_review",
+      serviceTier: "priority",
+    };
+    const turnStarted = createDeferred<void>();
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const message: unknown = JSON.parse(line);
+        if (
+          !isJsonObject(message) ||
+          typeof message.method !== "string" ||
+          message.id === undefined
+        ) {
+          return;
+        }
+        requests.push({ method: message.method, params: message.params });
+        let result: unknown = {};
+        if (message.method === "initialize") {
+          result = { userAgent: `codex-cli/${getMockRuntimeIdentity().serverVersion}`, codexHome };
+        } else if (message.method === "config/read") {
+          result = { config: { model_provider: "openai" }, origins: {} };
+        } else if (message.method === "thread/read") {
+          result = { thread: { ...nativeResponse.thread, path: rolloutPath } };
+        } else if (message.method === "thread/resume") {
+          // Native resume tears down an idle, unsubscribed thread before applying overrides.
+          // A successful response alone cannot prove that its configuration changed.
+          send({
+            method: "thread/status/changed",
+            params: { threadId: "thread-existing", status: { type: "notLoaded" } },
+          });
+          result = nativeResponse;
+        } else if (message.method === "turn/start") {
+          result = turnStartResult();
+          turnStarted.resolve();
+        } else if (message.method === "thread/unsubscribe") {
+          result = { status: "unsubscribed" };
+        }
+        send({ id: message.id, result });
+      },
     });
-    const clientFactory = vi.fn(async () => harness.client);
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const clientFactory = vi.fn(sharedClientModule.getLeasedSharedCodexAppServerClient);
     testing.setOpenClawCodingToolsFactoryForTests(() => []);
     // This test owns review-policy projection, not requester-scoped MCP discovery.
     agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
     agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
     const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";
     params.model = createCodexTestModel("anthropic");
@@ -7034,28 +7086,42 @@ describe("runCodexAppServerAttempt", () => {
       tools: { ...params.config?.tools, exec: { mode: "auto" } },
     } as EmbeddedRunAttemptParams["config"];
     const run = runCodexAppServerAttempt(params, {
-      pluginConfig: {
-        appServer: { mode: "guardian" },
-        supervision: { enabled: true },
-      },
+      pluginConfig,
       clientFactory,
     });
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-    await run;
+    try {
+      await Promise.race([
+        turnStarted.promise,
+        run.then((result) => {
+          throw new Error("Codex attempt ended before turn/start", { cause: result });
+        }),
+      ]);
+      harness.send({
+        method: "turn/completed",
+        params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed" } },
+      });
+      expect(readAttemptTerminal(await run)).toMatchObject({
+        aborted: false,
+        timedOut: false,
+        promptError: null,
+      });
+    } finally {
+      start.mockRestore();
+      await harness.client.closeAndWait();
+    }
     expect(clientFactory).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId: null,
         startOptions: expect.objectContaining({ homeScope: "user" }),
       }),
     );
-    const resumeRequest = harness.requests.find((request) => request.method === "thread/resume");
+    const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeParams = resumeRequest?.params as Record<string, unknown> | undefined;
     expect(resumeParams).not.toHaveProperty("model");
     expect(resumeParams).not.toHaveProperty("modelProvider");
     expect(resumeParams?.approvalsReviewer).toBe("auto_review");
     expect(resumeParams?.serviceTier).toBe("priority");
-    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("modelProvider");
@@ -7137,89 +7203,108 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("starts sequential ephemeral generations that share a stable session key", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionKey = "agent:main:ephemeral-helper";
-    const storePath = path.join(tempDir, "ephemeral-sessions.json");
-    let generation = 0;
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/start") {
-        generation += 1;
-        return threadStartResult(`thread-ephemeral-${generation}`);
-      }
-      if (method === "turn/start") {
-        return turnStartResult(`turn-ephemeral-${generation}`);
-      }
-      return undefined;
-    });
-
-    for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
-      const params = createParams(sessionFile, workspaceDir);
-      params.sessionId = sessionId;
-      params.sessionKey = sessionKey;
-      params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
-      params.config = { ...params.config, session: { store: storePath } };
-
-      const run = runCodexAppServerAttempt(params);
-      let startupError: unknown;
-      void run.catch((error: unknown) => {
-        startupError = error;
-      });
-      const expectedGeneration = index + 1;
-      await vi.waitFor(() => {
-        if (startupError) {
-          throw startupError instanceof Error
-            ? startupError
-            : new Error("Codex attempt failed.", { cause: startupError });
+  it.each(["default", "config", "target"] as const)(
+    "starts sequential ephemeral generations with the %s session store",
+    async (storeSelection) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const sessionKey = "agent:main:ephemeral-helper";
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "ephemeral-state"));
+      const storePath = path.join(tempDir, "ephemeral-sessions.json");
+      let generation = 0;
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "thread/start") {
+          generation += 1;
+          return threadStartResult(`thread-ephemeral-${generation}`);
         }
-        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
-          expectedGeneration,
-        );
-      }, fastWait);
-      const threadId = `thread-ephemeral-${expectedGeneration}`;
-      const turnId = `turn-ephemeral-${expectedGeneration}`;
-      await harness.completeTurn({ threadId, turnId });
-      await expect(run).resolves.toBeDefined();
-    }
-    expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
-  });
+        if (method === "turn/start") {
+          return turnStartResult(`turn-ephemeral-${generation}`);
+        }
+        return undefined;
+      });
 
-  it("rejects a run whose physical generation mismatches its durable session row", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionKey = "agent:main:durable-generation";
-    const durableSessionId = "session-durable-current";
-    const storePath = path.join(tempDir, "durable-sessions.json");
-    registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-durable-current",
-      cwd: workspaceDir,
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      entry: { sessionId: durableSessionId, updatedAt: Date.now() },
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.sessionId = "session-durable-stale";
-    params.sessionKey = sessionKey;
-    params.sessionTarget = {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey,
-      storePath,
-    };
-    params.config = { ...params.config, session: { store: storePath } };
-    const clientFactory = vi.fn(async () => {
-      throw new Error("client must not start");
-    });
+      for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
+        const params = createParams(sessionFile, workspaceDir);
+        params.sessionId = sessionId;
+        params.sessionKey = sessionKey;
+        if (storeSelection === "target") {
+          params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
+        } else if (storeSelection === "config") {
+          params.config = { ...params.config, session: { store: storePath } };
+        }
 
-    await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
-      name: "AgentHarnessSessionSupersededError",
-      message: "Codex session generation is no longer current: session-durable-stale",
-    });
-    expect(clientFactory).not.toHaveBeenCalled();
-  });
+        const run = runCodexAppServerAttempt(params);
+        let startupError: unknown;
+        void run.catch((error: unknown) => {
+          startupError = error;
+        });
+        const expectedGeneration = index + 1;
+        await vi.waitFor(() => {
+          if (startupError) {
+            throw startupError instanceof Error
+              ? startupError
+              : new Error("Codex attempt failed.", { cause: startupError });
+          }
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedGeneration);
+        }, fastWait);
+        const threadId = `thread-ephemeral-${expectedGeneration}`;
+        const turnId = `turn-ephemeral-${expectedGeneration}`;
+        await harness.completeTurn({ threadId, turnId });
+        await expect(run).resolves.toBeDefined();
+      }
+      expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(
+        2,
+      );
+    },
+  );
+
+  it.each(["default", "config", "target"] as const)(
+    "rejects a superseded generation in the %s session store",
+    async (storeSelection) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const sessionKey = "agent:main:durable-generation";
+      const durableSessionId = "session-durable-current";
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "durable-state"));
+      const storePath =
+        storeSelection === "default"
+          ? resolveStorePath(undefined, { agentId: "main" })
+          : path.join(tempDir, "durable-sessions.json");
+      registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-durable-current",
+        cwd: workspaceDir,
+      });
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: { sessionId: durableSessionId, updatedAt: Date.now() },
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionId = "session-durable-stale";
+      params.sessionKey = sessionKey;
+      if (storeSelection === "target") {
+        params.sessionTarget = {
+          agentId: "main",
+          sessionId: params.sessionId,
+          sessionKey,
+          storePath,
+        };
+      } else if (storeSelection === "config") {
+        params.config = { ...params.config, session: { store: storePath } };
+      }
+      const clientFactory = vi.fn(async () => {
+        throw new Error("client must not start");
+      });
+
+      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
+        name: "AgentHarnessSessionSupersededError",
+        message: "Codex session generation is no longer current: session-durable-stale",
+      });
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

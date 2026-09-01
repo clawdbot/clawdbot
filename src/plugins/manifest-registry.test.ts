@@ -977,6 +977,18 @@ describe("loadPluginManifestRegistry", () => {
 
   it.each([
     {
+      name: "conflicting npm requested identity",
+      overrides: { spec: "@vendor/diffs" },
+    },
+    {
+      name: "conflicting npm resolved identity",
+      overrides: { resolvedName: "@vendor/diffs" },
+    },
+    {
+      name: "missing npm identity",
+      overrides: { spec: undefined, resolvedName: undefined, resolvedSpec: undefined },
+    },
+    {
       name: "npm-pack archive metadata",
       overrides: {
         sourcePath: "/tmp/diffs.tgz",
@@ -1165,7 +1177,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
-  it("preserves legacy spec-only records for catalog-backed ClawHub installs", () => {
+  it("does not trust legacy ClawHub records without source authority", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
@@ -1188,7 +1200,7 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
   it("marks official diagnostics-otel config paths trusted when the install record matches", () => {

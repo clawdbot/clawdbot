@@ -218,6 +218,19 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("only support PRs targeting main");
   });
 
+  it("packages the dependency-free ClawSweeper review gate with the native wrapper", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      const helper = join(fixture.canonical, "scripts/pr-lib/clawsweeper-review-gate.mjs");
+      expect(readScript(helper)).not.toMatch(/from ["'](?!node:)/);
+      expect(existsSync(join(fixture.linked, "scripts/pr-lib/clawsweeper-review-gate.mjs"))).toBe(
+        true,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   itPosix("preserves the caller's gh route environment through startup", () => {
     const fixture = makeMismatchedWrapperRepo();
     try {
@@ -662,7 +675,7 @@ describe("scripts/pr wrappers", () => {
 
         // The trusted planner reads candidate sources without executing them. A
         // non-sibling importer exercises its real source-scanning child as well.
-        mkdirSync(join(fixture.linked, "src"));
+        mkdirSync(join(fixture.linked, "src"), { recursive: true });
         mkdirSync(join(fixture.linked, "test/probe"), { recursive: true });
         writeFileSync(join(fixture.linked, "src/anchor-value.ts"), "export const value = 1;\n");
         writeFileSync(

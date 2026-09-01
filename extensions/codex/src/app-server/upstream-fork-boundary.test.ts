@@ -87,6 +87,7 @@ async function resolveEntries(
   entries: SessionTranscriptMessageEntry[],
   entryId: string,
   historyMode: "legacy" | "paginated" = "legacy",
+  canonicalThreadId?: string,
 ) {
   transcriptMocks.readVisibleEntries.mockResolvedValue(entries);
   const result = await resolveCodexUpstreamForkBoundary({
@@ -96,12 +97,19 @@ async function resolveEntries(
     storePath: "/tmp/does-not-matter",
     entryId,
     threadId: "thread-1",
+    canonicalThreadId,
     control: {
-      readThread: vi.fn(async () => ({ id: "thread-1", historyMode })),
+      readThread: vi.fn(async (id: string) => ({ id, historyMode })),
       listTurnPage: vi.fn(async () => ({ data: [...turns] })),
     } as unknown as Parameters<typeof resolveCodexUpstreamForkBoundary>[0]["control"],
   });
-  return result.ok ? { ok: true as const, boundary: result.boundary } : result;
+  return result.ok
+    ? {
+        ok: true as const,
+        boundary: result.boundary,
+        ...(canonicalThreadId ? { canonical: result.canonical } : {}),
+      }
+    : result;
 }
 
 describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
@@ -119,8 +127,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
         ok: true,
         boundary: {
           beforeTurnId: "turn-2",
-          targetTurnId: "turn-2",
-          retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+
+          lastRetainedTurnId: "turn-1",
         },
       });
     },
@@ -136,8 +144,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
       ok: true,
       boundary: {
         beforeTurnId: "turn-1",
-        targetTurnId: "turn-1",
-        retainedMarker: { turnId: null, userMessageCount: 0 },
+
+        lastRetainedTurnId: null,
       },
     });
   });
@@ -170,8 +178,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
       ok: true,
       boundary: {
         beforeTurnId: "turn-2",
-        targetTurnId: "turn-2",
-        retainedMarker: { turnId: "turn-review", userMessageCount: 1 },
+
+        lastRetainedTurnId: "turn-review",
       },
     });
   });
@@ -306,13 +314,27 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
       ];
 
       // Verify the full prompt both when selected and when retained before an unchanged target.
-      for (const targetIndex of [0, 1]) {
-        const result = await resolveEntries(turns, entries, `entry-${targetIndex}`);
-        expect(result).toMatchObject(
-          matches
-            ? { ok: true, boundary: { beforeTurnId: `turn-${targetIndex + 1}` } }
-            : { ok: false, code: "drift-mismatch" },
-        );
+      for (const canonicalThreadId of [undefined, "canonical-thread"]) {
+        for (const targetIndex of [0, 1]) {
+          const result = await resolveEntries(
+            turns,
+            entries,
+            `entry-${targetIndex}`,
+            "legacy",
+            canonicalThreadId,
+          );
+          expect(result).toMatchObject(
+            matches
+              ? {
+                  ok: true,
+                  boundary: { beforeTurnId: `turn-${targetIndex + 1}` },
+                  ...(canonicalThreadId
+                    ? { canonical: { thread: { id: canonicalThreadId } } }
+                    : {}),
+                }
+              : { ok: false, code: "drift-mismatch" },
+          );
+        }
       }
     },
   );

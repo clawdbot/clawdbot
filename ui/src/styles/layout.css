@@ -1075,27 +1075,15 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
-.sidebar-brand__new-thread,
-.sidebar-footer-bar__custodian {
+.sidebar-brand__new-thread {
   width: 32px;
   height: 32px;
   color: var(--text);
 }
 
-.sidebar-brand__new-thread svg,
-.sidebar-footer-bar__custodian svg {
+.sidebar-brand__new-thread svg {
   width: 18px;
   height: 18px;
-}
-
-.sidebar-footer-bar__custodian-glyph {
-  position: relative;
-  display: inline-flex;
-}
-
-.sidebar-footer-bar__custodian-badge--warning,
-.sidebar-footer-bar__custodian-badge--error {
-  color: var(--inbox-attention);
 }
 
 .sidebar-shell__content {
@@ -4502,7 +4490,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .sidebar-recent-session--single-line .sidebar-recent-session__text {
   flex-direction: row;
   align-items: center;
-  gap: var(--sidebar-row-gap);
+  gap: calc(var(--sidebar-row-gap) + var(--sidebar-row-gap));
 }
 
 /* Basis 0 mirrors the two-line subtitle contract: the title absorbs all

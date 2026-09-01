@@ -390,7 +390,22 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.catalog.startTerminal")).toHaveLength(0);
       await composer.locator(".new-session-page__selection-status").click();
       await capabilityMenu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
+      // A tooltip owns the first Escape only while a hint is actually open.
+      const openHints = page.locator("openclaw-tooltip[open]");
+      if (await openHints.count()) {
+        await page.keyboard.press("Escape");
+        await expect.poll(() => openHints.count()).toBe(0);
+        expect(await capabilityMenu.getAttribute("open")).not.toBeNull();
+      }
       await page.keyboard.press("Escape");
+      await expect.poll(() => capabilityMenu.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() =>
+          composer
+            .getByRole("button", { name: "Add attachment" })
+            .evaluate((button) => button.matches(":focus")),
+        )
+        .toBe(true);
       await expect.poll(() => terminalTrigger.isEnabled()).toBe(true);
 
       if (captureCliAgentsProof) {

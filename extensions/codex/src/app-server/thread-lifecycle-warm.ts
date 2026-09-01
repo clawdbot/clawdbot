@@ -8,6 +8,7 @@ import {
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
+  isCodexAppServerLiveThreadClaimed,
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -18,8 +19,11 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { JsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import {
+  captureExclusiveSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientByInstanceId,
+} from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
@@ -27,13 +31,9 @@ import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadRequestContext,
+  CodexThreadFinalConfigPatchResult,
 } from "./thread-lifecycle-types.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
-
-type CodexWarmThreadFinalConfigPatch = {
-  configPatch?: JsonObject;
-  nativeHookRelayGeneration?: string;
-};
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -47,7 +47,7 @@ type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
 type CodexWarmThreadReuseResult =
   | { kind: "ready"; binding: CodexAppServerThreadLifecycleBinding }
   | { kind: "rotate" }
-  | { kind: "resume"; prebuiltFinalConfigPatch?: CodexWarmThreadFinalConfigPatch };
+  | { kind: "resume"; prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult };
 
 type CodexLiveThreadReleaseParams = {
   client: CodexAppServerClient;
@@ -106,7 +106,7 @@ async function abandonCodexLiveThreadRelease(
 }
 
 /** Releases through the retained owner, preserving its guarded callback and rollback. */
-export async function releaseCodexRetainedLiveThread(
+async function releaseCodexRetainedLiveThread(
   options: CodexLiveThreadReleaseParams,
 ): Promise<boolean> {
   try {
@@ -119,6 +119,42 @@ export async function releaseCodexRetainedLiveThread(
       throw error;
     }
     return await abandonCodexLiveThreadRelease(options, error);
+  }
+}
+
+/** Release follows the physical owner across connection rotation, never a copied thread id. */
+export async function releaseCodexBoundLiveThread(
+  options: CodexLiveThreadReleaseParams & { clientId?: string; ownerClientId?: string },
+): Promise<boolean> {
+  const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
+  const previous = changedClient
+    ? retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
+    : undefined;
+  if (changedClient && !previous) {
+    return false;
+  }
+  try {
+    const client = previous?.client ?? options.client;
+    const assertPrevious =
+      previous && options.assertCurrent
+        ? captureExclusiveSharedCodexAppServerClient(client)
+        : undefined;
+    if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
+      throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
+    }
+    return await releaseCodexRetainedLiveThread({
+      ...options,
+      client,
+      abandonClient: previous ? undefined : options.abandonClient,
+      assertCurrent: options.assertCurrent
+        ? () => {
+            options.assertCurrent?.();
+            assertPrevious?.();
+          }
+        : undefined,
+    });
+  } finally {
+    previous?.release();
   }
 }
 

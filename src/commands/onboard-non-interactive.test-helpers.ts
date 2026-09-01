@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 // Non-interactive onboarding test helpers build runtime stubs that throw instead of exiting.
 import type { RuntimeEnv } from "../runtime.js";
@@ -122,21 +123,20 @@ export function createOnboardTestConfigStore() {
   function readSnapshot(): ConfigFileSnapshot {
     const config = configStore.get(resolveConfigPath()) ?? {};
     const exists = configStore.has(resolveConfigPath());
-    return {
+    return createConfigFileSnapshot({
       path: resolveConfigPath(),
       exists,
       raw: exists ? `${JSON.stringify(config, null, 2)}\n` : null,
       parsed: config,
+      sourceConfigBeforeMigrations: config,
       sourceConfig: config,
-      resolved: config,
       valid: true,
       runtimeConfig: config,
-      config,
       ...(exists ? { hash: "test-config-hash" } : {}),
       issues: [],
       warnings: [],
       legacyIssues: [],
-    };
+    });
   }
 
   return { configStore, resolveConfigPath, readConfig, readSnapshot };

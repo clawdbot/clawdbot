@@ -87,6 +87,7 @@ actor OutboxTransportState {
     var sendRejects = false
     var sendResponseErrors = false
     var sendRoutingChanged = false
+    var sendSettingsChanged = false
     var historyFails = false
     var sessionListFails = false
     var historyRequestCount = 0
@@ -379,6 +380,13 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
                     "reason": AnyCodable(OpenClawChatSessionRoutingContract.changedErrorReason),
                 ])
         }
+        if await self.state.sendSettingsChanged {
+            throw GatewayResponseError(
+                method: "chat.send",
+                code: "INVALID_REQUEST",
+                message: "session settings changed; review and retry",
+                details: ["reason": AnyCodable(OpenClawChatSessionSettingsContract.changedErrorReason)])
+        }
         if await self.state.sendRejects {
             // Gateway responded but refused to start the run.
             return OpenClawChatSendResponse(runId: idempotencyKey, status: "error")
@@ -561,11 +569,12 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     private var loadDelayNanoseconds: UInt64 = 0
     private var enqueueRelease: DeleteGate?
     private var recoveryAvailable = true
-    private var terminalWritesAvailable = true
+    private var terminalWriteResult: OpenClawChatOutboxUpdateResult = .updated
     private var parkingAvailable = true
     private var captured = DeleteGate()
     private var snapshotRelease = DeleteGate()
     private var shouldHoldNextLoad = false
+    private var shouldHoldLoadAfterFailure = false
     private let enqueueStarted = DeleteGate()
     private let recoveryAttempted = DeleteGate()
     private let canceled = DeleteGate()
@@ -589,7 +598,11 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     }
 
     func setTerminalWritesAvailable(_ available: Bool) {
-        self.terminalWritesAvailable = available
+        self.terminalWriteResult = available ? .updated : .unavailable
+    }
+
+    func setTerminalWriteResult(_ result: OpenClawChatOutboxUpdateResult) {
+        self.terminalWriteResult = result
     }
 
     func setParkingAvailable(_ available: Bool) {
@@ -611,6 +624,12 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     func releaseEnqueue() async {
         await self.enqueueRelease?.open()
         self.enqueueRelease = nil
+    }
+
+    func holdLoadAfterFailure() {
+        self.captured = DeleteGate()
+        self.snapshotRelease = DeleteGate()
+        self.shouldHoldLoadAfterFailure = true
     }
 
     func holdNextLoad() {
@@ -703,12 +722,30 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        guard self.terminalWritesAvailable else { return .unavailable }
-        return await self.base.markCommandFailedIfPresent(
+        switch self.terminalWriteResult {
+        case .unavailable:
+            return .unavailable
+        case .confirmed, .missing:
+            _ = await self.base.confirmCommand(id: id, attemptVersion: attemptVersion)
+            return self.terminalWriteResult
+        case .superseded:
+            _ = await self.base.markCommandQueued(
+                id: id, attemptVersion: attemptVersion, retryCount: retryCount, lastError: nil)
+            _ = await self.base.claimNextCommand()
+            return .superseded
+        case .updated:
+            break
+        }
+        let result = await self.base.markCommandFailedIfPresent(
             id: id,
             attemptVersion: attemptVersion,
             retryCount: retryCount,
             lastError: lastError)
+        if result == .updated, self.shouldHoldLoadAfterFailure {
+            self.shouldHoldLoadAfterFailure = false
+            self.shouldHoldNextLoad = true
+        }
+        return result
     }
 
     func parkQueuedCommands(

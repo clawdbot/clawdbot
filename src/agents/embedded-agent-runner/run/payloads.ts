@@ -389,16 +389,18 @@ export function buildEmbeddedRunPayloads(params: {
           })
         : false;
       if (!duplicateWarning) {
-        replyItems.push({
+        const warning = {
           text: failureWarning.text,
-          ...(!isRestartStatus
-            ? {
-                isError: true,
-                nonTerminalToolErrorWarning:
-                  hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
-              }
-            : {}),
-        });
+          ...(!isRestartStatus ? { isError: true } : {}),
+        };
+        if (!isRestartStatus) {
+          setReplyPayloadMetadata(warning, {
+            toolErrorWarning: { toolName: params.lastToolError.toolName },
+            nonTerminalToolErrorWarning:
+              hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
+          });
+        }
+        replyItems.push(warning);
       }
     }
   }
@@ -436,11 +438,6 @@ export function buildEmbeddedRunPayloads(params: {
         explicitFinalSourceReply === false
       ) {
         markReplyPayloadForSourceSuppressionDelivery(payload);
-      }
-      if (item.nonTerminalToolErrorWarning) {
-        setReplyPayloadMetadata(payload, {
-          nonTerminalToolErrorWarning: true,
-        });
       }
       if (heartbeatTerminalToolFailure) {
         setReplyPayloadMetadata(payload, {

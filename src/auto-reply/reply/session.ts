@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -363,6 +364,7 @@ export function resolveReplySessionPreprocessingState(
       params.cfg.session?.scope ?? "per-sender",
       attemptContext.sessionCtxForState,
       normalizeMainKey(params.cfg.session?.mainKey),
+      attemptContext.agentId,
     ),
   });
   const sessionEntry = loadReplySessionInitializationSnapshot({
@@ -584,10 +586,18 @@ async function initSessionStateAttemptLocked(
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
   // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const relatedSessionKeys = [
+    buildAgentMainSessionKey({ agentId, mainKey }),
+    ctx.ParentSessionKey,
+    ctx.ModelParentSessionKey,
+    ctx.CommandTargetSessionKey,
+    resolveSessionParentSessionKey(sessionKey),
+  ].filter((key): key is string => typeof key === "string");
   const initializationSnapshot = loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
+    relatedSessionKeys,
   });
   if (ingressTimingEnabled) {
     log.info(
@@ -1015,6 +1025,7 @@ async function initSessionStateAttemptLocked(
     agentId,
     archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
+    relatedSessionKeys,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
       log.warn(

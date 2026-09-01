@@ -189,8 +189,10 @@ suite.define(() => {
         const listRequests = await gateway.getRequests("tasks.list");
         expect(listRequests.length).toBeGreaterThanOrEqual(2);
         for (const request of listRequests) {
-          expect(request.params).toMatchObject({ sessionKey: "agent:main:main" });
-          expect(request.params).not.toHaveProperty("agentId");
+          expect(request.params).toMatchObject({
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          });
         }
         await page.screenshot({ path: path.join(railFlowDir, "01-rail-open.png"), fullPage: true });
 

@@ -53,8 +53,52 @@
   },
   "redirects": [
     {
+      "source": "/cli/commitments",
+      "destination": "/en/automation#retired-inferred-commitments"
+    },
+    {
+      "source": "/concepts/commitments",
+      "destination": "/en/automation#retired-inferred-commitments"
+    },
+    {
+      "source": "/concepts/channel-docking",
+      "destination": "/en/concepts/session#retired-channel-docking"
+    },
+    {
       "source": "/install/clawdock",
-      "destination": "/install/docker#clawdock-migration"
+      "destination": "/en/install/docker#clawdock-migration"
+    },
+    {
+      "source": "/plan/swarms",
+      "destination": "/en/tools/swarm"
+    },
+    {
+      "source": "/plugins/reference/linux-canvas",
+      "destination": "/en/platforms/linux#retired-linux-canvas"
+    },
+    {
+      "source": "/plugins/reference/open-prose",
+      "destination": "/en/prose"
+    },
+    {
+      "source": "/plugins/reference/workspaces",
+      "destination": "/en/web/dashboards#retired-workspaces"
+    },
+    {
+      "source": "/providers/qwen-oauth",
+      "destination": "/en/providers/qwen#retired-qwen-portal-authentication"
+    },
+    {
+      "source": "/refactor/canvas",
+      "destination": "/en/platforms/mac/canvas"
+    },
+    {
+      "source": "/reference/templates/TOOLS.dev",
+      "destination": "/en/reference/templates/AGENTS.dev#tools"
+    },
+    {
+      "source": "/web/workspaces",
+      "destination": "/en/web/dashboards#retired-workspaces"
     },
     {
       "source": "/concepts/message-lifecycle-refactor",

@@ -20,6 +20,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
@@ -959,7 +960,7 @@ async function archiveLegacyArtifacts(
   ) => {
     owner.report.issues.push({
       code: unreferenced ? "unreferenced_jsonl_archive_failed" : "transcript_archive_failed",
-      message: `${source}: ${String(error)}`,
+      message: `${source}: ${formatErrorMessage(error)}`,
     });
   };
   for (const [source, refs] of references) {
@@ -1210,7 +1211,7 @@ async function archiveImportedLegacySessionStores(
       for (const { report, target } of entries) {
         report.issues.push({
           code: "legacy_store_archive_failed",
-          message: `${storePath}: ${String(error)}`,
+          message: `${storePath}: ${formatErrorMessage(error)}`,
         });
         // A recorded index plan already protects its dependencies and can reconcile on retry.
         // Earlier failures have no artifact record, so retain that failure on the owner instead.

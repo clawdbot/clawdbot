@@ -241,9 +241,21 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only` id is not registered, no check runs for that id; use `checksRun`/`checksSkipped` in the output to confirm a focused gate selects the checks you expect.
 
+To check model credentials, run `openclaw doctor --lint --only core/doctor/auth-profiles --json`.
+This opt-in check inspects shared credentials and each configured agent's local
+auth store, including fleets without a default agent. Shared credential problems
+are reported once; agent-specific cooldowns remain attributed to their local store.
+
 ## Post-upgrade mode
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
+
+The probes also warn with `plugin.version_drift` when an enabled official plugin
+in the installed index belongs to a different release cohort than the upgraded
+OpenClaw CLI. Follow the reported plugin update command, then restart the
+Gateway. Exact npm pins receive an update command only after the registry
+confirms that target exists. Independently versioned community plugins and
+disabled plugins are excluded; version drift alone does not change the exit code.
 
 Container image startup is the exception to the usual "run doctor after
 updating" flow. When `openclaw gateway run` starts on a new OpenClaw version, it
@@ -269,6 +281,8 @@ Device Pair and Active Memory legacy JSON imports check namespace capacity befor
 Microsoft Teams conversation, poll, and SSO token imports also verify that selected legacy keys and pre-existing destination keys remain in SQLite before archiving. Poll imports check both metadata and vote buckets; existing conversation and poll retention rules still select which legacy rows to import. If any required keys are missing, doctor warns and leaves the legacy file in place without reporting completion. Existing SQLite conversations, poll metadata, voter selections, and SSO tokens still take precedence over matching legacy values. These checks do not roll back rows already evicted during import.
 
 Doctor also reports when shared auth still uses the legacy `agents/main/agent/openclaw-agent.sqlite` owner. `openclaw doctor --fix` copies its auth profile and runtime-state rows into `state/openclaw.sqlite`, verifies the exact payloads, removes the source rows, and records the new ownership only after the transaction succeeds. Auth resolution has no dual-read fallback: before migration the legacy database is complete; after migration the shared state database is complete. Once relocated, deleting `main` no longer risks fleet credentials.
+
+If the shared target already contains every legacy profile with identical credential content, Doctor preserves the richer target and completes cleanup, including an empty legacy profile set or older row timestamps. Credential comparison ignores JSON object-key order but preserves every field; it does not select credentials by timestamp. Different credentials, source-only profiles, malformed subset payloads, or differing runtime-state rows remain conflicts. Back up both auth databases, reconcile the reported conflict locally, and rerun `openclaw doctor --fix`. Pending relocation receipts retain the original source digest through interrupted cleanup. After relocation completes, main-agent rows without a pending relocation receipt remain ordinary per-agent overrides.
 
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).

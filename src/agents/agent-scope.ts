@@ -420,6 +420,18 @@ function updateAgentModelPrimary(
 
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
+export function resolveAgentModelPrimaryWriteTarget(
+  cfg: OpenClawConfig,
+  agentId: string,
+  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  return target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))
+    ? "agent"
+    : "defaults";
+}
+
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -428,9 +440,10 @@ export function setAgentEffectiveModelPrimary(
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
   const target = options.target ?? (options.forceAgent ? "agent" : undefined);
+  const resolvedTarget = resolveAgentModelPrimaryWriteTarget(cfg, id, options);
   // An explicit agent target pins the write even without an existing model,
   // so a per-agent override never rewrites the shared default route.
-  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
+  if (resolvedTarget === "agent") {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);

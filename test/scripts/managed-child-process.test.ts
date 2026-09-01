@@ -1194,8 +1194,11 @@ const keepAlive = setInterval(() => {
     process.stderr.write('drained-err');
   }
 }, ${mode === "normal drainage" ? 5 : 1000});
-fs.writeFileSync(${JSON.stringify(pidPath)} + '.tmp', String(process.pid));
-fs.renameSync(${JSON.stringify(pidPath)} + '.tmp', ${JSON.stringify(pidPath)});
+// The watchdog may kill the parent as soon as readiness is published.
+process.once('disconnect', () => {
+  fs.writeFileSync(${JSON.stringify(pidPath)} + '.tmp', String(process.pid));
+  fs.renameSync(${JSON.stringify(pidPath)} + '.tmp', ${JSON.stringify(pidPath)});
+});
 process.send('ready');
 process.disconnect();
 `;

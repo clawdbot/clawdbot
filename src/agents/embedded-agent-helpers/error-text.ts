@@ -276,7 +276,7 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  if (isTimeoutErrorMessage(raw)) {
+  if (isTimeoutErrorMessage(raw) && !(facts?.status !== undefined && facts.status >= 500)) {
     return SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   }
 

@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 type LoadStaticCatalog =
@@ -47,6 +48,19 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
+  createPreparedModelCatalogWorkerInput: vi.fn(
+    ({
+      agentFacts,
+    }: {
+      agentFacts: { input: unknown; authStore: unknown; providerIds: unknown };
+    }) => ({
+      kind: "catalog",
+      generationFingerprint: "test-generation",
+      input: agentFacts.input,
+      authStore: agentFacts.authStore,
+      providerIds: agentFacts.providerIds,
+    }),
+  ),
   configuredAgentIds: [] as string[],
   configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
@@ -66,19 +80,29 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginCatalogs: [],
   })),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
-  runPreparedModelCatalogWorker: vi.fn(async (..._args: unknown[]) => ({
-    entries: [],
-    routeVariants: [],
-  })),
+  runPreparedModelCatalogWorker: vi.fn(
+    async (..._args: unknown[]): Promise<ModelCatalogSnapshot> => ({
+      entries: [],
+      routeVariants: [],
+    }),
+  ),
   runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
   mutationListener: undefined as
-    | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
+    | ((event: {
+        agentDir?: string;
+        affectsInheritedStores: boolean;
+        profileSetChanged?: boolean;
+      }) => void)
     | undefined,
   mutationListeners: new Set<
-    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+    (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged?: boolean;
+    }) => void
   >(),
   materializationListeners: new Set<
     (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
@@ -92,21 +116,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: ({
-    agentFacts,
-  }: {
-    agentFacts: {
-      input: unknown;
-      authStore: unknown;
-      providerIds: unknown;
-    };
-  }) => ({
-    kind: "catalog",
-    generationFingerprint: "test-generation",
-    input: agentFacts.input,
-    authStore: agentFacts.authStore,
-    providerIds: agentFacts.providerIds,
-  }),
+  createPreparedModelCatalogWorkerInput: (
+    ...args: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput>
+  ) => preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput(...args),
   createPreparedModelCatalogWorker: () => ({
     loadCatalog: (...args: unknown[]) =>
       preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
@@ -232,7 +244,11 @@ vi.mock("./auth-profiles/runtime-materializations.js", () => ({
   getPreparedRuntimeAuthMaterializations: () =>
     preparedModelRuntimeMocks.preparedAuthMaterializations,
   registerRuntimeAuthMaterializationMutationListener: (
-    listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
+    listener: (event: {
+      agentDir?: string;
+      affectsInheritedStores: boolean;
+      profileSetChanged?: boolean;
+    }) => void,
   ) => {
     preparedModelRuntimeMocks.materializationListeners.add(listener);
     return () => preparedModelRuntimeMocks.materializationListeners.delete(listener);
@@ -383,6 +399,7 @@ export function resetPreparedModelRuntimeHarness(state: OpenClawTestState): void
   preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
+  preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput.mockClear();
   preparedModelRuntimeMocks.discoverAuthStorage
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);

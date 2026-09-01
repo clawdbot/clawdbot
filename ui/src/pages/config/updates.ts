@@ -23,7 +23,10 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
+
+registerSettingsEnglish();
 
 type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
 

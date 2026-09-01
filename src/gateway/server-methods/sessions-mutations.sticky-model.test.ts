@@ -5,6 +5,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -12,55 +14,19 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
-  policyHash: "sticky-model-test-empty-plugin-policy",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "sticky-model-test-empty-plugin-policy",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
-  registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
-  diagnostics: [],
-  byPluginId: new Map(),
-  normalizePluginId: (pluginId: string) => pluginId,
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    modelIdNormalizationPolicies: new Map(),
-  },
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
+const pluginMetadata = vi.hoisted(() => ({
+  snapshot: undefined as PluginMetadataSnapshot | undefined,
 }));
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot: () => pluginMetadata.snapshot,
 }));
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+  loadPluginMetadataSnapshot: () => pluginMetadata.snapshot,
+  resolvePluginMetadataSnapshot: () => pluginMetadata.snapshot,
 }));
 
 vi.mock("../../plugins/provider-thinking.js", () => ({
@@ -154,6 +120,11 @@ async function patchSession(
 
 beforeAll(async () => {
   openClawTestState = await createOpenClawTestState({ scenario: "minimal" });
+  // Sticky selections still pass real harness admission; this fixture supplies
+  // the installed owner required by its OpenAI route without loading runtime code.
+  pluginMetadata.snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "codex", activation: { onAgentHarnesses: ["codex"] } }],
+  });
 });
 
 beforeEach(() => {
