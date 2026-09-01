@@ -92,7 +92,7 @@ function permissionSelection(value: string | undefined): PermissionSelection | u
 
 export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
   const disabled = params.disabled || params.applying;
-  const fullAccess = params.mode === "full" && !params.applying;
+  const fullAccess = (params.mode ?? params.defaultMode) === "full" && !params.applying;
   const label = params.applying
     ? t("chat.permissionControls.applying")
     : modeLabel(params.mode, params.defaultMode);
