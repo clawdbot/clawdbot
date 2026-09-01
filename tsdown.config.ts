@@ -7,9 +7,7 @@ import {
   collectBundledPluginBuildEntries,
   collectChannelConfigDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
-  collectRootPackageExcludedExtensionDirs,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-  parseDockerSelectedPluginBuildIdFilter,
+  collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createClaudeAgentSdkAssetPlugin } from "./scripts/lib/claude-agent-sdk-assets.mts";
 import {
@@ -564,12 +562,8 @@ function shouldExternalizeTerminalCoreDependency(id: string): boolean {
 
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
-const rootPackageExcludedPluginDirs = collectRootPackageExcludedExtensionDirs();
-const dockerSelectedPluginIds = parseDockerSelectedPluginBuildIdFilter();
-const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ id }) =>
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)
-    ? shouldBuildPrivateQaEntries
-    : !rootPackageExcludedPluginDirs.has(id) || dockerSelectedPluginIds?.has(id),
+const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries().filter(
+  ({ isolated }) => !isolated,
 );
 
 function buildUnifiedDistEntries(): Record<string, string> {

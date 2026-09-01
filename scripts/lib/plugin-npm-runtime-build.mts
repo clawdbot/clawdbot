@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
+  pluginRuntimeExtension,
+  resolvePluginRuntimeFormat,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
 import {
@@ -64,17 +66,9 @@ function isTypeScriptEntry(entry: string) {
   return /\.(?:c|m)?ts$/u.test(entry);
 }
 
-function resolveRuntimeBuildFormat(packageJson: PluginPackageJson): RuntimeBuildFormat {
-  return packageJson.openclaw?.build?.runtimeFormat === "cjs" ? "cjs" : "esm";
-}
-
-function runtimeBuildExtension(runtimeFormat: RuntimeBuildFormat) {
-  return runtimeFormat === "cjs" ? ".cjs" : ".js";
-}
-
 function toPackageRuntimeEntry(entry: string, runtimeFormat: RuntimeBuildFormat = "esm") {
   const normalized = normalizePackageEntry(entry).replace(/^\.\//u, "");
-  return `./dist/${normalized.replace(/\.[^.]+$/u, runtimeBuildExtension(runtimeFormat))}`;
+  return `./dist/${normalized.replace(/\.[^.]+$/u, pluginRuntimeExtension(runtimeFormat))}`;
 }
 
 function collectExternalDependencyNames(packageJson: PluginPackageJson) {
@@ -197,7 +191,7 @@ export function listPluginNpmRuntimeBuildOutputs(plan: {
   runtimeFormat: RuntimeBuildFormat;
   entry: Record<string, string>;
 }) {
-  const extension = runtimeBuildExtension(plan.runtimeFormat);
+  const extension = pluginRuntimeExtension(plan.runtimeFormat);
   return Object.keys(plan.entry)
     .map((entryKey) => `./dist/${entryKey}${extension}`)
     .toSorted((left, right) => left.localeCompare(right));
@@ -334,7 +328,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
     return null;
   }
 
-  const runtimeFormat = resolveRuntimeBuildFormat(packageJson);
+  const runtimeFormat = resolvePluginRuntimeFormat(packageJson);
   const packageEntries = collectPluginSourceEntries(packageJson).map(normalizePackageEntry);
   const requiresRuntimeBuild = packageEntries.some(isTypeScriptEntry);
   if (!requiresRuntimeBuild) {
@@ -490,7 +484,7 @@ async function preparePluginNativeImport(params: PluginNpmRuntimeBuildParams) {
   ) {
     throw new Error("Host SDK output is missing; build OpenClaw before preparing native imports.");
   }
-  const runtimeFormat = resolveRuntimeBuildFormat(manifest.value);
+  const runtimeFormat = resolvePluginRuntimeFormat(manifest.value);
   const outDir = path.join(packageDir, "dist");
   for (const entry of collectPluginSourceEntries(manifest.value)) {
     const output = path.resolve(packageDir, toPackageRuntimeEntry(entry, runtimeFormat));

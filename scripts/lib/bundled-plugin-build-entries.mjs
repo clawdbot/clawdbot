@@ -93,6 +93,18 @@ function shouldBuildBundledDistEntry(packageJson) {
   return packageJson?.openclaw?.build?.bundledDist !== false;
 }
 
+/**
+ * Standalone and isolated source-checkout builds retain the package's declared format.
+ * @returns {"cjs" | "esm"}
+ */
+export function resolvePluginRuntimeFormat(packageJson) {
+  return packageJson?.openclaw?.build?.runtimeFormat === "cjs" ? "cjs" : "esm";
+}
+
+export function pluginRuntimeExtension(runtimeFormat) {
+  return runtimeFormat === "cjs" ? ".cjs" : ".js";
+}
+
 function isExcludedTopLevelPublicSurfaceFile(fileName) {
   const normalizedName = fileName.toLowerCase();
   return (
@@ -276,7 +288,15 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledCluster(dirName, env, { packageJson })) {
       continue;
     }
-    if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
+    const externalSourceEntry =
+      params.includeExternalSourceEntries === true &&
+      (packageJson?.openclaw?.release?.publishToNpm === true ||
+        packageJson?.openclaw?.release?.publishToClawHub === true);
+    if (
+      !shouldBuildBundledDistEntry(packageJson) &&
+      !dockerSelectedBuildIds?.has(dirName) &&
+      !externalSourceEntry
+    ) {
       continue;
     }
 
@@ -320,6 +340,35 @@ export function collectBundledPluginBuildEntries(params = {}) {
     );
   }
   return entries.filter((entry) => filteredBuildIds.has(entry.id));
+}
+
+/** One source-checkout output plan for compilation, metadata, and readiness checks. */
+export function collectSourceCheckoutPluginBuildEntries(params = {}) {
+  const env = params.env ?? process.env;
+  const dockerSelected = parseDockerSelectedPluginBuildIdFilter(env);
+  const excluded = collectRootPackageExcludedExtensionDirs(params);
+  return collectBundledPluginBuildEntries({
+    ...params,
+    includeExternalSourceEntries: !dockerSelected,
+  })
+    .filter(({ id }) =>
+      NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)
+        ? env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+        : !dockerSelected || !excluded.has(id) || dockerSelected.has(id),
+    )
+    .map((entry) => {
+      const isolated =
+        !dockerSelected &&
+        !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(entry.id) &&
+        (excluded.has(entry.id) || !shouldBuildBundledDistEntry(entry.packageJson));
+      // Docker-selected plugins belong to the unified ESM graph, irrespective
+      // of their standalone format. Never infer ownership from files left on disk.
+      const runtimeFormat = isolated ? resolvePluginRuntimeFormat(entry.packageJson) : "esm";
+      return Object.assign(entry, {
+        isolated,
+        runtimeExtension: pluginRuntimeExtension(runtimeFormat),
+      });
+    });
 }
 
 /** Retain channel config migrations with core schemas, independently of plugin installation. */

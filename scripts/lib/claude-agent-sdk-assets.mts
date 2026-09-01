@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Plugin } from "rolldown";
+import type { TsdownPlugin } from "tsdown";
 import { isRecord } from "./record-shared.mjs";
 
 const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
@@ -10,7 +10,7 @@ const NATIVE_SDK_PACKAGE =
   /^@anthropic-ai\/claude-agent-sdk-(?:(?:darwin|win32)-(?:x64|arm64)|linux-(?:x64|arm64)(?:-musl)?)$/u;
 
 /** Preserve the official SDK package without installing its redundant native Claude executable. */
-export function createClaudeAgentSdkAssetPlugin(rootDir = process.cwd()): Plugin {
+export function createClaudeAgentSdkAssetPlugin(rootDir = process.cwd()): TsdownPlugin {
   const require = createRequire(path.join(rootDir, "extensions/anthropic/package.json"));
   const sdkEntry = require.resolve(SDK_PACKAGE);
   const sdkDir = path.dirname(sdkEntry);
