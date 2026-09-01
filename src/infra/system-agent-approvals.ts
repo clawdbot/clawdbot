@@ -26,7 +26,7 @@ export type SystemAgentApprovalRequest = {
 };
 
 export type SystemAgentApprovalApplicationStatus = "applied" | "not-applied";
-export type SystemAgentApprovalTerminalStatus = "expired" | "cancelled";
+type SystemAgentApprovalTerminalStatus = "expired" | "cancelled";
 
 export type SystemAgentApprovalResolved = {
   id: string;
