@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
+import { hasErrnoCode } from "./errno.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   detectLegacyAuditLogs,
   legacyAuditRawCheckpointKey,
@@ -70,11 +75,11 @@ export function isLegacyAuditMigrationBackupPath(sourcePath: string, stateDir: s
       `^\\.${escaped}\\.doctor-importing(?:\\.(?:[2-9]|[1-9][0-9]+))?$`,
       "u",
     );
-    const rawPattern = new RegExp(
-      `^${escaped}\\.migrated(?:\\.(?:[2-9]|[1-9][0-9]+))?\\.raw(?:\\.doctor-scrub-(?:progress|restore|staging))?$`,
+    const archivePattern = new RegExp(
+      `^${escaped}\\.migrated(?:\\.(?:[2-9]|[1-9][0-9]+))?(?:\\.raw(?:\\.doctor-scrub-(?:progress|restore|staging))?)?$`,
       "u",
     );
-    if (claimPattern.test(basename) || rawPattern.test(basename)) {
+    if (claimPattern.test(basename) || archivePattern.test(basename)) {
       return true;
     }
   }
@@ -86,12 +91,112 @@ type LegacyAuditBackupCheckpoint = {
   value: LegacyAuditRawCheckpoint;
 };
 
+type LegacyAuditBackupSourceWitness = {
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+  sanitizedContentHash: string;
+};
+
 export type LegacyAuditBackupSnapshot = {
   sourcePath: string;
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
+  sourceWitness: LegacyAuditBackupSourceWitness;
   checkpoint?: LegacyAuditBackupCheckpoint;
 };
+
+export type LegacyAuditBackupCapture = {
+  snapshots: LegacyAuditBackupSnapshot[];
+  databaseWitness: string;
+};
+
+export class LegacyAuditBackupStateChangedError extends Error {
+  constructor(message = "Legacy audit state changed while backup was capturing it") {
+    super(message);
+    this.name = "LegacyAuditBackupStateChangedError";
+  }
+}
+
+const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
+
+export function createLegacyAuditDatabaseWitness(database: DatabaseSync): string {
+  const hasDiagnosticEvents = database // sqlite-allow-raw -- Read-only backup witness boundary.
+    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("diagnostic_events") as { ok?: unknown } | undefined; // SAFETY: fixed SELECT returns `ok` or no row.
+  const hash = createHash("sha256");
+  if (hasDiagnosticEvents?.ok !== 1) {
+    return hash.digest("hex");
+  }
+  const statement = database // sqlite-allow-raw -- Read-only backup witness boundary.
+    .prepare(
+      `SELECT scope, event_key, payload_json, created_at, sequence
+       FROM diagnostic_events
+       WHERE (scope IN (?, ?) AND event_key GLOB 'legacy:*') OR scope = ?
+       ORDER BY scope, event_key, sequence`,
+    );
+  const rows = statement.all(
+    CONFIG_AUDIT_SCOPE,
+    SYSTEM_AGENT_AUDIT_SCOPE,
+    LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE,
+  );
+  for (const row of rows) {
+    const serialized = JSON.stringify([
+      row.scope,
+      row.event_key,
+      row.payload_json,
+      row.created_at,
+      row.sequence,
+    ]);
+    hash.update(String(Buffer.byteLength(serialized)));
+    hash.update(":");
+    hash.update(serialized);
+  }
+  return hash.digest("hex");
+}
+
+async function readLegacyAuditDatabaseWitness(stateDir: string): Promise<string> {
+  const databasePath = resolveOpenClawStateSqlitePath({
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+  });
+  try {
+    await fs.access(databasePath);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return createHash("sha256").digest("hex");
+    }
+    throw error;
+  }
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    return createLegacyAuditDatabaseWitness(database);
+  } finally {
+    database.close();
+  }
+}
+
+export function legacyAuditBackupCapturesMatch(
+  left: LegacyAuditBackupCapture,
+  right: LegacyAuditBackupCapture,
+): boolean {
+  if (
+    left.databaseWitness !== right.databaseWitness ||
+    left.snapshots.length !== right.snapshots.length
+  ) {
+    return false;
+  }
+  return left.snapshots.every((snapshot, index) => {
+    const candidate = right.snapshots[index];
+    return (
+      candidate !== undefined &&
+      snapshot.archiveSourcePath === candidate.archiveSourcePath &&
+      JSON.stringify(snapshot.sourceWitness) === JSON.stringify(candidate.sourceWitness) &&
+      JSON.stringify(snapshot.checkpoint) === JSON.stringify(candidate.checkpoint)
+    );
+  });
+}
 
 /** Replaces live raw checkpoints with metadata for the transformed backup files. */
 export function rewriteLegacyAuditBackupCheckpoints(
@@ -197,6 +302,13 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
     snapshots.push({
       sourcePath,
       archiveSourcePath: source.sourcePath,
+      sourceWitness: {
+        dev: snapshot.dev,
+        ino: snapshot.ino,
+        mtimeMs: snapshot.mtimeMs,
+        size: snapshot.size,
+        sanitizedContentHash: createHash("sha256").update(prepared.sanitizedJsonl).digest("hex"),
+      },
       ...(checkpoint ? { checkpoint } : {}),
       skippedSourcePaths: new Set([
         path.resolve(source.sourcePath),
@@ -209,7 +321,16 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
   return snapshots;
 }
 
-export async function createLegacyAuditBackupSnapshots(params: {
+export async function createLegacyAuditBackupCapture(params: {
+  stateDir: string;
+  tempDir: string;
+}): Promise<LegacyAuditBackupCapture> {
+  const snapshots = await createLegacyAuditBackupSnapshots(params);
+  const databaseWitness = await readLegacyAuditDatabaseWitness(params.stateDir);
+  return { snapshots, databaseWitness };
+}
+
+async function createLegacyAuditBackupSnapshots(params: {
   stateDir: string;
   tempDir: string;
 }): Promise<LegacyAuditBackupSnapshot[]> {

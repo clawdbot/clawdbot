@@ -20,6 +20,8 @@ import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
+  createLegacyAuditDatabaseWitness,
+  LegacyAuditBackupStateChangedError,
   rewriteLegacyAuditBackupCheckpoints,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
@@ -29,6 +31,21 @@ type SqliteBackupAsset = {
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
 };
+
+function findLegacyAuditBackupStateChange(
+  error: unknown,
+): LegacyAuditBackupStateChangedError | undefined {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof LegacyAuditBackupStateChangedError) {
+      return current;
+    }
+    seen.add(current);
+    current = current.cause;
+  }
+  return undefined;
+}
 
 type CanonicalSqliteSource = {
   archiveSourcePath: string;
@@ -242,6 +259,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
   inventory: BackupResourceInventory;
   tempDir: string;
   legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
+  legacyAuditDatabaseWitness?: string;
 }): Promise<{ snapshots: SqliteBackupAsset[]; discoveredSourcePaths: Set<string> }> {
   const globalStateSqlitePath = path.resolve(
     resolveOpenClawStateSqlitePath({
@@ -335,6 +353,14 @@ export async function createBackupSqliteSnapshotPlan(params: {
         transform:
           canonicalSource?.role === "global"
             ? (database) => {
+                if (
+                  params.legacyAuditDatabaseWitness !== undefined &&
+                  createLegacyAuditDatabaseWitness(database) !== params.legacyAuditDatabaseWitness
+                ) {
+                  throw new LegacyAuditBackupStateChangedError(
+                    "Legacy audit database rows changed during SQLite backup",
+                  );
+                }
                 sanitizeOpenClawGlobalStateSnapshot(database);
                 rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
               }
@@ -343,6 +369,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
               : undefined,
       });
     } catch (error) {
+      const stateChange = findLegacyAuditBackupStateChange(error);
+      if (stateChange) {
+        throw stateChange;
+      }
       throw new Error(
         `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.`,
         { cause: error },

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  createLegacyAuditBackupSnapshots,
+  createLegacyAuditBackupCapture,
   hasLegacyAuditBackupSources,
   isLegacyAuditMigrationBackupPath,
 } from "./state-migrations.audit-backup.js";
@@ -59,6 +59,9 @@ describe("legacy audit raw backup snapshots", () => {
   it("recognizes only supported audit migration paths", () => {
     const stateDir = "/opt/openclaw/state";
     expect(
+      isLegacyAuditMigrationBackupPath(`${stateDir}/logs/config-audit.jsonl.migrated.10`, stateDir),
+    ).toBe(true);
+    expect(
       isLegacyAuditMigrationBackupPath(
         `${stateDir}/logs/config-audit.jsonl.migrated.10.raw.doctor-scrub-restore`,
         stateDir,
@@ -103,7 +106,7 @@ describe("legacy audit raw backup snapshots", () => {
       await fs.mkdir(tempDir);
       await fs.writeFile(sourcePath, `${JSON.stringify(configAuditRecord("active-value-7f3c"))}\n`);
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
 
@@ -130,14 +133,14 @@ describe("legacy audit raw backup snapshots", () => {
         ]),
       );
 
-      const snapshotPromise = createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const snapshotPromise = createLegacyAuditBackupCapture({ stateDir, tempDir });
       for (let index = 0; index < 8; index += 1) {
         await fs.appendFile(
           sourcePath,
           `${JSON.stringify(configAuditRecord(`late-value-${index}-9a21`))}\n`,
         );
       }
-      const snapshots = await snapshotPromise;
+      const { snapshots } = await snapshotPromise;
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
 
@@ -161,7 +164,7 @@ describe("legacy audit raw backup snapshots", () => {
       await fs.mkdir(tempDir);
       await fs.writeFile(rawPath, `${JSON.stringify(configAuditRecord("late-value-7f3c"))}\n`);
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
 
       expect(snapshots).toHaveLength(1);
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
@@ -193,7 +196,7 @@ describe("legacy audit raw backup snapshots", () => {
         await buildTestAuditRestoreJournal(rawPath, original, Math.floor(partial.length / 2)),
       );
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = await fs.readFile(snapshotAsset.sourcePath, "utf8");
 
@@ -229,7 +232,7 @@ describe("legacy audit raw backup snapshots", () => {
         await buildTestAuditRestoreJournal(rawPath, original),
       );
 
-      const snapshots = await createLegacyAuditBackupSnapshots({ stateDir, tempDir });
+      const { snapshots } = await createLegacyAuditBackupCapture({ stateDir, tempDir });
       const snapshotAsset = expectDefined(snapshots[0], "snapshot");
       const snapshot = JSON.parse(await fs.readFile(snapshotAsset.sourcePath, "utf8"));
 
