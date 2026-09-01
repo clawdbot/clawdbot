@@ -441,7 +441,8 @@ fun ChatScreen(
         ?: selected.substringAfterLast('/')
     } ?: nativeString("Model")
   val modelUnavailableReason =
-    selectedChatModelSendUnavailableReason(
+    selectedChatModelSendBlockingReason(
+      gatewayReady = healthOk,
       selectedModelRef = selectedModelRef,
       catalog = modelCatalog,
     )

@@ -83,8 +83,22 @@ class ChatModelPickerTest {
   fun permanentAuthGateFailsOpenWhenGatewayIsNotReady() {
     val missing = model(id = "chat", provider = "synthetic", available = false, reason = GatewayModelUnavailableReason.MissingAuth)
 
+    assertEquals(
+      GatewayModelUnavailableReason.MissingAuth,
+      selectedChatModelSendBlockingReason(gatewayReady = true, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
+    )
+    assertEquals(
+      null,
+      selectedChatModelSendBlockingReason(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
+    )
     assertTrue(chatModelSendBlocked(gatewayReady = true, selectedModelRef = "synthetic/chat", catalog = listOf(missing)))
     assertFalse(chatModelSendBlocked(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)))
+    assertEquals(
+      null,
+      chatModelUnavailableText(
+        selectedChatModelSendBlockingReason(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
+      ),
+    )
   }
 
   private fun model(

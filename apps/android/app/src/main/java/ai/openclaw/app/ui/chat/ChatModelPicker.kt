@@ -57,11 +57,17 @@ internal fun selectedChatModelSendUnavailableReason(
     it == GatewayModelUnavailableReason.MissingAuth || it == GatewayModelUnavailableReason.AuthFailed
   }
 
+internal fun selectedChatModelSendBlockingReason(
+  gatewayReady: Boolean,
+  selectedModelRef: String?,
+  catalog: List<GatewayModelSummary>,
+): GatewayModelUnavailableReason? = if (gatewayReady) selectedChatModelSendUnavailableReason(selectedModelRef, catalog) else null
+
 internal fun chatModelSendBlocked(
   gatewayReady: Boolean,
   selectedModelRef: String?,
   catalog: List<GatewayModelSummary>,
-): Boolean = gatewayReady && selectedChatModelSendUnavailableReason(selectedModelRef, catalog) != null
+): Boolean = selectedChatModelSendBlockingReason(gatewayReady, selectedModelRef, catalog) != null
 
 internal fun chatModelPickerAction(model: GatewayModelSummary): ChatModelPickerAction =
   when {
