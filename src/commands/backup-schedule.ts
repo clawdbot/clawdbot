@@ -99,9 +99,9 @@ export async function backupEnableCommand(
 ): Promise<{ id: string; updated: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  // ?? not ||: Commander already supplies the 24h default when --every is
-  // omitted, so an empty string here is a value the caller passed. || discarded
-  // it for the default; ?? lets it reach parseDurationMs, which rejects empty.
+  // An explicitly blank --every must reach parseDurationMs, which rejects it.
+  // Commander supplies the 24h default only when the flag is omitted, so
+  // swallowing a blank here schedules an interval the caller never asked for.
   const every = options.every?.trim() ?? "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
