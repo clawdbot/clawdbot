@@ -34,7 +34,7 @@ private actor GatewayConfigReadGate {
     }
 }
 
-@Suite(.serialized, .sharedTestStateIsolated)
+@Suite(.serialized)
 @MainActor
 struct AppStateRemoteConfigTests {
     private func withGatewayPreferenceIsolation<T>(

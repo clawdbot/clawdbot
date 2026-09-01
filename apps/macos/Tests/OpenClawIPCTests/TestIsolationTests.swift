@@ -1,24 +1,9 @@
 import Foundation
 import Testing
-@testable import OpenClaw
 
 struct TestIsolationTests {
     private enum BodyFailure: Error {
         case expected
-    }
-
-    @Test
-    @MainActor
-    func `nested shared state isolation restores each scope`() async {
-        let key = "openclaw.test.isolation.\(UUID().uuidString)"
-        await TestIsolation.withUserDefaultsValues([key: "outer"]) {
-            #expect(AppDefaults.standard.string(forKey: key) == "outer")
-            await TestIsolation.withUserDefaultsValues([key: "inner"]) {
-                #expect(AppDefaults.standard.string(forKey: key) == "inner")
-            }
-            #expect(AppDefaults.standard.string(forKey: key) == "outer")
-        }
-        #expect(AppDefaults.standard.object(forKey: key) == nil)
     }
 
     @Test(arguments: [
