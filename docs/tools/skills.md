@@ -165,6 +165,13 @@ Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
 selection if its complete bundles exceed that limit. Published revisions are
 retained, including revisions still selected by older sessions.
 
+ZIP imports allow up to 16 unfinished uploads per canonical profile and 32
+across the Gateway. Linked or merged identities share the profile limit.
+Completed imports do not count toward either limit, and uploads expire one
+hour after they begin. If a profile merge or upgrade leaves more uploads than
+the limit allows, existing unexpired uploads can still be completed. Finish
+existing uploads or wait for them to expire before starting more.
+
 The Gateway stores library records and revision metadata in
 `state/openclaw.sqlite`, and immutable bundles under
 `skill-library/<skill-id>/revisions/<revision-hash>/` inside its state directory.
