@@ -361,6 +361,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     channelTransformSuppressed ||=
       noVisibleReplyFallbackAllowed() &&
       finalDeliveries.length > 0 &&
+      finalDeliveries.every((outcome) => outcome !== undefined) &&
       (await Promise.all(finalDeliveries)).every((outcome) => outcome === "channel-transform");
     sessionWriterDeliveryRevoked ||= replies.some(
       (reply) => !state.isSessionWriterDeliveryAuthorized(reply),

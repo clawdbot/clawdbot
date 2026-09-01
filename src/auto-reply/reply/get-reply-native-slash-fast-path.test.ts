@@ -114,7 +114,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     body: string,
     config?: OpenClawConfig,
     response: { shouldContinue: boolean; reply?: { text: string } } = { shouldContinue: true },
-    preparedModelCatalog?: ModelCatalogSnapshot,
+    preparedCatalog?: ModelCatalogSnapshot,
   ) {
     handleCommandsMock.mockResolvedValue(response);
     const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
@@ -152,7 +152,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       agentCfg: config?.agents?.defaults,
       commandAuthorized: true,
       typing,
-      preparedModelCatalog,
+      preparedModelCatalog: preparedCatalog,
     });
 
     return { result, typing, storePath: resolvedConfig.session?.store };
