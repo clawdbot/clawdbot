@@ -658,9 +658,12 @@ When an agent run starts, OpenClaw:
   to pass secrets into sandboxed runs.
 </Warning>
 
-For the bundled `claude-cli` backend, OpenClaw also materializes the same
-eligible skill snapshot as a temporary Claude Code plugin and passes it via
-`--plugin-dir`. Other CLI backends use the prompt catalog only.
+For the bundled `claude-cli` backend, sessions without library selections
+materialize eligible skills as a temporary Claude Code plugin, passed via
+`--plugin-dir`. Sessions with library selections use OpenClaw's prompt catalog
+and pinned revision paths instead. OpenClaw omits `--plugin-dir` for those
+sessions to keep Claude's native skill aliases from conflicting with library
+command identities. Other CLI backends use the prompt catalog only.
 
 ## Snapshots and refresh
 
