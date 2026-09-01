@@ -162,7 +162,7 @@ internal object ChatRichBlockRenderer {
       return ChatRenderCancellation {}
     }
     val host = context.findActivity()?.window?.decorView as? ViewGroup
-    if (host == null || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+    if (host == null) {
       completion(ChatRichBlockResult.TransientFailure)
       return ChatRenderCancellation {}
     }
@@ -251,7 +251,7 @@ private class ChatRichBlockWebViewBackend(
     request: ChatRichBlockRequest,
     completion: (ChatRichBlockResult<ChatRichBlockImage>) -> Unit,
   ) {
-    if (host.get() == null) {
+    if (webView == null) {
       completion(ChatRichBlockResult.TransientFailure)
       return
     }
@@ -273,8 +273,9 @@ private class ChatRichBlockWebViewBackend(
   // device-file access are denied, and the bridge exposes only render completions.
   @SuppressLint("SetJavaScriptEnabled", "MissingOnRenderProcessGone")
   @Suppress("DEPRECATION")
-  private fun createWebView(): WebView =
-    WebView(application).apply {
+  private fun createWebView(): WebView? {
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return null
+    return WebView(application).apply {
       alpha = 0f
       visibility = View.VISIBLE
       isClickable = false
@@ -339,16 +340,19 @@ private class ChatRichBlockWebViewBackend(
       WebViewCompat.addWebMessageListener(this, kind.bridgeName, setOf(CHAT_RENDER_ORIGIN), RenderMessageBridge())
       loadUrl(shellUrl)
     }
+  }
 
   private fun releaseWebView(view: WebView) {
     (view.parent as? ViewGroup)?.removeView(view)
-    WebViewCompat.removeWebMessageListener(view, kind.bridgeName)
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      WebViewCompat.removeWebMessageListener(view, kind.bridgeName)
+    }
     view.destroy()
   }
 
   private fun attachWebView() {
     val currentHost = host.get() ?: return
-    val view = webView ?: createWebView().also { webView = it }
+    val view = webView ?: createWebView()?.also { webView = it } ?: return
     if (view.parent === currentHost) return
     (view.parent as? ViewGroup)?.removeView(view)
     // VisualStateCallback requires an attached visible WebView. The transparent
