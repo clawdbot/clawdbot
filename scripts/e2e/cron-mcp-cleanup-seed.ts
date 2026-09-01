@@ -13,8 +13,8 @@ async function writeProbeServer(params: {
   pidsPath: string;
   exitPath: string;
 }) {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/server");
+  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/server/stdio");
   await fs.writeFile(
     params.serverPath,
     `#!/usr/bin/env node
@@ -41,7 +41,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 setInterval(() => {}, 1000);
 
 const server = new McpServer({ name: "cron-mcp-cleanup-probe", version: "1.0.0" });
-server.tool("cleanup_probe", "Cron MCP cleanup probe", async () => ({
+server.registerTool("cleanup_probe", { description: "Cron MCP cleanup probe" }, async () => ({
   content: [{ type: "text", text: "cron-mcp-cleanup-ok" }],
 }));
 

@@ -1,7 +1,7 @@
+import type { Client } from "@modelcontextprotocol/client";
+import { SdkErrorCode } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 // Shared Chrome MCP contracts and constants.
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { CdpActionTimeouts } from "./cdp.js";
@@ -82,7 +82,8 @@ export type ChromeMcpPageProbe = {
   onResult: (tabCount: number | null) => void;
 };
 
-export const MCP_REQUEST_TIMEOUT_CODE: number = ErrorCode.RequestTimeout;
+// v2 timeout errors carry a string SdkErrorCode (no longer the numeric -32001).
+export const MCP_REQUEST_TIMEOUT_CODE = SdkErrorCode.RequestTimeout;
 
 /** Browser profile options used to connect or launch chrome-devtools-mcp. */
 export type ChromeMcpProfileOptions = {

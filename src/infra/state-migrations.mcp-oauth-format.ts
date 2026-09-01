@@ -4,7 +4,7 @@ import {
   OAuthProtectedResourceMetadataSchema,
   OAuthTokensSchema,
   OpenIdProviderDiscoveryMetadataSchema,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;

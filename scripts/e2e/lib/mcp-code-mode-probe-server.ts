@@ -6,8 +6,8 @@ import path from "node:path";
 const require = createRequire(import.meta.url);
 
 export async function writeProbeMcpServer(serverPath: string) {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/server");
+  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/server/stdio");
   const zodPath = require.resolve("zod");
   await fs.mkdir(path.dirname(serverPath), { recursive: true });
   await fs.writeFile(
@@ -23,11 +23,13 @@ const notes = new Map([
 ]);
 const server = new McpServer({ name: "code-mode-fixture", version: "1.0.0" });
 
-server.tool(
+server.registerTool(
   "lookup_note",
-  "Look up one read-only fixture note by id.",
   {
-    id: z.string().describe("Fixture note id to look up."),
+    description: "Look up one read-only fixture note by id.",
+    inputSchema: z.object({
+      id: z.string().describe("Fixture note id to look up."),
+    }),
   },
   async ({ id }) => {
     const note = notes.get(id);

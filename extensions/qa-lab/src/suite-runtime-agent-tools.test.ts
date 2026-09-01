@@ -22,7 +22,7 @@ const stdioTransportMock = vi.hoisted(() =>
   }),
 );
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", () => ({
   Client: vi
     .fn()
     .mockImplementation(
@@ -40,7 +40,7 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
     ),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: stdioTransportMock,
 }));
 
@@ -174,7 +174,6 @@ describe("qa suite runtime agent tools helpers", () => {
         name: "plugin.echo",
         arguments: { text: "hello" },
       },
-      undefined,
       { timeout: 180_000 },
     );
     expect(closeMock).toHaveBeenCalled();

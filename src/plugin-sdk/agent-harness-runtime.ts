@@ -403,7 +403,7 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
   uiResourceUri: string;
   toolCallId: string;
   toolInput: unknown;
-  toolResult: import("@modelcontextprotocol/sdk/types.js").CallToolResult;
+  toolResult: import("@modelcontextprotocol/client").CallToolResult;
   allowedAppToolNames: ReadonlySet<string>;
   resultMetaState?: "unavailable";
 }): Promise<{ mcpAppPreview: unknown } | undefined> {

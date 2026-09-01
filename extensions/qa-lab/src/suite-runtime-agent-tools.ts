@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import {
   appendQaChildOutputTail,
   createQaChildOutputTail,
@@ -118,7 +118,6 @@ async function callPluginToolsMcp(params: {
         name: params.toolName,
         arguments: params.args,
       },
-      undefined,
       { timeout: MCP_REQUEST_TIMEOUT_MS },
     );
   } catch (error) {

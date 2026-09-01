@@ -233,6 +233,11 @@ async function postMcp(params: {
  *
  * initialize -> (capture `Mcp-Session-Id` header + negotiated protocolVersion)
  * -> notifications/initialized -> tools/call. Anonymous (no bearer token).
+ *
+ * Legacy-era gate: this flow speaks the 2025 Streamable HTTP session model on
+ * purpose — the hosted Parallel Search endpoint is a 2025-era server. Session
+ * ids are only echoed when the server assigns one, so stateless servers keep
+ * working; the 2026-07-28 spec removes the header entirely.
  */
 async function mcpCall(
   toolName: string,

@@ -5,7 +5,7 @@
  * share one implementation and one app-server client pool.
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { Server } from "@modelcontextprotocol/server";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getRuntimeConfig } from "../config/config.js";

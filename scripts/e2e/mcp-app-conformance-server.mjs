@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 const appUri = "ui://conformance/app";
 const appModuleUrl =
@@ -36,16 +36,20 @@ write("initialized", "ready");
 </script>`;
 
 const server = new McpServer({ name: "mcp-app-conformance", version: "1.0.0" });
-const show = server.tool("show", "Show the conformance app", async () => ({
+const show = server.registerTool("show", { description: "Show the conformance app" }, async () => ({
   content: [{ type: "text", text: "initial-result" }],
   structuredContent: { value: "initial-result" },
 }));
 show.update({ _meta: { ui: { resourceUri: appUri } } });
 
-const appOnly = server.tool("app_companion", "App-only companion", async () => ({
-  content: [{ type: "text", text: "companion-called" }],
-  structuredContent: { value: "companion-called" },
-}));
+const appOnly = server.registerTool(
+  "app_companion",
+  { description: "App-only companion" },
+  async () => ({
+    content: [{ type: "text", text: "companion-called" }],
+    structuredContent: { value: "companion-called" },
+  }),
+);
 appOnly.update({ _meta: { ui: { visibility: ["app"] } } });
 
 server.registerResource(

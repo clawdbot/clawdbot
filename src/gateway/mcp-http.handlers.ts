@@ -1,7 +1,8 @@
-// Gateway MCP loopback JSON-RPC handlers.
 // Implements initialize, tools/list, tools/call, and notification handling.
 import crypto from "node:crypto";
-import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
+// Gateway MCP loopback JSON-RPC handlers.
+import type { ContentBlock } from "@modelcontextprotocol/server";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import {

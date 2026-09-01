@@ -3611,6 +3611,33 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(res.headers.get("mcp-session-id")).toBeNull();
   });
 
+  it("serves a 2026-07-28 stateless request: per-request _meta, no initialize, no session id", async () => {
+    server = await ensureMcpLoopbackServer(0);
+    const res = await sendRaw({
+      port: server.port,
+      token: getActiveMcpLoopbackRuntime()?.ownerToken,
+      headers: { "content-type": "application/json", "x-session-key": "agent:main:main" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            clientInfo: { name: "openclaw-stateless-probe", version: "0.0.0" },
+            clientCapabilities: {},
+          },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+    const payload = (await res.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    expect(Array.isArray(payload.result?.tools)).toBe(true);
+  });
+
   it("rejects a browser-Origin GET before auth (403, no bearer)", async () => {
     server = await ensureMcpLoopbackServer(0);
     const res = await sendRaw({

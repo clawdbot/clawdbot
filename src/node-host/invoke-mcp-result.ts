@@ -114,3 +114,14 @@ export function boundMcpToolResultPayload(result: {
     ...(isError ? { isError } : {}),
   };
 }
+
+/** Extracts a human-readable error message from an MCP tool error result. */
+export function mcpToolErrorMessage(result: { content: readonly unknown[] }): string {
+  const textParts: string[] = [];
+  for (const block of result.content) {
+    if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
+      textParts.push(block.text);
+    }
+  }
+  return textParts.join("\n") || "MCP tool returned an error";
+}

@@ -155,7 +155,7 @@ describe("MCP OAuth refresh issuer binding", () => {
 
         await expect(
           buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/requires OAuth authorization/);
+        ).rejects.toThrow(/Incompatible auth server|requires OAuth authorization/);
 
         expect(network.tokenRequests).toEqual([]);
         expect(readStore().tokens).toMatchObject({
@@ -275,7 +275,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         });
         await expect(
           buildOAuthFetch(newIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/requires OAuth authorization/);
+        ).rejects.toThrow(/Incompatible auth server|requires OAuth authorization/);
 
         expect(newIssuer.tokenRequests).toEqual([]);
         expect(readStore().tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
@@ -297,7 +297,7 @@ describe("MCP OAuth refresh issuer binding", () => {
 
         await expect(
           buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/requires OAuth authorization/);
+        ).rejects.toThrow(/Incompatible auth server|requires OAuth authorization/);
 
         expect(network.tokenRequests).toEqual([]);
         expect(readStore().tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);

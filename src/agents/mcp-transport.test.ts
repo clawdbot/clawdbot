@@ -43,7 +43,13 @@ vi.mock("../infra/net/undici-runtime.js", () => ({
   }),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+type SseTransportOptions = {
+  eventSourceInit?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
+};
+
+// v2 merges the old client/streamableHttp.js + client/sse.js exports into one
+// module, so both transports share a single vi.mock registration.
+vi.mock("@modelcontextprotocol/client", () => ({
   StreamableHTTPClientTransport: function MockStreamableHTTPClientTransport(
     this: unknown,
     url: URL,
@@ -51,13 +57,6 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   ) {
     streamableTransportConstructorMock(url, options);
   },
-}));
-
-type SseTransportOptions = {
-  eventSourceInit?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
-};
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: function MockSSEClientTransport(
     this: unknown,
     url: URL,
