@@ -43,6 +43,62 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
+  it("omits API-key-only auth rows without model-provider evidence", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "web-search",
+          displayName: "Web Search",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+        },
+        {
+          provider: "web-extract",
+          displayName: "Web Extract",
+          status: "static",
+          profiles: [{ profileId: "extract", type: "api_key", status: "static" }],
+        },
+      ]),
+    });
+    expect(cards).toEqual([]);
+  });
+
+  it.each(["oauth", "token"] as const)(
+    "keeps auth-only %s profiles, including non-expiring tokens",
+    (type) => {
+      const status = type === "token" ? "static" : "ok";
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            status,
+            profiles: [{ profileId: "primary", type, status, logoutSupported: true }],
+          },
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "static",
+            profiles: [{ profileId: "secondary", type: "api_key", status: "static" }],
+          },
+        ]),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "anthropic",
+        modelCount: 0,
+        profiles: [
+          { profileId: "primary", type, status, logoutSupported: true },
+          { profileId: "secondary", type: "api_key", status: "static" },
+        ],
+        logoutTargets: [{ provider: "anthropic", profileIds: ["primary"] }],
+      });
+    },
+  );
+
   it("keeps catalog providers, including ones whose models are all unavailable", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -337,77 +393,6 @@ describe("buildModelProviderCards", () => {
       credentialProviderIds: ["OpenAI"],
       hasConfigApiKey: true,
       profiles: [],
-    });
-  });
-
-  it("does not count tool-only API key auth rows as configured model providers", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      models: [
-        catalogEntry({
-          provider: "custom-chat-provider",
-          id: "custom-chat-provider/primary",
-          available: true,
-        }),
-      ],
-      authStatus: authStatus([
-        {
-          provider: "anthropic",
-          displayName: "Anthropic",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "ANTHROPIC_API_KEY" },
-        },
-        {
-          provider: "anthropic-openai",
-          displayName: "Anthropic",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "ANTHROPIC_API_KEY" },
-        },
-        {
-          provider: "brave",
-          displayName: "Brave",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "BRAVE_API_KEY" },
-        },
-        {
-          provider: "firecrawl",
-          displayName: "Firecrawl",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "FIRECRAWL_API_KEY" },
-        },
-        {
-          provider: "openrouter",
-          displayName: "OpenRouter",
-          status: "static",
-          profiles: [{ type: "api_key", status: "static", profileId: "openrouter:default" }],
-          apiKey: { source: "config" },
-        },
-        {
-          provider: "perplexity",
-          displayName: "Perplexity",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "OPENROUTER_API_KEY" },
-        },
-        {
-          provider: "custom-chat-provider",
-          displayName: "Custom Chat Provider",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "config" },
-        },
-      ]),
-    });
-
-    expect(cards).toHaveLength(1);
-    expect(firstCard(cards)).toMatchObject({
-      id: "custom-chat-provider",
-      credentialProviderIds: ["custom-chat-provider"],
-      modelCount: 1,
     });
   });
 });
