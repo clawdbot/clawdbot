@@ -4,8 +4,12 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
+import {
+  closeAuthProfileReadPool,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-provider-types.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
@@ -216,6 +220,8 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
       await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
       expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-profile-key");
     } finally {
+      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+      closeOpenClawAgentDatabases(agentDir);
       await rm(agentDir, { force: true, recursive: true });
     }
   });
