@@ -34,7 +34,11 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
             "contextWindow": 1000000,
             "contextWindows": [
@@ -50,7 +54,11 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
             "contextWindow": 1000000,
             "contextWindows": [
@@ -66,7 +74,11 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
             "contextWindow": 1000000,
             "contextWindows": [
@@ -77,6 +89,21 @@
             "maxTokens": 128000
           },
           {
+            "id": "claude-haiku-4-5",
+            "name": "Claude Haiku 4.5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": {
+                "maxSidePx": 1568,
+                "preferredSidePx": 1568,
+                "tokenMode": "provider"
+              }
+            },
+            "contextWindow": 200000,
+            "maxTokens": 64000
+          },
+          {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8 (Claude CLI)",
             "status": "deprecated",
@@ -84,7 +111,11 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
             "contextWindow": 200000,
             "maxTokens": 128000
@@ -102,9 +133,18 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
-            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+            "cost": {
+              "input": 10,
+              "output": 50,
+              "cacheRead": 1,
+              "cacheWrite": 12.5
+            },
             "contextWindow": 1000000,
             "contextWindows": [
               { "id": "200k", "label": "200K", "contextWindow": 200000 },
@@ -125,9 +165,18 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
-            "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
+            "cost": {
+              "input": 5,
+              "output": 25,
+              "cacheRead": 0.5,
+              "cacheWrite": 6.25
+            },
             "contextWindow": 1000000,
             "contextWindows": [
               { "id": "200k", "label": "200K", "contextWindow": 200000 },
@@ -147,9 +196,18 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
-            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "cost": {
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.2,
+              "cacheWrite": 2.5
+            },
             "contextWindow": 1000000,
             "contextWindows": [
               { "id": "200k", "label": "200K", "contextWindow": 200000 },
@@ -169,9 +227,18 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
-            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+            "cost": {
+              "input": 10,
+              "output": 50,
+              "cacheRead": 1,
+              "cacheWrite": 12.5
+            },
             "contextWindow": 1000000,
             "maxTokens": 128000,
             "thinkingLevelMap": {
@@ -189,7 +256,11 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 2576,
+                "preferredSidePx": 2576,
+                "tokenMode": "provider"
+              }
             },
             "contextWindow": 1000000,
             "maxTokens": 128000,
@@ -201,7 +272,11 @@
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
+              "image": {
+                "maxSidePx": 1568,
+                "preferredSidePx": 1568,
+                "tokenMode": "provider"
+              }
             },
             "contextWindow": 200000,
             "maxTokens": 64000,
