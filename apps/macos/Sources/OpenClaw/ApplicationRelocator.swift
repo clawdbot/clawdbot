@@ -1054,9 +1054,11 @@ extension ApplicationRelocator {
                 try FileManager().copyItem(at: source, to: staging)
             }.value
         } catch {
-            // Remove a partial copy off the main thread so a multi-gigabyte
-            // deletion cannot re-block the caller.
-            Task.detached { try? FileManager().removeItem(at: staging) }
+            // Remove a partial copy off the main thread. Await the deletion so
+            // it actually completes before the process exits (the app quits
+            // ~2 s after a failure alert, which would abandon a fire-and-forget
+            // multi-GB cleanup).
+            try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
             throw error
         }
 
@@ -1069,15 +1071,16 @@ extension ApplicationRelocator {
                     withItemAt: staging,
                     backupItemName: backupName)
                 // The backup is the previous installed bundle (potentially
-                // multi-GB). Remove it off the main thread to avoid a second
-                // main-thread stall right after the copy finishes.
-                Task.detached { try? FileManager().removeItem(at: backupURL) }
+                // multi-GB). Remove it off the main thread and await completion
+                // so the relaunch that follows does not abandon a large leftover.
+                try? await Task.detached { try? FileManager().removeItem(at: backupURL) }.value
             } else {
                 try fileManager.moveItem(at: staging, to: destination)
             }
         } catch {
-            // replace/move failed while staging still exists. Clean up off-main.
-            Task.detached { try? FileManager().removeItem(at: staging) }
+            // replace/move failed while staging still exists. Clean up off-main
+            // and await it before surfacing the error.
+            try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
             throw error
         }
     }
