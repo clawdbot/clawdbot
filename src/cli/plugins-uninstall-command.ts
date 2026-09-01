@@ -139,16 +139,18 @@ async function runPluginUninstallCommandUnlocked(
   }
   const { installOwner: pluginId, pluginIds: ownedPluginIds } = ownership.value;
   const policyPluginIds = ownedPluginIds.length > 0 ? ownedPluginIds : [pluginId];
-  const channelIds =
-    ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId
-      ? plugin?.channelIds
-      : [
-          ...new Set(
-            ownedPluginIds.flatMap(
-              (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
-            ),
-          ),
-        ];
+  let channelIds: string[] | undefined;
+  if (ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId) {
+    channelIds = plugin?.channelIds;
+  } else if (ownedPluginIds.length > 1) {
+    channelIds = [
+      ...new Set(
+        ownedPluginIds.flatMap(
+          (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
+        ),
+      ),
+    ];
+  }
   const initialPlan = planPluginUninstall(
     recordPluginPackageUninstallPlan(
       {

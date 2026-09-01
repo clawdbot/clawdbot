@@ -771,6 +771,61 @@ describe("plugins cli uninstall", () => {
     expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });
 
+  it("removes owner-keyed channel config for an exact orphan install record", async () => {
+    const pluginId = "orphan-channel-plugin";
+    const installRecords = {
+      [pluginId]: {
+        source: "path",
+        sourcePath: "/tmp/missing-orphan-channel-source",
+        installPath: "/tmp/missing-orphan-channel-install",
+      },
+    } as const;
+    const baseConfig = {
+      channels: {
+        [pluginId]: { enabled: true },
+        discord: { enabled: true },
+      },
+    } as OpenClawConfig;
+    pluginCliConfigMock.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginSnapshotReportMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    const actualUninstall =
+      await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
+    planPluginUninstallMock.mockImplementation((params) =>
+      actualUninstall.planPluginUninstall(
+        params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
+      ),
+    );
+    const installedIndexModule = await import("../plugins/installed-plugin-index.js");
+    const indexSpy = vi
+      .spyOn(installedIndexModule, "loadInstalledPluginIndex")
+      .mockReturnValue(
+        createTestInstalledPluginIndex({ policyHash: "orphan-channel", installRecords }),
+      );
+    try {
+      await runPluginsCommand(["plugins", "uninstall", pluginId, "--force", "--keep-files"]);
+
+      expectLatestUninstallPlanParams({
+        pluginId,
+        channelIds: undefined,
+        deleteFiles: false,
+      });
+      expectInstallRecordsWrittenWithLease(
+        {},
+        {
+          channels: {
+            discord: { enabled: true },
+          },
+        },
+      );
+    } finally {
+      indexSpy.mockRestore();
+    }
+  });
+
   it("exits when uninstall target is not managed by plugin install records", async () => {
     pluginCliConfigMock.mockReturnValue({
       plugins: {
