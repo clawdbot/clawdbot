@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
-import { pluginInstallPathMatchesRoot } from "./runtime-degraded-state.js";
+import {
+  pluginInstallPathMatchesRoot,
+  toPublicPluginVerificationDiagnostic,
+} from "./runtime-degraded-state.js";
 
 describe("pluginInstallPathMatchesRoot", () => {
   it("matches an existing plugin root through a symlink alias", () => {
@@ -30,5 +33,30 @@ describe("pluginInstallPathMatchesRoot", () => {
         false,
       );
     });
+  });
+});
+
+describe("toPublicPluginVerificationDiagnostic", () => {
+  it("redacts credentials before bounding public detail", () => {
+    const secret = "sk-proj-public-diagnostic-secret";
+    const diagnostic = toPublicPluginVerificationDiagnostic({
+      kind: "plugin-verification",
+      reason: "invalid-package-json",
+      detail: `api_key=${secret} ${"x".repeat(1_200)}`,
+    });
+
+    expect(diagnostic.detail).not.toContain(secret);
+    expect(diagnostic.detail.length).toBeLessThanOrEqual(1_000);
+  });
+
+  it("does not split a surrogate pair at the public detail limit", () => {
+    const diagnostic = toPublicPluginVerificationDiagnostic({
+      kind: "plugin-verification",
+      reason: "invalid-package-json",
+      detail: `${"x".repeat(999)}😀`,
+    });
+
+    expect(diagnostic.detail).toHaveLength(999);
+    expect(diagnostic.detail).not.toMatch(/[\uD800-\uDFFF]$/u);
   });
 });
