@@ -4,13 +4,17 @@ import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pa
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
-const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
+const mediaTranscriptRealGatewayTest =
+  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
+const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts", mediaTranscriptRealGatewayTest];
 const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
+  mediaTranscriptRealGatewayTest,
 ];
 
 function createUiE2eVitestConfig(

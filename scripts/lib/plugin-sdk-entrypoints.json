@@ -114,6 +114,7 @@
   "gateway-runtime",
   "cli-argv",
   "cli-runtime",
+  "node-cli-runtime",
   "cli-backend",
   "claude-model-runtime",
   "codex-mcp-projection",

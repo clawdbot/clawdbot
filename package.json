@@ -805,6 +805,10 @@
     "./plugin-sdk/cli-runtime": {
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
+    "./plugin-sdk/node-cli-runtime": {
+      "types": "./dist/plugin-sdk/node-cli-runtime.d.ts",
+      "default": "./dist/plugin-sdk/node-cli-runtime.js"
+    },
     "./plugin-sdk/cli-backend": {
       "default": "./dist/plugin-sdk/cli-backend.js"
     },

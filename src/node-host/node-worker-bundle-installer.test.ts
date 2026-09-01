@@ -1,5 +1,6 @@
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -19,12 +20,16 @@ import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 describe("node worker bundle installer", () => {
   let root: string;
   let server: http.Server | undefined;
+  let cleanupPrewarming: (() => Promise<void>) | undefined;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-bundle-"));
   });
 
   afterEach(async () => {
+    const cleanup = cleanupPrewarming;
+    cleanupPrewarming = undefined;
+    await cleanup?.();
     vi.restoreAllMocks();
     await new Promise<void>((resolve) => {
       if (!server) {
@@ -708,11 +713,21 @@ describe("node worker bundle installer", () => {
   it("cancels prewarming and releases the namespace queue for the next install", async ({
     signal,
   }) => {
-    const slowStarted = createDeferredCore<http.ServerResponse>();
+    const slow = await bundleFixture({
+      fixtureName: "slow",
+      bundlePrewarm: 1,
+      workerSource: 'process.stdout.write("started");\nprocess.stdin.resume();\n',
+    });
+    const fastMarker = path.join(root, "fast-prewarm-finished");
+    const fast = await bundleFixture({
+      fixtureName: "fast",
+      bundlePrewarm: 1,
+      prewarmMarker: fastMarker,
+    });
+    const fastRequested = createDeferredCore();
     server = http.createServer((req, res) => {
-      if (req.url === "/prewarm-started") {
-        slowStarted.resolve(res);
-        return;
+      if (req.url?.endsWith(fast.input.build.bundleHash)) {
+        fastRequested.resolve();
       }
       const archive = req.url?.endsWith(slow.input.build.bundleHash) ? slow.archive : fast.archive;
       res.writeHead(200, {
@@ -729,48 +744,75 @@ describe("node worker bundle installer", () => {
       throw new Error("test server did not bind a TCP port");
     }
     const gatewayUrl = `ws://127.0.0.1:${address.port}`;
-    const slow = await bundleFixture({
-      fixtureName: "slow",
-      bundlePrewarm: 1,
-      workerSource: `await fetch("http://127.0.0.1:${address.port}/prewarm-started");\n`,
-    });
-    const fastMarker = path.join(root, "fast-prewarm-finished");
-    const fast = await bundleFixture({
-      fixtureName: "fast",
-      bundlePrewarm: 1,
-      prewarmMarker: fastMarker,
-    });
     const installer = new NodeWorkerBundleInstaller({ root });
     const controller = new AbortController();
+    const cleanupController = new AbortController();
+    const testSignal = AbortSignal.any([signal, cleanupController.signal]);
+    const started = createDeferredCore<ChildProcess>();
+    const children = new Map<ChildProcess, Promise<void>>();
+    const entries = [slow, fast].map((fixture) =>
+      path.join(
+        root,
+        fixture.input.gatewayNamespace,
+        "bundles",
+        fixture.input.build.bundleHash,
+        "worker.mjs",
+      ),
+    );
+    const childProcesses = channel("child_process");
+    const trackPrewarm = (message: unknown) => {
+      const child = (message as { process: ChildProcess }).process;
+      child.once("spawn", () => {
+        if (!entries.includes(child.spawnargs[1] ?? "")) {
+          return;
+        }
+        const closed = createDeferredCore();
+        child.once("close", () => closed.resolve());
+        children.set(child, closed.promise);
+        if (child.spawnargs[1] === entries[0]) {
+          child.stdout!.once("data", () => started.resolve(child));
+        }
+      });
+    };
+    childProcesses.subscribe(trackPrewarm);
     const first = installer.ensure({
       input: slow.input,
       gatewayUrl,
-      signal: AbortSignal.any([controller.signal, signal]),
+      signal: AbortSignal.any([controller.signal, testSignal]),
     });
-    let second: ReturnType<typeof installer.ensure> | undefined;
-    let held: http.ServerResponse | undefined;
-    try {
-      held = await Promise.race([
-        slowStarted.promise,
-        first.then(() => {
-          throw new Error("Slow prewarm finished before cancellation");
-        }),
-      ]);
-      // The unfinished request keeps the child alive; peer close witnesses cancellation,
-      // independent of archive extraction, process startup, or the next install's speed.
-      const slowClosed = once(held, "close", { signal });
-      second = installer.ensure({ input: fast.input, gatewayUrl, signal });
-      controller.abort(new Error("launch fenced"));
-      await Promise.all([
-        expect(first).rejects.toThrow("launch fenced"),
-        slowClosed,
-        expect(second).resolves.toEqual(fast.input.build),
-      ]);
-      await expect(fs.readFile(fastMarker, "utf8")).resolves.toBe("ready");
-    } finally {
-      controller.abort();
-      held?.end();
-      await Promise.allSettled([first, second]);
-    }
+    const installs = [first];
+    cleanupPrewarming = async () => {
+      cleanupController.abort();
+      for (const child of children.keys()) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }
+      await Promise.allSettled([...installs, ...children.values()]);
+      childProcesses.unsubscribe(trackPrewarm);
+    };
+    // Startup time is not the cancellation contract: hold the real child until
+    // abort, and join its close event even when readiness or assertions fail.
+    const slowChild = await Promise.race([
+      started.promise,
+      first.then(() => {
+        throw new Error("prewarm finished before cancellation");
+      }),
+    ]);
+    testSignal.throwIfAborted();
+    const second = installer.ensure({ input: fast.input, gatewayUrl, signal: testSignal });
+    installs.push(second);
+
+    controller.abort(new Error("launch fenced"));
+
+    // Bound handoff from cancellation; acquisition precedes cold extraction and prewarm.
+    await Promise.all([
+      vi.waitFor(() => expect(fastRequested.promise).resolves.toBeUndefined(), { timeout: 750 }),
+      expect(first).rejects.toThrow("launch fenced"),
+    ]);
+    await expect(second).resolves.toEqual(fast.input.build);
+    await children.get(slowChild);
+    expect(slowChild.killed).toBe(true);
+    await expect(fs.readFile(fastMarker, "utf8")).resolves.toBe("ready");
   });
 });
