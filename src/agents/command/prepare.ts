@@ -27,10 +27,10 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
+import { resolveAgentRunCwd } from "../agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveAgentRunCwd,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
