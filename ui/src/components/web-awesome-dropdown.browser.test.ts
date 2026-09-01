@@ -53,26 +53,35 @@ async function open(f: Fixture) {
 }
 
 // Run in the animation-start task, not after a host RPC that can outlast the animation.
-async function duringAnimation(f: Fixture, state: "show" | "hide", action: () => void) {
+async function duringElementAnimation(
+  element: HTMLElement,
+  state: "show" | "hide",
+  request: () => unknown,
+  action: () => void,
+) {
   let observed = false;
   const listener = (event: AnimationEvent) => {
-    if (event.target !== f.menu || !f.menu.classList.contains(state)) {
+    if (event.target !== element || !element.classList.contains(state)) {
       return;
     }
-    f.menu.removeEventListener("animationstart", listener);
-    expect(f.menu.getAnimations().some((animation) => animation.playState === "running")).toBe(
+    element.removeEventListener("animationstart", listener);
+    expect(element.getAnimations().some((animation) => animation.playState === "running")).toBe(
       true,
     );
     observed = true;
     action();
   };
-  f.menu.addEventListener("animationstart", listener);
-  f.dropdown.open = state === "show";
+  element.addEventListener("animationstart", listener);
   try {
+    await request();
     await expect.poll(() => observed).toBe(true);
   } finally {
-    f.menu.removeEventListener("animationstart", listener);
+    element.removeEventListener("animationstart", listener);
   }
+}
+
+async function duringAnimation(f: Fixture, state: "show" | "hide", action: () => void) {
+  await duringElementAnimation(f.menu, state, () => (f.dropdown.open = state === "show"), action);
 }
 
 async function reopen(f: Fixture) {
@@ -174,6 +183,59 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     },
   );
 
+  it("settles a pending show canceled after its first animation sample", async () => {
+    const f = await fixture();
+    let starts = 0;
+    let observed: { pending: boolean; starts: number } | undefined;
+    f.menu.addEventListener("animationstart", () => starts++);
+    const observer = new MutationObserver(() => {
+      if (!f.menu.classList.contains("show")) {
+        return;
+      }
+      observer.disconnect();
+      // Queue behind the helper's first frame, before the pending CSS animation starts.
+      requestAnimationFrame(() => {
+        observed = {
+          pending: f.menu.getAnimations().some((animation) => animation.pending),
+          starts,
+        };
+        f.dropdown.open = false;
+        f.outside.focus();
+      });
+    });
+    observer.observe(f.menu, { attributes: true, attributeFilter: ["class"] });
+    try {
+      f.dropdown.open = true;
+      await expect.poll(() => observed).toEqual({ pending: true, starts: 0 });
+      await closed(f);
+      expect(count(f, "wa-after-show")).toBe(0);
+      expect(document.activeElement).toBe(f.outside);
+      await open(f);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  it("closes without waiting for an unrelated paused transition when menu animation is disabled", async () => {
+    const f = await fixture();
+    await open(f);
+    f.menu.style.animation = "none";
+    f.menu.style.transition = "opacity 100ms linear";
+    expect(getComputedStyle(f.menu).opacity).toBe("1");
+    f.menu.style.opacity = "0.9";
+    const transition = f.menu
+      .getAnimations()
+      .find((animation) => animation instanceof CSSTransition);
+    expect(transition).toBeDefined();
+    transition!.pause();
+    try {
+      f.dropdown.open = false;
+      await closed(f);
+    } finally {
+      transition!.cancel();
+    }
+  });
+
   it("keeps a canceled show closed and a subsequent accepted show functional", async () => {
     const f = await fixture();
     f.dropdown.addEventListener("wa-show", (event) => event.preventDefault(), { once: true });
@@ -217,6 +279,107 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     await userEvent.keyboard("{Escape}");
     await closed(f);
   });
+
+  it("keeps a reopened submenu visible after its interrupted hide finishes", async () => {
+    const f = await fixture();
+    await open(f);
+    f.parent.submenuOpen = true;
+    await expect.poll(() => document.activeElement).toBe(f.nested);
+    const submenu = f.parent.submenuElement;
+    await duringElementAnimation(
+      submenu,
+      "hide",
+      () => (f.parent.submenuOpen = false),
+      () => {
+        f.parent.submenuOpen = true;
+        f.parent.focus();
+      },
+    );
+    await expect.poll(() => submenu.getAnimations().length).toBe(0);
+    expect(f.parent.submenuOpen).toBe(true);
+    expect(submenu.hidden).toBe(false);
+    expect(submenu.matches(":popover-open")).toBe(true);
+    await expect.poll(() => document.activeElement).toBe(f.nested);
+  });
+
+  it("focuses keyboard submenus on opening without a late animation focus reset", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const f = await fixture();
+    await open(f);
+    await userEvent.keyboard("{ArrowDown}");
+    const submenu = f.parent.submenuElement;
+    await duringElementAnimation(
+      submenu,
+      "show",
+      () => userEvent.keyboard("{ArrowRight}"),
+      () => {
+        expect(document.activeElement).toBe(f.nested);
+        f.outside.focus();
+      },
+    );
+    await expect.poll(() => submenu.getAnimations().length).toBe(0);
+    await frame();
+    expect(document.activeElement).toBe(f.outside);
+  });
+
+  it("settles a never-connected submenu close as a public no-op", async () => {
+    const item = document.createElement("wa-dropdown-item");
+    let completed = false;
+    void item.closeSubmenu().then(() => (completed = true));
+    await expect.poll(() => completed).toBe(true);
+    expect(item.isConnected).toBe(false);
+    expect(item.submenuOpen).toBe(false);
+  });
+
+  it("settles repeated public submenu requests through the same visibility lifecycle", async () => {
+    const f = await fixture();
+    await open(f);
+    let openings = 0;
+    f.parent.addEventListener("submenu-opening", () => openings++);
+    let completed = 0;
+    const requests = [f.parent.openSubmenu(), f.parent.openSubmenu()];
+    void Promise.all(requests).then(() => completed++);
+    await expect.poll(() => completed).toBe(1);
+    expect(openings).toBe(1);
+    expect(f.parent.submenuElement.hidden).toBe(false);
+    expect(document.activeElement).toBe(f.nested);
+    void Promise.all([f.parent.closeSubmenu(), f.parent.closeSubmenu()]).then(() => completed++);
+    await expect.poll(() => completed).toBe(2);
+    expect(f.parent.submenuOpen).toBe(false);
+    expect(f.parent.submenuElement.hidden).toBe(true);
+    expect(f.parent.submenuElement.matches(":popover-open")).toBe(false);
+  });
+
+  it.each(["show", "hide"] as const)(
+    "retires an interrupted submenu %s on disconnect before a fresh public reopen",
+    async (phase) => {
+      const f = await fixture();
+      await open(f);
+      if (phase === "hide") {
+        await f.parent.openSubmenu();
+      }
+      const submenu = f.parent.submenuElement;
+      await duringElementAnimation(
+        submenu,
+        phase,
+        () => (f.parent.submenuOpen = phase === "show"),
+        () => {
+          f.parent.remove();
+          f.outside.focus();
+        },
+      );
+      await frame();
+      expect(f.parent.submenuOpen).toBe(false);
+      expect(submenu.hidden).toBe(true);
+      expect(submenu.matches(":popover-open")).toBe(false);
+      expect(document.activeElement).toBe(f.outside);
+      f.dropdown.append(f.parent);
+      await f.parent.openSubmenu();
+      expect(submenu.hidden).toBe(false);
+      expect(submenu.matches(":popover-open")).toBe(true);
+      expect(document.activeElement).toBe(f.nested);
+    },
+  );
 
   it.each([
     { dir: "ltr", openKey: "ArrowRight" },
@@ -292,6 +455,42 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       expect(document.activeElement).toBe(f.item);
       await userEvent.keyboard("{Escape}");
       await closed(f);
+    },
+  );
+
+  it.each(["wa-tooltip", "wa-popover"] as const)(
+    "waits for %s reactive popup rendering and its actual opening animation",
+    async (tag) => {
+      const f = await fixture();
+      const surface = document.createElement(tag);
+      f.outside.id = "animation-proof-anchor";
+      surface.for = f.outside.id;
+      surface.textContent = "Details";
+      if (tag === "wa-tooltip") {
+        surface.setAttribute("trigger", "manual");
+      }
+      f.host.append(surface);
+      await surface.updateComplete;
+      const popup = surface.shadowRoot!.querySelector("wa-popup")!;
+      let starts = 0;
+      let shown = false;
+      let hidden = false;
+      popup.popup.addEventListener(
+        "animationstart",
+        () => {
+          expect(shown).toBe(false);
+          starts++;
+        },
+        { once: true },
+      );
+      surface.addEventListener("wa-after-show", () => (shown = true));
+      surface.addEventListener("wa-after-hide", () => (hidden = true));
+      surface.open = true;
+      await expect.poll(() => shown).toBe(true);
+      expect(starts).toBe(1);
+      surface.open = false;
+      await expect.poll(() => hidden).toBe(true);
+      expect(popup.active).toBe(false);
     },
   );
 
