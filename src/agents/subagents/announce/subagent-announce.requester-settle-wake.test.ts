@@ -560,6 +560,28 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(String(deliveredCallArg().triggerMessage)).toContain("orphaned findings");
   });
 
+  it("carries a single undelivered completion as a trusted direct-fallback event", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({
+        runId: "run-b",
+        delivery: { status: "suspended", suspendedAt: 4_000 },
+        completion: { required: true, resultText: "orphaned findings" },
+      }),
+    ]);
+
+    await expect(maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).resolves.toBe(true);
+
+    expect(deliveredCallArg().internalEvents).toEqual([
+      expect.objectContaining({
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:run-b",
+        result: "orphaned findings",
+        status: "ok",
+      }),
+    ]);
+  });
+
   it("wakes with captured fallback output after a resumed completion returns NO_REPLY", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({

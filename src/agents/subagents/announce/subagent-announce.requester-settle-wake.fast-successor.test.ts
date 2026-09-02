@@ -216,6 +216,52 @@ describe("fast-settled successor requester settle wakes", () => {
     expect(deliverSpy).toHaveBeenCalledOnce();
   });
 
+  it("keeps the predecessor wake pending while its successor is still unsettled", async () => {
+    const original = makeSettledChild({
+      runId: "run-original",
+      delivery: { status: "delivered" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["run-original"],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    });
+    const successor = makeSettledChild({
+      runId: "run-successor",
+      createdAt: 4_000,
+      execution: { status: "running", startedAt: 4_500 },
+    });
+    const children = [original];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    registryRuntimeMock.hasDescendantRunAwaitingSettle
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    deliverSpy.mockImplementationOnce(async () => {
+      children.push(successor);
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+      };
+    });
+
+    await expect(
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: original })),
+    ).resolves.toBe(false);
+
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(original.requesterSettleWake).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+    });
+    expect(deliverSpy).toHaveBeenCalledOnce();
+  });
+
   it("retries a visible final despite an unrelated durable yielded wake", async () => {
     const original = makeSettledChild({
       runId: "run-original",
