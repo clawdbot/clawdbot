@@ -130,7 +130,7 @@ describe("chat pane composer controls", () => {
     ["workspace", "Default (Workspace)"],
     ["full", "Default (Full Access)"],
   ] as const)(
-    "labels inherited permissions for %s without selecting a mode",
+    "renders inherited permissions for %s without selecting a mode",
     (defaultMode, label) => {
       const container = document.createElement("div");
       const onSelect = vi.fn();
@@ -140,9 +140,18 @@ describe("chat pane composer controls", () => {
       );
       const trigger = container.querySelector('[data-chat-permission-select="true"]');
       const option = container.querySelector('[data-chat-permission-option="default"]');
+      const fullAccess = defaultMode === "full";
       expect(trigger?.textContent?.trim()).toBe(label);
       expect(trigger?.getAttribute("aria-label")).toBe(`Permissions: ${label}`);
       expect(trigger?.getAttribute("data-chat-select-value")).toBe("");
+      expect(trigger?.classList.contains("chat-controls__permission-trigger--full")).toBe(
+        fullAccess,
+      );
+      expect(
+        trigger
+          ?.querySelector(".chat-controls__inline-select-label")
+          ?.classList.contains("chat-controls__permission-label--full"),
+      ).toBe(fullAccess);
       expect(
         option?.querySelector(".chat-controls__permission-option-title")?.textContent?.trim(),
       ).toBe(label);

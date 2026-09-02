@@ -1055,10 +1055,7 @@ describe("processResponsesStream", () => {
     }
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("passes SDK maxRetries %s as %i", async (maxRetries, expected) => {
+  it("pins SDK maxRetries to zero", async () => {
     let requestMaxRetries: number | undefined;
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
@@ -1067,7 +1064,6 @@ describe("processResponsesStream", () => {
       stream,
       model: nativeOpenAIModel,
       output,
-      options: maxRetries === undefined ? undefined : { maxRetries },
       createClient: () => ({
         responses: {
           create: (_params, requestOptions) => {
@@ -1090,7 +1086,7 @@ describe("processResponsesStream", () => {
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
     });
 
-    expect(requestMaxRetries).toBe(expected);
+    expect(requestMaxRetries).toBe(0);
     expect(output.stopReason).toBe("stop");
   });
 

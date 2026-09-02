@@ -6,9 +6,12 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  listSessionEntriesReadOnly,
   listSessionParticipantsReadOnly,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
@@ -45,7 +48,9 @@ import {
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 installGatewayTestHooks({ scope: "suite" });
-const sessionKey = "agent:main:main";
+let agentId = "main";
+let sessionKey = "agent:main:main";
+let canonicalKey = sessionKey;
 let sessionId: string;
 const connectionId = "talk-consult-history-ui";
 const spoken = "SPOKEN_133855: Keep the literal labels Context: and Spoken style: in my note.";
@@ -75,6 +80,8 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  agentId = "main";
+  sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
   storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -171,7 +178,7 @@ afterEach(async () => {
 });
 
 function scope() {
-  return { agentId: "main", sessionKey, sessionId, storePath };
+  return { agentId, sessionKey: canonicalKey, sessionId, storePath };
 }
 async function rpc(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
@@ -188,7 +195,7 @@ async function rpc(method: string, params: Record<string, unknown>) {
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
 async function waitForDispatchEnd() {
-  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
   expect(context.chatAbortControllers.size).toBe(0);
 }
 async function drainPublications() {
@@ -240,7 +247,7 @@ function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer
   }
 }
 async function historyMessages() {
-  const result = await rpc("chat.history", { sessionKey });
+  const result = await rpc("chat.history", { sessionKey: canonicalKey, agentId });
   expect(Array.isArray(result.messages)).toBe(true);
   return result.messages as unknown[];
 }
@@ -257,12 +264,109 @@ async function consult(question: string, callId: string) {
 
 async function startHeldConsult() {
   const ack = await consult("Keep this task running until released.", "held-task");
-  await modelStarted.promise;
+  await Promise.race([
+    modelStarted.promise,
+    getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] }),
+  ]);
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "held model invocation");
   const abortSignal = expectDefined(run.abortSignal, "admitted model cancellation signal");
   expect(abortSignal.aborted).toBe(false);
   return { ack, run, abortSignal };
 }
+
+describe("Browser Talk consult target handoff", () => {
+  it.each([
+    { name: "bare main", key: "main", expected: "agent:voice:main" },
+    { name: "new session", key: "main", fresh: true, expected: "agent:voice:main" },
+    { name: "custom main", key: "main", mainKey: "home", expected: "agent:voice:home" },
+    { name: "global", key: "main", global: true, expected: "global" },
+    { name: "scoped global", key: "agent:voice:main", global: true, expected: "global" },
+    { name: "fixed store", key: "main", fixed: true, expected: "agent:voice:main" },
+    { name: "explicit other agent", key: "agent:primary:chosen", expected: "agent:primary:chosen" },
+  ])(
+    "executes and cancels the exact $name target without changing voice identity",
+    async (entry) => {
+      await rpc("talk.client.close", { sessionKey, voiceSessionId });
+      voiceSessionId = undefined;
+      const previousConfig = getRuntimeConfig();
+      testState.sessionStorePath = undefined;
+      agentId = entry.key.startsWith("agent:primary:") ? "primary" : "voice";
+      sessionKey = entry.key;
+      canonicalKey = entry.expected;
+      storePath = entry.fixed
+        ? resolveOpenClawAgentSqlitePath({ agentId })
+        : resolveSessionStorePathCore(undefined, { agentId });
+      await writeSessionStore({
+        storePath,
+        agentId,
+        mainKey: entry.mainKey,
+        entries: entry.fresh
+          ? {}
+          : { [canonicalKey]: { sessionId, updatedAt: Date.now(), status: "done" } },
+      });
+      setRuntimeConfigSnapshot({
+        ...previousConfig,
+        agents: {
+          ownership: "explicit",
+          entries: { primary: {}, voice: {} },
+          defaults: {
+            ...previousConfig.agents?.defaults,
+            ...(entry.fixed ? { sessionStore: { agentId } } : {}),
+          },
+        },
+        talk: { agentId: "voice" },
+        session: {
+          ...(entry.mainKey ? { mainKey: entry.mainKey } : {}),
+          ...(entry.global ? { scope: "global" } : {}),
+          ...(entry.fixed ? { store: storePath } : {}),
+        },
+      });
+      await prepareGatewayReplyRuntimeForTest({ force: true });
+      voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
+      if (!entry.fresh) {
+        await rpc("talk.client.transcript", {
+          sessionKey,
+          voiceSessionId,
+          entryId: "spoken-user",
+          role: "user",
+          text: spoken,
+        });
+      }
+      const { ack, run, abortSignal } = await startHeldConsult();
+      expect(run).toMatchObject({
+        agentId,
+        sessionKey: canonicalKey,
+        ...(!entry.fresh ? { sessionId } : {}),
+      });
+      if (entry.fresh) {
+        sessionId = run.sessionId;
+      }
+      expect(ack).toMatchObject({ agentId, agentSessionKey: canonicalKey });
+      expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)).toMatchObject({
+        sessionKey,
+        status: "open",
+        consultRunIds: [ack.runId],
+      });
+      expect(
+        listSessionEntriesReadOnly({ agentId, storePath }).map((row) => row.sessionKey),
+      ).toEqual([canonicalKey]);
+      expect(
+        await rpc("chat.abort", {
+          sessionKey: ack.agentSessionKey,
+          agentId: ack.agentId,
+          runId: ack.runId,
+        }),
+      ).toMatchObject({ aborted: true, runIds: [ack.runId] });
+      expect(abortSignal.aborted).toBe(true);
+      const history = await historyMessages();
+      if (entry.fresh) {
+        expectNoGeneratedInput(history, "new target history");
+      } else {
+        expectVisibleSpeechOnly(history, "canonical target history", false);
+      }
+    },
+  );
+});
 
 describe("Browser Talk literal consult commands", () => {
   it.each(["/stop", "stop"])("dispatches generated %j as literal model input", async (question) => {
@@ -321,7 +425,7 @@ describe("Browser Talk consult input custody", () => {
       tools: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
     },
   ])(
-    "keeps $name consult scaffolding out of live, reloaded, and exported chat",
+    "keeps $name consult scaffolding out of chat and later context but in the raw archive",
     async ({ scopes, tools }) => {
       client.connect.scopes = scopes;
       await rpc("talk.client.transcript", {
@@ -383,6 +487,7 @@ describe("Browser Talk consult input custody", () => {
       expect.soft(generated[0]).toMatchObject({
         role: "user",
         display: false,
+        excludeFromContext: true,
         provenance: { kind: "internal_system" },
       });
       const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
@@ -399,7 +504,17 @@ describe("Browser Talk consult input custody", () => {
       expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
       clearSessionStoreCacheForTest();
       expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
-      expect(loadTranscriptEventsSync(scope())).not.toEqual([]);
+      for (const manager of [
+        SessionManager.open(scope()),
+        SessionManager.openModelContext(scope()),
+      ]) {
+        const messages = manager.buildSessionContext().messages;
+        expectNoGeneratedInput(messages, "reopened model context");
+        expect(messages.map(extractText)).toEqual(expect.arrayContaining([spoken, answer]));
+      }
+      expect(loadTranscriptEventsSync(scope())).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: generated[0] })]),
+      );
     },
   );
 });

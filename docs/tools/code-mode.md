@@ -42,8 +42,15 @@ identically-named `exec`/`wait` tools.
 In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
 `code`, not a shell command. For shell or file operations, call the appropriate
 async tool global from guest JavaScript. Recognizable shell
-commands are rejected before the QuickJS worker starts with actionable
+commands are rejected before guest execution with actionable
 `invalid_input` guidance.
+
+Source validation, TypeScript compilation, and guest execution run in a bounded
+pool of worker threads that scales with available CPU cores. Workers stay warm
+between calls; each execution or resume gets an isolated QuickJS VM. Tool
+permissions, approvals, and session ownership remain with the Gateway. Queued
+work shares the execution deadline, and cancellation stops an active worker
+before the call settles.
 
 ## What it does
 
@@ -1181,7 +1188,10 @@ session.`.
 runs.`.
 
 Snapshot storage is bounded by `maxSnapshotBytes` per run, the per-process
-suspended-run cap above, and `snapshotTtlSeconds`.
+suspended-run cap above, and `snapshotTtlSeconds`. The worker checks the snapshot
+size, including QuickJS metadata, before handing pending work to the Gateway.
+These limits and `memoryLimitBytes` bound guest state, not total Gateway memory;
+warm worker threads and TypeScript compilers also retain memory.
 
 ## QuickJS-WASI runtime
 
@@ -1193,6 +1203,8 @@ create one isolated VM per code-mode run or resume; register host callbacks
 by stable names; set memory and interrupt limits; evaluate JavaScript; drain
 pending jobs; snapshot suspended VM state; restore snapshots for `wait`;
 dispose VM handles and snapshots after terminal states.
+Snapshot buffers transfer directly between workers and the Gateway without
+copying the VM heap through a storage serialization format.
 
 The runtime executes in a Node.js worker thread, outside OpenClaw's main
 event loop. A guest infinite loop must not block the Gateway process

@@ -108,7 +108,7 @@ export function convertAnthropicMessagesToResponsesInput(params: {
           type: "function_call_output",
           call_id: block.tool_use_id,
           output: stringifyToolResultContent(block.content),
-          ...(block.is_error === true ? { is_error: true } : {}),
+          ...(typeof block.is_error === "boolean" ? { is_error: block.is_error } : {}),
         });
         continue;
       }

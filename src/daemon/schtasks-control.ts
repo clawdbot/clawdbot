@@ -42,6 +42,7 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type {
   GatewayServiceControlArgs,
@@ -178,8 +179,13 @@ export async function runScheduledTaskOrThrow(params: {
   ) {
     return "scheduled-task";
   }
-  await launchFallbackTaskScript(params.env);
-  return "direct-fallback";
+  if (!shouldManageGatewayListenerPort(params.env)) {
+    await launchFallbackTaskScript(params.env);
+    return "direct-fallback";
+  }
+  throw new Error(
+    `Scheduled Task ${params.taskName} did not start within ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
+  );
 }
 
 function parseScheduledTaskXmlEnabled(output: string): boolean | null {
@@ -226,12 +232,17 @@ async function changeScheduledTaskEnabledState(params: {
     );
     if (!params.enabled) {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
-      const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
-      if (restore.code !== 0) {
-        const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
-        throw new AggregateError(
-          [changeError, new Error(`schtasks enable failed: ${restoreDetail}`)],
-          "Scheduled Task disable failed and its enabled state could not be restored",
+      try {
+        const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
+        if (restore.code !== 0) {
+          const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
+          throw new Error(`schtasks enable failed: ${restoreDetail}`);
+        }
+      } catch (restoreError) {
+        throw new ScheduledTaskAutoStartRecoveryError(
+          [changeError, restoreError],
+          `Scheduled Task disable failed and its enabled state could not be restored: ${changeError.message}; ${String(restoreError)}`,
+          params.env,
         );
       }
     }

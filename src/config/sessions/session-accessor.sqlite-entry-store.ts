@@ -38,11 +38,7 @@ import {
 import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import {
-  cloneSessionEntry,
-  getSessionKysely,
-  normalizeSqliteSessionKey,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, normalizeSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import {
   bindSessionNode,
   bindSessionRoot,
@@ -116,6 +112,7 @@ export function parseReadableSqliteSessionEntryRow(
   );
 }
 
+/** Exact reads already own nested values; retain them through identity publication. */
 export function readSessionIdentitySnapshot(
   database: OpenClawAgentDatabase,
   sessionKeys: Iterable<string>,
@@ -124,16 +121,10 @@ export function readSessionIdentitySnapshot(
   for (const sessionKey of uniqueStrings([...sessionKeys].map((key) => key.trim()))) {
     const row = readExactSessionEntryRow(database, sessionKey);
     if (row) {
-      snapshot.set(sessionKey, cloneSessionEntry(row.entry));
+      snapshot.set(sessionKey, row.entry);
     }
   }
   return snapshot;
-}
-
-export function createSessionIdentitySnapshot(
-  rows: readonly { entry: SessionEntry; sessionKey: string }[],
-): Map<string, SessionEntry> {
-  return new Map(rows.map((row) => [row.sessionKey, cloneSessionEntry(row.entry)]));
 }
 
 export function readSessionEntryRow(
@@ -222,15 +213,19 @@ export function readExactSessionEntryRowValidated(
 
 export function readSessionEntryStore(
   database: OpenClawAgentDatabase,
-  options: { allowCanonicalRepair?: boolean } = {},
+  options: { allowCanonicalRepair?: boolean; sessionKeys?: readonly string[] } = {},
 ): Record<string, SessionEntry> {
   if (options.allowCanonicalRepair !== true) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
+  if (options.sessionKeys?.length === 0) {
+    return {};
+  }
   const db = getSessionKysely(database.db);
+  const query = db.selectFrom("session_nodes").selectAll().orderBy("session_key");
   const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").selectAll().orderBy("session_key"),
+    options.sessionKeys ? query.where("session_key", "in", options.sessionKeys) : query,
   );
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
@@ -340,15 +335,15 @@ export function deleteSessionEntryRows(
     database.db,
     db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
   ).rows;
-  // Maintenance may have reclaimed every window already. Only scan surviving
-  // prompts when a retained window needs an owner; otherwise each deletion reads the whole store.
+  // Skip the survivor scan when maintenance reclaimed every window. Otherwise, project
+  // reference metadata before acquiring rows to avoid loading unrelated saved prompts.
   const survivingNodes =
     windows.length > 0
       ? executeSqliteQuerySync(
           database.db,
           db
             .selectFrom("session_nodes")
-            .select(["current_session_id", "entry_json", "session_key"])
+            .select(["current_session_id", sessionEntryMetadataJson, "session_key"])
             .where("session_key", "!=", sessionKey)
             .orderBy("session_key", "asc"),
         ).rows

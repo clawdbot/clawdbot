@@ -1938,6 +1938,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [1200, 800, "desktop"],
+    [900, 500, "mobile-landscape-900"],
+    [640, 900, "mobile-responsive-640"],
     [320, 568, "mobile-320"],
     [375, 812, "mobile-375"],
     [430, 932, "mobile-430"],
@@ -1987,15 +1989,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 width: bounds.width,
               };
             };
+            const composer = document
+              .querySelector<HTMLElement>(".agent-chat__composer-shell")!
+              .getBoundingClientRect();
+            const thread = document
+              .querySelector<HTMLElement>(".chat-thread")!
+              .getBoundingClientRect();
+            const fade = getComputedStyle(
+              document.querySelector<HTMLElement>(".agent-chat__composer-shell")!,
+              "::before",
+            );
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
+              fadeInsetLeft: composer.left + Number.parseFloat(fade.left) - thread.left,
+              fadeInsetRight: thread.right - (composer.right - Number.parseFloat(fade.right)),
+              scrollbarSize: Number.parseFloat(
+                getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
+              ),
               thread: rect(".chat-thread"),
             };
           });
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
         expect(await page.locator(".agent-chat__composer-overlay").isVisible()).toBe(false);
         const before = await geometry();
+        expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
+        expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         await page.locator(".chat-topbar-notices").evaluate((node) => {
           node.innerHTML =
             '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
@@ -4040,7 +4059,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(10);
+        expect(previewPaddingTop).toBe(18);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
         expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
       } finally {
@@ -4623,10 +4642,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps a ten-step task panel full-width with a fixed header and an internal list scroll", async () => {
+  it("keeps a long task panel full-width with a fixed header and an internal body scroll", async () => {
     const page = await openBrowserPage(980, 844);
+    const stepCount = 14;
     const steps = Array.from(
-      { length: 10 },
+      { length: stepCount },
       (
         _,
         index,
@@ -4657,10 +4677,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 <span class="session-progress-card__summary-collapsed">
                   <span class="session-progress-card__current">Abrir a interface</span>
                 </span>
-                <span class="session-progress-card__summary-count session-progress-card__summary-count--collapsed">1/10</span>
+                <span class="session-progress-card__summary-count session-progress-card__summary-count--collapsed">1/${stepCount}</span>
                 <span class="session-progress-card__summary-expanded">
                   <span class="session-progress-card__summary-title">Task progress</span>
-                  <span class="session-progress-card__heading-actions">6 of 10</span>
+                  <span class="session-progress-card__heading-actions">6 of ${stepCount}</span>
                 </span>
                 <span class="session-progress-card__summary-chevron">${iconSvg()}</span>
               </summary>
@@ -4702,6 +4722,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       const summary = page.locator(".session-progress-card__summary");
       const card = page.locator(".session-progress-card--composer");
+      const body = page.locator(".session-progress-card__body");
       const list = page.locator(".session-progress-card__steps");
       const widthBefore = (await card.boundingBox())?.width;
       const readSummaryState = () =>
@@ -4819,12 +4840,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(expandedAfter.actionsColor).not.toBe(expandedBefore.actionsColor);
       expect(expandedAfter.chevronColor).not.toBe(expandedBefore.chevronColor);
 
-      const listLayout = await list.evaluate((node) => {
+      const bodyLayout = await body.evaluate((node) => {
         const bounds = node.getBoundingClientRect();
-        const visibleItems = [...node.children].filter((child) => {
-          const row = child.getBoundingClientRect();
-          return row.bottom <= bounds.bottom + 1 && row.top >= bounds.top - 1;
-        }).length;
+        const visibleItems = [...node.querySelectorAll(".session-progress-card__step")].filter(
+          (child) => {
+            const row = child.getBoundingClientRect();
+            return row.bottom <= bounds.bottom + 1 && row.top >= bounds.top - 1;
+          },
+        ).length;
         return {
           clientHeight: node.clientHeight,
           overflowY: getComputedStyle(node).overflowY,
@@ -4832,10 +4855,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           visibleItems,
         };
       });
-      expect(listLayout.overflowY).toBe("auto");
-      expect(listLayout.scrollHeight).toBeGreaterThan(listLayout.clientHeight);
-      expect(listLayout.visibleItems).toBeGreaterThanOrEqual(5);
-      expect(listLayout.visibleItems).toBeLessThanOrEqual(7);
+      expect(bodyLayout.overflowY).toBe("auto");
+      expect(bodyLayout.scrollHeight).toBeGreaterThan(bodyLayout.clientHeight);
+      expect(bodyLayout.visibleItems).toBeGreaterThan(0);
+      expect(bodyLayout.visibleItems).toBeLessThan(stepCount);
+      expect(await list.evaluate((node) => getComputedStyle(node).overflowY)).toBe("visible");
       const openStackAxes = await page.evaluate(() => {
         const centerX = (selector: string) => {
           const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
@@ -4871,13 +4895,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         Math.max(...openStackAxes.contentLefts) - Math.min(...openStackAxes.contentLefts),
       ).toBeLessThan(0.5);
       expect(Math.abs(openStackAxes.trailingCenterDelta)).toBeLessThan(0.5);
-      expect(
-        await page
-          .locator(".session-progress-card__body")
-          .evaluate((node) => getComputedStyle(node).overflow),
-      ).toBe("hidden");
-
-      await list.evaluate((node) => {
+      await body.evaluate((node) => {
         node.scrollTop = node.scrollHeight;
       });
       expect((await summary.boundingBox())?.y).toBeCloseTo(expandedBefore.y, 1);
@@ -4886,7 +4904,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
-        await list.evaluate((node) => {
+        await body.evaluate((node) => {
           node.scrollTop = 0;
         });
         await page.locator(".agent-chat__composer-shell").screenshot({

@@ -3,7 +3,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
+import {
+  closeFailedUpdateDialog,
+  confirmAndStartUpdateRuntime,
+} from "./update-confirmation.runtime.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
@@ -85,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
   document.body.replaceChildren();
   restoreDialogPolyfill();
   if (originalWebkit) {
@@ -164,7 +168,7 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
-it("keeps the dialog open and narrates the install, the restart, and the failure", async () => {
+it("keeps the dialog open and narrates the install, the disconnect, and the failure", async () => {
   const stream = createProgressStream();
   const { settled, startGatewayUpdate } = startUpdate({
     watchUpdateProgress: stream.watchUpdateProgress,
@@ -181,7 +185,10 @@ it("keeps the dialog open and narrates the install, the restart, and the failure
   // The Gateway goes away mid-install; the dialog is mounted outside the shell
   // precisely so it can keep reporting through the disconnect.
   await stream.push({ busy: true, connected: false, failure: null });
-  expect(modal.textContent).toContain("The Gateway is restarting");
+  expect(modal.textContent).toContain("The Gateway disconnected during the update");
+  expect(modal.textContent).toContain("openclaw triage");
+  expect(modal.textContent).toContain("on the Gateway host");
+  expect(modal.textContent).toContain("local coding agent");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
   await stream.push({
@@ -207,6 +214,28 @@ it("closes itself once a watched update finishes without a failure", async () =>
 
   await settled;
   expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+});
+
+it("hands only a failed dialog over to triage", async () => {
+  const stream = createProgressStream();
+  const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+  await getRenderedModalDialog(document.body);
+  closeFailedUpdateDialog();
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  findButton("Update and restart").click();
+  await stream.push({ busy: true, connected: true, failure: null });
+  closeFailedUpdateDialog();
+  expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+
+  await stream.push({
+    busy: false,
+    connected: true,
+    failure: "Read the recorded cause before retrying.",
+  });
+  closeFailedUpdateDialog();
+  await settled;
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(stream.stopped).toBe(true);
 });
 
 /**

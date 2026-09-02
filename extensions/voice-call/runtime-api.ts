@@ -8,6 +8,7 @@ export {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 export { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";

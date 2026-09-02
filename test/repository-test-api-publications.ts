@@ -41,9 +41,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.embeddedRunAuthPlanTestApi",
   ),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
-  "src/agents/embedded-agent-subscribe.handlers.messages.update.ts": Symbol.for(
-    "openclaw.embeddedSubscribeMessagesTestApi",
-  ),
   "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
@@ -68,7 +65,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
   "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
-  "src/agents/tools/image-generate-tool.ts": Symbol.for("openclaw.imageGenerateToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/tools/model-config.helpers.ts": Symbol.for("openclaw.modelConfigHelpersTestApi"),
   "src/agents/tools/structured-output-tool.ts": Symbol.for("openclaw.structuredOutputToolTestApi"),
@@ -76,7 +72,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
-  "src/auto-reply/reply/agent-runner-memory.ts": Symbol.for("openclaw.agentRunnerMemoryTestApi"),
   "src/auto-reply/reply/agent-runner-session-reset.ts": Symbol.for(
     "openclaw.agentRunnerSessionResetTestApi",
   ),

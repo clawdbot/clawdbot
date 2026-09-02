@@ -174,9 +174,9 @@ function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: s
 }
 
 function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, readonly string[]> {
-  return new Map(
-    [...owners.entries()].map(([ownedId, pluginIds]) => [ownedId, Object.freeze([...pluginIds])]),
-  );
+  // These maps and arrays are private until this transfer to the snapshot.
+  owners.forEach((pluginIds) => Object.freeze(pluginIds));
+  return owners;
 }
 
 function buildPluginMetadataOwnerMaps(

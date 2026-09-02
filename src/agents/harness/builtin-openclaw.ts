@@ -47,6 +47,7 @@ function buildRestrictedFinalizationAttempt(
     onLaneWait: attempt.onLaneWait,
     onRunProgress: attempt.onRunProgress,
     onAttemptTimeoutArmed: attempt.onAttemptTimeoutArmed,
+    onAttemptDeadlineChanged: attempt.onAttemptDeadlineChanged,
     onAttemptTimeout: attempt.onAttemptTimeout,
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,

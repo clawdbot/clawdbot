@@ -9,6 +9,7 @@ import {
 import {
   createConfigResolutionFacts,
   getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 
@@ -336,8 +337,9 @@ describe("resolveConfigEnvVars", () => {
   });
 
   describe("graceful missing env var handling (onMissing)", () => {
-    it("keeps authored SecretRef provenance distinct across dotted plugin and header keys", () => {
+    it("keeps pending and resolved SecretRef provenance distinct across config paths", () => {
       const pendingEnvSecretRefs = new Map<string, string>();
+      const resolvedEnvSecretRefs = new Map<string, string>();
       const config = resolveConfigEnvVars(
         {
           plugins: {
@@ -362,13 +364,18 @@ describe("resolveConfigEnvVars", () => {
               },
             },
           },
+          resolved: "${RESOLVED_SECRET}",
         },
-        {},
+        { RESOLVED_SECRET: "resolved-value" },
         {
           onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+          onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
         },
       );
-      setConfigResolutionFacts(config, createConfigResolutionFacts([], pendingEnvSecretRefs));
+      setConfigResolutionFacts(
+        config,
+        createConfigResolutionFacts([], pendingEnvSecretRefs, undefined, resolvedEnvSecretRefs),
+      );
 
       expect([...pendingEnvSecretRefs]).toEqual([
         ['plugins.entries["foo.config.bar"].config.token', "ATTACKER"],
@@ -378,6 +385,7 @@ describe("resolveConfigEnvVars", () => {
         ["models.providers.alpha:beta.apiKey", "CORE_PROVIDER"],
         ["models.providers.alpha:beta.headers.X.Trace", "CORE_HEADER"],
       ]);
+      expect([...resolvedEnvSecretRefs]).toEqual([["resolved", "RESOLVED_SECRET"]]);
       for (const [configPath, id] of pendingEnvSecretRefs) {
         expect(getAuthoredConfigSecretRef(config, configPath), configPath).toEqual({
           source: "env",
@@ -385,6 +393,12 @@ describe("resolveConfigEnvVars", () => {
           id,
         });
       }
+      expect(getAuthoredConfigSecretRef(config, "resolved")).toBeNull();
+      expect(getResolvedConfigEnvSecretRef(config, "resolved")).toEqual({
+        source: "env",
+        provider: "default",
+        id: "RESOLVED_SECRET",
+      });
     });
 
     it("collects warnings and preserves placeholder when onMissing is set", () => {

@@ -2,13 +2,12 @@
 import fs from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
-import type { UserConfig } from "tsdown";
+import type { DtsOptions, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { fsSafeNativeCopy } from "./scripts/lib/fs-safe-native-assets.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -22,7 +21,6 @@ import {
 } from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
-  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
@@ -296,19 +294,25 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@anthropic-ai/claude-agent-sdk",
     "@anthropic-ai/vertex-sdk",
     "@discordjs/voice",
-    "@lancedb/lancedb",
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
+    // Its crypto loader uses createRequire(import.meta.url) for package-owned dependencies.
+    "@openclaw/crabline",
+    // Its native loader resolves optional platform packages from the package scope.
+    "@openclaw/fs-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
     "jimp",
     "matrix-js-sdk",
     "prism-media",
-    "sharp",
     "typescript",
     "vitest",
+    // Selected plugin distributions install platform optionals beside bundled JavaScript.
+    ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
+      Object.keys(packageJson?.optionalDependencies ?? {}),
+    ),
   ],
 });
 
@@ -317,14 +321,16 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
+  // Arrow's relative module augmentations must stay beside their package modules.
+  return (
+    shouldNeverBundleDependency(id) ||
+    ["zod", "apache-arrow"].some((name) => id === name || id.startsWith(`${name}/`))
+  );
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
-    id === "@openclaw/fs-safe" ||
-    id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
@@ -438,6 +444,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "cli/run-main": "src/cli/run-main.ts",
     "config/config": "src/config/config.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
+    "plugins/official-external-install-records": "src/plugins/official-external-install-records.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
     "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
@@ -691,7 +698,11 @@ function buildUnifiedDeclarationPartitions(
     }
     return {
       name,
-      sources: partition.map(([, source]) => normalizeDeclarationEntrySource(source)),
+      // The compiler's TypeScript-only policy leaves JavaScript runtime assets
+      // without declarations; they remain in the unified runtime entry graph.
+      sources: partition
+        .filter(([, source]) => /\.[cm]?tsx?$/u.test(source))
+        .map(([, source]) => normalizeDeclarationEntrySource(source)),
     };
   });
 }
@@ -703,6 +714,11 @@ const unifiedDeps = {
   // Keep dependency-owned types canonical across independently emitted declaration graphs.
   dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
+
+// TypeScript supports this hidden flag before get-tsconfig's option type does.
+const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions"]> & {
+  stableTypeOrdering: true;
+} = { stableTypeOrdering: true };
 
 const configs = [
   nodeBuildConfig({
@@ -758,7 +774,6 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      copy: fsSafeNativeCopy,
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
@@ -783,11 +798,13 @@ const configs = [
             name,
             entry: unifiedDistEntries,
             deps: unifiedDeps,
-            ...(TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => group === name)
-              ? { hooks: { "build:done": createDeclarationInputCapture(name) } }
-              : {}),
+            hooks: { "build:done": createDeclarationInputCapture(name) },
           },
-          { emitDtsOnly: true, entry: sources },
+          {
+            emitDtsOnly: true,
+            entry: sources,
+            compilerOptions: unifiedDeclarationCompilerOptions,
+          },
         ),
       )
     : []),

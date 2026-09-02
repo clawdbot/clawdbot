@@ -29,6 +29,7 @@ struct LocalChatFixture {
     let modelProvider: String
     let modelID: String
     let modelName: String
+    let modelSelectionTarget: String
     let additionalModels: [OpenClawChatModelChoice]
     let responsePrefix: String
     let seedMessages: [String]
@@ -43,6 +44,7 @@ struct LocalChatFixture {
         modelProvider: "demo",
         modelID: "local-demo",
         modelName: "Apple Review Demo",
+        modelSelectionTarget: "session",
         additionalModels: [],
         responsePrefix: "Demo mode is active.",
         seedMessages: [
@@ -74,6 +76,7 @@ struct LocalChatFixture {
         modelProvider: "openai",
         modelID: "gpt-5.6-sol",
         modelName: "GPT-5.6 Sol",
+        modelSelectionTarget: "global",
         additionalModels: [
             OpenClawChatModelChoice(
                 modelID: "claude-opus-4-1",
@@ -227,13 +230,43 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
-        [
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
+            return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
+            {"models":[
+              {"id":"gpt-5.6-sol","name":"GPT-5.6 Sol","provider":"openai",
+               "available":true,"contextWindow":128000},
+              {"id":"claude-opus-4-1","name":"Claude Opus 4.1","provider":"anthropic",
+               "available":false,"unavailableReason":"missing-auth","contextWindow":200000}
+            ]}
+            """#.utf8))
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-selected-model-auth-failure-fixture") {
+            return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
+            {"models":[
+              {"id":"gpt-5.6-sol","name":"GPT-5.6 Sol","provider":"openai",
+               "available":false,"unavailableReason":"auth-failed","contextWindow":128000},
+              {"id":"claude-opus-4-1","name":"Claude Opus 4.1","provider":"anthropic",
+               "available":true,"contextWindow":200000}
+            ]}
+            """#.utf8))
+        }
+        return [
             OpenClawChatModelChoice(
                 modelID: self.fixture.modelID,
                 name: self.fixture.modelName,
                 provider: self.fixture.modelProvider,
                 contextWindow: 128_000),
         ] + self.fixture.additionalModels
+    }
+
+    func loadModelCatalog(
+        sessionKey _: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        let choices = try await self.listModels(agentID: agentID)
+        return OpenClawChatModelCatalogSnapshot(
+            choices: choices,
+            availabilityIsSessionScoped: true)
     }
 
     func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
@@ -534,8 +567,22 @@ private actor LocalFixtureChatStore {
                 thinkingLevels: Self.thinkingLevels,
                 thinkingOptions: Self.thinkingOptions,
                 thinkingDefault: "auto",
-                mainSessionKey: self.fixture.sessionKey),
+                mainSessionKey: self.fixture.sessionKey,
+                modelSelectionTarget: self.fixtureModelSelectionTarget),
             sessions: [entry])
+    }
+
+    private var fixtureModelSelectionTarget: String {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-selection-target"),
+              arguments.indices.contains(index + 1)
+        else {
+            return self.fixture.modelSelectionTarget
+        }
+        switch arguments[index + 1] {
+        case "session", "agent", "global": return arguments[index + 1]
+        default: return self.fixture.modelSelectionTarget
+        }
     }
 
     func reset() {

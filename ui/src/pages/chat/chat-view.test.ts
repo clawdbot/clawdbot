@@ -560,6 +560,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
     modelOverrides: state.sessions.state.modelOverrides,
+    modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
     modelSwitching: false,
     modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
@@ -1001,6 +1002,7 @@ describe("chat run error", () => {
       ],
       placementStartup: {
         sessionKey: "main",
+        targetKind: "profile",
         phase: "failed",
         startedAt: 1,
         retryable: true,
@@ -1046,6 +1048,7 @@ describe("chat run error", () => {
         ],
         placementStartup: {
           sessionKey: "agent:main:startup",
+          targetKind: "profile",
           phase: "failed",
           startedAt: 1,
           retryable: true,
@@ -1163,6 +1166,7 @@ describe("chat run error", () => {
     const container = renderChatView({
       placementStartup: {
         sessionKey: "agent:main:startup",
+        targetKind: "profile",
         phase: "failed",
         startedAt: 1,
         error: "⚠️ Provisioning failed\n  Final diagnostic line  ",
@@ -5549,6 +5553,38 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
+  it("keeps a stable composer name when attachments change its placeholder", () => {
+    const harness = createReactiveDraftHarness();
+    const textarea = requireElement(
+      harness.container,
+      "textarea",
+      "chat composer",
+    ) as HTMLTextAreaElement;
+    const initialPlaceholder = textarea.placeholder;
+    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
+    expect(textarea.hasAttribute("role")).toBe(false);
+
+    harness.renderCurrent({
+      attachments: [
+        {
+          id: "image",
+          fileName: "sample.png",
+          mimeType: "image/png",
+          previewUrl: "blob:sample-image",
+          sizeBytes: 3,
+        },
+      ],
+    });
+    expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
+    expect(textarea.placeholder).not.toBe(initialPlaceholder);
+    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
+    expect(textarea.hasAttribute("role")).toBe(false);
+
+    harness.renderCurrent({ attachments: [] });
+    expect(textarea.placeholder).toBe(initialPlaceholder);
+    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
+  });
+
   it("updates the active descendant and live announcement during command navigation", () => {
     const harness = createSlashRerenderHarness();
     let container = harness.inputAndRender(harness.container, "/");
@@ -6955,6 +6991,36 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it.each([
+    { target: "session", label: "Selection target: This session only" },
+    { target: "agent", label: "Selection target: This agent's default" },
+    { target: "global", label: "Selection target: Global default" },
+  ] as const)(
+    "discloses the $target write target before pointer selection",
+    ({ target, label }) => {
+      const { state } = createOpenAiHeaderState();
+      state.sessionsResult = {
+        ...expectDefined(state.sessionsResult, "sessions result"),
+        defaults: {
+          ...expectDefined(state.sessionsResult, "sessions result").defaults,
+          modelSelectionTarget: target,
+        },
+      };
+      const onModelSelect = vi.fn(async () => true);
+      const container = renderModelControls(state, { onModelSelect });
+
+      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+        label,
+      );
+      const modelOption = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      ).find((button) => button.getAttribute("aria-selected") === "false");
+      modelOption?.click();
+
+      expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+    },
+  );
+
   it("renders and applies selectable context windows inside the model picker", () => {
     const { state } = createChatHeaderState({
       model: "claude-fable-5",
@@ -7180,6 +7246,40 @@ describe("chat model controls", () => {
     container.remove();
   });
 
+  it.each([
+    { target: "agent", targetLabel: "Selection target: This agent's default" },
+    { target: "global", targetLabel: "Selection target: Global default" },
+  ] as const)(
+    "keeps a pinned reset session-only while model rows write to the $target target",
+    ({ target, targetLabel }) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.4",
+        modelOverrideSource: "user",
+        modelProvider: "openai",
+        models: createOpenAiModelCatalog(),
+      });
+      state.sessionsResult = {
+        ...expectDefined(state.sessionsResult, "sessions result"),
+        defaults: {
+          ...expectDefined(state.sessionsResult, "sessions result").defaults,
+          modelSelectionTarget: target,
+        },
+      };
+      const onModelSelect = vi.fn(async () => true);
+      const container = renderModelControls(state, { onModelSelect });
+
+      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+        targetLabel,
+      );
+      expect(container.querySelector("[data-chat-model-pin-provenance]")?.textContent).toContain(
+        "Only for this session",
+      );
+      container.querySelector<HTMLButtonElement>("[data-chat-model-reset]")?.click();
+
+      expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    },
+  );
+
   // Settings can move the agent default onto — and back off — a session's pinned
   // model. Provenance must survive both moves, and the default row must stay a live
   // way to clear the pin while the two values coincide.
@@ -7363,7 +7463,10 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
+    const container = renderModelControls(state, {
+      modelSelectionTarget: "agent",
+      onModelSelect,
+    });
     document.body.append(container);
 
     const providerHeadings = Array.from(
@@ -7381,6 +7484,9 @@ describe("chat model controls", () => {
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     details!.open = true;
+    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+      "Selection target: This agent's default",
+    );
     search!.value = "anth";
     search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
@@ -7449,7 +7555,10 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
+    const container = renderModelControls(state, {
+      modelSelectionTarget: "global",
+      onModelSelect,
+    });
     document.body.append(container);
 
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
@@ -9176,19 +9285,16 @@ describe("right-click Reply", () => {
     const section = container.querySelector<HTMLElement>(".card.chat");
     expect(section).not.toBeNull();
 
-    const group = document.createElement("div");
-    group.className = "chat-group";
-    const bubble = document.createElement("div");
-    bubble.className = "chat-bubble";
-    bubble.dataset.messageId = "msg-1";
-    bubble.dataset.messageText = "selectable text";
+    const { bubble, group } = appendChatBubble(container, {
+      messageId: "msg-1",
+      text: "selectable text",
+    });
     bubble.textContent = "selectable text";
     const otherBubble = document.createElement("div");
     otherBubble.className = "chat-bubble";
     otherBubble.dataset.messageText = "other text";
     otherBubble.textContent = "other text";
-    group.append(bubble, otherBubble);
-    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+    group.append(otherBubble);
 
     const bubbleText = expectDefined(bubble.firstChild, "bubble text node");
     const otherText = expectDefined(otherBubble.firstChild, "other bubble text node");

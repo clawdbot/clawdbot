@@ -1,4 +1,4 @@
-import { finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
@@ -68,7 +68,7 @@ async function queryCurrentProfiles(params: {
     closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
     onEvent: (event) => {
       const current = latestByKind.get(event.kind);
-      if (!current || event.created_at > current.created_at) {
+      if (!current || compareEvents(event, current) < 0) {
         latestByKind.set(event.kind, event);
       }
     },

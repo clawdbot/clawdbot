@@ -23,6 +23,7 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
@@ -37,6 +38,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "../session-utils.js";
 import { prepareSessionWorktree } from "../session-worktree-preparation.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
@@ -112,7 +114,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
-    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    const sessionCreation = prepareSkillLibrarySessionCreation(
+      client,
+      context.getRuntimeConfig,
+      resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+    );
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
@@ -128,14 +134,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const requestedModel = normalizeOptionalString(p.model);
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
-    let commitGuard =
-      authority.commitGuard || sessionMutationCommitGuard || sessionMutationAuthorization
-        ? () => {
-            sessionMutationCommitGuard?.();
-            authority.commitGuard?.();
-            sessionMutationAuthorization?.assertCurrent();
-          }
-        : undefined;
+    let commitGuard = () => {
+      sessionMutationCommitGuard?.();
+      authority.commitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
+      assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
+    };
     const catalogId = normalizeOptionalString(p.catalogId);
     const catalogConflict = p.model ? "model" : p.key ? "key" : undefined;
     if (catalogId && catalogConflict) {
@@ -542,7 +546,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       armSessionDiffBaselineCapture: true,
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
-      ...(commitGuard ? { commitGuard } : {}),
+      commitGuard,
       afterCreate: async ({ key, agentId }) => {
         if (!authority.hasActive()) {
           return;

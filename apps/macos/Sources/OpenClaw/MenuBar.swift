@@ -71,12 +71,12 @@ struct OpenClawApp: App {
     var body: some Scene {
         Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
             SettingsRootView(state: self.state, updater: self.delegate.updaterController)
-                .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
                 .environment(self.tailscaleService)
                 .background(SettingsWindowOpenRegistrar())
         }
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
+        // Keep this a preferred size so the content can fit smaller displays.
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {

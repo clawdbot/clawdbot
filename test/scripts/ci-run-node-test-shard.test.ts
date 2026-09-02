@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -21,6 +22,7 @@ import {
   resolveTestProjectsEntrypoint,
   runShardPlans,
 } from "../../scripts/ci-run-node-test-shard.mts";
+import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 
 const scratchDirs: string[] = [];
 
@@ -73,11 +75,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it("falls back from groups to the single-shard matrix envelope", () => {
     const groupPlans = resolveShardPlans({
       OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-        { configs: ["one.config.ts"], shard_name: "one" },
+        { configs: ["one.config.ts"], shard_name: "one", timing_key: "one#include-aaaa" },
         { configs: ["two.config.ts"], shard_name: "two" },
       ]),
     });
     expect(groupPlans.map((plan) => plan.name)).toEqual(["one", "two"]);
+    expect(groupPlans.map((plan) => (plan.kind === "group" ? plan.timingKey : null))).toEqual([
+      "one#include-aaaa",
+      "two",
+    ]);
 
     const singlePlans = resolveShardPlans({
       OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["solo.config.ts"]),
@@ -165,6 +171,96 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
+
+  it("keeps readable child output separate from membership timing spans", async () => {
+    const timingKey =
+      "agentic-agents-support#selector-2-aaaa#generation-bbbb#part-1-of-2#include-1-cccc";
+    const lines: string[] = [];
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
+          {
+            configs: ["one.config.ts"],
+            shard_name: "agentic-agents-support-hosted-1",
+            timing_key: timingKey,
+          },
+        ]),
+      }),
+      {
+        concurrency: 1,
+        env: {},
+        runChild: async (_args, _childEnv, label, spanKey) => {
+          lines.push(`2026-08-27T23:00:00Z [shard:${spanKey}] begin`);
+          lines.push(`2026-08-27T23:00:01Z [shard:${label}] child output`);
+          lines.push(`2026-08-27T23:00:10Z [shard:${spanKey}] end (exit 0)`);
+          return 0;
+        },
+        scratchDir: makeScratchDir(),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(lines[1]).toContain("[shard:agentic-agents-support-hosted-1] child output");
+    const runs = [1, 2].map((id) => ({
+      id,
+      createdAt: `2026-08-${26 + id}T23:00:00Z`,
+      logs: [{ kind: "compact" as const, labels: ["blacksmith-16vcpu"], text: lines.join("\n") }],
+    }));
+    expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith[timingKey]).toBe(10);
+  });
+
+  it.each([
+    { source: "option", concurrency: 3, env: {} },
+    {
+      source: "environment",
+      concurrency: undefined,
+      env: { OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "3" },
+    },
+    { source: "default", concurrency: undefined, env: {} },
+  ])(
+    "bounds $source workers and restored cache slots to actual plans",
+    async ({ env, concurrency }) => {
+      const persistentRoot = makeScratchDir();
+      const seed = path.join(persistentRoot, "vitest-cache-0");
+      mkdirSync(seed);
+      writeFileSync(path.join(seed, "transform"), "cached", "utf8");
+      const seen: string[] = [];
+      const exitCode = await runShardPlans(
+        [{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }],
+        {
+          concurrency,
+          env: { ...env, OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+          scratchDir: makeScratchDir(),
+          runChild: async (_args, childEnv) => {
+            seen.push(childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH ?? "");
+            return 0;
+          },
+        },
+      );
+      expect(exitCode).toBe(0);
+      expect(seen).toEqual([seed]);
+      expect(readdirSync(persistentRoot)).toEqual(["vitest-cache-0"]);
+    },
+  );
+
+  it.each([Number.NaN, 0, 1.5])(
+    "rejects invalid concurrency %s before scheduling plans",
+    async (concurrency) => {
+      let runs = 0;
+      await expect(
+        runShardPlans([{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }], {
+          concurrency,
+          env: {},
+          scratchDir: makeScratchDir(),
+          runChild: async () => {
+            runs += 1;
+            return 0;
+          },
+        }),
+      ).rejects.toThrow("Shard plan concurrency must be a positive integer");
+      expect(runs).toBe(0);
+    },
+  );
 
   it("runs per-config groups serially through one persistent cache slot", async () => {
     const scratchDir = makeScratchDir();

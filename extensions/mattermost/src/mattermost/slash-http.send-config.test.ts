@@ -69,6 +69,7 @@ vi.mock("./runtime-api.js", () => {
     formatInboundFromLabel: vi.fn(() => ""),
     rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
     readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+    sendHttpRequestRejection: vi.fn(async () => undefined),
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,
       parentSessionKey: undefined,

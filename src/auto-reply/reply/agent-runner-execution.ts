@@ -26,7 +26,6 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
-import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -50,12 +49,7 @@ import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-auto-fallback.js";
-import {
-  cancelOverloadRetryNotice,
-  handleAgentExecutionError,
-  markOverloadRetryUnsafeToReplay,
-  type OverloadRetryState,
-} from "./agent-runner-error-handler.js";
+import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -121,10 +115,9 @@ function resolveRunStartupPhase(
   return undefined;
 }
 
-async function executeAgentTurnInternalWithRetryState(
+async function executeAgentTurnInternalLoop(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
-  overloadRetryState: OverloadRetryState,
   commitMcpAppModelContext: () => void,
   preparedRunAdmission: PreparedAgentRunAdmission,
   admittedRunContext: { current?: AdmittedRunContext },
@@ -273,9 +266,6 @@ async function executeAgentTurnInternalWithRetryState(
     if (info.phase === "model_call_started" || info.phase === "process_spawned") {
       commitMcpAppModelContext();
     }
-    if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
-      markOverloadRetryUnsafeToReplay(overloadRetryState);
-    }
     const isUserVisibleExecutionActivity =
       info.phase === "turn_accepted" ||
       info.phase === "process_spawned" ||
@@ -307,12 +297,11 @@ async function executeAgentTurnInternalWithRetryState(
     onError: (error) =>
       logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
   });
-  let transientHttpRetriesRemaining = 1;
-  const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
     deferredLifecycle,
     lifecycleGeneration,
+    turnStartedAtMs: Date.now(),
     compaction,
     postCompactionModelAttempted: false,
     attemptedRuntimeProvider: fallbackProvider,
@@ -397,8 +386,6 @@ async function executeAgentTurnInternalWithRetryState(
         liveModelSwitchRetries,
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
-        overloadRetryState,
-        consumeTransientHttpRetry,
         modelPatch,
       });
       if (action.kind === "aborted") {
@@ -533,13 +520,6 @@ async function executeAgentTurnInternal(
   commitMcpAppModelContext: () => void,
   compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
-  const overloadRetryState: OverloadRetryState = {
-    retryCount: 0,
-    turnStartedAtMs: Date.now(),
-    unsafeToReplay: false,
-    noticeSent: false,
-    completed: false,
-  };
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const admittedRunContext: { current?: AdmittedRunContext } = {};
   const gatewayContextResolver =
@@ -555,6 +535,7 @@ async function executeAgentTurnInternal(
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;
+      params.followupRun.run.skillLibraryAuthoring?.bind(context);
     },
   });
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
@@ -566,10 +547,9 @@ async function executeAgentTurnInternal(
     abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
   });
   try {
-    return await executeAgentTurnInternalWithRetryState(
+    return await executeAgentTurnInternalLoop(
       params,
       commitTerminalOutcome,
-      overloadRetryState,
       commitMcpAppModelContext,
       preparedRunAdmission,
       admittedRunContext,
@@ -579,7 +559,6 @@ async function executeAgentTurnInternal(
   } finally {
     await deferredLifecycle.complete();
     preparedRunAdmission.close();
-    await cancelOverloadRetryNotice(overloadRetryState);
   }
 }
 
@@ -697,9 +676,7 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
       },
     };
   } catch (error) {
-    const abortReason = isAgentRunRestartAbortReason(error)
-      ? "restart"
-      : resolveReplyOperationAbortReason(executionParams.replyOperation);
+    const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
     if (abortReason) {
       return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
     }

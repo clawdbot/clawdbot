@@ -55,7 +55,10 @@ import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
+import {
+  rejectUnavailableProfileConnect,
+  resolveEffectiveConnectionScopes,
+} from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
@@ -76,6 +79,11 @@ type AuthenticatedNodePairingAdmission = {
 
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
+}
+
+function resolveAuthenticatedProfile(profileId: string, updatedAt: number) {
+  const { id, displayName, avatarRevision, hasAvatar } = getUserProfileDisplay(profileId);
+  return { profileId: id, displayName, avatarRevision, hasAvatar, updatedAt };
 }
 
 export async function attachAuthenticatedGatewayConnect(
@@ -207,20 +215,16 @@ export async function attachAuthenticatedGatewayConnect(
           ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
           : ensureProfileForEmail(authenticatedUserId);
       const profileId = "profileId" in profile ? profile.profileId : profile.id;
-      const display = getUserProfileDisplay(profileId);
       // The live profile callback refreshes edits and detached provider-avatar adoption.
-      authenticatedUserProfile = {
-        profileId: display.id,
-        displayName: display.displayName,
-        avatarRevision: display.avatarRevision,
-        hasAvatar: display.hasAvatar,
-        updatedAt: profile.updatedAt,
-      };
+      authenticatedUserProfile = resolveAuthenticatedProfile(profileId, profile.updatedAt);
     } catch (error) {
-      // Profile storage and best-effort provider metadata must never block login.
       logWsControl.warn(
         `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
       );
+      if (rolesConfigured && role === "operator" && !sharedSecretOperatorOwner) {
+        await rejectUnavailableProfileConnect(context, error);
+        return;
+      }
     }
   }
   // Identity-derived scopes must be capped only after their durable profile is known.
@@ -239,18 +243,15 @@ export async function attachAuthenticatedGatewayConnect(
           context.configSnapshot,
         )
       : undefined;
-  const scopes =
-    role === "operator" && authenticatedUserId && rolesConfigured && !authenticatedUserProfile
-      ? []
-      : rolePolicy
-        ? effectiveScopes.scopes.filter((scope) =>
-            roleScopesAllow({
-              role: "operator",
-              requestedScopes: [scope],
-              allowedScopes: rolePolicy.scopes,
-            }),
-          )
-        : effectiveScopes.scopes;
+  const scopes = rolePolicy
+    ? effectiveScopes.scopes.filter((scope) =>
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: [scope],
+          allowedScopes: rolePolicy.scopes,
+        }),
+      )
+    : effectiveScopes.scopes;
   state.scopes = scopes;
   connectParams.scopes = scopes;
   const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
@@ -440,14 +441,7 @@ export async function attachAuthenticatedGatewayConnect(
     ) {
       return;
     }
-    const display = getUserProfileDisplay(profileId);
-    const profile = {
-      profileId: display.id,
-      displayName: display.displayName,
-      avatarRevision: display.avatarRevision,
-      hasAvatar: display.hasAvatar,
-      updatedAt,
-    };
+    const profile = resolveAuthenticatedProfile(profileId, updatedAt);
     if (nextClient.authenticatedUserProfile) {
       Object.assign(nextClient.authenticatedUserProfile, profile);
     } else {
@@ -457,7 +451,8 @@ export async function attachAuthenticatedGatewayConnect(
       nextClient,
       prepareLocalUserIngress(nextClient.authenticatedUserProfile),
     );
-    buildRequestContext().refreshConnectedUserProfile?.({ ...display, updatedAt });
+    const { profileId: id, ...display } = profile;
+    buildRequestContext().refreshConnectedUserProfile?.({ id, ...display });
   };
   if (resolveAuthenticatedGitHubIdentity) {
     nextClient.authenticatedGitHubIdentitySync = async () => {

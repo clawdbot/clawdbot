@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   validateNpmPreflightProducer,
+  validateFullReleaseNpmPreflight,
+  verifyNpmPreflightProducer,
   verifyReleasePreflightToolingIdentity,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
@@ -464,7 +466,9 @@ describe("historical npm preflight tooling", () => {
     };
     const runGh = vi.fn((args: string[]) => {
       const route = args[1]?.replace("repos/openclaw/openclaw/", "");
-      if (!route || !(route in responses)) throw new Error("unavailable provenance");
+      if (!route || !(route in responses)) {
+        throw new Error("unavailable provenance");
+      }
       return JSON.stringify(responses[route]);
     });
     return { ...protectedIdentity(), publisherSha: OTHER_SHA, runGh };
@@ -501,9 +505,7 @@ describe("historical npm preflight tooling", () => {
     ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
     ["missing ancestry", `compare/${SHA}...${OTHER_SHA}`, {}],
   ])("rejects %s", (_name, route, response) => {
-    expect(() =>
-      verifyReleasePreflightToolingIdentity(proof({ [String(route)]: response })),
-    ).toThrow();
+    expect(() => verifyReleasePreflightToolingIdentity(proof({ [route]: response }))).toThrow();
   });
 
   it("fails closed when provenance cannot be read", () => {
@@ -523,5 +525,149 @@ describe("historical npm preflight tooling", () => {
     { workflowSha: OTHER_SHA },
   ])("rejects invalid producer or publisher identity %j", (override) => {
     expect(() => verifyReleasePreflightToolingIdentity({ ...proof(), ...override })).toThrow();
+  });
+});
+
+describe("FRV-owned npm qualification", () => {
+  const workflowPath = ".github/workflows/full-release-validation.yml";
+  const producer = {
+    repository: "openclaw/openclaw",
+    workflowRef: `openclaw/openclaw/${workflowPath}@refs/heads/main`,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+    jobId: "999",
+    jobName: "Qualify release npm artifacts / Qualify prepared npm package",
+    producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
+  };
+  const manifest = {
+    version: 3,
+    releaseSha: OTHER_SHA,
+    tarballSha256: "c".repeat(64),
+    producer,
+    preparedBundle: {
+      schema: "openclaw.prepared-npm-bundle/v1",
+      source: { sha: OTHER_SHA },
+      package: { sha256: "c".repeat(64) },
+      producer: { repository: producer.repository, workflowSha: SHA },
+    },
+  };
+  const qualified = {
+    schema: "openclaw.qualified-npm-preflight/v1",
+    source: { sha: OTHER_SHA },
+    producer,
+    manifestSha256: "d".repeat(64),
+    artifact: {
+      id: "555",
+      name: `openclaw-npm-preflight-${OTHER_SHA}`,
+      digest: "e".repeat(64),
+      runId: RUN_ID,
+      runAttempt: "1",
+    },
+  };
+  const fullReleaseManifest = {
+    workflowName: "Full Release Validation",
+    runId: RUN_ID,
+    runAttempt: "1",
+    targetSha: OTHER_SHA,
+    workflowSha: SHA,
+    publicationArtifacts: { npmPreflight: qualified },
+  };
+  const input = {
+    manifest,
+    repository: producer.repository,
+    workflowFullRef: "refs/heads/main",
+    workflowSha: SHA,
+    workflowPath,
+    runId: RUN_ID,
+    runAttempt: "1",
+    fullReleaseManifest,
+    manifestSha256: "d".repeat(64),
+  };
+  function reader(jobOverrides = {}) {
+    const job = {
+      id: 999,
+      name: producer.jobName,
+      run_id: Number(RUN_ID),
+      run_attempt: 1,
+      head_sha: SHA,
+      status: "completed",
+      conclusion: "success",
+      ...jobOverrides,
+    };
+    return (args: string[]) => {
+      const endpoint = args[1];
+      if (!endpoint) {
+        throw new Error("Expected GitHub API endpoint.");
+      }
+      if (endpoint.endsWith("/artifacts/555")) {
+        return JSON.stringify({
+          id: 555,
+          name: qualified.artifact.name,
+          digest: `sha256:${qualified.artifact.digest}`,
+          expired: false,
+          workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+        });
+      }
+      if (endpoint.includes("/jobs?")) {
+        return JSON.stringify({ total_count: 1, jobs: [job] });
+      }
+      if (endpoint.endsWith("/attempts/1")) {
+        return JSON.stringify({
+          id: Number(RUN_ID),
+          run_attempt: 1,
+          head_sha: SHA,
+          path: workflowPath,
+          head_branch: "main",
+          event: "workflow_dispatch",
+          status: "completed",
+          conclusion: "success",
+          repository: { full_name: producer.repository },
+          head_repository: { full_name: producer.repository },
+        });
+      }
+      throw new Error(`Unexpected proof request: ${endpoint}`);
+    };
+  }
+  it("requires the exact successful qualifier and immutable artifact from the selected FRV", () => {
+    expect(verifyNpmPreflightProducer({ ...input, runGh: reader() })).toMatchObject({
+      provenance: "immutable-manifest",
+    });
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, runGh: reader({ conclusion: "failure" }) }),
+    ).toThrow("completed producer job");
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, manifestSha256: "f".repeat(64), runGh: reader() }),
+    ).toThrow("exact full release qualification");
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, fullReleaseManifest: undefined, runGh: reader() }),
+    ).toThrow("qualified npm preflight");
+  });
+  it("rejects stale source or attempt and raw-only package evidence", () => {
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, manifest: { version: 1 }, runGh: reader() }),
+    ).toThrow("qualified version 3");
+    const expected = {
+      manifest: fullReleaseManifest,
+      runId: RUN_ID,
+      runAttempt: "1",
+      sourceSha: OTHER_SHA,
+      toolingSha: SHA,
+    };
+    expect(() => validateFullReleaseNpmPreflight({ ...expected, sourceSha: SHA })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() => validateFullReleaseNpmPreflight({ ...expected, runAttempt: "2" })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() =>
+      validateNpmPreflightProducer({
+        ...input,
+        manifest: {
+          ...manifest,
+          producer: { ...producer, jobName: "Prepare publishable npm package" },
+        },
+      }),
+    ).toThrow("qualification");
   });
 });

@@ -237,7 +237,6 @@ export function publishChatSessionProjectionMessages(
   messages: readonly unknown[],
   options: {
     event?: SessionProjectionEvent;
-    retainSupersededMessages?: boolean;
     scope?: SessionProjectionScope;
   } = {},
 ): SessionProjectionState {
@@ -246,9 +245,9 @@ export function publishChatSessionProjectionMessages(
   const current = options.event ? reduceSessionProjection(base, { ...options.event, scope }) : base;
   const eventMessage = options.event?.type === "messagePersisted" ? options.event.message : null;
   const currentMessages = new Set(current.messages);
-  const supersededMessages = options.retainSupersededMessages
-    ? new Set<unknown>()
-    : new Set(base.messages.filter((message) => !currentMessages.has(message)));
+  const supersededMessages = new Set(
+    base.messages.filter((message) => !currentMessages.has(message)),
+  );
   const eventAccepted = eventMessage === null || currentMessages.has(eventMessage);
   const acceptedMessages: unknown[] = [];
   let eventPublished = false;

@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
+import { vitestWorkerBuildEntries } from "../scripts/lib/vitest-worker-build-entries.mts";
 import productionConfig from "./knip.config.ts";
 
 const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
@@ -39,8 +40,10 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  // The worker-artifact fixture compiles and launches this native child by path.
-  "test/scripts/anthropic-preparation-probe.ts!",
+  // Compiled subprocesses are launched by path rather than imported by their tests.
+  ...Object.values(vitestWorkerBuildEntries).map(
+    (source) => `${path.relative(".", source).replaceAll("\\", "/")}!`,
+  ),
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
   // Vitest loads these by configuration or module alias rather than imports.
@@ -96,6 +99,8 @@ const workspaces = Object.fromEntries(
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
           : [
               TEST_ENTRY_GLOB,
+              // Vitest's root aliases execute these Discord-owned runtime adapters.
+              ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next

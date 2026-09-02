@@ -6,6 +6,7 @@ import {
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
+  finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
 } from "./agent-tools.before-tool-call.js";
@@ -14,6 +15,7 @@ import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
+  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
@@ -311,8 +313,6 @@ function matchesCachedToolSearchIndex(
 let schemaValidatorModulePromise:
   | Promise<typeof import("../plugins/schema-validator.js")>
   | undefined;
-const catalogSchemaCacheIds = new WeakMap<object, number>();
-let nextCatalogSchemaCacheId = 0;
 
 function getCatalogSchemaCacheKey(
   entry: ToolSearchCatalogEntry,
@@ -320,17 +320,8 @@ function getCatalogSchemaCacheKey(
   schema: unknown,
 ): string {
   const prefix = `tool-${schemaName === "inputSchema" ? "input" : "output"}:${entry.id}`;
-  if (typeof schema !== "object" || schema === null) {
-    return `${prefix}:${String(schema)}`;
-  }
-  let schemaCacheId = catalogSchemaCacheIds.get(schema);
-  if (schemaCacheId === undefined) {
-    schemaCacheId = nextCatalogSchemaCacheId++;
-    catalogSchemaCacheIds.set(schema, schemaCacheId);
-  }
-  // Trusted schemas can be edited in place, so object identity alone cannot
-  // safely reuse a compiled validator after its constraints have changed.
-  return `${prefix}:${schemaCacheId}:${JSON.stringify(schema)}`;
+  // Content keys reuse rebuilt tool schemas while invalidating in-place constraint changes.
+  return `${prefix}:${JSON.stringify(schema)}`;
 }
 
 async function validateCatalogSchemaValue(
@@ -616,14 +607,20 @@ export class ToolSearchRuntime {
         return await params.acceptResultBeforeProjection(result);
       });
     let preExecutionBlocked = false;
+    // Reuse only this call's accepted snapshot; outer schema validation must still run.
+    let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
-      const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      const snapshot =
+        candidate === acceptedSnapshot
+          ? candidate
+          : snapshotToolSearchTargetTranscriptResult(candidate);
       await assertCatalogOutputMatchesSchema(entry, snapshot);
+      acceptedSnapshot = snapshot;
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
@@ -675,22 +672,33 @@ export class ToolSearchRuntime {
         }
       }
     };
-    const result = validateInput
-      ? await runWithToolExecutionValidation(
-          toolCallId,
-          async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
-          runExecution,
-        )
-      : await runExecution();
-    const acceptedResult = await acceptResultBeforeProjection(result);
-    if (options?.parentToolCallId) {
-      this.terminalTargetBatchByParent.set(
-        options.parentToolCallId,
-        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
-          acceptedResult.terminate === true,
-      );
+    let acceptedResult: AgentToolResult<unknown> | undefined;
+    try {
+      const result = validateInput
+        ? await runWithToolExecutionValidation(
+            toolCallId,
+            async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
+            runExecution,
+          )
+        : await runExecution();
+      acceptedResult = await acceptResultBeforeProjection(result);
+      if (options?.parentToolCallId) {
+        this.terminalTargetBatchByParent.set(
+          options.parentToolCallId,
+          this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
+            acceptedResult.terminate === true,
+        );
+      }
+      return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
+    } finally {
+      // Nested executors can reject after raw success; only outer acceptance owns the summary.
+      finalizeToolTerminalPresentation({
+        toolCallId,
+        runId: this.ctx.runId,
+        result: acceptedResult ?? { content: [], details: undefined },
+        isError: acceptedResult === undefined || isToolResultError(acceptedResult),
+      });
     }
-    return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
   };
 
   telemetry() {

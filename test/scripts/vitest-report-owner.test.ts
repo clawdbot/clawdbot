@@ -11,7 +11,11 @@ const inventory = (report: {
 }) =>
   report.testResults
     .flatMap((file) => file.assertionResults.map((test) => [test.fullName.trim(), test.status]))
-    .sort();
+    .toSorted((left, right) => {
+      const leftKey = left.join(",");
+      const rightKey = right.join(",");
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
 const expected = [
   ["alpha/one", "passed"],
   ["alpha/two", "passed"],
@@ -23,6 +27,42 @@ const expected = [
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   const run = (mode: ReportFixtureMode) => createVitestReportFixture(dirs.make("oc-report-"))(mode);
+
+  it.each([
+    ["serial", "projects", false, "SIGABRT", 134],
+    ["parallel", "projects", false, "SIGABRT", 134],
+    ["serial", undefined, false, "SIGABRT", 134],
+    ["parallel", undefined, false, "SIGABRT", 134],
+    ["serial", "projects", true, "SIGABRT", 134],
+    ["parallel", "projects", true, "SIGABRT", 134],
+    ["parallel", "projects", true, "SIGKILL", 137],
+  ] as const)(
+    "preserves shard crashes: %s entry=%s report=%s signal=%s",
+    { timeout: 60000 },
+    async (mode, entry, report, crashSignal, exitCode) => {
+      const result = await createVitestReportFixture(dirs.make("oc-report-crash-"))(mode, {
+        entry,
+        report,
+        crashSignal,
+      });
+      expect(result.code !== 0 || result.signal !== null, result.stderr).toBe(true);
+      expect(result.signal === crashSignal || result.code === exitCode, result.stderr).toBe(true);
+      expect(result.stderr).not.toMatch(/\[test\] passed /u);
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+        `[test] FAILED (exit ${exitCode})`,
+      ]);
+      expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(`[test] FAILED (exit ${exitCode})`);
+      if (report) {
+        const index = json(path.join(result.reportSet!, "index.json"));
+        expect(index.complete).toBe(false);
+        expect(index.entries[0].attempts[0].outcome).toMatchObject({
+          code: exitCode,
+          signal: crashSignal,
+        });
+        expect(fs.existsSync(result.output)).toBe(false);
+      }
+    },
+  );
 
   it.each([
     "serial",
@@ -71,6 +111,26 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
+  it(
+    "publishes a wholly live-aware real-home batch without consuming the caller home",
+    { timeout: 60000 },
+    async () => {
+      const root = dirs.make("oc-report-real-home-");
+      const result = await createVitestReportFixture(root)("batch-real-home");
+
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(inventory(json(result.output))).toEqual(expected);
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(true);
+      expect(index.merge).toMatchObject({ code: 0, signal: null });
+      expect(index.entries).toHaveLength(2);
+      expect(fs.readFileSync(path.join(root, "home/canary"), "utf8")).toBe(
+        "synthetic caller home\n",
+      );
+    },
+  );
+
   it.each(["failure", "batch-failure", "unhandled"] as const)(
     "publishes complete evidence without erasing native failure: %s",
     { timeout: 60000 },
@@ -78,7 +138,9 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       const result = await run(mode);
       expect(result.code, result.stderr).toBe(1);
       const cases = expected.map((entry) => [...entry]);
-      if (mode === "failure" || mode === "batch-failure") cases[2]![1] = "failed";
+      if (mode === "failure" || mode === "batch-failure") {
+        cases[2]![1] = "failed";
+      }
       expect(inventory(json(result.output))).toEqual(cases);
       const index = json(path.join(result.reportSet!, "index.json"));
       expect(index.complete).toBe(true);
@@ -196,12 +258,17 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(index.complete).toBe(false);
       expect(index.error).not.toBe("");
       expect(index.aggregate).toBe("");
-      if (!["corrupt", "merge-failure", "identity", "final-write", "publish-write"].includes(mode))
+      if (
+        !["corrupt", "merge-failure", "identity", "final-write", "publish-write"].includes(mode)
+      ) {
         expect(index.merge).toBeNull();
-      if (["missing", "corrupt", "merge-failure", "final-write", "identity"].includes(mode))
+      }
+      if (["missing", "corrupt", "merge-failure", "final-write", "identity"].includes(mode)) {
         expect(fs.readFileSync(result.output, "utf8")).toBe("old report");
-      if (["fail-fast", "cancel", "batch-fail-fast", "batch-cancel"].includes(mode))
+      }
+      if (["fail-fast", "cancel", "batch-fail-fast", "batch-cancel"].includes(mode)) {
         expect(index.entries[1].attempts).toHaveLength(0);
+      }
     },
   );
 
@@ -264,9 +331,12 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       } else {
         expect(result.reportSet).toBeUndefined();
         expect(fs.existsSync(result.output)).toBe(false);
-        if (kind === "error") expect(result.stderr).toMatch(/Unknown option|value is missing/u);
-        if (kind === "native-error")
+        if (kind === "error") {
+          expect(result.stderr).toMatch(/Unknown option|value is missing/u);
+        }
+        if (kind === "native-error") {
           expect(result.stderr).toMatch(/No test tags found|standalone mode requires --watch/u);
+        }
       }
     },
   );
@@ -289,10 +359,14 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout.match(/Usage:/gu) ?? []).toHaveLength(helpBlocks);
       expect(result.stderr).not.toContain("report publication failed");
-      if (tests) expect(inventory(json(result.output))).toEqual(expected);
-      else expect(result.reportSet).toBeUndefined();
-      if (entry === "batch-cli")
+      if (tests) {
+        expect(inventory(json(result.output))).toEqual(expected);
+      } else {
+        expect(result.reportSet).toBeUndefined();
+      }
+      if (entry === "batch-cli") {
         expect(result.stderr.match(/Usage: pnpm test:extensions:batch/gu)).toHaveLength(1);
+      }
     },
   );
 
@@ -325,7 +399,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     const result = await run("chunks");
     expect(result.code, result.stderr).toBe(0);
     expect(inventory(json(result.output))).toEqual(
-      Array.from({ length: 2 }, (_, i) => [`chunk/${i}`, "passed"]).sort(),
+      Array.from({ length: 2 }, (_, i) => [`chunk/${i}`, "passed"]),
     );
     const index = json(path.join(result.reportSet!, "index.json"));
     expect(

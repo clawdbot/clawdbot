@@ -60,20 +60,20 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("names session actions and routes menu hints through the shared tooltip", async () => {
+  it("uses generic pin labels and routes menu hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      const pin = row?.querySelector<HTMLElement>("[data-sidebar-session-pin]");
       const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
       const tooltip = menu?.closest("openclaw-tooltip") as
         | (HTMLElement & { content: string; describe: boolean })
         | null;
       expect(label).toBeTruthy();
-      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
-        `Pin session: ${label}`,
-      );
+      expect(pin?.getAttribute("aria-label")).toBe("Pin session");
+      expect(pin?.getAttribute("title")).toBe("Pin session");
       expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
       expect(menu?.hasAttribute("title")).toBe(false);
       expect(tooltip?.content).toBe("Open session menu");
@@ -676,7 +676,7 @@ describe("AppSidebar catalog session rows", () => {
       const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
       expect(active).toHaveLength(1);
       expect(active[0]?.getAttribute("data-session-key")).toBe(
-        "catalog:codex:gateway%3Alocal:thread-1",
+        "agent:main:catalog:codex:gateway%3Alocal:thread-1",
       );
       expect(active[0]?.getAttribute("role")).toBe("listitem");
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");

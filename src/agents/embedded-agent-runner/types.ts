@@ -112,7 +112,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
-    | "same_model_rate_limit"
+    | "same_model_transient"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -202,6 +202,8 @@ export type EmbeddedAgentRunMeta = {
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
+  /** A visible parent delegated its otherwise-empty result to completion children. */
+  continuationPending?: true;
   error?: {
     kind:
       | "context_overflow"

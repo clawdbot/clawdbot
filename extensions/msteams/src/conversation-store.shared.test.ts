@@ -1,86 +1,34 @@
 // Msteams tests cover conversation store.shared plugin behavior.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  findPreferredDmConversationByUserId,
-  mergeStoredConversationReference,
-  normalizeStoredConversationId,
-  toConversationStoreEntries,
-} from "./conversation-store-helpers.js";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type {
-  MSTeamsConversationStore,
-  MSTeamsConversationStoreEntry,
-  StoredConversationReference,
-} from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
-type StoreFactory = {
-  name: string;
-  createStore: () => Promise<MSTeamsConversationStore>;
-};
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(() => {
+    resetPluginStateStoreForTests();
+    cleanup();
+  }),
+);
 
-function createMemoryConversationStore(
-  initial: MSTeamsConversationStoreEntry[] = [],
-): MSTeamsConversationStore {
-  const map = new Map<string, StoredConversationReference>();
-  for (const { conversationId, reference } of initial) {
-    map.set(normalizeStoredConversationId(conversationId), reference);
-  }
-
-  const findPreferredDmByUserId = async (
-    id: string,
-  ): Promise<MSTeamsConversationStoreEntry | null> =>
-    findPreferredDmConversationByUserId(toConversationStoreEntries(map.entries()), id);
-
-  return {
-    upsert: async (conversationId, reference) => {
-      const normalizedId = normalizeStoredConversationId(conversationId);
-      map.set(
-        normalizedId,
-        mergeStoredConversationReference(
-          map.get(normalizedId),
-          reference,
-          new Date().toISOString(),
-        ),
-      );
-    },
-    get: async (conversationId) => map.get(normalizeStoredConversationId(conversationId)) ?? null,
-    list: async () => toConversationStoreEntries(map.entries()),
-    remove: async (conversationId) => map.delete(normalizeStoredConversationId(conversationId)),
-    findPreferredDmByUserId,
-  };
+function createStore() {
+  const stateDir = tempDirs.make("openclaw-msteams-store-");
+  return createMSTeamsConversationStoreState({
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    ttlMs: 60_000,
+  });
 }
 
-const storeFactories: StoreFactory[] = [
-  {
-    name: "state",
-    createStore: async () => {
-      const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
-      return createMSTeamsConversationStoreState({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        ttlMs: 60_000,
-      });
-    },
-  },
-  {
-    name: "memory",
-    createStore: async () => createMemoryConversationStore(),
-  },
-];
-
-describe.each(storeFactories)("msteams conversation store ($name)", ({ createStore }) => {
+describe("msteams conversation store ('state')", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 
   it("normalizes conversation ids consistently", async () => {
-    const store = await createStore();
+    const store = createStore();
 
     await store.upsert("conv-norm;messageid=123", {
       conversation: { id: "conv-norm" },
@@ -103,7 +51,7 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
   });
 
   it("upserts, lists, removes, and resolves users by both AAD and Bot Framework ids", async () => {
-    const store = await createStore();
+    const store = createStore();
 
     vi.useFakeTimers();
     try {
@@ -185,7 +133,7 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
   });
 
   it("preserves existing timezone when upsert omits timezone", async () => {
-    const store = await createStore();
+    const store = createStore();
 
     vi.useFakeTimers();
     try {
@@ -220,7 +168,7 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
   });
 
   it("prefers the freshest personal conversation for repeated upserts of the same user", async () => {
-    const store = await createStore();
+    const store = createStore();
 
     vi.useFakeTimers();
     try {
