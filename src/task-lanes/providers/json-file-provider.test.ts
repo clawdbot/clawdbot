@@ -90,6 +90,45 @@ describe("json-file task-lane provider", () => {
     ).rejects.toThrow(/too large/);
   });
 
+  it("never echoes filesystem paths in load errors", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "task-lane-msg-"));
+    try {
+      const root = path.join(tmp, "root");
+      const outside = path.join(tmp, "outside.json");
+      await fs.mkdir(root);
+      await fs.writeFile(outside, JSON.stringify(VALID_DOC));
+      await fs.symlink(outside, path.join(root, "link.json"));
+      // A directory where the config expects a file: readFile fails with EISDIR
+      // regardless of the effective uid (a chmod-000 probe would not).
+      await fs.mkdir(path.join(root, "adir.json"));
+      const cases: Array<{ rootDir: string; filePath: string; fragment: string }> = [
+        { rootDir: root, filePath: "link.json", fragment: outside },
+        { rootDir: root, filePath: "nope.json", fragment: path.join(root, "nope.json") },
+        { rootDir: root, filePath: "adir.json", fragment: path.join(root, "adir.json") },
+      ];
+      for (const probe of cases) {
+        const error: unknown = await loadJsonFileProviderLanes(probe).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(Error);
+        const message = (error as Error).message;
+        expect(message).not.toContain(probe.fragment);
+        expect(message).not.toContain(tmp);
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reports invalid JSON without echoing file content", async () => {
+    const error: unknown = await loadJsonFileProviderLanes({
+      rootDir: "/data/lanes",
+      filePath: "board.json",
+      reader: async () => Buffer.from('{"schemaVersion": 1, "lanes": "sentinel-LEAK"', "utf8"),
+      resolveRealpath: async (p) => p,
+    }).catch((e: unknown) => e);
+    expect((error as Error).message).not.toContain("sentinel-LEAK");
+    expect((error as Error).message).toMatch(/not valid JSON/);
+  });
+
   it("throws on invalid JSON", async () => {
     await expect(
       loadJsonFileProviderLanes({

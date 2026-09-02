@@ -5,6 +5,9 @@
  *   - Path is resolved to its realpath; the resulting file must reside under
  *     a caller-supplied root directory (no symlink escape, no traversal).
  *   - File size is bounded by TASK_LANE_MAX_FILE_BYTES.
+ *   - Failure messages never echo filesystem paths or file content: diagnostics are
+ *     RPC-visible, so an unreadable file reports a node errno code (ENOENT/EISDIR/...)
+ *     rather than the absolute path node embeds in its raw messages.
  *   - Lane and item counts are bounded by TASK_LANE_MAX_LANES and
  *     TASK_LANE_MAX_ITEMS_PER_LANE.
  *   - artifactUrl is normalized to a safe http(s) URL; any other scheme,
@@ -147,21 +150,45 @@ export type JsonFileProviderOptions = {
 };
 
 /**
+ * Extracts a node errno code from a fs error. The raw message is never reused
+ * because node embeds the absolute path it failed on.
+ */
+function fsErrorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" ? code : "read failed";
+}
+
+/**
  * Loads a versioned JSON file and converts it to a lane set, enforcing
  * realpath/size/bounds safety. Throws when the file cannot be trusted.
  */
 export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Promise<{
   lanes: TaskLane[];
 }> {
-  const rootRealpath = await (options.resolveRealpath ?? realpath)(path.resolve(options.rootDir));
+  let rootRealpath: string;
+  try {
+    rootRealpath = await (options.resolveRealpath ?? realpath)(path.resolve(options.rootDir));
+  } catch (error) {
+    throw new Error(`task lane root directory is unavailable (${fsErrorCode(error)})`);
+  }
   const candidate = path.isAbsolute(options.filePath)
     ? options.filePath
     : path.resolve(options.rootDir, options.filePath);
-  const real = await (options.resolveRealpath ?? realpath)(candidate);
-  if (!isPathInside(rootRealpath, real)) {
-    throw new Error(`task lane file escapes root: ${real}`);
+  let real: string;
+  try {
+    real = await (options.resolveRealpath ?? realpath)(candidate);
+  } catch (error) {
+    throw new Error(`task lane file is unavailable (${fsErrorCode(error)})`);
   }
-  const buffer = await (options.reader ?? defaultReader)(real);
+  if (!isPathInside(rootRealpath, real)) {
+    throw new Error("task lane file escapes root");
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await (options.reader ?? defaultReader)(real);
+  } catch (error) {
+    throw new Error(`task lane file could not be read (${fsErrorCode(error)})`);
+  }
   if (buffer.byteLength > TASK_LANE_MAX_FILE_BYTES) {
     throw new Error(`task lane file too large: ${buffer.byteLength} > ${TASK_LANE_MAX_FILE_BYTES}`);
   }
@@ -169,10 +196,8 @@ export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(
-      `task lane file is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  } catch {
+    throw new Error("task lane file is not valid JSON");
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("task lane file root is not an object");
