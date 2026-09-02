@@ -12,6 +12,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
+import { prependCodexCurrentUntrustedContext } from "./src/app-server/current-turn-context.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import {
@@ -75,6 +76,10 @@ export function buildCodexHarnessPromptSnapshot(params: {
     }),
     params.developerInstructionAdditions,
   );
+  const promptText = prependCodexCurrentUntrustedContext(
+    params.promptText ?? params.attempt.prompt,
+    params.attempt,
+  );
   return {
     developerInstructions,
     threadStartParams: buildThreadStartParams(params.attempt, {
@@ -94,7 +99,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
       threadId: params.threadId,
       cwd: params.cwd,
       appServer: params.appServer,
-      promptText: params.promptText,
+      promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       sessionStatusAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
         (tool) => tool.name === "session_status",

@@ -6481,7 +6481,7 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
-  it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
+  it("scopes trusted and untrusted current context across successive turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const turnIds = ["turn-ada", "turn-grace"] as const;
@@ -6503,11 +6503,17 @@ describe("runCodexAppServerAttempt", () => {
       { persistedThreads: ["thread-existing"] },
     );
 
-    const runTurn = async (sender: { id: string; name: string }, prompt: string, runId: string) => {
+    const runTurn = async (
+      sender: { id: string; name: string },
+      prompt: string,
+      runId: string,
+      currentInboundContext?: EmbeddedRunAttemptParams["currentInboundContext"],
+    ) => {
       const expectedTurnStarts =
         harness.requests.filter((request) => request.method === "turn/start").length + 1;
       const params = createParams(sessionFile, workspaceDir, { prompt, runId });
       params.trigger = "user";
+      params.currentInboundContext = currentInboundContext;
       const message = {
         role: "user" as const,
         content: prompt,
@@ -6536,9 +6542,22 @@ describe("runCodexAppServerAttempt", () => {
       await run;
     };
 
-    await runTurn({ id: "profile-ada", name: "Ada" }, "first request", "run-ada");
+    await runTurn({ id: "profile-ada", name: "Ada" }, "first request", "run-ada", {
+      text: "First-turn provider context.",
+      trustedDeliveryDirective: "Use the message tool on the first turn only.",
+      reply: {
+        replyTargetPresent: true,
+        quotePresent: true,
+        replyChainPresent: false,
+      },
+      replyIdentifiers: {
+        currentMessageId: "message-1",
+        replyToId: "message-0",
+      },
+    });
     await runTurn({ id: "profile-grace", name: "Grace" }, "second request", "run-grace");
 
+    const turnStarts = harness.requests.filter((request) => request.method === "turn/start");
     expect(
       harness.requests
         .filter((request) =>
@@ -6546,27 +6565,41 @@ describe("runCodexAppServerAttempt", () => {
         )
         .map((request) => request.method),
     ).toEqual(["thread/resume", "turn/start", "turn/start"]);
-    expect(
-      harness.requests
-        .filter((request) => request.method === "turn/start")
-        .map(
-          (request) =>
-            (
-              request.params as {
-                additionalContext?: Record<string, { kind: string; value: string }>;
-              }
-            ).additionalContext?.openclaw_current_sender,
-        ),
-    ).toEqual([
-      {
-        kind: "untrusted",
-        value: '{"sender":{"id":"profile-ada","name":"Ada"}}',
-      },
-      {
-        kind: "untrusted",
-        value: '{"sender":{"id":"profile-grace","name":"Grace"}}',
-      },
-    ]);
+    const turnInputTexts = turnStarts.map((request) => {
+      const input = (request.params as { input?: Array<{ type?: string; text?: string }> }).input;
+      return input?.find((item) => item.type === "text")?.text ?? "";
+    });
+    expect(turnInputTexts[0]).toContain('"id":"profile-ada"');
+    expect(turnInputTexts[0]).toContain("First-turn provider context.");
+    expect(turnInputTexts[0]).toContain('"replyToId": "message-0"');
+    expect(turnInputTexts[0]).not.toContain("Use the message tool on the first turn only.");
+    expect(turnInputTexts[1]).toContain('"id":"profile-grace"');
+    expect(turnInputTexts[1]).not.toContain("First-turn provider context.");
+    expect(turnInputTexts[1]).not.toContain('"replyToId"');
+
+    const developerInstructions = turnStarts.map((request) => {
+      const collaborationMode = (
+        request.params as {
+          collaborationMode?: { settings?: { developer_instructions?: string | null } };
+        }
+      ).collaborationMode;
+      return collaborationMode?.settings?.developer_instructions ?? "";
+    });
+    expect(developerInstructions[0]).toContain('"replyTargetPresent": true');
+    expect(developerInstructions[0]).toContain("Use the message tool on the first turn only.");
+    expect(developerInstructions[0]).not.toContain('"replyToId"');
+    expect(developerInstructions[1]).toContain(
+      "No current OpenClaw reply metadata or delivery directive.",
+    );
+    expect(developerInstructions[1]).not.toContain("Use the message tool on the first turn only.");
+    for (const request of turnStarts) {
+      expect((request.params as { additionalContext?: unknown }).additionalContext).toEqual({
+        openclaw_temporal_context: {
+          kind: "application",
+          value: expect.stringContaining("## Temporal Context"),
+        },
+      });
+    }
   });
   it("keeps context usage fresh across two turns of one Codex thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -7313,6 +7346,21 @@ describe("runCodexAppServerAttempt", () => {
       params.modelId = "claude-opus-4-6";
       params.model = createCodexTestModel("anthropic");
       params.fastMode = true;
+      params.trigger = "user";
+      params.senderId = "profile-supervised";
+      params.currentInboundContext = {
+        text: "Quoted supervised context.",
+        trustedDeliveryDirective: "Send the supervised reply through the message tool.",
+        reply: {
+          replyTargetPresent: true,
+          quotePresent: true,
+          replyChainPresent: false,
+        },
+        replyIdentifiers: {
+          currentMessageId: "message-2",
+          replyToId: "message-1",
+        },
+      };
       setCodexTestModelSupportsTools(params, false);
       params.config = {
         ...params.config,
@@ -7363,12 +7411,30 @@ describe("runCodexAppServerAttempt", () => {
       expect(resumeParams).not.toHaveProperty("modelProvider");
       expect(resumeParams?.approvalsReviewer).toBe("auto_review");
       expect(resumeParams?.serviceTier).toBe("priority");
+      expect(resumeParams?.developerInstructions).toContain('"replyTargetPresent": true');
+      expect(resumeParams?.developerInstructions).toContain(
+        "Send the supervised reply through the message tool.",
+      );
+      expect(resumeParams?.developerInstructions).not.toContain("Quoted supervised context.");
+      expect(resumeParams?.developerInstructions).not.toContain('"replyToId"');
       const turnRequest = requests.find((request) => request.method === "turn/start");
       const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
       expect(turnParams).not.toHaveProperty("model");
       expect(turnParams).not.toHaveProperty("modelProvider");
       expect(turnParams?.approvalsReviewer).toBe("auto_review");
       expect(turnParams?.serviceTier).toBe("priority");
+      expect(turnParams?.additionalContext).toEqual({
+        openclaw_temporal_context: {
+          kind: "application",
+          value: expect.stringContaining("## Temporal Context"),
+        },
+      });
+      const turnInput = (
+        turnParams?.input as Array<{ type?: string; text?: string }> | undefined
+      )?.find((item) => item.type === "text")?.text;
+      expect(turnInput).toContain("Quoted supervised context.");
+      expect(turnInput).toContain('"replyToId": "message-1"');
+      expect(turnInput).not.toContain("Send the supervised reply through the message tool.");
     },
   );
 

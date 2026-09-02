@@ -105,7 +105,10 @@ import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  buildCurrentInboundPrompt,
+  buildCurrentInboundSystemPromptContext,
+} from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
@@ -1827,12 +1830,13 @@ export async function prepareCliRunContext(
         cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       }
     }
+    const currentInboundContext = skipsTurnPreparation
+      ? undefined
+      : prependCliSessionDriftUserContext(params.currentInboundContext, reusableCliSession);
+    const currentInboundSystemContext =
+      buildCurrentInboundSystemPromptContext(currentInboundContext);
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
-      const currentInboundContext = prependCliSessionDriftUserContext(
-        params.currentInboundContext,
-        reusableCliSession,
-      );
       const renderCurrentPrompt = (prompt: string, preferResumableText = false) =>
         annotateInterSessionPromptText(
           buildCurrentInboundPrompt({
@@ -1873,6 +1877,14 @@ export async function prepareCliRunContext(
     const systemPromptWithReplacements = skipsTurnPreparation
       ? systemPrompt
       : applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
+    const systemPromptWithCurrentInboundContext = currentInboundSystemContext
+      ? (composeSystemPromptWithHookContext({
+          baseSystemPrompt: systemPromptWithReplacements.trim()
+            ? ensureSystemPromptCacheBoundary(systemPromptWithReplacements)
+            : systemPromptWithReplacements,
+          appendSystemContext: currentInboundSystemContext,
+        }) ?? systemPromptWithReplacements)
+      : systemPromptWithReplacements;
     // Ensure the cache boundary before appending the model identity so the identity lands in the
     // dynamic suffix, not the cached prefix, for marker-free hook overrides — otherwise an idle
     // turn's prefix (O + identity) diverges from an active media turn's prefix (O) and breaks
@@ -1882,9 +1894,9 @@ export async function prepareCliRunContext(
       : appendModelIdentitySystemPrompt({
           systemPrompt:
             buildModelIdentityPromptLine(modelDisplay) &&
-            systemPromptWithReplacements.trim().length > 0
-              ? ensureSystemPromptCacheBoundary(systemPromptWithReplacements)
-              : systemPromptWithReplacements,
+            systemPromptWithCurrentInboundContext.trim().length > 0
+              ? ensureSystemPromptCacheBoundary(systemPromptWithCurrentInboundContext)
+              : systemPromptWithCurrentInboundContext,
           model: modelDisplay,
         });
     const systemPromptReport = buildSystemPromptReport({
@@ -1910,7 +1922,11 @@ export async function prepareCliRunContext(
       currentTurn: {
         ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
         promptChars: preparedPrompt.length,
-        runtimeContextChars: [promptContext?.prependContext, promptContext?.appendContext]
+        runtimeContextChars: [
+          currentInboundSystemContext,
+          promptContext?.prependContext,
+          promptContext?.appendContext,
+        ]
           .filter(Boolean)
           .join("\n\n").length,
       },

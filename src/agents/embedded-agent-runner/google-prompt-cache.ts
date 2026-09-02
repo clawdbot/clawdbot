@@ -594,6 +594,17 @@ export async function prepareGooglePromptCacheStreamFn(
 
   const inner = params.streamFn;
   return async (model, context, options) => {
+    // Gemini rejects a request that combines cachedContent with a live
+    // systemInstruction. If current-turn trusted instructions changed the
+    // complete system prompt after cache preparation, preserve that live prompt
+    // and bypass managed caching rather than demoting the change to user text.
+    // Unchanged dynamic suffixes still use the prepared cache.
+    if (resolveManagedSystemPrompt(context.systemPrompt) !== systemPrompt) {
+      log.debug(
+        `google prompt cache bypassed for ${params.provider}/${params.modelId}; current turn has dynamic system instructions`,
+      );
+      return inner(model, context, options);
+    }
     const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
     const cachedContent = await ensureGooglePromptCache(
       {

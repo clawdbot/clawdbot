@@ -2,12 +2,8 @@ import {
   buildTemporalContextText,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import { buildCodexCurrentRuntimeDeveloperInstructions } from "./current-turn-context.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -23,37 +19,6 @@ import {
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
 import { buildCodexUserInput } from "./user-input.js";
-
-const CODEX_CURRENT_SENDER_FIELD_MAX_CHARS = 256;
-
-function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
-  const metadata = asOptionalRecord(
-    asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
-  );
-  const recorded = [
-    normalizeOptionalString(metadata?.["senderId"]),
-    normalizeOptionalString(metadata?.["senderName"]),
-    normalizeOptionalString(metadata?.["senderUsername"]),
-  ] as const;
-  const [id, name, username] = recorded.some(Boolean)
-    ? recorded
-    : [
-        normalizeOptionalString(params.senderId),
-        normalizeOptionalString(params.senderName),
-        normalizeOptionalString(params.senderUsername),
-      ];
-  if (!id && !name && !username) {
-    return undefined;
-  }
-  const bound = (value: string) => truncateUtf16Safe(value, CODEX_CURRENT_SENDER_FIELD_MAX_CHARS);
-  return JSON.stringify({
-    sender: {
-      ...(id ? { id: bound(id) } : {}),
-      ...(name ? { name: bound(name) } : {}),
-      ...(username ? { username: bound(username) } : {}),
-    },
-  });
-}
 
 export function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
@@ -94,28 +59,11 @@ export function buildTurnStartParams(
       })
     : undefined;
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
-  const currentSenderContext =
-    params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
   // Codex emits only changed values and cannot retract omitted fragments from model history.
   // Always send configured-or-host context so warm threads see rollover and removed overrides.
-  let additionalContext = buildCodexTemporalAdditionalContext(params, {
+  const additionalContext = buildCodexTemporalAdditionalContext(params, {
     sessionStatusAvailable: options.sessionStatusAvailable === true,
   });
-  // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  if (currentSenderContext) {
-    additionalContext = {
-      ...additionalContext,
-      openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
-    };
-  }
-  if (params.permissionChange?.notice) {
-    // Application context is a developer message in Codex 0.151.0 and also
-    // reaches native-preserved threads without overriding their turn settings.
-    additionalContext = {
-      ...additionalContext,
-      openclaw_permission_change: { kind: "application", value: params.permissionChange.notice },
-    };
-  }
   return {
     threadId: options.threadId,
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
@@ -216,6 +164,9 @@ function buildTurnScopedCollaborationInstructions(
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
     options.skillsCollaborationInstructions,
+    // Unlike Codex 0.151's additionalContext store, collaboration developer
+    // instructions are rebuilt in replacement history after mid-turn compaction.
+    buildCodexCurrentRuntimeDeveloperInstructions(params),
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);

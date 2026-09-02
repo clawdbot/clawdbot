@@ -68,8 +68,8 @@ import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
-  buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
+  buildUntrustedInboundContextCustomMessage,
   resolveRuntimeContextPromptParts,
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
@@ -576,29 +576,17 @@ export function prepareEmbeddedAttemptPromptContext(input: {
             appendContext: input.prompt.promptBuildAppendContext ?? "",
           }
         : undefined,
+    currentInboundContext: attempt.currentInboundContext,
     emptyTranscriptMode: attempt.suppressNextUserMessagePersistence
       ? "model-prompt"
       : "runtime-event",
   });
   const isRuntimeOnlyTurn = promptSubmission.runtimeOnly === true;
-  const currentInboundContextText = isRuntimeOnlyTurn
-    ? undefined
-    : attempt.currentInboundContext?.text?.trim() || undefined;
   // Normal user turns persist the bare prompt and carry current inbound metadata
-  // in a hidden runtime-context message. Runtime-only turns have no bare user turn,
-  // so their inbound context remains inline and byte-stable across replay.
-  const promptForSession = isRuntimeOnlyTurn
-    ? buildCurrentInboundPrompt({
-        context: attempt.currentInboundContext,
-        prompt: promptSubmission.prompt,
-      })
-    : promptSubmission.prompt;
-  const promptForModel = isRuntimeOnlyTurn
-    ? buildCurrentInboundPrompt({
-        context: attempt.currentInboundContext,
-        prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-      })
-    : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
+  // in a hidden runtime-context message. Runtime-only turns keep trusted runtime
+  // metadata in system context while user-authored inbound text stays user-role.
+  const promptForSession = promptSubmission.prompt;
+  const promptForModel = promptSubmission.modelPrompt ?? promptSubmission.prompt;
   const currentUserTimestampOverride =
     !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"
       ? {
@@ -609,7 +597,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       : undefined;
   const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
   let systemPromptForHook = input.systemPromptText;
-  if (promptSubmission.runtimeOnly && runtimeSystemContext) {
+  if (runtimeSystemContext) {
     const runtimeSystemPrompt = composeSystemPromptWithHookContext({
       baseSystemPrompt: input.systemPromptText,
       appendSystemContext: runtimeSystemContext,
@@ -621,15 +609,12 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   }
   const runtimeContextForHook = isRuntimeOnlyTurn
     ? undefined
-    : [
-        currentInboundContextText,
-        promptSubmission.runtimeContext?.trim(),
-        input.heartbeatOutcomeContext?.trim(),
-      ]
+    : [promptSubmission.runtimeContext?.trim(), input.heartbeatOutcomeContext?.trim()]
         .filter((value): value is string => Boolean(value))
         .join("\n\n") || undefined;
-  const runtimeContextMessageForCurrentTurn =
-    buildRuntimeContextCustomMessage(runtimeContextForHook);
+  const runtimeContextMessageForCurrentTurn = isRuntimeOnlyTurn
+    ? buildUntrustedInboundContextCustomMessage(promptSubmission.runtimeUserContext)
+    : buildRuntimeContextCustomMessage(runtimeContextForHook, promptSubmission.runtimeUserContext);
   const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
     ? [...sessionMessages, runtimeContextMessageForCurrentTurn]
     : sessionMessages;
@@ -646,9 +631,10 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
       promptChars: promptForModel.length,
-      runtimeContextChars: promptSubmission.runtimeOnly
-        ? (runtimeSystemContext?.length ?? 0)
-        : (runtimeContextForHook?.length ?? 0),
+      runtimeContextChars:
+        (runtimeSystemContext?.length ?? 0) +
+        (promptSubmission.runtimeUserContext?.trim().length ?? 0) +
+        (runtimeContextForHook?.length ?? 0),
       // Hook context reaches only the model, so count the delta beyond the
       // transcript prompt or downstream context accounting undercounts it.
       modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),

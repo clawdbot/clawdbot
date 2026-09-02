@@ -1,5 +1,9 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
+import {
+  buildCurrentInboundPrompt,
+  buildCurrentInboundSystemPromptContext,
+} from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
@@ -86,8 +90,12 @@ describe("buildReplyPromptEnvelope", () => {
     });
 
     expect(
-      countOccurrences(envelope.currentInboundContext?.text, MESSAGE_TOOL_ONLY_DELIVERY_HINT),
+      countOccurrences(
+        envelope.currentInboundContext?.trustedDeliveryDirective,
+        MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+      ),
     ).toBe(1);
+    expect(envelope.currentInboundContext?.text).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
     expect(envelope.prefixedCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
@@ -117,9 +125,302 @@ describe("buildReplyPromptEnvelope", () => {
         sourceReplyDeliveryMode,
       });
 
-      expect(envelope.currentInboundContext?.text).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+      expect(envelope.currentInboundContext?.trustedDeliveryDirective).toBeUndefined();
     },
   );
+
+  it("carries Telegram forum reply metadata in current-turn runtime context", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Sean, answer this old reply",
+      BodyStripped: "Sean, answer this old reply",
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      MessageThreadId: 777,
+      ReplyToId: "34971",
+      ReplyToBody: "old target body",
+      ReplyToSender: "Alice",
+      ReplyChain: [
+        {
+          messageId: "34971",
+          threadId: "777",
+          sender: "Alice",
+          body: "old target body",
+        },
+      ],
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Sean, answer this old reply",
+      prefixedBody: "Sean, answer this old reply",
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:\nreply_to_id=34971",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: false,
+      replyChainPresent: true,
+    });
+    expect(envelope.currentInboundContext?.replyIdentifiers).toEqual({
+      currentMessageId: "34974",
+      threadId: "777",
+      replyToId: "34971",
+      replyChainMessageIds: ["34971"],
+    });
+
+    const runtimePrefix = buildCurrentInboundPrompt({
+      context: envelope.currentInboundContext,
+      prompt: "",
+    });
+    const systemContext = buildCurrentInboundSystemPromptContext(envelope.currentInboundContext);
+    expect(systemContext).toContain("Current reply metadata (trusted OpenClaw runtime metadata):");
+    expect(runtimePrefix).not.toContain("Current reply metadata");
+    expect(runtimePrefix).toContain("Current reply identifiers (untrusted provider metadata):");
+    expect(runtimePrefix).toContain("Conversation info");
+  });
+
+  it("retains at most 20 nearest generic reply-chain identifiers", () => {
+    const replyChain = Array.from({ length: 25 }, (_, index) => ({
+      messageId: `generic-reply-${index}`,
+    }));
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect the reply chain",
+      BodyStripped: "inspect the reply chain",
+      Provider: "generic-test-channel",
+      ChatType: "group",
+      ReplyChain: replyChain,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect the reply chain",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.currentInboundContext?.replyIdentifiers?.replyChainMessageIds).toEqual(
+      replyChain.slice(0, 20).map((entry) => entry.messageId),
+    );
+    expect(envelope.currentInboundContext?.reply).toMatchObject({
+      replyTargetPresent: true,
+      replyChainPresent: true,
+    });
+  });
+
+  it("bounds exact reply identifiers and their pretty-serialized untrusted aggregate", () => {
+    const oversizedId = `oversized-${"x".repeat(256)}`;
+    const escapedId = (index: number) =>
+      `chain-${index.toString().padStart(2, "0")}-${'\\"'.repeat(120)}`;
+    const chainIds = [
+      escapedId(0),
+      oversizedId,
+      ...Array.from({ length: 18 }, (_, index) => escapedId(index + 1)),
+    ];
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect oversized reply metadata",
+      BodyStripped: "inspect oversized reply metadata",
+      Provider: "generic-test-channel",
+      ChatType: "group",
+      MessageSid: oversizedId,
+      MessageSidFull: "current-message-full",
+      MessageThreadId: escapedId(90),
+      ReplyToId: oversizedId,
+      ReplyToIdFull: escapedId(91),
+      ReplyChain: chainIds.map((messageId) => ({ messageId })),
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect oversized reply metadata",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    const reply = envelope.currentInboundContext?.reply;
+    const replyIdentifiers = envelope.currentInboundContext?.replyIdentifiers;
+    expect(replyIdentifiers).toMatchObject({
+      currentMessageId: "current-message-full",
+    });
+    expect(reply).toMatchObject({
+      replyTargetPresent: true,
+      replyChainPresent: true,
+    });
+    expect(replyIdentifiers?.replyToId).toBeUndefined();
+    expect(replyIdentifiers?.replyToIdFull).toBeUndefined();
+    expect(replyIdentifiers?.replyChainMessageIds).toBeUndefined();
+    expect(JSON.stringify(replyIdentifiers, null, 2).length).toBeLessThanOrEqual(4_096);
+
+    const runtimePrefix = buildCurrentInboundPrompt({
+      context: envelope.currentInboundContext,
+      prompt: "",
+    });
+    expect(runtimePrefix).toContain("current-message-full");
+    expect(runtimePrefix).not.toContain(oversizedId);
+  });
+
+  it("retains the reply anchor first when scalar metadata reaches the aggregate budget", () => {
+    const escapedControlId = (prefix: string) => `${prefix}${"\u0001".repeat(256 - prefix.length)}`;
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect scalar reply metadata",
+      BodyStripped: "inspect scalar reply metadata",
+      Provider: "generic-test-channel",
+      ChatType: "group",
+      MessageSid: escapedControlId("current-"),
+      MessageThreadId: escapedControlId("thread-"),
+      ReplyToId: "reply-anchor",
+      ReplyToIdFull: escapedControlId("reply-full-"),
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect scalar reply metadata",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    const replyIdentifiers = envelope.currentInboundContext?.replyIdentifiers;
+    expect(replyIdentifiers?.replyToId).toBe("reply-anchor");
+    expect(replyIdentifiers?.currentMessageId).toBeUndefined();
+    expect(replyIdentifiers?.threadId).toBeUndefined();
+    expect(replyIdentifiers?.replyToIdFull).toBeUndefined();
+    expect(
+      Buffer.byteLength(JSON.stringify(replyIdentifiers ?? {}, null, 2), "utf8"),
+    ).toBeLessThanOrEqual(880);
+  });
+
+  it.each([
+    {
+      label: "escaped control",
+      buildId: (index: number) =>
+        `control-${index.toString().padStart(2, "0")}-${"\u0001".repeat(100)}`,
+    },
+    {
+      label: "CJK",
+      buildId: (index: number) => `cjk-${index.toString().padStart(2, "0")}-${"漢".repeat(240)}`,
+    },
+    {
+      label: "high-entropy ASCII",
+      buildId: (index: number) =>
+        `random-${index.toString().padStart(2, "0")}-${Array.from({ length: 240 }, (_, offset) =>
+          String.fromCharCode(33 + ((index * 53 + offset * 47) % 94)),
+        ).join("")}`,
+    },
+  ])("bounds $label reply chains by conservative serialized token pressure", ({ buildId }) => {
+    const chainIds = Array.from({ length: 20 }, (_, index) => buildId(index));
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect adversarial reply metadata",
+      BodyStripped: "inspect adversarial reply metadata",
+      Provider: "generic-test-channel",
+      ChatType: "group",
+      ReplyChain: chainIds.map((messageId) => ({ messageId })),
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect adversarial reply metadata",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    const replyIdentifiers = envelope.currentInboundContext?.replyIdentifiers;
+    const retainedIds = replyIdentifiers?.replyChainMessageIds ?? [];
+    const serialized = JSON.stringify(replyIdentifiers ?? {}, null, 2);
+    expect(retainedIds.length).toBeGreaterThan(0);
+    expect(retainedIds.length).toBeLessThan(chainIds.length);
+    expect(retainedIds).toEqual(chainIds.slice(0, retainedIds.length));
+    expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(880);
+    expect(envelope.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: false,
+      replyChainPresent: true,
+    });
+  });
+
+  it("keeps reply-presence facts when every opaque identifier is oversized", () => {
+    const oversizedId = "x".repeat(257);
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect the reply",
+      BodyStripped: "inspect the reply",
+      Provider: "generic-test-channel",
+      ChatType: "group",
+      ReplyToId: oversizedId,
+      ReplyChain: [{ messageId: oversizedId }],
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect the reply",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: false,
+      replyChainPresent: true,
+    });
+  });
+
+  it("marks selected quote presence separately from reply target presence", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Sean, answer this quote",
+      BodyStripped: "Sean, answer this quote",
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      MessageThreadId: 777,
+      ReplyToId: "34971",
+      ReplyToBody: "whole replied-to message",
+      ReplyToQuoteText: "selected quoted slice",
+      ReplyToIsQuote: true,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Sean, answer this quote",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.currentInboundContext?.text).toBe("");
+    expect(envelope.currentInboundContext?.reply).toMatchObject({
+      replyTargetPresent: true,
+      quotePresent: true,
+      replyChainPresent: false,
+    });
+    expect(envelope.currentInboundContext?.replyIdentifiers).toMatchObject({
+      currentMessageId: "34974",
+      threadId: "777",
+      replyToId: "34971",
+    });
+  });
 
   it("projects room events as context instead of user requests", () => {
     const sessionCtx = finalizeInboundContext({
@@ -174,8 +475,10 @@ describe("buildReplyPromptEnvelope", () => {
           "#35674 Other: I wish I could enjoy 5.5",
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
       ].join("\n\n"),
+    );
+    expect(envelope.currentInboundContext?.trustedDeliveryDirective).toBe(
+      "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
     );
     // Each room-event fact appears exactly once per request: kind lives in the
     // Conversation info JSON, the event line lives in the user turn body.
@@ -191,7 +494,6 @@ describe("buildReplyPromptEnvelope", () => {
           JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
           "```",
         ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
       ].join("\n\n"),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
@@ -255,7 +557,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext?.text).toContain("Room context:");
     expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
     expect(envelope.queuedBody).toBe("#2002 Bob: current note");
-    expect(envelope.currentInboundContext?.text).toContain(
+    expect(envelope.currentInboundContext?.trustedDeliveryDirective).toBe(
       "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
     );
     expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");

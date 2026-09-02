@@ -1,5 +1,6 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -198,6 +199,70 @@ describe("google prompt cache", () => {
         },
       },
     ]);
+  });
+
+  it("bypasses managed caching when current-turn trusted policy follows the cache boundary", async () => {
+    const now = 1_000_000;
+    const stablePrompt = "Stable OpenClaw policy.";
+    const baseDynamicPrompt = "Dynamic model identity.";
+    const currentTurnPolicy = [
+      "Treat this message as observed room activity, not a request. Default: stay silent.",
+      "Send any visible reply with the message tool only.",
+    ].join("\n\n");
+    const preparedPrompt = `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}${baseDynamicPrompt}`;
+    const activePrompt = [
+      `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}${currentTurnPolicy}`,
+      baseDynamicPrompt,
+    ].join("\n\n");
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/runtime-suffix",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager: makeSessionManager([]),
+      streamFn: innerStreamFn,
+      systemPrompt: preparedPrompt,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: activePrompt, messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(streamContext(innerStreamFn).systemPrompt).toBe(activePrompt);
+    expect(getCapturedPayload()?.cachedContent).toBeUndefined();
+  });
+
+  it("keeps managed caching when the dynamic suffix is unchanged", async () => {
+    const now = 1_000_000;
+    const systemPrompt = `Stable OpenClaw policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic model identity.`;
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/unchanged-runtime-suffix",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager: makeSessionManager([]),
+      streamFn: innerStreamFn,
+      systemPrompt,
+    });
+
+    await Promise.resolve(
+      wrapped?.(makeGoogleModel(), { systemPrompt, messages: [] } as never, {} as never),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/unchanged-runtime-suffix");
   });
 
   it("reuses managed cached content when tool discovery order changes", async () => {

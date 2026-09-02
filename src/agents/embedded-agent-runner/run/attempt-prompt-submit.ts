@@ -165,6 +165,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
     }
   };
   const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
+  const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
+    session: activeSession,
+    message: input.runtimeContextMessage,
+  });
   try {
     if (input.runtimeOnly) {
       await input.promptActiveSession(input.transcriptPrompt, {
@@ -172,25 +176,18 @@ export async function submitEmbeddedAttemptPrompt(input: {
         preflightResult: armModelPromptTransform,
       });
     } else {
-      const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
-        session: activeSession,
-        message: input.runtimeContextMessage,
+      await input.promptActiveSession(input.transcriptPrompt, {
+        ...(input.images.length > 0 ? { images: input.images } : {}),
+        ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
+        preflightResult: armModelPromptTransform,
       });
-      try {
-        await input.promptActiveSession(input.transcriptPrompt, {
-          ...(input.images.length > 0 ? { images: input.images } : {}),
-          ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
-          preflightResult: armModelPromptTransform,
-        });
-      } finally {
-        cleanupRuntimeContextMessage();
-      }
     }
     if (input.leasedSteering) {
       ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
   } finally {
+    cleanupRuntimeContextMessage();
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
   }

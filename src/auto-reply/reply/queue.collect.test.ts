@@ -3330,15 +3330,24 @@ describe("followup queue collect routing", () => {
     const { calls, done, runFollowup } = createDrainRecorder();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-    for (const [prompt, contextText] of [
-      ["first", "context one"],
-      ["second", "context two"],
+    for (const [prompt, contextText, currentMessageId, replyToId] of [
+      ["first", "context one", "1001", "991"],
+      ["second", "context two", "1002", "992"],
     ] as const) {
       enqueueFollowupRun(
         key,
         {
           ...createRun({ prompt }),
-          currentInboundContext: { text: contextText },
+          currentInboundContext: {
+            text: contextText,
+            trustedDeliveryDirective: "Use the message tool for visible delivery.",
+            reply: {
+              replyTargetPresent: true,
+              quotePresent: false,
+              replyChainPresent: false,
+            },
+            replyIdentifiers: { currentMessageId, replyToId },
+          },
         },
         settings,
       );
@@ -3351,6 +3360,46 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("second");
     expect(calls[0]?.currentInboundContext?.text).toContain("Queued #1 context:\ncontext one");
     expect(calls[0]?.currentInboundContext?.text).toContain("Queued #2 context:\ncontext two");
+    expect(calls[0]?.currentInboundContext?.trustedDeliveryDirective).toBe(
+      "Use the message tool for visible delivery.",
+    );
+    expect(calls[0]?.currentInboundContext?.replyIdentifiers).toMatchObject({
+      currentMessageId: "1002",
+      replyToId: "992",
+    });
+  });
+
+  it("does not inherit singular reply metadata from an earlier collected source", async () => {
+    const key = `test-collect-runtime-context-latest-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "first" }),
+        currentInboundContext: {
+          text: "earlier context",
+          trustedDeliveryDirective: "Earlier delivery policy.",
+          reply: {
+            replyTargetPresent: true,
+            quotePresent: false,
+            replyChainPresent: false,
+          },
+          replyIdentifiers: { currentMessageId: "1001", replyToId: "991" },
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.currentInboundContext?.text).toContain("Queued #1 context:\nearlier context");
+    expect(calls[0]?.currentInboundContext?.trustedDeliveryDirective).toBeUndefined();
+    expect(calls[0]?.currentInboundContext?.reply).toBeUndefined();
+    expect(calls[0]?.currentInboundContext?.replyIdentifiers).toBeUndefined();
   });
 
   it("does not let one source cancel an admitted collected run", async () => {

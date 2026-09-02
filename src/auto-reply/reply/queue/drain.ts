@@ -733,9 +733,12 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   if (contexts.length === 0) {
     return undefined;
   }
-  if (contexts.length === 1) {
-    return contexts[0]?.context;
+  if (items.length === 1) {
+    return items[0]?.currentInboundContext;
   }
+  // The last queued item owns the aggregate turn's reply anchor and execution
+  // params. Keep its singular metadata aligned with that same selected source.
+  const selectedContext = items.at(-1)?.currentInboundContext;
   const renderField = (field: "text" | "resumableText") => {
     const blocks = contexts.flatMap(({ context, index }) => {
       const value = context[field];
@@ -744,7 +747,12 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
     return blocks.length > 0 ? blocks.join("\n\n") : undefined;
   };
   const text = renderField("text");
-  if (!text) {
+  if (
+    !text &&
+    !selectedContext?.trustedDeliveryDirective &&
+    !selectedContext?.reply &&
+    !selectedContext?.replyIdentifiers
+  ) {
     return undefined;
   }
   const resumableText = renderField("resumableText");
@@ -752,10 +760,17 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
     ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
   ];
   return {
-    text,
+    text: text ?? "",
     ...(resumableText ? { resumableText } : {}),
     promptJoiner: "\n\n",
+    ...(selectedContext?.trustedDeliveryDirective
+      ? { trustedDeliveryDirective: selectedContext.trustedDeliveryDirective }
+      : {}),
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
+    ...(selectedContext?.reply ? { reply: selectedContext.reply } : {}),
+    ...(selectedContext?.replyIdentifiers
+      ? { replyIdentifiers: selectedContext.replyIdentifiers }
+      : {}),
   };
 }
 

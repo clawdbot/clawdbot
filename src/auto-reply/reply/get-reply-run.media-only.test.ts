@@ -1072,10 +1072,13 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toBe("please answer here");
     expect(call.followupRun.transcriptPrompt).toBe("please answer here");
     expect(call.followupRun.currentInboundContext?.text).toBe(
-      [
-        "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
-        MESSAGE_TOOL_ONLY_DELIVERY_HINT,
-      ].join("\n\n"),
+      "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
+    );
+    expect(call.followupRun.currentInboundContext?.trustedDeliveryDirective).toBe(
+      MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+    );
+    expect(call.followupRun.currentInboundContext?.text).not.toContain(
+      MESSAGE_TOOL_ONLY_DELIVERY_HINT,
     );
     const persistedUserMessage = call.followupRun.userTurnTranscriptRecorder?.message;
     if (!persistedUserMessage) {
@@ -3348,9 +3351,13 @@ describe("runPreparedReply media-only handling", () => {
       "#35675 obviyus ->#35674: Are you fr fr",
     );
     expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.trustedDeliveryDirective).toBe(
       ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+    );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain("message(action=send)");
     expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
     expect(call?.followupRun.currentInboundContext?.text).not.toContain("Current event:");
   });
@@ -3383,6 +3390,18 @@ describe("runPreparedReply media-only handling", () => {
         ...createSessionTurn("ambient", "telegram", "group"),
         InboundEventKind: "room_event",
         MessageSid: "992",
+        MessageThreadId: "777",
+        ReplyToId: "991",
+        ReplyToBody: "prior room message",
+        ReplyToSender: "Bob",
+        ReplyChain: [
+          {
+            messageId: "991",
+            threadId: "777",
+            sender: "Bob",
+            body: "prior room message",
+          },
+        ],
         SenderName: "Alice",
       },
     });
@@ -3396,6 +3415,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call.followupRun.abortSignal).toBe(abortController.signal);
     expect(call.followupRun.currentInboundContext?.text).toContain("Room context:");
+    expect(call.followupRun.currentInboundContext?.trustedDeliveryDirective).toBe(
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+    );
+    expect(call.followupRun.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: false,
+      replyChainPresent: true,
+    });
+    expect(call.followupRun.currentInboundContext?.replyIdentifiers).toEqual({
+      currentMessageId: "992",
+      threadId: "777",
+      replyToId: "991",
+      replyChainMessageIds: ["991"],
+    });
+    expect(call.followupRun.currentInboundContext?.text).not.toContain(
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+    );
   });
 
   it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
@@ -3533,7 +3569,13 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toBe(
+      "[OpenClaw room event]\n\nRoom context:\nroom context",
+    );
+    expect(call?.followupRun.currentInboundContext?.trustedDeliveryDirective).toBe(
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+    );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
       ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
     expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
@@ -3584,7 +3626,13 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toBe(
+      "[OpenClaw room event]\n\nRoom context:\nroom context",
+    );
+    expect(call?.followupRun.currentInboundContext?.trustedDeliveryDirective).toBe(
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+    );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
       ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
     expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
@@ -3899,8 +3947,13 @@ describe("runPreparedReply media-only handling", () => {
       expect(primaryRun.sourceReplyDeliveryMode).toBe(stableMode);
       expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
       expect(roomEventRun.extraSystemPrompt).toBe(expectedPrompt);
-      expect(requireRunReplyAgentCall(0).followupRun.currentInboundContext?.text).toContain(
-        "You were not explicitly tagged or mentioned in this room event",
+      const roomEventInboundContext = requireRunReplyAgentCall(0).followupRun.currentInboundContext;
+      expect(roomEventInboundContext?.text).toBe("[OpenClaw room event]");
+      expect(roomEventInboundContext?.trustedDeliveryDirective).toBe(
+        ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+      );
+      expect(roomEventInboundContext?.text).not.toContain(
+        "your final text here stays private either way",
       );
       expect(roomEventRun.extraSystemPromptStatic).toBe(expectedPrompt);
       expect(roomEventRun.extraSystemPromptStatic).not.toContain(

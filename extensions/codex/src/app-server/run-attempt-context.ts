@@ -23,6 +23,7 @@ import {
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { buildCodexCurrentRuntimeDeveloperInstructions } from "./current-turn-context.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { joinPresentSections } from "./run-attempt-state.js";
@@ -174,6 +175,14 @@ export async function prepareCodexAttemptContext(
       dynamicTools: toolBridge.availableSpecs,
     }),
     agentWorkspaceDeveloperInstructions,
+    // Codex 0.151.0 drops unchanged additionalContext when automatic or
+    // token-budget compaction replaces history (openai/codex#38269). Supervised
+    // turns cannot use collaborationMode without overriding native settings, so
+    // keep their trusted runtime facts on the generic developer-instruction
+    // surface that Codex rebuilds in its compaction initial-context path.
+    usesSupervisionConnection
+      ? buildCodexCurrentRuntimeDeveloperInstructions(runtimeParams)
+      : undefined,
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,

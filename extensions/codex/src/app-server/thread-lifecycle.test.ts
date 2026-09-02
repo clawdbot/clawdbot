@@ -1864,6 +1864,22 @@ describe("Codex app-server native code mode config", () => {
     "does not overwrite native supervised turn settings (notice: %s)",
     (notice) => {
       const params = createAttemptParams({ provider: "anthropic" });
+      params.trigger = "user";
+      params.senderId = "profile-ada";
+      params.senderName = "Ada";
+      params.currentInboundContext = {
+        text: "Quoted reply from the supervised turn.",
+        trustedDeliveryDirective: "Send the supervised reply through the message tool.",
+        reply: {
+          replyTargetPresent: true,
+          quotePresent: true,
+          replyChainPresent: false,
+        },
+        replyIdentifiers: {
+          currentMessageId: "message-2",
+          replyToId: "message-1",
+        },
+      };
       params.thinkLevel = "off";
       const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
       params.model = {
@@ -1898,12 +1914,12 @@ describe("Codex app-server native code mode config", () => {
           kind: "application",
           value: expect.stringContaining("## Temporal Context"),
         },
-        ...(notice
-          ? {
-              openclaw_permission_change: { kind: "application", value: notice },
-            }
-          : {}),
       });
+      // Current-turn context is projected before this transport builder: user
+      // data is in the primary input and trusted facts are in the thread's
+      // compaction-stable developer instructions. Keep the permission notice
+      // out of Codex 0.151's lossy additionalContext store (openai/codex#38269).
+      expect(request.additionalContext).not.toHaveProperty("openclaw_permission_change");
     },
   );
 
@@ -2521,14 +2537,12 @@ describe("Codex app-server turn params", () => {
     expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
     expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
     expect(turnParams.serviceTier).toBe("flex");
-    expect(turnParams.collaborationMode).toEqual({
-      mode: "default",
-      settings: {
-        model: "gpt-5.4-codex",
-        reasoning_effort: "medium",
-        developer_instructions: null,
-      },
-    });
+    expect(turnParams.collaborationMode?.mode).toBe("default");
+    expect(turnParams.collaborationMode?.settings.model).toBe("gpt-5.4-codex");
+    expect(turnParams.collaborationMode?.settings.reasoning_effort).toBe("medium");
+    expect(turnParams.collaborationMode?.settings.developer_instructions).toContain(
+      "No current OpenClaw reply metadata or delivery directive.",
+    );
   });
 
   it("keeps heartbeat Codex turns in normal Default collaboration mode", () => {
@@ -2541,7 +2555,12 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toBeNull();
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "No current OpenClaw reply metadata or delivery directive.",
+    );
 
     const workspaceInstructions = buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: "Turn-only workspace instructions.",

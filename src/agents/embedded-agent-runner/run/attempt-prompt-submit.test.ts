@@ -287,6 +287,14 @@ describe("submitEmbeddedAttemptPrompt", () => {
   it("submits runtime-only prompts without images and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();
+    const runtimeContextMessage: RuntimeContextCustomMessage = {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: "untrusted inbound context",
+      display: false,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+      timestamp: 2,
+    };
     const promptActiveSession = vi.fn(
       async (
         prompt: string,
@@ -297,6 +305,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         expect(input.onFinalPromptText).toHaveBeenCalledWith("transcript prompt");
         expect(activeSession.agent.streamFn).not.toBe(baseStreamFn);
         expect(activeSession.agent.transformContext).not.toBe(originalTransformContext);
+        expect(activeSession.messages).toContain(runtimeContextMessage);
         options?.preflightResult?.(true);
       },
     );
@@ -307,10 +316,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
       images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
       leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"] },
       promptActiveSession,
+      runtimeContextMessage,
       runtimeOnly: true,
     });
 
     expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
+    expect(activeSession.messages).not.toContain(runtimeContextMessage);
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
   });

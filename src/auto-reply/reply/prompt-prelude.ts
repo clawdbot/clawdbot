@@ -19,6 +19,12 @@ const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
 ];
+const CURRENT_REPLY_IDENTIFIER_MAX_CHARS = 256;
+const CURRENT_REPLY_CHAIN_MAX_ENTRIES = 20;
+const CURRENT_REPLY_IDENTIFIERS_MAX_SERIALIZED_TOKENS = 880;
+
+type CurrentReplyMetadata = NonNullable<CurrentInboundPromptContext["reply"]>;
+type CurrentReplyIdentifiers = NonNullable<CurrentInboundPromptContext["replyIdentifiers"]>;
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */
 function buildReplyPromptBodies(params: {
@@ -150,6 +156,113 @@ function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): 
   );
 }
 
+function normalizeRuntimeContextString(value: unknown): string | undefined {
+  const normalized =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : normalizeOptionalString(value);
+  return normalized?.replaceAll("\u0000", "") || undefined;
+}
+
+function normalizeCurrentReplyIdentifier(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > CURRENT_REPLY_IDENTIFIER_MAX_CHARS) {
+    return undefined;
+  }
+  const normalized = normalizeRuntimeContextString(value);
+  return normalized && normalized.length <= CURRENT_REPLY_IDENTIFIER_MAX_CHARS
+    ? normalized
+    : undefined;
+}
+
+function hasRuntimeContextValue(value: unknown): boolean {
+  if (typeof value === "string" && value.length > CURRENT_REPLY_IDENTIFIER_MAX_CHARS) {
+    return true;
+  }
+  return Boolean(normalizeRuntimeContextString(value));
+}
+
+function assembleCurrentReplyMetadata(params: {
+  quotePresent: boolean;
+  replyChainPresent: boolean;
+}): CurrentReplyMetadata {
+  return {
+    replyTargetPresent: true,
+    quotePresent: params.quotePresent,
+    replyChainPresent: params.replyChainPresent,
+  };
+}
+
+function currentReplyIdentifiersFitBudget(identifiers: CurrentReplyIdentifiers): boolean {
+  const serialized = JSON.stringify(identifiers, null, 2);
+  // Every tokenizer token consumes at least one UTF-8 byte, so byte length is
+  // a conservative token ceiling with reserved projection-wrapper headroom.
+  return Buffer.byteLength(serialized, "utf8") <= CURRENT_REPLY_IDENTIFIERS_MAX_SERIALIZED_TOKENS;
+}
+
+function buildCurrentReplyMetadata(
+  ctx: TemplateContext,
+): Pick<CurrentInboundPromptContext, "reply" | "replyIdentifiers"> | undefined {
+  const replyChain = Array.isArray(ctx.ReplyChain) ? ctx.ReplyChain : [];
+  const replyChainPresent = replyChain.length > 0;
+  const replyToIdPresent = hasRuntimeContextValue(ctx.ReplyToId);
+  const replyToIdFullPresent = hasRuntimeContextValue(ctx.ReplyToIdFull);
+  const replyTargetBodyPresent = hasRuntimeContextValue(ctx.ReplyToBody);
+  const quotePresent = ctx.ReplyToIsQuote === true || hasRuntimeContextValue(ctx.ReplyToQuoteText);
+  const replyTargetPresent =
+    replyToIdPresent ||
+    replyToIdFullPresent ||
+    replyTargetBodyPresent ||
+    quotePresent ||
+    hasRuntimeContextValue(ctx.ReplyToSender) ||
+    replyChainPresent;
+  if (!replyTargetPresent) {
+    return undefined;
+  }
+
+  let identifiers: CurrentReplyIdentifiers = {};
+  const scalarIdentifiers = [
+    ["replyToId", normalizeCurrentReplyIdentifier(ctx.ReplyToId)],
+    [
+      "currentMessageId",
+      normalizeCurrentReplyIdentifier(ctx.MessageSid) ??
+        normalizeCurrentReplyIdentifier(ctx.MessageSidFull),
+    ],
+    ["threadId", normalizeCurrentReplyIdentifier(ctx.MessageThreadId)],
+    ["replyToIdFull", normalizeCurrentReplyIdentifier(ctx.ReplyToIdFull)],
+  ] as const;
+  for (const [key, value] of scalarIdentifiers) {
+    if (!value) {
+      continue;
+    }
+    const candidateIdentifiers = { ...identifiers, [key]: value };
+    if (currentReplyIdentifiersFitBudget(candidateIdentifiers)) {
+      identifiers = candidateIdentifiers;
+    }
+  }
+
+  const replyChainMessageIds: string[] = [];
+  // Slice before normalization so a generic channel/plugin cannot force an O(n) scan.
+  for (const entry of replyChain.slice(0, CURRENT_REPLY_CHAIN_MAX_ENTRIES)) {
+    const messageId = normalizeCurrentReplyIdentifier(entry.messageId);
+    if (!messageId) {
+      continue;
+    }
+    const candidateIds = [...replyChainMessageIds, messageId];
+    if (!currentReplyIdentifiersFitBudget({ ...identifiers, replyChainMessageIds: candidateIds })) {
+      break;
+    }
+    replyChainMessageIds.push(messageId);
+  }
+  if (replyChainMessageIds.length > 0) {
+    identifiers.replyChainMessageIds = replyChainMessageIds;
+  }
+
+  return {
+    reply: assembleCurrentReplyMetadata({ quotePresent, replyChainPresent }),
+    ...(Object.keys(identifiers).length > 0 ? { replyIdentifiers: identifiers } : {}),
+  };
+}
+
 function resolvePerTurnDeliveryDirective(params: {
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -168,13 +281,11 @@ function resolvePerTurnDeliveryDirective(params: {
   return undefined;
 }
 
-// The current event itself is the user turn body; the context block carries
-// only the marker, the room backlog, and the reply-policy directive so no
-// fact is stated twice in one request.
-function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
+// The current event itself is the user turn body; the untrusted context block
+// carries only the marker and room backlog so no fact is stated twice.
+function buildRoomEventContext(roomContext: string): string {
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
-  const deliveryDirective = resolvePerTurnDeliveryDirective(params);
-  return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
+  return [ROOM_EVENT_PROMPT, roomContextBlock].filter(Boolean).join("\n\n");
 }
 
 function buildResumableRoomContext(roomContext: string): string {
@@ -194,12 +305,13 @@ export function buildReplyPromptEnvelopeBase(
   const softResetTail = params.softResetTail?.trim() ?? "";
   const isRoomEvent = params.inboundEventKind === "room_event";
   const inboundUserContext = params.inboundUserContext.trim();
+  const trustedDeliveryDirective = resolvePerTurnDeliveryDirective(params);
   const resumableRoomEventContext = isRoomEvent
-    ? buildRoomEventContext(params, buildResumableRoomContext(inboundUserContext))
+    ? buildRoomEventContext(buildResumableRoomContext(inboundUserContext))
     : undefined;
   const currentInboundContextText = isRoomEvent
-    ? buildRoomEventContext(params, inboundUserContext)
-    : [inboundUserContext, resolvePerTurnDeliveryDirective(params)].filter(Boolean).join("\n\n");
+    ? buildRoomEventContext(inboundUserContext)
+    : inboundUserContext;
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -223,13 +335,17 @@ export function buildReplyPromptEnvelopeBase(
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
       : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
+  const currentReplyMetadata = buildCurrentReplyMetadata(params.sessionCtx);
   const currentInboundContext: CurrentInboundPromptContext | undefined =
-    !params.isBareSessionReset && currentInboundContextText
+    !params.isBareSessionReset &&
+    (currentInboundContextText || trustedDeliveryDirective || currentReplyMetadata)
       ? {
           text: currentInboundContextText,
           ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
+          ...(trustedDeliveryDirective ? { trustedDeliveryDirective } : {}),
           ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
+          ...currentReplyMetadata,
         }
       : undefined;
 

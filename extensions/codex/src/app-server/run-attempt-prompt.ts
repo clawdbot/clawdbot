@@ -17,14 +17,11 @@ import {
   projectContextEngineAssemblyForCodex,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { prependCodexCurrentUntrustedContext } from "./current-turn-context.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
-import {
-  isNonEmptyString,
-  joinPresentSections,
-  prependCurrentInboundContext,
-} from "./run-attempt-state.js";
+import { isNonEmptyString, joinPresentSections } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildContextEngineBinding,
@@ -56,6 +53,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   } = context;
   const {
     connection,
+    runtimeParams,
     buildActiveRunAttemptParams,
     effectiveContextTokenBudget,
     effectiveRuntimeModelId,
@@ -187,7 +185,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
+      prompt: prependCodexCurrentUntrustedContext(promptState.promptText, runtimeParams),
       developerInstructions: {
         build: ({ toolsAllow }) => {
           if (isRestrictivePromptToolsAllow(toolsAllow)) {

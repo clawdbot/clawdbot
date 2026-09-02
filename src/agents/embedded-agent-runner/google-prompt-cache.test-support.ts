@@ -148,6 +148,7 @@ export function preparePromptCacheStream(params: {
   sessionManager: TestGooglePromptCacheSessionManager;
   signal?: AbortSignal;
   streamFn: StreamFn;
+  systemPrompt?: string;
 }) {
   const model = params.model ?? makeGoogleModel();
   return prepareGooglePromptCacheStreamFn(
@@ -160,7 +161,7 @@ export function preparePromptCacheStream(params: {
       sessionManager: params.sessionManager,
       signal: params.signal,
       streamFn: params.streamFn,
-      systemPrompt: "Follow policy.",
+      systemPrompt: params.systemPrompt ?? "Follow policy.",
     },
     {
       ...(params.buildGuardedFetch

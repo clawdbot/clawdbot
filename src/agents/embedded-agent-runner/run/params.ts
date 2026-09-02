@@ -80,12 +80,32 @@ type ReasoningStreamPayload = Pick<
   requiresReasoningProgressOptIn?: boolean;
 };
 
+type CurrentInboundReplyMetadata = {
+  replyTargetPresent?: boolean;
+  quotePresent?: boolean;
+  replyChainPresent?: boolean;
+};
+
+type CurrentInboundReplyIdentifiers = {
+  currentMessageId?: string;
+  threadId?: string;
+  replyToId?: string;
+  replyToIdFull?: string;
+  replyChainMessageIds?: string[];
+};
+
 export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  /** Runtime-generated delivery policy; never channel-provided or user-authored text. */
+  trustedDeliveryDirective?: string;
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
   injectedGoalContexts?: string[];
+  /** OpenClaw-owned reply-presence facts safe for trusted runtime context. */
+  reply?: CurrentInboundReplyMetadata;
+  /** Provider-controlled opaque identifiers; model-visible only through user-role context. */
+  replyIdentifiers?: CurrentInboundReplyIdentifiers;
 };
 
 export type RunEmbeddedAgentParams = {

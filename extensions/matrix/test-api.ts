@@ -27,4 +27,5 @@ export type {
   MatrixVerificationMethod,
   MatrixVerificationSummary,
 } from "./src/matrix/sdk/verification-manager.js";
+export { resolveMatrixReplyToEventId } from "./src/matrix/monitor/threads.js";
 export { setMatrixRuntime } from "./src/runtime.js";

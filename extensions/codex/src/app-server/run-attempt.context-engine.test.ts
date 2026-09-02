@@ -513,6 +513,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
     expect(inputText).toContain("hook append marker");
+    expect(requireRequestParams(harness, "turn/start").additionalContext).toEqual({
+      openclaw_temporal_context: {
+        kind: "application",
+        value: expect.stringContaining("## Temporal Context"),
+      },
+    });
 
     await harness.completeTurn();
     await run;
@@ -1834,7 +1840,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
-  it("keeps current inbound context at the front of the Codex context-engine prompt", async () => {
+  it("keeps untrusted reply context in user input and trusted runtime facts in developer instructions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
@@ -1850,6 +1856,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         "#6474 Sun 2026-05-10 22:22 GMT+5:30 [reply target] OpenClaw: anchor REPLYCTX this is the old message",
         "#6498 Sun 2026-05-10 22:22 GMT+5:30 OpenClaw: filler REPLYCTX 23",
       ].join("\n"),
+      trustedDeliveryDirective: "Use the message tool for this current turn only.",
+      reply: {
+        replyTargetPresent: true,
+        quotePresent: true,
+        replyChainPresent: false,
+      },
+      replyIdentifiers: {
+        currentMessageId: "6499",
+        threadId: "telegram-thread-1",
+        replyToId: "6474",
+      },
     };
 
     const run = runCodexAppServerAttempt(params);
@@ -1858,8 +1875,30 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const inputText = getRequestInputText(harness);
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain("Current user request:\nhello");
-    expect(inputText).toContain("[reply target] OpenClaw: anchor REPLYCTX");
-    expect(inputText.trim().startsWith("Conversation context (chronological")).toBe(true);
+    expect(inputText).toContain("REPLYCTX");
+    expect(inputText).not.toContain("Use the message tool for this current turn only.");
+    expect(inputText).toContain('"replyToId": "6474"');
+    const turnStart = requireRequestParams(harness, "turn/start");
+    expect(turnStart.additionalContext).toEqual({
+      openclaw_temporal_context: {
+        kind: "application",
+        value: expect.stringContaining("## Temporal Context"),
+      },
+    });
+    const collaborationMode = requireRecord(
+      turnStart.collaborationMode,
+      "turn/start collaboration mode",
+    );
+    const collaborationSettings = requireRecord(
+      collaborationMode.settings,
+      "turn/start collaboration settings",
+    );
+    const developerInstructions =
+      readStringValue(collaborationSettings.developer_instructions) ?? "";
+    expect(developerInstructions).toContain('"replyTargetPresent": true');
+    expect(developerInstructions).not.toContain('"replyToId"');
+    expect(developerInstructions).toContain("Use the message tool for this current turn only.");
+    expect(developerInstructions).not.toContain("REPLYCTX");
 
     await harness.completeTurn();
     await run;

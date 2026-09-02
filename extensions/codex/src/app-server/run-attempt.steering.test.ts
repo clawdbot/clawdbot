@@ -178,11 +178,24 @@ describe("runCodexAppServerAttempt steering", () => {
       const settled = vi.fn();
       void outcome.then(settled);
       await waitForMethod("turn/start");
-      expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
-        additionalContext: {
-          openclaw_permission_change: { kind: "application", value: permissionChange.notice },
+      const turnStartParams = requests.find((request) => request.method === "turn/start")
+        ?.params as
+        | {
+            additionalContext?: unknown;
+            collaborationMode?: { settings?: { developer_instructions?: string } };
+            input?: unknown;
+          }
+        | undefined;
+      expect(turnStartParams?.additionalContext).toEqual({
+        openclaw_temporal_context: {
+          kind: "application",
+          value: expect.stringContaining("## Temporal Context"),
         },
       });
+      expect(turnStartParams?.collaborationMode?.settings?.developer_instructions).toContain(
+        permissionChange.notice,
+      );
+      expect(JSON.stringify(turnStartParams?.input)).not.toContain(permissionChange.notice);
       let handle:
         | {
             abort: () => void;
