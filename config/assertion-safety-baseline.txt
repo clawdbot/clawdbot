@@ -30,7 +30,7 @@ extensions/anthropic/cli-migration.ts	2
 extensions/anthropic/config-defaults.ts	10
 extensions/anthropic/register.runtime.ts	2
 extensions/anthropic/session-catalog-continue.ts	1
-extensions/anthropic/session-catalog-discovery.ts	5
+extensions/anthropic/session-catalog-discovery.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	7

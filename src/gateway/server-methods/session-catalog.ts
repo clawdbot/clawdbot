@@ -115,8 +115,6 @@ type CatalogListCacheState = {
 };
 
 const catalogListsByConfig = new WeakMap<OpenClawConfig, CatalogListCacheState>();
-const catalogCallerIds = new WeakMap<GatewayClient, number>();
-let nextCatalogCallerId = 0;
 
 function providerCreateTargetCache(
   config: OpenClawConfig,
@@ -195,13 +193,10 @@ function sessionCatalogListKey(params: {
   allowProcessHomeFallback: boolean;
   visibilityKey: string;
 }): string {
-  // Providers inherit this exact caller through Gateway async scope, including node APIs.
-  // A matching profile alone cannot make another connection's enumeration reusable.
-  let callerId = params.client ? catalogCallerIds.get(params.client) : 0;
-  if (params.client && callerId === undefined) {
-    callerId = ++nextCatalogCallerId;
-    catalogCallerIds.set(params.client, callerId);
-  }
+  // Providers inherit the caller through Gateway async scope, including node.list/invoke, which
+  // read only scopes, role, and device id from it; visibilityKey carries the profile facts. A
+  // reconnected dashboard is a new client object with the same authority and must reuse the
+  // settled enumeration instead of queueing another provider scan behind the admission cap.
   const cursors = params.request.cursors
     ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
         left.localeCompare(right),
@@ -216,7 +211,6 @@ function sessionCatalogListKey(params: {
     cursors,
     params.allowProcessHomeFallback,
     params.visibilityKey,
-    callerId,
     params.client?.connect?.scopes?.toSorted() ?? [],
     params.client?.connect?.role ?? null,
     params.client?.connect?.device?.id ?? null,

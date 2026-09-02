@@ -303,6 +303,15 @@ more history; appended rows stay visible and are re-fetched to the same depth
 across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses
 `sessions.catalog.read`.
 
+Those refreshes are cheap on the Gateway: the plugin watches `~/.claude/projects/`
+and the Desktop session store for changes instead of re-reading them on every
+poll, so an unchanged tree costs no disk access and a change re-reads only the
+affected project directory. It re-reads the whole tree at most every five
+minutes as a backstop, and falls back to per-request scanning if the platform
+cannot provide a file watcher. The Gateway also shares one settled enumeration
+for three seconds across connections with identical authority, so a dashboard
+reconnect or a second tab does not start another scan.
+
 Catalog visibility follows the authenticated Gateway profile. Admin connections
 see every discovered Claude row, and solo or shared-secret Gateways remain
 unfiltered. On a multi-user Gateway, a non-admin sees only rows already adopted
