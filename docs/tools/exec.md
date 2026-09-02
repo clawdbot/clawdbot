@@ -146,7 +146,7 @@ When `tools.exec.strictInlineEval` is `true`, inline interpreter-eval forms requ
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
   - To prevent user shell configuration (like `~/.zshenv` or `/etc/zshenv`) from overriding priority paths during startup, `tools.exec.pathPrepend` entries are securely prepended to the final `PATH` inside the shell command right before execution.
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`. OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation); `tools.exec.pathPrepend` applies here too.
-- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations.
+- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts, and `tools.exec.pathPrepend` does not apply. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations. Linux nodes run the command through a login shell, so `/etc/profile` may reset `PATH`; the node re-applies its own service `PATH` after profile sourcing via an internal env var (no shell interpolation), keeping the service entries ahead of the profile ones.
 
 Per-agent node binding (use the keyed agent ID in config):
 

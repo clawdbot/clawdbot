@@ -1,4 +1,5 @@
 // Builds platform shell argv for Node-driven command execution.
+import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Node shell command construction keeps platform shell flags centralized for
@@ -15,4 +16,47 @@ export function buildNodeShellCommand(command: string, platform?: string | null)
     return ["/bin/sh", "-c", command];
   }
   return ["/bin/sh", "-lc", command];
+}
+
+const LOGIN_SHELL_PATH_CARRIER = "OPENCLAW_PREPEND_PATH";
+const POSIX_SHELL_BASENAMES = new Set(["sh", "bash", "dash", "zsh"]);
+
+function isPosixLoginShellPayloadArgv(argv: readonly string[]): boolean {
+  const shell = argv[0]?.trim();
+  if (argv.length < 3 || !shell) {
+    return false;
+  }
+  if (!POSIX_SHELL_BASENAMES.has(normalizeLowercaseStringOrEmpty(path.posix.basename(shell)))) {
+    return false;
+  }
+  // Only the plain `<shell> [-l|-c flags] <payload>` form; any other option or a
+  // trailing operand list means the last token is not the inline payload.
+  const flags = argv.slice(1, -1);
+  return (
+    flags.every((flag) => /^-[lc]+$/.test(flag)) &&
+    flags.some((flag) => flag.includes("l")) &&
+    flags.some((flag) => flag.includes("c"))
+  );
+}
+
+/** Re-apply the caller-provided PATH after a login shell sources its profile. */
+export function restoreLoginShellServicePath(
+  argv: string[],
+  env: Record<string, string> | undefined,
+): { argv: string[]; env: Record<string, string> | undefined } {
+  const servicePath = env?.PATH;
+  if (!servicePath || !isPosixLoginShellPayloadArgv(argv)) {
+    return { argv, env };
+  }
+  // Login profiles overwrite PATH (Debian `/etc/profile`, macOS `path_helper`),
+  // discarding the node service PATH the child was handed; re-export it after
+  // sourcing, via an env var so the value never reaches argv or the parser.
+  return {
+    argv: [
+      ...argv.slice(0, -1),
+      `export PATH="\${${LOGIN_SHELL_PATH_CARRIER}}\${PATH:+:$PATH}"; unset ${LOGIN_SHELL_PATH_CARRIER}; ${argv[argv.length - 1] ?? ""}`,
+    ],
+    // Assigned last so a request-scoped override of the carrier cannot win.
+    env: { ...env, [LOGIN_SHELL_PATH_CARRIER]: servicePath },
+  };
 }

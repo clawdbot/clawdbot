@@ -44,6 +44,7 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
+import { restoreLoginShellServicePath } from "../infra/node-shell.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   normalizeSystemRunApprovalPlan,
@@ -1071,9 +1072,13 @@ async function executeSystemRunPhase(
   if (opts.signal?.aborted) {
     return;
   }
+  // Strictly after policy: approval identity and durable coverage bind the
+  // pre-rewrite argv/commandText, so the login-shell PATH restore is applied
+  // only to what is spawned.
+  const spawn = restoreLoginShellServicePath(execArgv, phase.env);
   const result = await (opts.signal
-    ? opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs, opts.signal)
-    : opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs));
+    ? opts.runCommand(spawn.argv, phase.cwd, spawn.env, phase.timeoutMs, opts.signal)
+    : opts.runCommand(spawn.argv, phase.cwd, spawn.env, phase.timeoutMs));
   if (opts.signal?.aborted) {
     return;
   }

@@ -1876,6 +1876,32 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectInvokeOk(sendInvokeResult);
   });
 
+  it("re-applies the node service PATH after login-shell profile sourcing", async () => {
+    const servicePath = "/svc/bin:/usr/bin";
+    const commitAuthorization = vi.fn(async () => {});
+    const { runCommand, sendInvokeResult } = await runLocalSystemInvokeWithPolicy("full", "off", {
+      command: ["/bin/sh", "-lc", "echo ok"],
+      sanitizeEnv: () => ({ PATH: servicePath }),
+      commitExecAuthorization: commitAuthorization,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expect(requireFirstRunCommandArgs(runCommand)).toEqual([
+      "/bin/sh",
+      "-lc",
+      'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo ok',
+    ]);
+    expect(firstMockCallArg(runCommand, "runCommand", 2)).toEqual({
+      PATH: servicePath,
+      OPENCLAW_PREPEND_PATH: servicePath,
+    });
+    // Approval identity and durable coverage bind the pre-rewrite command text.
+    expect(commitAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ command: '/bin/sh -lc "echo ok"' }),
+    );
+    expectInvokeOk(sendInvokeResult);
+  });
+
   async function expectNestedEnvShellDenied(params: {
     depth: number;
     markerName: string;
