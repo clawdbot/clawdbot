@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseReleaseVersion } from "./release-version.mjs";
 
-export const MOBILE_VERSION_FILE = "apps/mobile/version.json";
+const MOBILE_VERSION_FILE = "apps/mobile/version.json";
 
 export type MobileVersionManifest = {
   version: string;

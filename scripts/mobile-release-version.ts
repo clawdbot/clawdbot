@@ -76,7 +76,7 @@ function readOptionValue(argv: string[], index: number, flag: string): string {
   return value;
 }
 
-export function parseMobileReleaseArgs(argv: string[]): MobileReleaseArgs {
+function parseMobileReleaseArgs(argv: string[]): MobileReleaseArgs {
   let help = false;
   let iosPlanPath: string | null = null;
   let mode: MobileReleaseMode = "check";
@@ -351,7 +351,7 @@ function readIosPlan(planPath: string): IosReleasePlan {
   return JSON.parse(fs.readFileSync(planPath, "utf8")) as IosReleasePlan;
 }
 
-export function main(argv = process.argv.slice(2)): number {
+function main(argv = process.argv.slice(2)): number {
   const args = parseMobileReleaseArgs(argv);
   if (args.help) {
     printUsage();
