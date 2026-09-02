@@ -307,7 +307,7 @@ function createDraftStreamStub() {
       await editFinal();
       return true;
     }),
-    messageId: () => "171234.567",
+    messageId: (): string | undefined => "171234.567",
     channelId: () => "C123",
   };
 }
