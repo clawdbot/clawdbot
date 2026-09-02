@@ -1,7 +1,9 @@
 import { getChildLogger } from "../../logging/logger.js";
 import {
+  getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryMaintenance,
@@ -24,6 +26,7 @@ type SessionEntryMaintenanceRequest = {
 };
 type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   activeSessionKeys: Set<string>;
+  database: OpenClawAgentDatabase;
   generation: number;
 };
 
@@ -37,8 +40,12 @@ export function kickSessionEntryMaintenanceAfterWrite(
     return;
   }
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(params.scope));
+  const database = getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(params.scope));
+  if (!database) {
+    return;
+  }
   const owner = maintenanceByStore.get(databasePath);
-  if (owner) {
+  if (owner?.database === database) {
     owner.activeSessionKeys.add(params.activeSessionKey);
     Object.assign(owner, params, { generation: owner.generation + 1 });
     return;
@@ -46,6 +53,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
   const created: SessionEntryMaintenanceOwner = {
     ...params,
     activeSessionKeys: new Set([params.activeSessionKey]),
+    database,
     generation: 1,
   };
   maintenanceByStore.set(databasePath, created);
@@ -56,13 +64,20 @@ async function runPendingMaintenance(
   databasePath: string,
   owner: SessionEntryMaintenanceOwner,
 ): Promise<void> {
-  while (maintenanceByStore.get(databasePath) === owner) {
+  const isCurrent = () =>
+    maintenanceByStore.get(databasePath) === owner && owner.database.db.isOpen;
+  while (isCurrent()) {
     const generation = owner.generation;
     const activeSessionKeys = [...owner.activeSessionKeys];
     owner.activeSessionKeys.clear();
     try {
-      const plan = await runExclusiveSqliteSessionWrite(owner.scope, async () =>
-        runOpenClawAgentWriteTransaction(
+      const plan = await runExclusiveSqliteSessionWrite(owner.scope, async () => {
+        // The writer queue can outlive the handle that admitted this owner.
+        // Check inside the acquired lane so an evicted owner cannot reopen the path.
+        if (!isCurrent()) {
+          return undefined;
+        }
+        return runOpenClawAgentWriteTransaction(
           (database) =>
             applySessionEntryMaintenance(database, {
               activeSessionKeys,
@@ -71,9 +86,17 @@ async function runPendingMaintenance(
               storePath: owner.storePath,
             }),
           toDatabaseOptions(owner.scope),
-        ),
-      );
-      await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan]);
+        );
+      });
+      if (!plan) {
+        if (maintenanceByStore.get(databasePath) === owner) {
+          maintenanceByStore.delete(databasePath);
+        }
+        return;
+      }
+      await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
+        isCurrent,
+      });
     } catch (error) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
         "SQLite automatic session maintenance failed",
@@ -82,9 +105,15 @@ async function runPendingMaintenance(
     }
     // Any write during awaited planning/finalization increments the generation.
     // Keep this owner alive so that write gets a fresh maintenance snapshot.
-    if (owner.generation === generation) {
+    if (maintenanceByStore.get(databasePath) !== owner) {
+      return;
+    }
+    if (!owner.database.db.isOpen || owner.generation === generation) {
       maintenanceByStore.delete(databasePath);
       return;
     }
+  }
+  if (maintenanceByStore.get(databasePath) === owner) {
+    maintenanceByStore.delete(databasePath);
   }
 }

@@ -127,6 +127,7 @@ describe("channel-inbound public helpers", () => {
           storePath,
           ctxPayload: {
             Body: "hello",
+            CommandAuthorized: false,
             RawBody: "hello",
             CommandBody: "hello",
             From: "test:user:peer",
