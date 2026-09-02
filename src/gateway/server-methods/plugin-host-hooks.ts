@@ -25,13 +25,46 @@ import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import {
+  buildGatewaySessionInfo,
+  resolveCanonicalSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTargetWithStore,
+} from "../session-utils.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
 function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
   return errors.map((error) => error.text).join("; ");
+}
+
+function resolveSessionActionContextTokens(
+  context: GatewayRequestContext,
+  sessionKey: string | undefined,
+  agentId: string | undefined,
+): number | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  const cfg = context.getRuntimeConfig();
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg,
+    key: sessionKey,
+    ...(agentId ? { agentId } : {}),
+    clone: false,
+    readOnly: true,
+    exactRead: true,
+  });
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  return buildGatewaySessionInfo({
+    cfg,
+    storePath: target.storePath,
+    store: target.store,
+    key: target.canonicalKey,
+    entry,
+    agentId: target.agentId,
+  }).contextTokens;
 }
 
 /** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
@@ -221,11 +254,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           return;
         }
       }
+      const agentId = sessionOwner?.ok ? sessionOwner.agentId : undefined;
+      const contextTokens = resolveSessionActionContextTokens(context, sessionKey, agentId);
       const result = await registration.action.handler({
         pluginId,
         actionId,
         ...(sessionKey ? { sessionKey } : {}),
-        ...(sessionOwner?.ok ? { agentId: sessionOwner.agentId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(contextTokens ? { contextTokens } : {}),
         ...(params.payload !== undefined ? { payload: params.payload } : {}),
         client: {
           ...(client?.connId ? { connId: client.connId } : {}),

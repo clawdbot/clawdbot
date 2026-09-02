@@ -1,6 +1,7 @@
 // Host hook contract tests cover plugin host hook registration and runtime behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import vm from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
@@ -1289,6 +1290,10 @@ describe("host-hook fixture plugin contract", () => {
     expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
+    expect(
+      isPluginJsonValue(vm.runInNewContext("({ state: 'waiting', nested: [{ ok: true }] })")),
+    ).toBe(true);
+    expect(isPluginJsonValue(vm.runInNewContext("new (class PluginValue { })()"))).toBe(false);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {

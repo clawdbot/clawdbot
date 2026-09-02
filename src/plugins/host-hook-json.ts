@@ -53,7 +53,12 @@ function isPluginJsonValueWithinLimits(
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
+  const isLocalPlainObject = prototype === Object.prototype || prototype === null;
+  const isCrossRealmPlainObject =
+    prototype !== null &&
+    Object.getPrototypeOf(prototype) === null &&
+    Object.prototype.toString.call(value) === "[object Object]";
+  if (!isLocalPlainObject && !isCrossRealmPlainObject) {
     return false;
   }
   const entries = Object.entries(value as Record<string, unknown>);
