@@ -939,6 +939,8 @@ suite.define(() => {
             key: "global",
             kind: "global",
             label: "Global",
+            sessionId: "global-active-run",
+            status: "running",
             updatedAt: Date.now(),
           },
           {
@@ -948,6 +950,8 @@ suite.define(() => {
             key: "agent:main:main",
             kind: "direct",
             label: "Main",
+            sessionId: "main-active-run",
+            status: "running",
             updatedAt: Date.now(),
           },
         ]),

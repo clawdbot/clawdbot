@@ -422,6 +422,42 @@ it("replays later commits onto an injected list without adopting its stale gener
   });
 });
 
+it("replaces canonical rows and membership without retaining omitted fields", async ({
+  connect,
+}) => {
+  const omitted = { key: "agent:ops:omitted", sessionId: "omitted-generation" };
+  const scenario = { sessions: [notes, omitted] };
+  const { request, controls } = await connect(scenario);
+  await request("sessions.patch", { key: notes.key, color: "purple", label: "Patched" });
+  await request("sessions.create", { key: "agent:ops:materialized", label: "Materialized" });
+  const replacement = { key: notes.key, sessionId: notes.sessionId, label: "Exact replacement" };
+
+  controls.setSessionsListResponse({ sessions: [replacement] });
+
+  const assertReplacement = async (currentRequest: typeof request) => {
+    expect((await currentRequest("sessions.list")).payload.sessions).toEqual([replacement]);
+    expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
+      replacement,
+    );
+    for (const method of ["chat.history", "chat.startup"]) {
+      expect((await currentRequest(method, { sessionKey: notes.key })).payload).toMatchObject({
+        sessionId: notes.sessionId,
+        sessionInfo: replacement,
+      });
+    }
+    for (const key of [omitted.key, "agent:ops:materialized"]) {
+      expect((await currentRequest("sessions.describe", { key })).payload.session).toBeNull();
+      expect(
+        (await currentRequest("chat.startup", { sessionKey: key })).payload,
+      ).not.toHaveProperty("sessionInfo");
+    }
+  };
+  await assertReplacement(request);
+
+  const reloaded = await connect(scenario);
+  await assertReplacement(reloaded.request);
+});
+
 it("commits only successful patchMany targets", async ({ connect }) => {
   const other = { key: "agent:ops:other", sessionId: "other-generation" };
   const scenario = {

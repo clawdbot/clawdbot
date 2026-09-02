@@ -97,6 +97,7 @@ function activeRunSnapshot(
       hasActiveRun: true,
       key: "agent:main:main",
       kind: "direct",
+      sessionId: "active-turn-recovery-session",
       status: "running",
       updatedAt: 1_000,
     },

@@ -51,6 +51,7 @@ export function createControlUiSessionFixtures(input: {
   const records = new Map<string, { row: ControlUiSessionFixture; changed: Set<string> }>();
   const listed = new Set<string>();
   const materialized = new Set<string>();
+  let materializedSequence = 0;
   let timestamp = 1_800_000_000_000;
   const canonicalKey = (key: string) => (key === "main" ? input.mainKey : key);
   const record = (inputKey: string) => {
@@ -160,6 +161,7 @@ export function createControlUiSessionFixtures(input: {
     value.row = { ...value.row, ...fields, key: canonicalKey(key) };
     listed.add(canonicalKey(key));
     materialized.add(canonicalKey(key));
+    materializedSequence += 1;
   };
   const list = (wireRows?: unknown[]) => {
     const rows = wireRows ?? [...listed].map(read);
@@ -195,27 +197,21 @@ export function createControlUiSessionFixtures(input: {
     patch,
     materialize,
     list,
-    materializedCount: () => materialized.size,
+    materializedCount: () => materializedSequence,
     replaceCanonicalList(rows: unknown[]) {
+      const replacements: ControlUiSessionFixture[] = [];
       for (const row of rows) {
         if (!row || typeof row !== "object" || !("key" in row) || typeof row.key !== "string") {
-          continue;
+          throw new Error("Canonical sessions.list rows require a string key");
         }
-        const fixture: ControlUiSessionFixture = { ...row, key: row.key };
-        const value = record(fixture.key);
-        const replaced =
-          typeof fixture.sessionId === "string" && fixture.sessionId !== value.row.sessionId;
-        value.row = replaced
-          ? { ...fixture, key: canonicalKey(fixture.key) }
-          : { ...value.row, ...fixture, key: canonicalKey(fixture.key) };
-        if (replaced) {
-          value.changed.clear();
-        } else {
-          for (const field of Object.keys(fixture)) {
-            value.changed.delete(field);
-          }
-        }
-        listed.add(canonicalKey(fixture.key));
+        replacements.push({ ...row, key: canonicalKey(row.key) });
+      }
+      records.clear();
+      listed.clear();
+      materialized.clear();
+      for (const fixture of replacements) {
+        records.set(fixture.key, { row: fixture, changed: new Set() });
+        listed.add(fixture.key);
       }
     },
   };

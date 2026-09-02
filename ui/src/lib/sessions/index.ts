@@ -38,7 +38,7 @@ export type {
   SessionListSnapshot,
   SessionMessageSubscription,
 } from "./session-capability.ts";
-export type { SessionPatch } from "./patch.ts";
+export type { SessionPatch, SessionPatchResult } from "./patch.ts";
 export { DEFAULT_SESSION_LIST_QUERY, SESSIONS_PAGE_DEFAULT_LIMIT } from "./session-requests.ts";
 export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
 export { requestSessionCreate } from "./create.ts";
@@ -234,6 +234,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    refreshReplacementResult: (agentId) => roster.refreshReplacementResult(agentId),
     publishedRow: (key) => roster.publishedRow((row) => row.key === key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,

@@ -1,9 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
   type SessionCapability,
   type SessionPatch,
+  type SessionPatchResult,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import {
@@ -97,9 +97,9 @@ export function patchChatSessionSettings(
     agentId?: string;
     expectedSessionId?: string;
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
-): Promise<SessionsPatchResult | null> {
+): Promise<SessionPatchResult | null> {
   const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
   const operation = (async () => {
     // Run-affecting settings and sends share this canonical per-session tail.
@@ -150,7 +150,7 @@ export async function patchChatCommandSessionSettings(
   patch: SessionPatch,
   options: {
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    reconcile?: (result: SessionPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(

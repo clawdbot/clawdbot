@@ -256,6 +256,11 @@ export function renderChatPaneComposerControls(params: {
           if (!patched) {
             throw new Error("Session capability is unavailable");
           }
+          if (patched.listRefreshError && ownsOutcome()) {
+            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed", {
+              error: patched.listRefreshError,
+            });
+          }
         } catch (error) {
           if (!ownsRoute() || !ownsOutcome()) {
             return;

@@ -1162,6 +1162,7 @@ function installControlUiMockGateway(
   (window as MockGatewayWindow)["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = scenario.basePath;
   const protocolVersion = input.protocolVersion;
   const methodResponseOverridesStorageKey = "openclaw.control-ui-e2e.method-responses.v1";
+  const canonicalSessionsStorageKey = "openclaw.control-ui-e2e.canonical-sessions.v1";
   const methodResponseOverrides: Record<string, unknown> = {};
   try {
     const storedOverrides = window.sessionStorage.getItem(methodResponseOverridesStorageKey);
@@ -1180,10 +1181,29 @@ function installControlUiMockGateway(
   const requestHandlers = new Map<string, ControlUiMockRequestHandler>();
   const methodResponseSequenceIndexes = new Map<string, number>();
   const pendingApprovals = new Map<string, Map<string, Record<string, unknown>>>();
+  let canonicalSessionRows = scenario.sessions;
+  let hasCanonicalSessionsOverride = false;
+  try {
+    const storedCanonicalSessions = window.sessionStorage.getItem(canonicalSessionsStorageKey);
+    const parsedCanonicalSessions = storedCanonicalSessions
+      ? (JSON.parse(storedCanonicalSessions) as unknown)
+      : null;
+    if (Array.isArray(parsedCanonicalSessions)) {
+      canonicalSessionRows = parsedCanonicalSessions as ControlUiSessionFixture[];
+      hasCanonicalSessionsOverride = true;
+    }
+  } catch {
+    // The scenario remains authoritative when browser storage is unavailable.
+  }
   const sessions = createSessions({
-    rows: scenario.sessions,
+    rows: canonicalSessionRows,
     mainKey: scenario.mainSessionKey,
   });
+  if (hasCanonicalSessionsOverride) {
+    // Persisted explicit snapshots bypass scenario-default enrichment so reload
+    // preserves the same exact owner rows used by CAS, describe, and startup.
+    sessions.replaceCanonicalList(canonicalSessionRows);
+  }
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
   const sessionMessageSubscriptions = new Set<string>();
@@ -2003,7 +2023,9 @@ function installControlUiMockGateway(
         const row = sessions.read(key);
         const info = sessions.sessionInfo(key);
         const override =
-          row.key === sessions.read(scenario.sessionKey).key ? scenario.sessionInfo : null;
+          !hasCanonicalSessionsOverride && row.key === sessions.read(scenario.sessionKey).key
+            ? scenario.sessionInfo
+            : null;
         return {
           messages: scenario.historyMessages,
           sessionId: row.sessionId,
@@ -2592,6 +2614,15 @@ function installControlUiMockGateway(
       // Generic method responses may be stale or delayed. Only this explicit
       // owner transition advances the canonical rows used by mutation CAS.
       sessions.replaceCanonicalList(payload.sessions);
+      hasCanonicalSessionsOverride = true;
+      try {
+        window.sessionStorage.setItem(
+          canonicalSessionsStorageKey,
+          JSON.stringify(payload.sessions),
+        );
+      } catch {
+        // The current document still observes the canonical replacement.
+      }
       this.setMethodResponse("sessions.list", payload);
     },
     setSessionSharingPolicy(policy) {

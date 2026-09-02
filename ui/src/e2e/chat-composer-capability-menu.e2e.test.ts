@@ -45,6 +45,7 @@ function sessionsList(
         kind: "direct",
         model: model.id,
         modelProvider: model.provider,
+        sessionId: "capability-menu-session",
         status: "done",
         updatedAt: Date.now(),
         ...(toolOverrides ? { toolOverrides } : {}),

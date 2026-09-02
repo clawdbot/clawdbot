@@ -50,7 +50,6 @@ suite.define(() => {
     };
     const gateway = await installMockGateway(page, {
       sessionKey: session.key,
-      sessionInfo: session,
       models: [
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
