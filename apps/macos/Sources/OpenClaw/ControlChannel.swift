@@ -109,12 +109,6 @@ struct ControlChannelCompatibilityAlerts {
         return self.updateConnection(generation: self.routeGeneration, state: .connected)
     }
 
-    mutating func shouldPresent(_ presentation: Presentation, connectedRevision: UInt64?) -> Bool {
-        // Handshake admission precedes its queued snapshot reaching the UI.
-        _ = self.observeConnection(revision: connectedRevision)
-        return self.presentation?.id == presentation.id
-    }
-
     mutating func updateConnection(
         generation: UInt64,
         state: ControlChannel.ConnectionState) -> ControlChannel.ConnectionState?
@@ -192,6 +186,17 @@ final class ControlChannel {
             self.cancelPendingStateTask()
         }
         return self.compatibilityAlerts.routeGeneration
+    }
+
+    @discardableResult
+    private func reconcileCurrentConnection(generation: UInt64) -> Bool {
+        guard generation == self.synchronizeRouteGeneration(),
+              let state = self.compatibilityAlerts.observeConnection(
+                  revision: GatewayConnection.shared.connectedEndpointRevision)
+        else { return false }
+        // Admission can precede its snapshot; publish success and cancel stale deferred status together.
+        self.setStateThrottled(state, generation: generation)
+        return generation == self.synchronizeRouteGeneration()
     }
 
     // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
@@ -287,8 +292,7 @@ final class ControlChannel {
         self.setStateThrottled(.connecting)
         do {
             try await self.establishGatewayConnection()
-            guard generation == self.synchronizeRouteGeneration() else { return }
-            self.setStateThrottled(.connected, generation: generation)
+            guard self.reconcileCurrentConnection(generation: generation) else { return }
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
             self.reportFailure(error, generation: generation)
@@ -310,7 +314,7 @@ final class ControlChannel {
         }
         let timeoutMs = (timeout ?? 15) * 1000
         let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
-        if generation == self.synchronizeRouteGeneration() {
+        if self.reconcileCurrentConnection(generation: generation) {
             self.lastPingMs = Date().timeIntervalSince(start) * 1000
         }
         return payload
@@ -354,7 +358,7 @@ final class ControlChannel {
         do {
             let data = try await operation()
             try Task.checkCancellation()
-            self.setStateThrottled(.connected, generation: generation)
+            self.reconcileCurrentConnection(generation: generation)
             return data
         } catch {
             // Closing a view cancels its requests, not the shared connection.
@@ -369,10 +373,10 @@ final class ControlChannel {
     private func reportFailure(_ error: Error, generation: UInt64) -> String {
         _ = self.synchronizeRouteGeneration()
         let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-        let presentation = GatewayCompatibilityIssue(error: error).flatMap {
-            self.compatibilityAlerts.prepare($0, generation: generation)
-        }
+        let issue = GatewayCompatibilityIssue(error: error)
         self.logger.error("control channel operation failed \(message, privacy: .public)")
+        if issue != nil, self.reconcileCurrentConnection(generation: generation) { return message }
+        let presentation = issue.flatMap { self.compatibilityAlerts.prepare($0, generation: generation) }
         self.setStateThrottled(.degraded(message), generation: generation)
         if let presentation {
             let issue = presentation.issue
@@ -380,9 +384,11 @@ final class ControlChannel {
             // after a route switch or successful connection with the same later issue.
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.synchronizeRouteGeneration(),
-                      self.compatibilityAlerts.shouldPresent(
-                          presentation, connectedRevision: GatewayConnection.shared.connectedEndpointRevision),
-                      generation == self.synchronizeRouteGeneration()
+                      self.compatibilityAlerts.presentation?.id == presentation.id
+                else { return }
+                self.reconcileCurrentConnection(generation: generation)
+                guard generation == self.synchronizeRouteGeneration(),
+                      self.compatibilityAlerts.presentation?.id == presentation.id
                 else { return }
                 let alert = NSAlert()
                 alert.messageText = issue.problem.title
@@ -623,12 +629,7 @@ final class ControlChannel {
             // changed on another device.
             self.refreshProfileAccent()
         case .snapshot:
-            let generation = self.synchronizeRouteGeneration()
-            if let state = self.compatibilityAlerts.observeConnection(
-                revision: GatewayConnection.shared.connectedEndpointRevision)
-            {
-                self.setStateThrottled(state, generation: generation)
-            }
+            self.reconcileCurrentConnection(generation: self.synchronizeRouteGeneration())
             self.refreshProfileAccent()
         default:
             break

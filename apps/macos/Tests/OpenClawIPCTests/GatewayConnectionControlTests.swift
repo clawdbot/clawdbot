@@ -262,16 +262,14 @@ private func assertConfigLookupCannotRecreateRoute(
         _ = alerts.observeEndpoint(revision: 1)
         let prepared = alerts.prepare(issue, generation: alerts.routeGeneration)
         let originalIssue = try #require(prepared)
-        let initialClaim = alerts.shouldPresent(originalIssue, connectedRevision: connection.connectedEndpointRevision)
-        #expect(initialClaim)
+        let initialRecovery = alerts.observeConnection(revision: connection.connectedEndpointRevision)
+        #expect(initialRecovery == nil)
+        #expect(alerts.presentation == originalIssue)
         let stream = await connection.subscribe()
         var buffered = stream.makeAsyncIterator()
         rejectConnect.withValue { $0 = false }
         _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
         let firstRevision = connection.connectedEndpointRevision
-        let recoveredClaim = alerts.shouldPresent(originalIssue, connectedRevision: firstRevision)
-        #expect(!recoveredClaim)
-        #expect(alerts.presentation == nil)
         let firstRecovery = alerts.observeConnection(revision: firstRevision)
         #expect(firstRevision == 1)
         #expect(firstRecovery == .connected)
@@ -282,6 +280,13 @@ private func assertConfigLookupCannotRecreateRoute(
             await connection.shutdown()
             return
         }
+
+        // A coalesced failure can resume after the successful snapshot was consumed.
+        let lateFailure = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(lateFailure != nil)
+        let lateRecovery = alerts.observeConnection(revision: connection.connectedEndpointRevision)
+        #expect(lateRecovery == .connected)
+        #expect(alerts.presentation == nil)
 
         source.setEndpoint(GatewayConnection.EndpointSnapshot(
             config: (urlB, nil, nil), routeAuthority: nil, revision: 2))
