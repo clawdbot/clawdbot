@@ -117,7 +117,9 @@ export function createChatSendReplyDispatch(params: {
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "markBlocked">;
 }) {
   const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
-  const { backingSessionId, cfg, clientRunId, sessionLoadOptions } = session;
+  const { backingSessionId, cfg, clientRunId } = session;
+  // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
+  const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
   let assistantTranscriptRewriteState = {
     sessionId: undefined as string | undefined,
     generation: null as string | null,

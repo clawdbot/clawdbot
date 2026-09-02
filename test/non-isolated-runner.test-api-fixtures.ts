@@ -93,7 +93,7 @@ describe("${generation} test API consumers", () => {
       changes: [],
     });
   }
-  it.each(["first test", "second test"])("keeps all three consumers usable in %s", async (phase) => {
+  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async (phase) => {
     await verifyConsumers(phase);
   });
   afterAll(async () => {
@@ -152,6 +152,8 @@ vi.mock(${sourcePath("cron/service/active-run-cancellation.ts")}, async () => ({
   ...await vi.importActual(${sourcePath("cron/service/active-run-cancellation.ts")}),
 }));
 const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
+// The second import replaces native metadata with a manual-mock placeholder;
+// the execution record must still identify the retained native generation.
 await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});

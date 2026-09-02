@@ -211,6 +211,11 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   };
 }
 
+/** True when root-owned paths would be paired with the sudo caller's user manager. */
+export function hasSudoToRootSystemdUserManagerMismatch(env: GatewayServiceEnv): boolean {
+  return resolveSystemctlUserScope(env).preferMachineScope;
+}
+
 /**
  * Resolves the account whose user manager owns the service operation.
  * Keep linger diagnostics on this identity so sudo never checks root while
@@ -310,8 +315,11 @@ export async function disableSystemdUserUnitForRemoval(
   throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
 }
 
-export async function reloadSystemdUserManager(env: GatewayServiceEnv): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"]);
+export async function reloadSystemdUserManager(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
+  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs);
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,

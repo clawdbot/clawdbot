@@ -170,22 +170,7 @@ export function resolveToolEmoji(
   if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
     return resolveToolDisplay({ name: toolName }).emoji;
   }
-  if (category === "deploy") {
-    return emojis.deploy;
-  }
-  if (category === "build") {
-    return emojis.build;
-  }
-  if (category === "concierge") {
-    return emojis.concierge;
-  }
-  if (category === "web") {
-    return emojis.web;
-  }
-  if (category === "coding") {
-    return emojis.coding;
-  }
-  return emojis.tool;
+  return emojis[category];
 }
 
 /**
@@ -240,10 +225,7 @@ export function createStatusReactionController(params: {
   }
 
   function clearActivityTimers(): void {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-    }
+    clearDebounceTimer();
     if (stallSoftTimer) {
       clearTimeout(stallSoftTimer);
       stallSoftTimer = null;

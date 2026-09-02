@@ -5,8 +5,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import {
+  assertExecApprovalPolicySurvived,
+  seedLegacyExecApprovalPolicy,
+} from "./exec-approval-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -26,6 +31,7 @@ const SCENARIOS = new Set([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
 ]);
 
@@ -158,11 +164,13 @@ function assert(condition, message) {
   }
 }
 
-function seedLegacySessionMetadata(stateDir) {
-  const legacySessionsDir = path.join(stateDir, "sessions");
+function seedLegacySessionMetadata(stateDir, perAgent) {
+  const legacySessionsDir = perAgent
+    ? path.join(stateDir, "agents", "main", "sessions")
+    : path.join(stateDir, "sessions");
   const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
   writeJson(path.join(legacySessionsDir, "sessions.json"), {
-    main: {
+    [perAgent ? "agent:main:main" : "main"]: {
       sessionId: LEGACY_SESSION_MAIN_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
       provider: "openai",
@@ -178,14 +186,14 @@ function seedLegacySessionMetadata(stateDir) {
         ],
       },
     },
-    "+15551234567": {
+    [perAgent ? "agent:main:+15551234567" : "+15551234567"]: {
       sessionId: LEGACY_SESSION_DIRECT_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + 100,
     },
-    "slack:channel:CUPGRADE": {
+    [perAgent ? "agent:main:slack:channel:cupgrade" : "slack:channel:CUPGRADE"]: {
       sessionId: LEGACY_SESSION_GROUP_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
       provider: "openai",
@@ -368,7 +376,9 @@ function seedState() {
     agentId: "main",
     title: "Existing user session",
   });
-  seedLegacySessionMetadata(stateDir);
+  // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
+  seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -1121,6 +1131,44 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
+async function loadTrustedOfficialInstallRecordPredicate() {
+  const candidatePackageRoot = path.join(
+    requireEnv("npm_config_prefix"),
+    "lib",
+    "node_modules",
+    "openclaw",
+  );
+  const modulePath = path.join(
+    candidatePackageRoot,
+    "dist",
+    "plugins",
+    "official-external-install-records.js",
+  );
+  assert(
+    fs.existsSync(modulePath),
+    `candidate official install record module missing: ${modulePath}`,
+  );
+  const module = await import(pathToFileURL(modulePath).href);
+  assert(
+    typeof module.isTrustedOfficialPluginInstallRecord === "function",
+    `candidate official install record predicate missing: ${modulePath}`,
+  );
+  return module.isTrustedOfficialPluginInstallRecord;
+}
+
+function isTrustedOfficialNpmCompanion(record, pluginId, packageName, isTrustedOfficialRecord) {
+  return isTrustedOfficialRecord?.({ pluginId, packageName, record }) === true;
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1147,17 +1195,21 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
   );
 }
 
-function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
+async function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
   assert(expectedVersion, "assert-companion-installs requires <expected-version>");
   assert(
     capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
     "assert-companion-installs requires candidate capability-consent support",
   );
+  const isTrustedOfficialRecord =
+    capabilityConsentSupported === "1"
+      ? await loadTrustedOfficialInstallRecordPredicate()
+      : undefined;
   const records = readInstalledPluginIndex().installRecords ?? {};
-  for (const [pluginId, packageName, source] of [
-    ["discord", "@openclaw/discord", "npm"],
-    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
-    ["codex", "@openclaw/codex", "npm"],
+  for (const [pluginId, packageName, source, allowsOfficialConsentExemption] of [
+    ["discord", "@openclaw/discord", "npm", true],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub", false],
+    ["codex", "@openclaw/codex", "npm", true],
   ]) {
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
@@ -1168,6 +1220,8 @@ function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSuppor
       packageJson,
       expectedVersion,
       capabilityConsentSupported,
+      isTrustedOfficialRecord,
+      allowsOfficialConsentExemption,
     );
   }
 }
@@ -1178,6 +1232,8 @@ function assertPluginArtifactConsent(
   packageJson,
   expectedVersion,
   capabilityConsentSupported,
+  isTrustedOfficialRecord,
+  allowsOfficialConsentExemption = false,
 ) {
   const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
   assert(
@@ -1193,7 +1249,14 @@ function assertPluginArtifactConsent(
     typeof integrity === "string" && integrity.length > 0,
     `${pluginId} plugin integrity missing`,
   );
-  if (capabilityConsentSupported === "1") {
+  // Verified first-party packages intentionally omit operator-acceptance metadata.
+  // Any unverified or partially accepted record still takes the strict path below.
+  if (
+    capabilityConsentSupported === "1" &&
+    (!allowsOfficialConsentExemption ||
+      hasCompanionPluginConsent(record) ||
+      !isTrustedOfficialNpmCompanion(record, pluginId, packageJson.name, isTrustedOfficialRecord))
+  ) {
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }
@@ -1281,10 +1344,6 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   }
   const plugins = result.postUpdate?.plugins;
   assertStrict.equal(plugins?.status, result.status === "error" ? "error" : "warning");
-  assertStrict.equal(
-    plugins?.reason,
-    result.status === "error" ? "post-plugin-doctor-invalid-config" : undefined,
-  );
   assertStrict.deepEqual(plugins.integrityDrifts, []);
   // These are the reviewed packages in the base and scenario recipes.
   // Any other plugin or failure needs investigation before accepting it.
@@ -1301,6 +1360,15 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
       assertStrict.equal(outcome.nextVersion, expectedVersion);
     }
   }
+  // Typed consent errors survive post-plugin validation without a Doctor reason.
+  // Check before warnings contribute IDs; prose alone cannot admit this shape.
+  const typedConsentOnly = plugins.reason === undefined && denied.size > 0;
+  assertStrict.equal(
+    plugins.reason,
+    result.status === "error" && !typedConsentOnly
+      ? "post-plugin-doctor-invalid-config"
+      : undefined,
+  );
   assertStrict.ok(Array.isArray(plugins.sync?.errors));
   assertStrict.ok(Array.isArray(plugins.warnings));
   for (const warning of [
@@ -1529,6 +1597,11 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "assert-exec-approvals") {
+  assertExecApprovalPolicySurvived(
+    requireEnv("OPENCLAW_STATE_DIR"),
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+  );
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
@@ -1545,7 +1618,7 @@ if (command === "list-scenarios") {
   );
   assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
 } else if (command === "assert-companion-installs") {
-  assertCompanionPluginInstalls(process.argv.slice(3));
+  await assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {
   assertRecoveredPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {

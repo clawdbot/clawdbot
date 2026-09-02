@@ -1,21 +1,174 @@
+import type { ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { panesOf, visiblePanesOf } from "./split-layout.ts";
 
 export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot"]["client"];
 
+type ComposerPresentation = {
+  state: () => ChatPageHost | undefined;
+  owner: () => ChatAttachmentGatewayOwner;
+  region: () => ChatInputRegion;
+  presented: () => boolean;
+  pause: () => void;
+  resume: (restore?: boolean) => void;
+};
+type ComposerOwnerScope = {
+  owner: NonNullable<ChatAttachmentGatewayOwner>;
+  gatewayOwner: string;
+  recoveryScope: string;
+  scopeKey: string;
+};
+const composerPresentations = new WeakMap<ApplicationContext, Set<ChatPaneComposerHandoff>>();
+
+/** Transfers live composer ownership across regions, never between ordinary split panes.
+ * The registry holds presentations only; existing persistence still owns stored drafts. */
+export class ChatPaneComposerHandoff {
+  private readonly presentations: Set<ChatPaneComposerHandoff>;
+  private scope: ComposerOwnerScope | null;
+  private ownsComposer = true;
+
+  constructor(
+    context: ApplicationContext,
+    private readonly host: ComposerPresentation,
+  ) {
+    let presentations = composerPresentations.get(context);
+    if (!presentations) {
+      presentations = new Set();
+      composerPresentations.set(context, presentations);
+    }
+    this.presentations = presentations;
+    this.scope = this.currentScope();
+    presentations.add(this);
+  }
+
+  claim(): void {
+    if (!this.host.presented()) {
+      return;
+    }
+    const scope = this.currentScope();
+    const source = this.otherRegion(scope).find((candidate) => candidate.ownsComposer);
+    source?.transferTo(this);
+    if (!this.ownsComposer) {
+      this.host.resume(true);
+      this.ownsComposer = true;
+    }
+    this.scope = scope;
+    // Most recently presented wins when the same Home appeared in multiple splits.
+    this.presentations.delete(this);
+    this.presentations.add(this);
+  }
+
+  dispose(): void {
+    if (this.ownsComposer) {
+      const candidates = this.otherRegion(this.currentScope());
+      const target = candidates.find((candidate) => candidate.host.presented()) ?? candidates[0];
+      if (target) {
+        this.transferTo(target);
+      }
+    }
+    this.presentations.delete(this);
+  }
+
+  private currentScope(): ComposerOwnerScope | null {
+    const state = this.host.state();
+    const owner = this.host.owner();
+    const recoveryScope = owner?.recoveryScope;
+    return state && owner && state.client === owner && recoveryScope
+      ? {
+          owner,
+          gatewayOwner: storageTargetForGateway(state.settings.gatewayUrl).gatewayOwner,
+          recoveryScope,
+          scopeKey: storedChatOutboxScopeKey(
+            resolveUiConversationIdentity(state, state.sessionKey),
+          ),
+        }
+      : null;
+  }
+
+  private otherRegion(scope: ComposerOwnerScope | null): ChatPaneComposerHandoff[] {
+    return [...this.presentations]
+      .toReversed()
+      .filter(
+        (candidate) =>
+          candidate.host.region() !== this.host.region() && candidate.matchesScope(scope),
+      );
+  }
+
+  private matchesScope(scope: ComposerOwnerScope | null): boolean {
+    const captured = this.scope;
+    const current = this.currentScope();
+    return Boolean(
+      scope &&
+      captured &&
+      current &&
+      current.owner === scope.owner &&
+      captured.gatewayOwner === scope.gatewayOwner &&
+      captured.recoveryScope === scope.recoveryScope &&
+      captured.scopeKey === scope.scopeKey &&
+      // A new transport must prove the same authenticated owner before taking
+      // over a live draft. Ordinary reconnects retain their captured identity.
+      (current.owner === captured.owner || current.owner.recoveryScopeReady) &&
+      current.gatewayOwner === captured.gatewayOwner &&
+      current.recoveryScope === captured.recoveryScope &&
+      current.scopeKey === captured.scopeKey,
+    );
+  }
+
+  private transferTo(target: ChatPaneComposerHandoff): void {
+    const sourceState = this.host.state();
+    const targetState = target.host.state();
+    if (!sourceState || !targetState || !this.matchesScope(target.currentScope())) {
+      return;
+    }
+    this.host.pause();
+    target.host.pause();
+    const attachments = sourceState.chatAttachments;
+    const fallbacks = sourceState.chatComposerFallbackByScope;
+    releaseDisplacedChatAttachmentPayloads(
+      [
+        targetState.chatAttachments,
+        ...Object.values(targetState.chatComposerFallbackByScope).map(
+          (fallback) => fallback.attachments,
+        ),
+      ].flat(),
+      [attachments, ...Object.values(fallbacks).map((fallback) => fallback.attachments)],
+    );
+    targetState.chatMessage = sourceState.chatMessage;
+    targetState.chatGoalDraftMode = sourceState.chatGoalDraftMode;
+    targetState.chatReplyTarget = sourceState.chatReplyTarget;
+    targetState.chatQueuedEdit = sourceState.chatQueuedEdit;
+    targetState.chatAttachments = attachments;
+    targetState.chatComposerFallbackByScope = fallbacks;
+    sourceState.chatMessage = "";
+    sourceState.chatGoalDraftMode = null;
+    sourceState.chatReplyTarget = null;
+    sourceState.chatQueuedEdit = null;
+    sourceState.chatAttachments = [];
+    sourceState.chatComposerFallbackByScope = {};
+    this.ownsComposer = false;
+    target.ownsComposer = true;
+    target.scope = target.currentScope();
+    target.host.resume();
+    sourceState.requestUpdate?.();
+    targetState.requestUpdate?.();
+  }
+}
+
 function handoffKey(paneId: string, state: ChatPageHost, owner: ChatAttachmentGatewayOwner) {
   return {
     owner,
     paneId,
-    scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, state.sessionKey)),
+    scopeKey: storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
   };
 }
 

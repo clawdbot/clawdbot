@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getRuntimeConfig } from "../config/config.js";
 import { extractErrorCode } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -50,18 +51,13 @@ export async function runExtensionRelayDaemon(params: {
   const now = params.now ?? Date.now;
   const idleExitMs = params.idleExitMs ?? RELAY_DAEMON_IDLE_EXIT_MS;
   const pollMs = params.pollMs ?? IDLE_POLL_MS;
-  let resolveDone: (reason: RelayDaemonExitReason) => void = () => {};
-  let rejectDone: (error: unknown) => void = () => {};
-  const done = new Promise<RelayDaemonExitReason>((resolve, reject) => {
-    resolveDone = resolve;
-    rejectDone = reject;
-  });
+  const completion = createDeferred<RelayDaemonExitReason>();
 
   const token = readToken();
   if (!token) {
     log.warn("relay daemon refused to start: no extension relay credential");
-    resolveDone("no-credential");
-    return { done, port: null, stop: () => {} };
+    completion.resolve("no-credential");
+    return { done: completion.promise, port: null, stop: () => {} };
   }
 
   let handle: ExtensionRelayHandle;
@@ -83,8 +79,8 @@ export async function runExtensionRelayDaemon(params: {
   } catch (error) {
     if (extractErrorCode(error) === "EADDRINUSE") {
       log.info(`relay port ${params.port} is already served; standalone daemon not needed`);
-      resolveDone("port-in-use");
-      return { done, port: null, stop: () => {} };
+      completion.resolve("port-in-use");
+      return { done: completion.promise, port: null, stop: () => {} };
     }
     throw error;
   }
@@ -98,7 +94,7 @@ export async function runExtensionRelayDaemon(params: {
     }
     stopped = true;
     clearInterval(idleTimer);
-    void handle.close().then(() => resolveDone(reason), rejectDone);
+    void handle.close().then(() => completion.resolve(reason), completion.reject);
   };
   const idleTimer = setInterval(() => {
     if (handle.bridge.extensionConnected || handle.bridge.cdpClientCount > 0) {
@@ -113,7 +109,7 @@ export async function runExtensionRelayDaemon(params: {
   idleTimer.unref?.();
 
   return {
-    done,
+    done: completion.promise,
     port: handle.port,
     stop: () => finish("stopped"),
   };

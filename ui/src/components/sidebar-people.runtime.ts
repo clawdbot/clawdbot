@@ -110,7 +110,7 @@ export class SidebarPeopleRuntime {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
         return;
       }
-      this.portal.schedulePointerExit(event, row);
+      this.portal.schedulePointerExit();
     } else if (event.type === "focusin" && !this.suppressFocus) {
       this.activate(row, 0);
       this.portal.focusInside = true;

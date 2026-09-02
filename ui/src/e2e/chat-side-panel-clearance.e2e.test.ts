@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -19,7 +19,13 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:side-panel-clearance";
-const proofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("chat-side-panel-clearance", proofDirParent)
+    : undefined;
+});
 const limitedScopes = ["operator.read", "operator.write"];
 const historyMessages = [
   {
@@ -132,7 +138,10 @@ async function waitForShellLayout(page: Page): Promise<void> {
   });
 }
 
-async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<void> {
+async function expectPanelHeaderControlsClearShellChrome(
+  page: Page,
+  shellChromeExpected: boolean,
+): Promise<void> {
   const panelControls = sidePanel(page).locator(
     ":scope > .side-panel__header :is(button, wa-tab):visible",
   );
@@ -173,14 +182,18 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
     };
   });
 
-  expect(geometry.shells.length).toBeGreaterThan(0);
-  const shellRight = Math.max(...geometry.shells.map((box) => box.right));
   const panelLeft = Math.min(...geometry.panels.map((box) => box.left));
-  expect(geometry.contentLeft - shellRight).toBeGreaterThanOrEqual(4);
-  expect(geometry.contentLeft - shellRight).toBeLessThanOrEqual(16);
-  expect(panelLeft - shellRight).toBeGreaterThanOrEqual(8);
-  if (geometry.direction !== "rtl") {
-    expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+  if (shellChromeExpected) {
+    expect(geometry.shells.length).toBeGreaterThan(0);
+    const shellRight = Math.max(...geometry.shells.map((box) => box.right));
+    expect(geometry.contentLeft - shellRight).toBeGreaterThanOrEqual(4);
+    expect(geometry.contentLeft - shellRight).toBeLessThanOrEqual(16);
+    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(8);
+    if (geometry.direction !== "rtl") {
+      expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+    }
+  } else {
+    expect(geometry.shells).toEqual([]);
   }
   expect(
     geometry.panels.every(
@@ -196,18 +209,44 @@ async function capturePanel(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, `${name}.png`) });
 }
 
 suite.define(() => {
+  it("reserves page-header clearance only for collapsed navigation", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1600 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}sessions`);
+
+        const shell = page.locator(".shell");
+        const header = page.locator(".content:not(.content--chat) .content-header").first();
+        await header.waitFor();
+        await expect
+          .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
+          .toBe("0px");
+
+        await page.locator(".sidebar-brand__collapse").click();
+        await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
+        await expect
+          .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
+          .toBe("48px");
+      },
+    );
+  });
+
   it.each([
     {
       beforeExpandProof: "right-docked",
       custodian: false,
       deviceLess: false,
       direction: "ltr",
-      expectedControl: ".shell-chrome-controls__search",
+      expectedControl: ".sidebar-brand__search",
       name: "expanded navigation",
       navCollapsed: false,
       operatorScopes: undefined,
@@ -275,7 +314,7 @@ suite.define(() => {
           document.documentElement.dir = direction;
         }, testCase.direction);
         if (testCase.navCollapsed) {
-          await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+          await page.locator(".sidebar-brand__collapse").click();
           await expect
             .poll(() => page.locator(".shell").getAttribute("class"))
             .toContain("shell--nav-collapsed");
@@ -283,7 +322,7 @@ suite.define(() => {
         }
         await page.locator(testCase.expectedControl).waitFor();
         await waitForShellLayout(page);
-        await expectPanelHeaderControlsClearShellChrome(page);
+        await expectPanelHeaderControlsClearShellChrome(page, testCase.navCollapsed);
         await capturePanel(page, testCase.proof);
       },
     );

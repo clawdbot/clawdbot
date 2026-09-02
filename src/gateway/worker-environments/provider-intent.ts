@@ -24,6 +24,7 @@ type WorkerProviderIntentOptions = Pick<
   resumeProvision: (
     record: WorkerEnvironmentRecord,
     provider?: WorkerProvider,
+    signal?: AbortSignal,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -49,6 +50,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       machineClass?: string;
       executionMode?: WorkerExecutionMode;
       projectPath?: string;
+      signal?: AbortSignal;
     } = {},
   ) => {
     const {
@@ -56,7 +58,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       machineClass,
       executionMode,
       projectPath,
+      signal,
     } = createOptions;
+    signal?.throwIfAborted();
     const inherited = requestedInherited
       ? { ...requestedInherited, profileSnapshot: { ...requestedInherited.profileSnapshot } }
       : undefined;
@@ -78,18 +82,19 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     }
     const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
+      signal?.throwIfAborted();
       if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
       const existing = store.get(environmentId);
       if (existing) {
         const existingProject = readWorkerProjectSnapshot(existing.profileSnapshot.project);
-        if (
-          existingProject &&
-          projectPath &&
-          existingProject.root !== (await fsp.realpath(projectPath))
-        ) {
-          throw serviceError("invalid_profile", "Idempotency key belongs to another project");
+        if (existingProject && projectPath) {
+          const root = await fsp.realpath(projectPath);
+          signal?.throwIfAborted();
+          if (existingProject.root !== root) {
+            throw serviceError("invalid_profile", "Idempotency key belongs to another project");
+          }
         }
         if (
           existing.profileId !== normalizedProfileId ||
@@ -110,7 +115,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           return existing;
         }
         if (!existing.leaseId && inState(existing, "requested", "provisioning")) {
-          return resumeProvision(existing);
+          return resumeProvision(existing, undefined, signal);
         }
         return existing;
       }
@@ -172,7 +177,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         const project = await prepareWorkerProjectSnapshot({
           localPath: projectPath,
           namespace: options.projectNamespace,
+          signal,
         });
+        signal?.throwIfAborted();
         if (options.isStopping()) {
           throw serviceError("invalid_state", "Worker environment service is stopping");
         }
@@ -187,7 +194,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         profileSnapshot,
         provisionOperationId,
       });
-      return resumeProvision(intent, provider);
+      return resumeProvision(intent, provider, signal);
     });
   };
 }

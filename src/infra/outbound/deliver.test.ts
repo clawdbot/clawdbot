@@ -1002,6 +1002,27 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
+  it("synchronously revalidates after the awaited handoff and before adapter invocation", async () => {
+    const messageSendText = installMatrixTextMessageAdapter({ messageId: "must-not-send" });
+    let writerIsCurrent = true;
+
+    await expect(
+      deliverMatrix({
+        skipQueue: true,
+        onPlatformSendDispatch: async () => {
+          await Promise.resolve();
+          writerIsCurrent = false;
+        },
+        assertDirectAdapterHandoff: () => {
+          if (!writerIsCurrent) {
+            throw new Error("turn authority closed after awaited handoff");
+          }
+        },
+      }),
+    ).rejects.toThrow("turn authority closed after awaited handoff");
+    expect(messageSendText).not.toHaveBeenCalled();
+  });
+
   it("fails closed for an unfinished conversation intent without route authority", async () => {
     const messageSendText = installMatrixTextMessageAdapter({
       messageId: "should-not-send",
@@ -1183,6 +1204,37 @@ describe("deliverOutboundPayloads", () => {
 
     expect(order).toEqual(["queue", "authorize"]);
     expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("revalidates persisted session writer authority after queue admission", async () => {
+    const messageSendText = installMatrixTextMessageAdapter({
+      messageId: "must-not-send",
+      durableFinal: { capabilities: { text: true } },
+    });
+
+    await expect(
+      deliverMatrix({
+        deliveryCompletion: {
+          kind: "pending-final",
+          deliveryId: "delivery-stale-writer",
+          intentId: "intent-stale-writer",
+          sessionId: "session-stale-writer",
+          sessionKey: "agent:main:matrix:room:stale-writer",
+          storePath: "/tmp/openclaw-missing-stale-writer.sqlite",
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            expectedLifecycleRevision: "revision-old",
+            expectedSessionId: "session-stale-writer",
+            expectedWriterRunId: "run-old",
+            sessionKey: "agent:main:matrix:room:stale-writer",
+            storePath: "/tmp/openclaw-missing-stale-writer.sqlite",
+          },
+        },
+      }),
+    ).rejects.toThrow("Session writer changed before final reply delivery");
+
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledOnce();
+    expect(messageSendText).not.toHaveBeenCalled();
   });
 
   it("finalizes owner state only after a chunked batch completes", async () => {

@@ -4,8 +4,8 @@ import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-gl
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
-import { formatSchemaRefusalLines, hasSchemaRefusal } from "./update-command-git.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service.js";
+import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 type UpdateDryRunPreview = {
   dryRun: true;

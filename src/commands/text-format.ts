@@ -1,5 +1,5 @@
-// Tiny text formatting helpers shared by command output.
-import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+// Text formatting helpers shared by command output.
+import * as terminalAnsi from "../../packages/terminal-core/src/ansi.js";
 
 /** Shortens text to maxLen code points, appending an ellipsis when truncated. */
 export const shortenText = (value: string, maxLen: number) => {
@@ -7,14 +7,20 @@ export const shortenText = (value: string, maxLen: number) => {
     return "";
   }
   const chars = Array.from(value);
-  if (chars.length <= maxLen) {
-    return value;
-  }
-  return `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
+  return chars.length <= maxLen ? value : `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
 };
 
 /** Fits a plain-text terminal cell using visible width and whole graphemes. */
 export function formatTextCell(text: string, width: number): string {
-  const fitted = visibleWidth(text) > width ? `${truncateToVisibleWidth(text, width - 1)}…` : text;
-  return `${fitted}${" ".repeat(width - visibleWidth(fitted))}`;
+  // Eight UTF-16 units per column allow ordinary accents/emoji; reserve width for padding.
+  // Whole-cluster raw bounds also catch invisible runs and oversized single graphemes.
+  const graphemes = terminalAnsi.splitGraphemes(text);
+  let length = 0;
+  const end = graphemes.findIndex((grapheme) => (length += grapheme.length) > width * 7);
+  const bounded = end < 0 ? text : `${graphemes.slice(0, end).join("")}…`;
+  const fitted =
+    terminalAnsi.visibleWidth(bounded) > width
+      ? `${terminalAnsi.truncateToVisibleWidth(bounded, width - 1)}…`
+      : bounded;
+  return `${fitted}${" ".repeat(width - terminalAnsi.visibleWidth(fitted))}`;
 }

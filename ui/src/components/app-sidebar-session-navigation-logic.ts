@@ -4,7 +4,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
@@ -22,10 +21,6 @@ import {
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
-import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -164,12 +159,6 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
-  const mainKey = context
-    ? resolveUiConfiguredMainKey({
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      })
-    : undefined;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
     activeSession: input.activeSession,
@@ -209,15 +198,6 @@ export function buildSidebarSessionNavigationState(input: {
       userLabel: row.label,
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
-      href: sessionNavigationTarget({
-        face: resolveSessionPreferredFace(row),
-        sessionKey: row.key,
-        fallbackAgentId: navigation.selectedAgentId,
-        basePath: context?.basePath ?? "",
-        row,
-        mainKey,
-        preferenceDerivedFace: true,
-      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       // Normalize optional gateway state before collapsing it to the sidebar's required fact.
@@ -486,13 +466,6 @@ export function resolveSidebarAgentResumeKey(
   mainKey: string,
 ): string {
   return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
-}
-
-export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
-  if (latest && isSessionRunActive(latest)) {
-    return t("agentChip.working");
-  }
-  return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");
 }
 
 export function collectKnownSidebarSessionCatalogIds(input: {

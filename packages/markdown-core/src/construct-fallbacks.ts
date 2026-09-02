@@ -7,7 +7,7 @@ import {
   type MarkdownStyle,
   type MarkdownStyleSpan,
 } from "./ir-spans.js";
-import { sliceMarkdownIR, type MarkdownIR } from "./ir.js";
+import { appendMarkdownIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 
 type TextEdit = { start: number; end: number; text: string };
 
@@ -101,29 +101,6 @@ function collectListFallbacks(ir: MarkdownIR, profile: FormatCapabilityProfile):
   return edits;
 }
 
-// sliceMarkdownIR owns the spans passed here; transfer them without another copy.
-function appendSpans<T extends { start: number; end: number }>(
-  into: T[],
-  spans: T[],
-  offset: number,
-): void {
-  for (const span of spans) {
-    span.start = offset + span.start;
-    span.end = offset + span.end;
-    into.push(span);
-  }
-}
-
-function appendSlice(target: MarkdownIR, source: MarkdownIR): void {
-  const offset = target.text.length;
-  target.text += source.text;
-  appendSpans(target.styles, source.styles, offset);
-  appendSpans(target.links, source.links, offset);
-  if (source.annotations?.length) {
-    appendSpans((target.annotations ??= []), source.annotations, offset);
-  }
-}
-
 function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
   if (edits.length === 0) {
     return ir;
@@ -144,11 +121,11 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
   const result: MarkdownIR = { text: "", styles: [], links: [] };
   let cursor = 0;
   for (const edit of ordered) {
-    appendSlice(result, sliceMarkdownIR(content, cursor, edit.start));
+    appendMarkdownIR(result, sliceMarkdownIR(content, cursor, edit.start));
     result.text += edit.text;
     cursor = edit.end;
   }
-  appendSlice(result, sliceMarkdownIR(content, cursor, ir.text.length));
+  appendMarkdownIR(result, sliceMarkdownIR(content, cursor, ir.text.length));
   result.styles = mergeStyleSpans(result.styles);
   if (result.annotations) {
     result.annotations = mergeAnnotationSpans(result.annotations);

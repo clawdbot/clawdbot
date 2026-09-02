@@ -161,10 +161,11 @@ describe("restart health", () => {
     "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)",
     "unauthorized: device token rejected (pair/repair this device, or provide gateway token)",
   ])(
-    "treats local policy-close probe reason %s as healthy gateway reachability",
+    "treats a correlated Gateway rejection with reason %s as healthy gateway reachability",
     async (reason) => {
       const snapshot = await inspectAmbiguousOwnershipWithProbe({
         ok: false,
+        gatewayReached: true,
         error: reason,
         close: { code: 1008, reason },
       });
@@ -177,6 +178,8 @@ describe("restart health", () => {
   it.each([
     "",
     "repair required",
+    "pairing required",
+    "auth required",
     "device identity required",
     "connect challenge missing nonce",
     "device signature invalid",

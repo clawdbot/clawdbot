@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-service.js";
+import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-service-plan.js";
 import { summarizeGatewayServiceLayout } from "./service-layout.js";
 
 describe("summarizeGatewayServiceLayout", () => {

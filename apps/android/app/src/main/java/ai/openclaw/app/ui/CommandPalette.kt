@@ -224,6 +224,7 @@ internal fun commandActionAccessibilityDescription(
     CommandAction.Voice,
     CommandAction.Sessions,
     -> title
+
     CommandAction.Providers,
     CommandAction.Settings,
     -> resolve("Open \${row.title}", title)

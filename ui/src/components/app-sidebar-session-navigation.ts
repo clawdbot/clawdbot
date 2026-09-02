@@ -46,7 +46,6 @@ import {
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
   someSidebarSessionInTree,
-  resolveSidebarAgentChipSubtitle,
   resolveActiveSidebarAgent,
   resolveSidebarHomeAttention,
   resolveLatestSidebarAgentSession,
@@ -304,6 +303,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.getSessionNavigationState().selectedAgentId;
   }
 
+  sidebarSessionHref(session: SidebarRecentSession): string {
+    // Build links only for rendered rows, after full-roster projection and pagination.
+    return sessionNavigationTarget({
+      face: resolveSessionPreferredFace(session),
+      sessionKey: session.key,
+      fallbackAgentId: this.selectedAgentIdForSessions(),
+      basePath: this.context?.basePath ?? "",
+      row: session,
+      mainKey: this.context ? this.sessionMainKey() : undefined,
+      preferenceDerivedFace: true,
+    }).href;
+  }
+
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter {
     return this.sessionsStatusFilter;
   }
@@ -327,7 +339,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       commit: () => {
         this.prepareSessionNavigation(sessionKey, target.options.pathname);
         this.onNavigate?.(face, target.options);
-        this.bindLiteralSession(sessionKey, this.selectedAgentIdForSessions(), target.options);
+        this.bindLiteralSession(sessionKey, navigationState.selectedAgentId, target.options);
         return true;
       },
       face,
@@ -369,9 +381,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   }
 
-  reconciledSidebarZone() {
-    const navigationState = this.getSessionNavigationState();
-    const rows = this.selectedAgentSessionRows(navigationState);
+  reconciledSidebarZone(rows = this.selectedAgentSessionRows(this.getSessionNavigationState())) {
     return buildReconciledSidebarZone({
       sidebarEntries: this.sidebarEntries,
       rows,
@@ -401,7 +411,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const navigationState = this.getSessionNavigationState();
     const rows = this.selectedAgentSessionRows(navigationState);
     const { visibleRows } = this.zonedVisibleSections(rows);
-    const { entries, sessionRows } = this.reconciledSidebarZone();
+    const { entries, sessionRows } = this.reconciledSidebarZone(rows);
     const pinnedRows = entries.flatMap((entry) => {
       const row = entry.type === "session" ? sessionRows.get(entry.key) : undefined;
       return row ? [row] : [];
@@ -519,10 +529,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       return;
     }
     this.selectSession(this.agentResumeKey(agentId));
-  }
-
-  agentChipSubtitle(agentId: string): string {
-    return resolveSidebarAgentChipSubtitle(this.latestAgentSessionRow(agentId));
   }
 
   switchChipAgent(agentId: string) {

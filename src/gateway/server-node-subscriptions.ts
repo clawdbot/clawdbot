@@ -11,8 +11,6 @@ type NodeSendEventFn = (opts: {
   payloadJSON?: SerializedEventPayload | null;
 }) => void | Promise<unknown>;
 
-type NodeListConnectedFn = () => Array<{ nodeId: string; pairingGeneration?: string }>;
-
 type NodeSubscriptionManager = {
   subscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
   unsubscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
@@ -34,13 +32,6 @@ type NodeSubscriptionManager = {
     payload: unknown,
     sendEvent?: NodeSendEventFn | null,
   ) => Promise<void>;
-  sendToAllConnected: (
-    event: string,
-    payload: unknown,
-    listConnected?: NodeListConnectedFn | null,
-    sendEvent?: NodeSendEventFn | null,
-  ) => Promise<void>;
-  clear: () => void;
 };
 
 /** Manages node subscriptions to gateway session events. */
@@ -230,39 +221,6 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     );
   };
 
-  const sendToAllConnected = async (
-    event: string,
-    payload: unknown,
-    listConnected?: NodeListConnectedFn | null,
-    sendEvent?: NodeSendEventFn | null,
-  ) => {
-    if (!sendEvent || !listConnected) {
-      return;
-    }
-    const payloadJSON = toPayloadJSON(payload);
-    if (payloadJSON === undefined) {
-      return;
-    }
-    await settleFanout(
-      listConnected().map(
-        (node) => () =>
-          node.pairingGeneration
-            ? sendEvent({
-                nodeId: node.nodeId,
-                pairingGeneration: node.pairingGeneration,
-                event,
-                payloadJSON,
-              })
-            : undefined,
-      ),
-    );
-  };
-
-  const clear = () => {
-    nodeSubscriptions.clear();
-    sessionSubscribers.clear();
-  };
-
   return {
     subscribe,
     unsubscribe,
@@ -270,7 +228,5 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     updatePairingGeneration,
     sendToSession,
     sendToAllSubscribed,
-    sendToAllConnected,
-    clear,
   };
 }

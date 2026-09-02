@@ -71,12 +71,12 @@ struct OpenClawApp: App {
     var body: some Scene {
         Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
             SettingsRootView(state: self.state, updater: self.delegate.updaterController)
-                .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
                 .environment(self.tailscaleService)
                 .background(SettingsWindowOpenRegistrar())
         }
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
+        // Keep this a preferred size so the content can fit smaller displays.
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
         .commands {
@@ -427,6 +427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
+        // AppKit will not tear down onboarding while its sheet remains attached.
+        // Retire it before terminateLater starts the asynchronous cleanup loop.
+        OnboardingController.shared.close()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()

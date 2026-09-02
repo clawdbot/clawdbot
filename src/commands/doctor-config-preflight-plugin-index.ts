@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -23,10 +24,37 @@ export type DoctorConfigPreflightPluginSnapshotRead = {
 
 type MeasurePreflightStep = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
-function throwPluginRegistryPersistenceFailed(reason: string): never {
+function throwPluginRegistryPersistenceFailed(
+  reason: string,
+  repair = 'Run "openclaw doctor --fix" and retry.',
+): never {
   throw new Error(
-    `OpenClaw refreshed the plugin registry but could not verify the persisted replacement (${reason}); refusing to write the migration checkpoint. Run "openclaw doctor --fix" and retry.`,
+    `OpenClaw refreshed the plugin registry but could not verify the persisted replacement (${reason}); refusing to write the migration checkpoint. ${repair}`,
   );
+}
+
+function formatPluginRegistryDifferences(
+  snapshot: PluginMetadataSnapshot | undefined,
+): string | undefined {
+  const differences = new Map(
+    snapshot?.registryDiagnostics
+      .flatMap((diagnostic) => diagnostic.differences ?? [])
+      .map((difference) => [JSON.stringify(difference), difference] as const),
+  );
+  if (differences.size === 0) {
+    return undefined;
+  }
+  return [...differences.values()]
+    .toSorted((left, right) =>
+      [left.pluginId, left.persistedSource, left.derivedSource]
+        .join("\0")
+        .localeCompare([right.pluginId, right.persistedSource, right.derivedSource].join("\0")),
+    )
+    .map(
+      (difference) =>
+        `${sanitizeTerminalText(difference.pluginId)} (persisted source: ${JSON.stringify(difference.persistedSource)}; derived source: ${JSON.stringify(difference.derivedSource)})`,
+    )
+    .join(", ");
 }
 
 export async function readDoctorConfigPreflightSnapshot(params: {
@@ -113,10 +141,12 @@ export async function persistRefreshedPluginIndex(params: {
     const diagnosticCodes = persistedPluginMetadataSnapshot?.registryDiagnostics.map(
       (diagnostic) => diagnostic.code,
     );
+    const differences = formatPluginRegistryDifferences(persistedPluginMetadataSnapshot);
     throwPluginRegistryPersistenceFailed(
       `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"}${
-        diagnosticCodes?.length ? `; diagnostics: ${diagnosticCodes.join(", ")}` : ""
-      }`,
+        differences ? `; differences: ${differences}` : ""
+      }${diagnosticCodes?.length ? `; diagnostics: ${diagnosticCodes.join(", ")}` : ""}`,
+      'Stop plugin package changes, run "openclaw plugins registry --refresh", then retry.',
     );
   }
   return persistedSnapshotRead;

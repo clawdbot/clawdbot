@@ -72,6 +72,40 @@ describe("resolveCliExecutionAuthProfileId", () => {
     ).toBe(authProfileId);
   });
 
+  it("forwards only automatic Claude profiles owned by Claude CLI", () => {
+    mocks.profiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+    mocks.order.push("anthropic:default");
+
+    expect(
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+      }),
+    ).toBeUndefined();
+
+    mocks.profiles["claude-cli:work"] = {
+      type: "api_key",
+      provider: "claude-cli",
+      key: "test-claude-key",
+    };
+    mocks.order.push("claude-cli:work");
+
+    expect(
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+      }),
+    ).toBe("claude-cli:work");
+  });
+
   it("rejects an explicitly selected profile from another provider", () => {
     mocks.profiles["openai:work"] = {
       type: "api_key",

@@ -92,6 +92,10 @@
           "id": "openclaw-qqbot",
           "label": "QQ Bot"
         },
+        "setupFeatures": {
+          "configPromotion": "preserve-root"
+        },
+        "legacyNpmPackageNames": ["@openclaw/qqbot"],
         "contracts": {
           "tools": ["qqbot_platform_api", "qqbot_remind"]
         },
@@ -238,9 +242,9 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-connect/openclaw-qqbot@2.0.1",
+          "npmSpec": "@tencent-connect/openclaw-qqbot@2.0.3",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q=="
+          "expectedIntegrity": "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA=="
         }
       }
     },
@@ -276,9 +280,9 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.6",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.8",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-qw9k3PLTiMWGNjjsknHgcTManH1w4j+Ji1ArWIaYLKCq3aFRsVwcqnPi127bvOoVMJGW4dbyJ8NECEMgoO+iRw==",
+          "expectedIntegrity": "sha512-hhO9prUQwzfSpIL6XGWazRsxNs89K+Mis3iQW6a8eum4AIDxOUiTFMg4nlNVD/au0SjAx5CcJjo3KYWZqGpgQA==",
           "minHostVersion": ">=2026.5.12"
         }
       }

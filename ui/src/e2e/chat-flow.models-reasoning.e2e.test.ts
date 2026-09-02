@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { t } from "../i18n/lib/translate.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -197,24 +198,20 @@ suite.define(() => {
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Default");
 
-      const remoteChange = {
-        ...session,
-        permissionMode: "read-only",
-        reason: "patch",
-        sessionKey: session.key,
+      const publishRemoteChange = async (permissionModePending: boolean, updatedAt: number) => {
+        const row = { ...session, permissionMode: "read-only", permissionModePending, updatedAt };
+        // Event-triggered roster refreshes must describe the same remote change.
+        await gateway.setMethodResponse("sessions.list", chatSessionListResponse([row]));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...row,
+          reason: "patch",
+          sessionKey: session.key,
+        });
       };
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...remoteChange,
-        permissionModePending: true,
-        updatedAt: 5,
-      });
+      await publishRemoteChange(true, 5);
       await expect.poll(() => trigger.textContent()).toContain("Applying permissions");
       expect(await trigger.isEnabled()).toBe(false);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...remoteChange,
-        permissionModePending: false,
-        updatedAt: 6,
-      });
+      await publishRemoteChange(false, 6);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain(
@@ -484,7 +481,10 @@ suite.define(() => {
         },
       ]);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
+        : undefined;
       if (artifactDir) {
         await menu.screenshot({
           animations: "disabled",
@@ -682,7 +682,10 @@ suite.define(() => {
   });
 
   it("shows one canonical default model with matching inherited reasoning", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -810,6 +813,65 @@ suite.define(() => {
       }
 
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("does not reuse catalog reasoning for a different session runtime", async () => {
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.runtime-reasoning", artifactDirParent)
+      : undefined;
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:codex-luna";
+    await installMockGateway(page, {
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+          agentRuntime: { id: "openclaw", source: "model" },
+          thinkingLevels: ["max", "ultra"].map((id) => ({ id, label: id })),
+          thinkingDefault: "ultra",
+        },
+      ],
+      sessionKey,
+      sessions: [
+        {
+          key: sessionKey,
+          kind: "direct",
+          label: "Codex Luna",
+          model: "gpt-5.6-luna",
+          modelProvider: "openai",
+          agentRuntime: { id: "codex", source: "session-key" },
+          updatedAt: 1,
+        },
+      ],
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const effortSelect = pane.locator('[data-chat-thinking-select="true"]');
+      await effortSelect.click();
+      const thinkingSlider = pane.locator('[data-chat-thinking-slider="true"]');
+      await thinkingSlider.waitFor({ state: "visible" });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/codex-luna-reasoning.png`, fullPage: true });
+      }
+
+      expect(await thinkingSlider.getAttribute("data-chat-thinking-values")).not.toContain("ultra");
+      expect(await effortSelect.getAttribute("data-chat-thinking-value")).not.toBe("ultra");
     } finally {
       await suite.closeBrowserContext(context);
     }

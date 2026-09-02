@@ -1463,7 +1463,7 @@ function restoreAuthoredAgentRoster(value: unknown, rootAuthoredConfig: unknown)
     : next;
 }
 
-function projectAuthoredAgentRosterForCanonicalIncludes(params: {
+export function projectAuthoredAgentRosterForWrite(params: {
   rootAuthoredConfig: unknown;
   sourceConfigBeforeMigrations?: unknown;
 }): unknown {
@@ -1536,7 +1536,7 @@ export function resolvePersistCandidateForWrite(params: {
     );
   }
   const projectedAuthoredRoster = persistCanonicalRoster
-    ? projectAuthoredAgentRosterForCanonicalIncludes({
+    ? projectAuthoredAgentRosterForWrite({
         rootAuthoredConfig,
         sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
       })

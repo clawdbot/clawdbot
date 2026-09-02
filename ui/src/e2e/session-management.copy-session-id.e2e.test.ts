@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -6,7 +7,6 @@ import {
   controlUiSessionUrl,
   installMockGateway,
   openSessionMenuSubmenu,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -54,7 +54,7 @@ suite.define(() => {
       await openSessionMenuSubmenu(page, "Copy");
       const copyItem = menuHost.getByRole("menuitem", { name: "Session ID", exact: true });
       await expect.poll(() => copyItem.count()).toBe(1);
-      await captureUiProof(page, "copy-session-id-menu.png");
+      await captureUiProof(suite, page, "copy-session-id-menu.png");
 
       await activateSelfRemovingControl(copyItem);
 

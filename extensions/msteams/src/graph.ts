@@ -187,6 +187,8 @@ export async function fetchAllGraphPages<T>(params: {
   maxPages?: number;
   /** Stop pagination early when this predicate returns true. */
   findOne?: (item: T) => boolean;
+  /** Find-only callers can skip retaining every traversed page. */
+  collectItems?: boolean;
 }): Promise<PaginatedResult<T>> {
   const maxPages = params.maxPages ?? 50;
   const items: T[] = [];
@@ -201,15 +203,13 @@ export async function fetchAllGraphPages<T>(params: {
 
     const pageItems = res.value ?? [];
 
-    if (params.findOne) {
-      const match = pageItems.find(params.findOne);
-      if (match) {
-        items.push(...pageItems);
-        return { items, truncated: false, found: match };
-      }
+    const match = params.findOne ? pageItems.find(params.findOne) : undefined;
+    if (params.collectItems !== false) {
+      items.push(...pageItems);
     }
-
-    items.push(...pageItems);
+    if (match) {
+      return { items, truncated: false, found: match };
+    }
 
     // @odata.nextLink is an absolute URL; strip the Graph root to get a relative path
     const rawNext: string | undefined = res["@odata.nextLink"];

@@ -233,6 +233,7 @@ private fun DrawScope.drawMouth(pose: MascotPose) {
         size = Size(radiusX * 2f, radiusY * 2f),
       )
     }
+
     pose.mouthOpen > 0.05 -> {
       val grin =
         Path().apply {
@@ -242,6 +243,7 @@ private fun DrawScope.drawMouth(pose: MascotPose) {
         }
       drawPath(grin, EyeDark)
     }
+
     kotlin.math.abs(pose.mouthCurve) > 0.05 -> {
       val curve =
         Path().apply {
@@ -298,7 +300,8 @@ private fun DrawScope.drawHardHat(
 
 private fun DrawScope.drawEffect(pose: MascotPose) {
   when (pose.effect) {
-    MascotEffect.None -> Unit
+    MascotEffect.None -> {}
+
     MascotEffect.Sparkles -> {
       repeat(6) { index ->
         val phase = (pose.effectPhase + index * 0.37) % 1.0
@@ -318,6 +321,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
         }
       }
     }
+
     MascotEffect.Zzz -> {
       repeat(3) { index ->
         val phase = (pose.effectPhase + index * 0.33) % 1.0
@@ -335,6 +339,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
         }
       }
     }
+
     MascotEffect.Sparks -> {
       repeat(5) { index ->
         val rawPhase = pose.effectPhase - index * 0.025
@@ -356,6 +361,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
         }
       }
     }
+
     MascotEffect.Sweat -> {
       val alpha = effectBell(pose.effectPhase)
       if (alpha > 0.02) {

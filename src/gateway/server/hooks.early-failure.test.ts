@@ -228,13 +228,6 @@ describe("gateway hook early-failure recovery", () => {
       events: 0,
     },
     {
-      name: "does not duplicate message-tool delivery",
-      outcome: { status: "ok", delivered: true, deliveryAttempted: true },
-      level: "info",
-      deliver: true,
-      events: 0,
-    },
-    {
       name: "leaves missing delivery facts unknown for deliver false",
       outcome: { status: "ok" },
       level: "info",

@@ -37,6 +37,7 @@ import {
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  hasCodexMcpToolApprovalOverrides,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
@@ -226,9 +227,16 @@ export async function startCodexAttemptThread(params: {
           resolvedPluginPolicy,
           enabledPluginConfigKeys,
         } = pluginStartupPolicy;
-        const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true ||
+          params.computerUseConfig.enabled ||
+          (params.nativeToolSurfaceEnabled &&
+            params.configuredMcpOwnershipVersion !== 1 &&
+            hasCodexMcpToolApprovalOverrides(
+              params.config?.mcp?.servers,
+              params.bundleMcpThreadConfig.userStaticServerNames,
+              params.bundleMcpThreadConfig.configPatch?.mcp_servers,
+            ));
         pluginAppServer = mcpElicitationDelegationRequired
           ? {
               ...params.appServer,
@@ -613,10 +621,7 @@ export async function startCodexAttemptThread(params: {
               } else if (
                 !isCodexAppServerStartSelectionChangedError(startupAttemptError) &&
                 (shouldClearSharedClientAfterStartupRace(startupAttemptError) ||
-                  shouldClearSharedClientAfterStartupFailure({
-                    error: startupAttemptError,
-                    spawnedBy: params.spawnedBy,
-                  }))
+                  shouldClearSharedClientAfterStartupFailure(startupAttemptError, params.spawnedBy))
               ) {
                 if (startupClientForAbandonedRequestCleanup === startupClient) {
                   startupClientForAbandonedRequestCleanup = undefined;
@@ -698,10 +703,7 @@ export async function startCodexAttemptThread(params: {
     } else if (
       !isCodexAppServerStartSelectionChangedError(error) &&
       (shouldClearSharedClientAfterStartupRace(error) ||
-        shouldClearSharedClientAfterStartupFailure({
-          error,
-          spawnedBy: params.spawnedBy,
-        }))
+        shouldClearSharedClientAfterStartupFailure(error, params.spawnedBy))
     ) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
@@ -718,12 +720,15 @@ function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
   return isCodexAppServerStartupError(error) || isCodexAppServerRequestTimeoutError(error);
 }
 
-function shouldClearSharedClientAfterStartupFailure(params: {
-  error: unknown;
-  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
-}): boolean {
-  if (isCodexAppServerOverloadError(params.error)) {
-    return false;
-  }
-  return isCodexAppServerBrokenPipeError(params.error) || !params.spawnedBy;
+function shouldClearSharedClientAfterStartupFailure(
+  error: unknown,
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
+): boolean {
+  // Model-independent preflights preserve healthy conversations. A handoff with
+  // an uncertain native write owns its retirement at the resume boundary.
+  return (
+    !isCodexAppServerOverloadError(error) &&
+    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+  );
 }

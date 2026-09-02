@@ -55,6 +55,9 @@ recovery.
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
+Resize the Settings window to fit your display. Long settings panes scroll
+independently of the sidebar, keeping permission and capability controls reachable.
+
 ## Updates
 
 The dashboard update card names what the app will update:

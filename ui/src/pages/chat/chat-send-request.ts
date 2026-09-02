@@ -10,8 +10,8 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
-import type { ChatState } from "./chat-history.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
   state: ChatState,

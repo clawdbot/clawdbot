@@ -77,7 +77,11 @@ export function collectPluginCapabilityConsentDiagnostics(params: {
   }
   const currentAcceptanceByOwner = new Map<string, boolean>();
   for (const plugin of params.index.plugins) {
-    if (!plugin.enabled || plugin.origin === "bundled") {
+    if (
+      !plugin.enabled ||
+      plugin.origin === "bundled" ||
+      params.manifests.get(plugin.pluginId)?.trustedOfficialInstall
+    ) {
       continue;
     }
     const installOwner = resolveInstalledPluginIndexInstallOwner(plugin);
@@ -120,6 +124,7 @@ function buildPluginRecordFromInstalledIndex(
     ...(manifest?.description ? { description: manifest.description } : {}),
     format,
     ...(bundleFormat ? { bundleFormat } : {}),
+    bundleCapabilities: manifest?.bundleCapabilities,
     ...(manifest?.kind ? { kind: manifest.kind } : {}),
     source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,

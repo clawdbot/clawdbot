@@ -5,7 +5,7 @@
   "description": "OpenClaw xAI plugin",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.16",
+    "typebox": "1.3.17",
     "ws": "8.21.3"
   },
   "devDependencies": {

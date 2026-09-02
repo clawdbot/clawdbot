@@ -26,6 +26,8 @@ import { stringEnum } from "../schema/typebox.js";
 import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 
 export type SystemAgentToolOptions = {
+  /** Verified inference owner, distinct from the internal OpenClaw execution agent. */
+  agentId?: string;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
   /** Delegated proposals require operator UI approval, never a chat reply. */
@@ -482,7 +484,13 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       try {
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
-          deps: { setupSurface: options.surface },
+          deps: {
+            setupSurface: options.surface,
+            loadOverview: async () =>
+              (await import("../../system-agent/overview.js")).loadSystemAgentOverview({
+                agentId: options.agentId,
+              }),
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

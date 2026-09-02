@@ -268,7 +268,7 @@ struct MacNodeRuntimeTests {
             if let actError {
                 throw actError
             }
-            return OpenClawComputerActResult(ok: true, cursorX: params.x ?? 0, cursorY: params.y ?? 0)
+            return OpenClawComputerActResult(ok: true)
         }
 
         func releaseHeldInput(lifecycleGeneration: UInt64) async {
@@ -662,7 +662,8 @@ struct MacNodeRuntimeTests {
         let payloadJSON = try #require(response.payloadJSON)
         let result = try JSONDecoder().decode(OpenClawComputerActResult.self, from: Data(payloadJSON.utf8))
         #expect(result.ok == true)
-        #expect(result.cursorX == 12)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
+        #expect(object.keys.sorted() == ["ok"])
     }
 
     @Test func `provider selection owns both snapshot and action without cross-provider fallback`() async throws {

@@ -872,7 +872,7 @@ export function readLatestDiagnosticStabilityBundleSync(
   }
 }
 
-function pruneOldBundles(dir: string, retention: number): void {
+function pruneOldBundles(dir: string, retention: number, retainedFile: string): void {
   if (!Number.isFinite(retention) || retention < 1) {
     return;
   }
@@ -890,9 +890,10 @@ function pruneOldBundles(dir: string, retention: number): void {
         }
         return { file, mtimeMs };
       })
+      .filter((entry) => entry.file !== retainedFile)
       .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file));
 
-    for (const entry of entries.slice(retention)) {
+    for (const entry of entries.slice(retention - 1)) {
       try {
         fs.unlinkSync(entry.file);
       } catch {
@@ -946,7 +947,7 @@ export function writeDiagnosticStabilityBundleSync(
       mode: 0o600,
       tempPrefix: ".openclaw-stability",
     });
-    pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);
+    pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION, file);
     return { status: "written", path: file, bundle };
   } catch (error) {
     return { status: "failed", error };

@@ -1,6 +1,6 @@
 // QA Lab mock provider output event builders.
 
-import type { StreamEvent } from "./mock-openai-contracts.js";
+import { buildCompletedResponseEvent, type StreamEvent } from "./mock-openai-contracts.js";
 import { buildMockFunctionCall } from "./mock-openai-tooling.js";
 
 export function buildFailedResponseEvents(): StreamEvent[] {
@@ -275,11 +275,13 @@ function appendAssistantMessageEvents(
       text: spec.text,
     });
   }
+  const item = buildAssistantOutputItem(spec);
   events.push({
     type: "response.output_item.done",
     output_index: outputIndex,
-    item: buildAssistantOutputItem(spec),
+    item,
   });
+  return item;
 }
 
 export function buildAssistantThenToolCallEvents(
@@ -288,9 +290,8 @@ export function buildAssistantThenToolCallEvents(
   args: Record<string, unknown>,
 ): StreamEvent[] {
   const call = buildMockFunctionCall(name, args);
-  const message = buildAssistantOutputItem(spec);
   const events: StreamEvent[] = [];
-  appendAssistantMessageEvents(events, spec, 0);
+  const message = appendAssistantMessageEvents(events, spec, 0);
   events.push({
     type: "response.output_item.added",
     output_index: 1,
@@ -313,15 +314,7 @@ export function buildAssistantThenToolCallEvents(
     output_index: 1,
     item: call.item,
   });
-  events.push({
-    type: "response.completed",
-    response: {
-      id: call.responseId,
-      status: "completed",
-      output: [message, call.item],
-      usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
-    },
-  });
+  events.push(buildCompletedResponseEvent(call.responseId, [message, call.item], 32));
   return events;
 }
 
@@ -337,24 +330,27 @@ export function buildAssistantEvents(
           },
         ]
       : specsOrText;
-  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
-  const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
-
-  for (const [outputIndex, { spec }] of renderedSpecs.entries()) {
-    appendAssistantMessageEvents(events, spec, outputIndex);
-  }
-
-  events.push({
-    type: "response.completed",
-    response: {
-      id: "resp_mock_msg_1",
-      status: "completed",
-      output,
-      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
-    },
-  });
+  const output = specs.map((spec, outputIndex) =>
+    appendAssistantMessageEvents(events, spec, outputIndex),
+  );
+  events.push(buildCompletedResponseEvent("resp_mock_msg_1", output, 24));
   return events;
+}
+
+export function buildStreamingFinalAnswerEvents(
+  id: string,
+  text: string,
+  previewText = text,
+): StreamEvent[] {
+  return buildAssistantEvents([
+    {
+      id,
+      phase: "final_answer",
+      streamDeltas: splitMockStreamingText(previewText),
+      text,
+    },
+  ]);
 }
 
 export function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
@@ -378,15 +374,7 @@ export function buildReasoningOnlyEvents(summaryText: string, id: string): Strea
       output_index: 0,
       item: reasoningItem,
     },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [reasoningItem],
-        usage: { input_tokens: 64, output_tokens: 8, total_tokens: 72 },
-      },
-    },
+    buildCompletedResponseEvent(`resp_${id}`, [reasoningItem], 8),
   ];
 }
 
@@ -400,12 +388,7 @@ export function buildReasoningAndAssistantEvents(params: {
     id: params.reasoningId,
     summary: [],
   } as const;
-  const answerItem = buildAssistantOutputItem({
-    id: params.answerId ?? "msg_mock_reasoned_answer",
-    phase: "final_answer",
-    text: params.answerText,
-  });
-  return [
+  const events: StreamEvent[] = [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -420,45 +403,19 @@ export function buildReasoningAndAssistantEvents(params: {
       output_index: 0,
       item: reasoningItem,
     },
+  ];
+  const answerItem = appendAssistantMessageEvents(
+    events,
     {
-      type: "response.output_item.added",
-      output_index: 1,
-      item: {
-        type: "message",
-        id: answerItem.id,
-        role: "assistant",
-        phase: "final_answer",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
-      delta: params.answerText,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
+      id: params.answerId ?? "msg_mock_reasoned_answer",
+      phase: "final_answer",
+      streamDeltas: [params.answerText],
       text: params.answerText,
     },
-    {
-      type: "response.output_item.done",
-      output_index: 1,
-      item: answerItem,
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${params.reasoningId}`,
-        status: "completed",
-        output: [reasoningItem, answerItem],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
-  ];
+    1,
+  );
+  events.push(
+    buildCompletedResponseEvent(`resp_${params.reasoningId}`, [reasoningItem, answerItem], 16),
+  );
+  return events;
 }

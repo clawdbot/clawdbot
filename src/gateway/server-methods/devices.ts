@@ -611,11 +611,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
     const rotated = await rotateDeviceToken({
       deviceId,
       role,
       scopes,
-      callerScopes: authz.callerScopes,
+      callerScopes,
     });
     if (!rotated.ok) {
       logDeviceTokenRotationDenied({
@@ -734,7 +736,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const revoked = await revokeDeviceToken({ deviceId, role, callerScopes: authz.callerScopes });
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
+    const revoked = await revokeDeviceToken({ deviceId, role, callerScopes });
     if (!revoked.ok) {
       logDeviceTokenRevocationDenied({
         log: context.logGateway,

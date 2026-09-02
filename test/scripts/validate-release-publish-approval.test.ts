@@ -135,22 +135,17 @@ function runAndroidApproval({
     { encoding: "utf8", env },
   );
   expect(producer.status, producer.stderr).toBe(0);
-  const dispatchFunction = workflowStep(
-    ".github/workflows/openclaw-release-publish.yml",
-    "Dispatch publish workflows",
-  ).match(/^promote_android_release_asset\(\) \{[\s\S]*?^\}/m)?.[0];
-  expect(dispatchFunction).toBeDefined();
   const dispatch = spawnSync(
     "bash",
     [
       "-c",
       `
 set -euo pipefail
+source scripts/lib/release-publish-children.sh
 is_android_release() { return 0; }
 verify_android_release_asset_contract() { return 1; }
 dispatch_workflow_at_ref() { printf '%s\n' "$@" > "$RUNNER_TEMP/dispatch-args"; echo 456; }
 wait_for_run() { touch "$RUNNER_TEMP/android-waited"; return 0; }
-${dispatchFunction}
 promote_android_release_asset
 `,
     ],

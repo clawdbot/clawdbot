@@ -57,7 +57,7 @@ suite.define(() => {
 
       const alert = page.locator('.agent-chat__talk-status[role="alert"]');
       await expect.poll(() => alert.textContent()).toContain("Realtime WebRTC setup failed (502)");
-      await captureWebRtcSdpAlertProof(page, "01-http-failure-alert.png");
+      await captureWebRtcSdpAlertProof(suite, page, "01-http-failure-alert.png");
       await expect
         .poll(() =>
           page.evaluate(
@@ -109,7 +109,7 @@ suite.define(() => {
       await expect
         .poll(() => alert.textContent())
         .toContain("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
-      await captureWebRtcSdpAlertProof(page, "02-oversized-answer-alert.png");
+      await captureWebRtcSdpAlertProof(suite, page, "02-oversized-answer-alert.png");
       await expect
         .poll(() =>
           page.evaluate(

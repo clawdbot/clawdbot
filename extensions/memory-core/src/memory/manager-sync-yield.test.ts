@@ -289,7 +289,7 @@ describe("embedding cache seed responsiveness", () => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
       sourceDb.exec("BEGIN");
-      for (let index = 0; index < 1_001; index += 1) {
+      for (let index = 0; index < 101; index += 1) {
         insert.run("test", "model", "key", `hash-${index}`, "[0.5]", 1, index);
       }
       sourceDb.exec("COMMIT");
@@ -320,9 +320,9 @@ describe("embedding cache seed responsiveness", () => {
       expect(duringYield).toEqual({
         sourceInTransaction: false,
         targetInTransaction: false,
-        rows: 1_000,
+        rows: 100,
       });
-      expect(countCacheRows(targetDb)).toBe(1_001);
+      expect(countCacheRows(targetDb)).toBe(101);
     } finally {
       sourceDb.close();
       targetDb.close();

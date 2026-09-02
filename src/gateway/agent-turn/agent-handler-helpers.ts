@@ -94,6 +94,7 @@ export function respondUnavailableAgentSessionForKey(params: {
   const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     clone: false,
+    projection: "list",
   });
   if (
     respondDeletedAgentSession({

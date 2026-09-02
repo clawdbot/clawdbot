@@ -1069,7 +1069,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionId: first.sessionId,
         sessionKey: first.sessionKey!,
         storePath: first.storePath,
-        sessionStore: first.sessionStore!,
+        sessionStore: {},
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result: {
@@ -1141,52 +1141,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-no-usage";
-      const sessionId = "test-session";
+  it.each([21_225, 0])(
+    "marks previous totalTokens=%i stale without provider usage (#67667)",
+    async (totalTokens) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const cfg = {} as OpenClawConfig;
+        const sessionKey = "agent:main:explicit:test-no-usage";
+        const sessionId = "test-session";
 
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          totalTokens: 21225,
-          totalTokensFresh: true,
-        },
-      };
-      await seedSessionStore(storePath, sessionStore);
-
-      const result: EmbeddedAgentRunResult = {
-        meta: {
-          durationMs: 500,
-          agentMeta: {
+        const sessionStore: Record<string, SessionEntry> = {
+          [sessionKey]: {
             sessionId,
-            provider: "minimax",
-            model: "MiniMax-M2.7",
+            updatedAt: 1,
+            totalTokens,
+            totalTokensFresh: true,
           },
-        },
-      };
+        };
+        await seedSessionStore(storePath, sessionStore);
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "minimax",
-        defaultModel: "MiniMax-M2.7",
-        result,
+        const result: EmbeddedAgentRunResult = {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+            },
+          },
+        };
+
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "minimax",
+          defaultModel: "MiniMax-M2.7",
+          result,
+        });
+
+        expect(sessionStore[sessionKey]?.totalTokens).toBe(totalTokens);
+        expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+
+        const persisted = loadPersistedSessionStore(storePath);
+        expect(persisted[sessionKey]?.totalTokens).toBe(totalTokens);
+        expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
       });
-
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
-      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
-
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(persisted[sessionKey]?.totalTokens).toBe(21225);
-      expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
-    });
-  });
+    },
+  );
 
   it("persists estimated context budget status without marking stale usage fresh", async () => {
     await withTempSessionStore(async ({ storePath }) => {
@@ -3222,6 +3225,74 @@ describe("consumeCliSessionForkInStore", () => {
         authEpoch: "epoch-1",
         authEpochVersion: 3,
       });
+    });
+  });
+
+  it.each(
+    (["consume", "restore", "successor"] as const).flatMap((operation) =>
+      (
+        ["rebound", "deleted", "session-replaced", "lifecycle-replaced", "writer-replaced"] as const
+      ).map((durableState) => ({ durableState, operation })),
+    ),
+  )("rejects a stale $operation after the durable row is $durableState", async (testCase) => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const { durableState, operation } = testCase;
+      const sessionKey = `agent:main:cli-fork-cas:${operation}`;
+      const sourceBinding = {
+        sessionId: "claude-source-session",
+        forceReuse: true,
+        ...(operation === "consume" ? { forkNextResume: true as const } : {}),
+      };
+      const cached: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        lifecycleRevision: "source-lifecycle",
+        activeWriterRunId: "source-writer",
+        cliSessionBindings: { "claude-cli": sourceBinding },
+      };
+      const rebound: SessionEntry = {
+        ...cached,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-other-session", forceReuse: true },
+        },
+      };
+      const sessionStore = { [sessionKey]: cached };
+      const ownerReplacement =
+        durableState === "session-replaced"
+          ? { sessionId: "openclaw-session-2" }
+          : durableState === "lifecycle-replaced"
+            ? { lifecycleRevision: "replacement-lifecycle" }
+            : durableState === "writer-replaced"
+              ? { activeWriterRunId: "replacement-writer" }
+              : {};
+      const durableEntry =
+        durableState === "rebound" ? rebound : { ...cached, ...ownerReplacement };
+      if (durableState !== "deleted") {
+        await seedSessionStore(storePath, { [sessionKey]: durableEntry });
+      }
+
+      const common = {
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      };
+      const result =
+        operation === "consume"
+          ? await consumeCliSessionForkInStore(common)
+          : operation === "restore"
+            ? await restoreCliSessionForkInStore(common)
+            : await persistCliSessionForkSuccessorInStore({
+                ...common,
+                successorCliSessionId: "claude-successor-session",
+              });
+
+      expect(result).toBeUndefined();
+      expect(sessionStore[sessionKey]).toEqual(cached);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(
+        durableState === "deleted" ? undefined : expect.objectContaining(durableEntry),
+      );
     });
   });
 });

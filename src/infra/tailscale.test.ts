@@ -17,6 +17,17 @@ const {
 const tailscaleBin = "tailscale";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function useTailscaleSudoFixture(mode: "password" | "route-error" | "conflict") {
+  const fixture = fileURLToPath(
+    new URL("../../test/fixtures/tailscale-sudo-fixture.mjs", import.meta.url),
+  );
+  const fakeBin = tempDirs.make("openclaw-tailscale-bin-");
+  symlinkSync(fixture, path.join(fakeBin, "sudo"));
+  process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
+  process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+  process.env.OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE = mode;
+}
+
 function expectExecCall(
   exec: ReturnType<typeof vi.fn>,
   callNumber: number,
@@ -45,6 +56,7 @@ describe("tailscale helpers", () => {
     envSnapshot = captureEnv([
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
+      "OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE",
       "NODE_ENV",
       "PATH",
       "VITEST",
@@ -217,7 +229,7 @@ describe("tailscale helpers", () => {
         new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
       );
 
-      const claim = await claimTailscaleRoute("serve", 18789);
+      const claim = await claimTailscaleRoute("serve", 18789, 18789, vi.fn());
       expect(claim.isActive()).toBe(true);
 
       await claim.stop();
@@ -227,17 +239,33 @@ describe("tailscale helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "names the operator fix when the sudo fallback cannot run without a TTY",
+    async () => {
+      useTailscaleSudoFixture("password");
+
+      await expect(claimTailscaleRoute("serve", 18791, 18791, vi.fn())).rejects.toThrow(
+        /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/,
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an operational error from an authorized sudo retry",
+    async () => {
+      useTailscaleSudoFixture("route-error");
+
+      await expect(claimTailscaleRoute("funnel", 18792, 18792, vi.fn())).rejects.toMatchObject({
+        message: "Funnel is not enabled on your tailnet.",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "preserves an ownership conflict from the privileged route retry",
     async () => {
-      const fixture = fileURLToPath(
-        new URL("../../test/fixtures/tailscale-sudo-conflict-fixture.mjs", import.meta.url),
-      );
-      const fakeBin = tempDirs.make("openclaw-tailscale-bin-");
-      symlinkSync(fixture, path.join(fakeBin, "sudo"));
-      process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
-      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+      useTailscaleSudoFixture("conflict");
 
-      await expect(claimTailscaleRoute("serve", 18789)).rejects.toThrow(
+      await expect(claimTailscaleRoute("serve", 18789, 18789, vi.fn())).rejects.toThrow(
         "ownership OpenClaw cannot prove; it was not modified",
       );
     },
@@ -263,7 +291,7 @@ describe("tailscale helpers", () => {
           }
         });
       });
-      const claimPromise = claimTailscaleRoute("funnel", 18790);
+      const claimPromise = claimTailscaleRoute("funnel", 18790, 18790, vi.fn());
       void claimPromise.catch(() => undefined);
       await markerWritten;
       expect(existsSync(marker)).toBe(true);

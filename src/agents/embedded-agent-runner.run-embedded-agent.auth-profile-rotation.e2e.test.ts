@@ -7,7 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
-import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
@@ -116,7 +116,7 @@ const originalFetch = globalThis.fetch;
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  runEmbeddedAgent = wrapRunWithTestAdmission(
+  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =

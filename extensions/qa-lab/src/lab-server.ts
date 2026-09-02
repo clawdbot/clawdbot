@@ -1,6 +1,6 @@
 // Qa Lab plugin module implements lab server behavior.
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -85,8 +85,12 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
-  if (writeQaRequestBodyLimitError(res, error)) {
+async function writeQaLabServerError(
+  req: IncomingMessage,
+  res: Parameters<typeof writeError>[0],
+  error: unknown,
+): Promise<void> {
+  if (await writeQaRequestBodyLimitError(req, res, error)) {
     return;
   }
   if (isQaMalformedJsonBodyError(error)) {
@@ -928,7 +932,7 @@ export async function startQaLabServer(
         }
         res.end(body);
       } catch (error) {
-        writeQaLabServerError(res, error);
+        await writeQaLabServerError(req, res, error);
       }
     });
   });

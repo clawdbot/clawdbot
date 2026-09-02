@@ -312,10 +312,20 @@ is rejected with the relevant config key in the error.
 
 Keep the parent session open in Chat while a swarm is active. The Control UI and
 native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
-between the transcript and composer, rendering each active collector group as one
-dot per child with queued, running, done, or failed state. Accessible labels identify
-each child and status; the Control UI also exposes them as dot tooltips. The widget
-disappears after every group child reaches a terminal state.
+between the transcript and composer.
+
+In the Control UI, each active collector group appears as a card with a completion
+count and phase progress segments. Hover over a card or focus it with the keyboard
+to reveal a list of child names, status icons, and run durations.
+
+Native Android, iOS, and macOS chat surfaces show phase-grouped grids of child
+status markers, capped at 256 markers per phase with an overflow count for additional
+children. Accessible labels identify each child and its queued, running, done, or
+failed status.
+
+All clients present killed and timed-out children as failed. Each group leaves the
+widget when none of its children are queued or running, and the widget disappears
+when no active groups remain.
 
 The session sidebar keeps the normal parent/child tree. Expand the parent row to
 inspect a collector child or open its transcript without losing the swarm hierarchy.

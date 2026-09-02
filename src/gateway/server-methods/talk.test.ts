@@ -8,6 +8,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -17,8 +18,10 @@ import {
 import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -208,7 +211,7 @@ vi.mock("../../talk/client-voice-session.js", async (importOriginal) => {
 
 vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: mocks.chatSend,
-  handleChatSendWithRuntimeTools: mocks.chatSend,
+  handleTrustedInternalChatSend: mocks.chatSend,
 }));
 
 vi.mock("../sessions-resolve.js", () => ({
@@ -267,7 +270,7 @@ function createTalkConfig(apiKey: unknown): OpenClawConfig {
 
 type TalkHandlerCallOptions = {
   params: Record<string, unknown>;
-  respond: ReturnType<typeof vi.fn>;
+  respond: RespondFn;
   context: unknown;
   client?: unknown;
   id?: string;
@@ -277,6 +280,21 @@ async function callTalkHandler(
   method: keyof typeof talkHandlers,
   { params, respond, context, client = { connId: "conn-1" }, id = "1" }: TalkHandlerCallOptions,
 ) {
+  const admission =
+    method === "talk.client.create" ||
+    method === "talk.session.create" ||
+    method === "talk.client.toolCall"
+      ? resolveSessionMutationAuthorization({
+          client: client as GatewayClient,
+          context: context as GatewayRequestContext,
+          method,
+          requestParams: params,
+        })
+      : undefined;
+  if (admission?.error) {
+    respond(false, undefined, admission.error);
+    return;
+  }
   await expectDefined(
     talkHandlers[method],
     `talkHandlers["${method}"] test invariant`,
@@ -285,8 +303,17 @@ async function callTalkHandler(
     params: params as never,
     client: client as never,
     isWebchatConnect: () => false,
-    respond: respond as never,
+    respond,
     context: context as never,
+    // Row creation is mocked here; talk-target.test covers the real post-ensure fence.
+    ...(admission?.authorization
+      ? {
+          sessionMutationAuthorization: {
+            ...admission.authorization,
+            assertTargetCurrent: vi.fn(),
+          },
+        }
+      : {}),
   });
 }
 
@@ -1925,10 +1952,14 @@ describe("talk.session unified handlers", () => {
       defaultModel: "gpt-realtime-default",
       surface: "gateway-relay",
     });
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     const relayCreateInput = mockCallArg(mocks.createTalkRealtimeRelaySession) as Record<
       string,
       unknown
@@ -2097,6 +2128,7 @@ describe("talk.session unified handlers", () => {
       sessionKey: "agent:main:main",
       text: "use the safer plan",
       mode: "steer",
+      assertCurrent: expect.any(Function),
     });
     expectRespondOk(steerRespond, {
       ok: true,
@@ -2173,10 +2205,14 @@ describe("talk.session unified handlers", () => {
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "research",
-      sessionKey: "incident-42",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "research",
+        sessionKey: "agent:research:incident-42",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
   });
 
@@ -2241,6 +2277,7 @@ describe("talk.session unified handlers", () => {
       context: {
         getRuntimeConfig: () =>
           ({
+            agents: { entries: { "voice-agent": {} } },
             talk: {
               realtime: {
                 provider: "openai",
@@ -2258,13 +2295,22 @@ describe("talk.session unified handlers", () => {
         provider,
         providerConfig: { model: "gpt-live-1-codex" },
         model: "gpt-live-1-codex",
-        sessionKey: "agent:voice-agent:main",
+        sessionTarget: expect.objectContaining({
+          agentId: "voice-agent",
+          sessionKey: "agent:voice-agent:main",
+          canonicalKey: "agent:voice-agent:main",
+          storePath: expect.any(String),
+        }),
       }),
     );
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "voice-agent",
-      sessionKey: "agent:voice-agent:main",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "voice-agent",
+        sessionKey: "agent:voice-agent:main",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     expectRespondOk(respond, { relaySessionId: "relay-effective-model" });
   });
 
@@ -2531,6 +2577,7 @@ describe("talk.session unified handlers", () => {
 
   it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
     const createRespond = vi.fn();
+    const config: OpenClawConfig = { agents: { entries: { worker: {} } } };
     await callTalkHandler("talk.session.create", {
       params: {
         mode: "stt-tts",
@@ -2541,7 +2588,7 @@ describe("talk.session unified handlers", () => {
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       respond: createRespond,
       context: {
-        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        getRuntimeConfig: () => config,
       },
     });
 
@@ -2550,7 +2597,7 @@ describe("talk.session unified handlers", () => {
       brain: "agent-consult",
     });
     expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
-      cfg: {},
+      cfg: config,
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
@@ -2600,7 +2647,7 @@ describe("talk.session unified handlers", () => {
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       respond: createRespond,
       context: {
-        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        getRuntimeConfig: () => ({ agents: { entries: { worker: {} } } }),
       },
     });
 
@@ -2792,17 +2839,13 @@ describe("talk.client.toolCall handler", () => {
       params?: Record<string, unknown>;
     };
     expectRecordFields(chatInput.req, { method: "chat.send" });
-    expectRecordFields(chatInput.params, { sessionKey: "main" });
+    expectRecordFields(chatInput.params, { sessionKey: "agent:main:main", agentId: "main" });
     expect(chatInput.params?.message).toContain("What is in this repo?");
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
-    expect(mockCallArg(mocks.chatSend, 0, 1)).toEqual([
-      "read",
-      "web_search",
-      "web_fetch",
-      "x_search",
-      "memory_search",
-      "memory_get",
-    ]);
+    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
+      toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+      transcript: { display: false, excludeFromContext: true },
+    });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
   });
@@ -2927,7 +2970,10 @@ describe("talk.client.toolCall handler", () => {
       thinking: "low",
       fastMode: true,
     });
-    expect(mockCallArg(mocks.chatSend, 0, 1)).toBeUndefined();
+    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
+      toolsAllow: undefined,
+      transcript: { display: false, excludeFromContext: true },
+    });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
@@ -2952,7 +2998,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-1",
       connId: "conn-1",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       runId: "run-voice-1",
       callId: "call-1",
     });
@@ -3026,6 +3072,7 @@ describe("talk.client.toolCall handler", () => {
 describe("talk.client.steer handler", () => {
   const createSteerContext = (ownerConnId = "conn-1") =>
     ({
+      getRuntimeConfig: () => ({}),
       chatAbortControllers: new Map([
         [
           "run-voice-1",
@@ -3033,6 +3080,8 @@ describe("talk.client.steer handler", () => {
             controller: new AbortController(),
             sessionId: "session-active",
             sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             startedAtMs: 1,
             expiresAtMs: Date.now() + 60_000,
             ownerConnId,
@@ -3073,6 +3122,7 @@ describe("talk.client.steer handler", () => {
 
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      runTarget: expect.objectContaining({ runId: "run-voice-1" }),
       text: "use the safer plan",
       mode: "steer",
     });
@@ -3262,7 +3312,8 @@ describe("talk.client.create handler", () => {
         cfg: expect.any(Object),
         agentRuntime: mocks.agentRuntime,
         agentId: "main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
         args: { question: "Check the repository" },
         transcript: [
           { role: "user", text: `2:${"🙂".repeat(799)}` },
@@ -3277,15 +3328,20 @@ describe("talk.client.create handler", () => {
     expect(createInput).not.toHaveProperty("provider");
     expect(createInput).not.toHaveProperty("providers");
     expect(createInput).not.toHaveProperty("transport");
-    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "main",
-    });
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
     expect(mocks.readSessionPreviewItemsFromTranscript).toHaveBeenCalledWith(
       {
         agentId: "main",
         sessionId: "session-main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
+        storePath: expect.any(String),
       },
       16,
       800,
@@ -3559,7 +3615,7 @@ describe("talk.client.create handler", () => {
     });
     expect(chatAbortControllers.get("talk-realtime-consult:gpt-live")).toMatchObject({
       sessionId: "session-main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       agentId: "main",
       ownerConnId: "conn-1",
       controlUiVisible: false,
@@ -3585,7 +3641,8 @@ describe("talk.client.create handler", () => {
       context,
     });
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
+      runTarget: expect.objectContaining({ runId: "talk-realtime-consult:gpt-live" }),
       text: "Use the safer plan",
       mode: "steer",
     });

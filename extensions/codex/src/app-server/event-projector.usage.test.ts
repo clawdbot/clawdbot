@@ -425,7 +425,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
   });
 
-  it("restores exact response usage after recovering a completed assistant timeout", async () => {
+  it("retains output and token counts but invalidates exact context usage on timeout", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -463,15 +463,8 @@ describe("CodexAppServerEventProjector usage projection", () => {
     expect(readAttemptTerminal(timedOut).aborted).toBe(true);
     expect(timedOut.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
 
-    expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
-    const recovered = projector.buildResult(buildEmptyToolTelemetry());
-    expect(readAttemptTerminal(recovered).aborted).toBe(false);
-    expect(readAttemptTerminal(recovered).promptError).toBeNull();
-    expect(recovered.attemptUsage?.contextUsage).toEqual({
-      state: "available",
-      promptTokens: 5,
-      totalTokens: 12,
-    });
+    expect(timedOut.assistantTexts).toEqual(["done"]);
+    expectUsageFields(timedOut.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
   });
 
   it("uses raw assistant response items when turn completion omits items", async () => {

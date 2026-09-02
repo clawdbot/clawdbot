@@ -385,8 +385,9 @@ export async function applyShortTermPromotions(
       ? Math.max(0, Math.floor(options.memoryFileMaxChars))
       : DEFAULT_MEMORY_FILE_MAX_CHARS;
   const consolidationPlan =
-    options.consolidation?.subagent && toAppend.length > 0
+    options.agentId && options.consolidation?.subagent && toAppend.length > 0
       ? await consolidateMemory({
+          agentId: options.agentId,
           subagent: options.consolidation.subagent,
           workspaceDir,
           existingMemory,
