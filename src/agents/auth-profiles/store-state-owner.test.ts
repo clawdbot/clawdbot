@@ -14,6 +14,7 @@ import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   prepareRuntimeAuthProfileStoreSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots,
@@ -324,6 +325,7 @@ describe("explicit auth state ownership", () => {
             config: {},
             authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores),
             authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+            authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
             warnings: [],
             webTools: {
               search: { providerSource: "none", diagnostics: [] },

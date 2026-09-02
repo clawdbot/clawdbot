@@ -107,18 +107,25 @@ function indexesMatch(
   );
 }
 
+/** Freezes prepared process-local facts; worker transfers must use restorePluginMetadataSnapshot. */
+export function finalizePluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+): PluginMetadataSnapshot {
+  freezeSnapshotValue(snapshot);
+  bindPluginMetadataSnapshotCache(snapshot);
+  return snapshot;
+}
+
 /** Restores process-local behavior and immutability after a snapshot crosses a worker boundary. */
 export function restorePluginMetadataSnapshot(
   snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
 ): PluginMetadataSnapshot {
-  const restored = freezeSnapshotValue({
+  return finalizePluginMetadataSnapshot({
     ...snapshot,
     normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, {
       manifestRegistry: snapshot.manifestRegistry,
     }),
   });
-  bindPluginMetadataSnapshotCache(restored);
-  return restored;
 }
 
 export function isPluginMetadataSnapshotCompatible(params: {
@@ -260,7 +267,10 @@ export function listPluginOriginsFromMetadataSnapshot(
 
 /** Rebuilds every manifest-derived snapshot fact from one authoritative registry. */
 export function rebasePluginMetadataSnapshotManifestRegistry(
-  snapshot: PluginMetadataSnapshot,
+  snapshot: Omit<
+    PluginMetadataSnapshot,
+    "manifestRegistry" | "plugins" | "diagnostics" | "byPluginId" | "owners"
+  >,
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
   const plugins = manifestRegistry.plugins;
@@ -443,53 +453,45 @@ export function completePluginMetadataSnapshot(params: {
     return completed;
   }
   return withPluginCache(cache, () => {
-    const completed = completePluginMetadataSnapshotImpl({ ...params, snapshot });
+    const inputs = { ...params, snapshot };
+    const workspaceDir = inputs.workspaceDir ?? inputs.snapshot.workspaceDir;
+    const manifestStartedAt = performance.now();
+    const manifestRegistry =
+      inputs.snapshot.pluginIds === undefined
+        ? inputs.snapshot.manifestRegistry
+        : loadPluginManifestRegistryForInstalledIndex({
+            index: inputs.snapshot.index,
+            config: inputs.config,
+            env: inputs.env ?? process.env,
+            ...(workspaceDir ? { workspaceDir } : {}),
+            includeDisabled: true,
+          });
+    // Bundled fallback contracts cannot come from a same-id external winner.
+    // Capture their separately validated roots before runtime readers lose discovery access.
+    const bundledManifestRegistry =
+      inputs.snapshot.bundledManifestRegistry ??
+      loadBundledPluginManifestRegistry({ env: inputs.env });
+    const manifestRegistryMs = performance.now() - manifestStartedAt;
+    const rebased = rebasePluginMetadataSnapshotManifestRegistry(inputs.snapshot, manifestRegistry);
+    const { pluginIds: _pluginIds, ...unscoped } = rebased;
+    const completed = finalizePluginMetadataSnapshot({
+      ...unscoped,
+      bundledManifestRegistry,
+      configFingerprint: resolvePluginControlPlaneFingerprint({
+        config: inputs.config,
+        env: inputs.env,
+        index: rebased.index,
+        policyHash: rebased.policyHash,
+        workspaceDir,
+      }),
+      metrics: {
+        ...rebased.metrics,
+        manifestRegistryMs,
+        totalMs: rebased.metrics.totalMs + manifestRegistryMs,
+      },
+    });
     cache.metadata.completions.set(snapshot, completed);
     return completed;
-  });
-}
-
-function completePluginMetadataSnapshotImpl(params: {
-  snapshot: PluginMetadataSnapshot;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): PluginMetadataSnapshot {
-  const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
-  const manifestStartedAt = performance.now();
-  const manifestRegistry =
-    params.snapshot.pluginIds === undefined
-      ? params.snapshot.manifestRegistry
-      : loadPluginManifestRegistryForInstalledIndex({
-          index: params.snapshot.index,
-          config: params.config,
-          env: params.env ?? process.env,
-          ...(workspaceDir ? { workspaceDir } : {}),
-          includeDisabled: true,
-        });
-  // Bundled fallback contracts cannot come from a same-id external winner.
-  // Capture their separately validated roots before runtime readers lose discovery access.
-  const bundledManifestRegistry =
-    params.snapshot.bundledManifestRegistry ??
-    loadBundledPluginManifestRegistry({ env: params.env });
-  const manifestRegistryMs = performance.now() - manifestStartedAt;
-  const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
-  const { pluginIds: _pluginIds, ...unscoped } = completed;
-  return restorePluginMetadataSnapshot({
-    ...unscoped,
-    bundledManifestRegistry,
-    configFingerprint: resolvePluginControlPlaneFingerprint({
-      config: params.config,
-      env: params.env,
-      index: completed.index,
-      policyHash: completed.policyHash,
-      workspaceDir,
-    }),
-    metrics: {
-      ...completed.metrics,
-      manifestRegistryMs,
-      totalMs: completed.metrics.totalMs + manifestRegistryMs,
-    },
   });
 }
 

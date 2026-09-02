@@ -627,8 +627,7 @@ export function createStreamRendering({
       final: false,
       inlineCode: createInlineCodeState(),
     };
-    state.lastStreamedAssistant = undefined;
-    state.lastStreamedAssistantCleaned = undefined;
+    state.assistantStream = undefined;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;

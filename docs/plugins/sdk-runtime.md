@@ -57,9 +57,11 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 Channel plugins that deliver agent replies directly can call
 `renderPresentationForDelivery(handler, payload)` from
-`openclaw/plugin-sdk/interactive-runtime` in their `preparePayload` hook. Supply
+`openclaw/plugin-sdk/interactive-runtime` at delivery, after modifying hooks. Supply
 the channel's `presentationCapabilities` and `renderPresentation` callback; the
-callback receives a payload with a normalized, adapted `presentation`. This
+callback receives a payload with a normalized, adapted `presentation` and the
+normalized original presentation as its second argument. Use the original for
+whole-card text fallbacks that must retain labels clipped by native limits. This
 shares core outbound rendering's fallback-text policy and removes the portable
 presentation fields after rendering. The callback may be synchronous or async.
 
@@ -1172,6 +1174,10 @@ The handler runs in the Gateway process and does not add a Gateway protocol subs
 returned unsubscribe function and call it during service cleanup. The payload is a lightweight
 change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
 current session entry.
+
+OpenClaw calls a service's `stop()` at most once per startup attempt, including when a replacement
+times out before startup fails. Failed-start rollback and shutdown share the same cleanup result;
+a cleanup failure is recorded rather than retried within that attempt.
 
 Service startup failures from a returned or awaited promise are recorded automatically. A service
 that intentionally starts required work in the background must report later failure and recovery

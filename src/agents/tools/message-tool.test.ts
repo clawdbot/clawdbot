@@ -29,20 +29,18 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
-type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
-type ResetPluginRuntimeStateForTest =
-  typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
-type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
-type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
-type RunMessageAction =
-  typeof import("../../infra/outbound/message-action-runner.js").runMessageAction;
+import { createMessageTool } from "./message-tool-execution.js";
+
+type CreateMessageTool = typeof createMessageTool;
 
 const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 const CRITICAL_THRESHOLD = 20;
@@ -51,13 +49,6 @@ const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   channels: [],
   getChannel: () => undefined,
 } as const;
-
-let createMessageTool: CreateMessageTool;
-let createOpenClawTools: CreateOpenClawTools;
-let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
-let setActivePluginRegistry: SetActivePluginRegistry;
-let createTestRegistry: CreateTestRegistry;
-let actualRunMessageAction: RunMessageAction;
 
 type DescribeMessageTool = NonNullable<
   NonNullable<ChannelPlugin["actions"]>["describeMessageTool"]
@@ -395,16 +386,9 @@ function expectStringSchema(
   }
 }
 
-beforeAll(async () => {
-  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-    await import("../../plugins/runtime.js"));
-  ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
-  ({ createMessageTool } = await import("./message-tool-execution.js"));
-  ({ createOpenClawTools } = await import("../openclaw-tools.js"));
-  ({ runMessageAction: actualRunMessageAction } = await vi.importActual(
-    "../../infra/outbound/message-action-runner.js",
-  ));
-});
+const { runMessageAction: actualRunMessageAction } = await vi.importActual<
+  typeof import("../../infra/outbound/message-action-runner.js")
+>("../../infra/outbound/message-action-runner.js");
 
 const mintedTurnCapabilities: string[] = [];
 

@@ -241,7 +241,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     ).toBeNull();
   });
 
-  it("keeps explicit silence terminal only for reply-optional settled turns", () => {
+  it("keeps explicit silence terminal across required and optional settled turns", () => {
     const toolUseAssistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
@@ -274,6 +274,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         runParams: {
           sessionId: "session:settled-silent",
           runId: "run:settled-silent",
+          allowEmptyAssistantReplyAsSilent: true,
           ...runParams,
         } as never,
         attempt,
@@ -290,9 +291,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       });
 
     expect(request({ trigger: "heartbeat" })).toBeNull();
-    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBe(
-      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
-    );
+    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBeNull();
   });
 
   it("requires an available finalizer and no visible structured error", () => {

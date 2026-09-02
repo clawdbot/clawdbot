@@ -4,6 +4,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
@@ -202,6 +203,8 @@ function registerNativeHookRelayInternal(
       ...(params.config ? { config: params.config } : {}),
       deferMcpToolApprovals:
         params.autoApproveMcpTools === true ||
+        // Native hook names lose raw identity; let Codex apply the prepared per-tool config.
+        (params.agentId ? loadMcpToolGrants(params.agentId).length > 0 : false) ||
         Object.keys({ ...params.projectedMcpServers, ...params.config?.mcp?.servers }).some(
           (serverName) =>
             resolveProjectedMcpCodexToolApprovalMode(

@@ -99,6 +99,10 @@ vi.mock("./browser-runtime.js", () => {
   return { createWorkerBrowserToolRuntime: browserRuntimeMocks.createWorkerBrowserToolRuntime };
 });
 
+// Compile the real lazy runtimes during collection, not inside the first turn.
+// Cold imports must not consume these integration cases' lifecycle deadlines.
+await Promise.all([import("./embedded-agent.runtime.js"), import("../agents/bash-tools.js")]);
+
 function waitForFast<T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},

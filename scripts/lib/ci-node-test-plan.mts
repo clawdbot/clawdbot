@@ -2398,9 +2398,9 @@ function splitOversizedCompactGroup(
   }
   const includePatterns =
     group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.();
-  const weightForFile = /^core-tooling-\d+$/u.test(group.shard_name)
-    ? toolingFileWeight
-    : stripeFileWeight;
+  const isTooling = /^core-tooling-\d+$/u.test(group.shard_name);
+  const packTooling = isTooling && runnerBackend === "github";
+  const weightForFile = isTooling ? toolingFileWeight : stripeFileWeight;
   const totalWeight =
     includePatterns?.reduce((seconds, file) => seconds + weightForFile(file), 0) ?? 0;
   // A measured whole-config parent can lag newly cataloged files. Its old
@@ -2419,15 +2419,10 @@ function splitOversizedCompactGroup(
     return [{ group, seconds: profileSeconds }];
   }
 
-  // An empty include list falls back to the whole config in the shard runner.
-  let stripeCount = Math.min(
-    includePatterns.length,
-    Math.ceil(splitSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
-  );
   // The prerequisite is charged once per emitted job. Include it in placement
   // so a balanced test stripe still leaves room for its runtime build.
   const buildModes = new Map(
-    isCliProcess
+    isCliProcess || packTooling
       ? includePatterns.map(
           (file) =>
             [
@@ -2437,24 +2432,41 @@ function splitOversizedCompactGroup(
         )
       : [],
   );
-  const cliProcessBatchWeight = (patterns: string[]) => {
-    const mode = mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file)));
-    return (
-      patterns.reduce((seconds, file) => seconds + weightForFile(file), 0) +
-      (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0)
+  const createStripes = (seconds: number) => {
+    const batchWeight = (patterns: readonly string[]) => {
+      const mode = mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file)));
+      const weight = patterns.reduce((sum, file) => sum + weightForFile(file), 0);
+      return (
+        (packTooling ? Math.ceil((seconds * weight) / totalWeight) : weight) +
+        Math.round(
+          (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0) *
+            (packTooling ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
+        )
+      );
+    };
+    const weightForValue =
+      isCliProcess || packTooling ? (file: string) => batchWeight([file]) : weightForFile;
+    if (packTooling) {
+      // Balanced thirds of a ~301s parent each consume a 150s job. Fill the
+      // budget first so unrelated families can share the small remainder.
+      // Hybrid retains balanced children for its faster Blacksmith admission.
+      const discoveryOrder = (a: string, b: string) =>
+        includePatterns.indexOf(a) - includePatterns.indexOf(b);
+      return packNodeTestGroups(
+        includePatterns.toSorted(
+          (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
+        ),
+        (bin, file) => batchWeight([...bin, file]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
+      ).map((patterns) => patterns.toSorted(discoveryOrder));
+    }
+    return createStripedBatches(
+      includePatterns,
+      Math.min(includePatterns.length, Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS)),
+      weightForValue,
+      isCliProcess ? batchWeight : undefined,
     );
   };
-  const weightForValue = isCliProcess
-    ? (file: string) => cliProcessBatchWeight([file])
-    : weightForFile;
-  const createStripes = (count: number) =>
-    createStripedBatches(
-      includePatterns,
-      count,
-      weightForValue,
-      isCliProcess ? cliProcessBatchWeight : undefined,
-    );
-  let stripes = createStripes(stripeCount);
+  let stripes = createStripes(splitSeconds);
   let timingGeneration = createCompactSplitTimingGeneration({
     configs: group.configs,
     env: group.env,
@@ -2479,11 +2491,7 @@ function splitOversizedCompactGroup(
     return [{ group, seconds: profileSeconds }];
   }
   if (completeMeasuredSeconds > splitSeconds) {
-    stripeCount = Math.min(
-      includePatterns.length,
-      Math.ceil(completeMeasuredSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
-    );
-    stripes = createStripes(stripeCount);
+    stripes = createStripes(completeMeasuredSeconds);
     timingGeneration = createCompactSplitTimingGeneration({
       configs: group.configs,
       env: group.env,

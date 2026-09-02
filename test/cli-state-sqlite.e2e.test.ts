@@ -13,6 +13,15 @@ import {
   openOpenClawStateDatabase,
 } from "../src/state/openclaw-state-db.js";
 
+function runDoctorCli(args: string[], env: NodeJS.ProcessEnv) {
+  return spawnSync(process.execPath, ["openclaw.mjs", "doctor", ...args], {
+    cwd: process.cwd(),
+    env,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+}
+
 describe("SQLite CLI maintenance ownership", () => {
   it("compacts after full CLI startup without retaining a config-health database handle", async () => {
     await withTempHome(
@@ -54,17 +63,7 @@ describe("SQLite CLI maintenance ownership", () => {
           closeOpenClawStateDatabase();
         }
 
-        const entry = path.resolve(process.cwd(), "src/entry.ts");
-        const result = spawnSync(
-          process.execPath,
-          ["--import", "tsx", entry, "doctor", "--state-sqlite", "compact", "--json"],
-          {
-            cwd: process.cwd(),
-            env,
-            encoding: "utf8",
-            timeout: 60_000,
-          },
-        );
+        const result = runDoctorCli(["--state-sqlite", "compact", "--json"], env);
 
         expect(result.status, result.stderr || result.stdout).toBe(0);
         const report = JSON.parse(result.stdout.trim()) as {
@@ -124,17 +123,7 @@ describe("SQLite CLI maintenance ownership", () => {
             const externalWalBefore = fs.readFileSync(externalWalPath);
             expect(externalWalBefore.byteLength).toBeGreaterThan(0);
 
-            const entry = path.resolve(process.cwd(), "src/entry.ts");
-            const result = spawnSync(
-              process.execPath,
-              ["--import", "tsx", entry, "doctor", "--state-sqlite", "compact", "--json"],
-              {
-                cwd: process.cwd(),
-                env,
-                encoding: "utf8",
-                timeout: 60_000,
-              },
-            );
+            const result = runDoctorCli(["--state-sqlite", "compact", "--json"], env);
 
             expect(result.status).not.toBe(0);
             expect(`${result.stderr}\n${result.stdout}`).toContain("hard-linked path");
@@ -173,26 +162,9 @@ describe("SQLite CLI maintenance ownership", () => {
         delete env.OPENCLAW_HOME;
         delete env.VITEST;
 
-        const entry = path.resolve(process.cwd(), "src/entry.ts");
-        const result = spawnSync(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            entry,
-            "doctor",
-            "--session-sqlite",
-            "compact",
-            "--session-sqlite-store",
-            externalStorePath,
-            "--json",
-          ],
-          {
-            cwd: process.cwd(),
-            env,
-            encoding: "utf8",
-            timeout: 60_000,
-          },
+        const result = runDoctorCli(
+          ["--session-sqlite", "compact", "--session-sqlite-store", externalStorePath, "--json"],
+          env,
         );
 
         expect(result.status).not.toBe(0);
@@ -230,26 +202,9 @@ describe("SQLite CLI maintenance ownership", () => {
         delete env.OPENCLAW_HOME;
         delete env.VITEST;
 
-        const entry = path.resolve(process.cwd(), "src/entry.ts");
-        const result = spawnSync(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            entry,
-            "doctor",
-            "--session-sqlite",
-            "compact",
-            "--session-sqlite-store",
-            storePath,
-            "--json",
-          ],
-          {
-            cwd: process.cwd(),
-            env,
-            encoding: "utf8",
-            timeout: 60_000,
-          },
+        const result = runDoctorCli(
+          ["--session-sqlite", "compact", "--session-sqlite-store", storePath, "--json"],
+          env,
         );
 
         expect(result.status).not.toBe(0);
@@ -292,26 +247,9 @@ describe("SQLite CLI maintenance ownership", () => {
           delete env.OPENCLAW_HOME;
           delete env.VITEST;
 
-          const entry = path.resolve(process.cwd(), "src/entry.ts");
-          const result = spawnSync(
-            process.execPath,
-            [
-              "--import",
-              "tsx",
-              entry,
-              "doctor",
-              "--session-sqlite",
-              "compact",
-              "--session-sqlite-store",
-              storePath,
-              "--json",
-            ],
-            {
-              cwd: process.cwd(),
-              env,
-              encoding: "utf8",
-              timeout: 60_000,
-            },
+          const result = runDoctorCli(
+            ["--session-sqlite", "compact", "--session-sqlite-store", storePath, "--json"],
+            env,
           );
 
           expect(result.status).not.toBe(0);
@@ -369,17 +307,7 @@ describe("SQLite CLI maintenance ownership", () => {
           const externalWalBefore = fs.readFileSync(externalWalPath);
           expect(externalWalBefore.byteLength).toBeGreaterThan(0);
 
-          const entry = path.resolve(process.cwd(), "src/entry.ts");
-          const result = spawnSync(
-            process.execPath,
-            ["--import", "tsx", entry, "doctor", "--session-sqlite", "compact", "--json"],
-            {
-              cwd: process.cwd(),
-              env,
-              encoding: "utf8",
-              timeout: 60_000,
-            },
-          );
+          const result = runDoctorCli(["--session-sqlite", "compact", "--json"], env);
 
           expect(result.status).not.toBe(0);
           expect(`${result.stderr}\n${result.stdout}`).toContain("hard-linked path");

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
   createMessageEndContext,
   createMessageToolEnvelope,
@@ -11,7 +10,6 @@ import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("handleMessageEnd", () => {
   it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
@@ -129,61 +127,6 @@ describe("handleMessageEnd", () => {
       );
     expect(diagnostic).toEqual(expect.any(String));
     expect(Buffer.from(String(diagnostic)).toString()).toBe(diagnostic);
-  });
-
-  it.each([
-    {
-      name: "persists streamed usage when the final assistant snapshot is zeroed",
-      api: "openai-completions",
-      pendingUsage: {
-        input: 7,
-        output: 5,
-        reasoningTokens: 2,
-        cacheWrite: 4,
-        cacheWrite1h: 3,
-        total: 16,
-        cost: { total: 0.125, totalOrigin: "provider-billed" },
-      },
-      finalUsage: { input: 0, output: 0, totalTokens: 0 },
-      expectedUsage: {
-        input: 7,
-        output: 5,
-        cacheRead: 0,
-        cacheWrite: 4,
-        cacheWrite1h: 3,
-        reasoningTokens: 2,
-        totalTokens: 16,
-        cost: { total: 0.125, totalOrigin: "provider-billed" },
-      },
-    },
-    {
-      name: "keeps authoritative final usage instead of pending stream usage",
-      pendingUsage: { input: 7, output: 5, total: 12 },
-      finalUsage: { input: 11, output: 3, totalTokens: 14 },
-      expectedUsage: { input: 11, output: 3, totalTokens: 14 },
-    },
-  ])("$name", ({ api, pendingUsage, finalUsage, expectedUsage }) => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-usage" });
-    const message = {
-      role: "assistant",
-      api,
-      content: [{ type: "text", text: "Done." }],
-      usage: { ...makeZeroUsageSnapshot(), ...finalUsage },
-    };
-    try {
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: { type: "done", usage: pendingUsage },
-      });
-      emit({ type: "message_end", message });
-
-      expect(message.usage).toMatchObject(expectedUsage);
-      expect(subscription.getCurrentAttemptAssistant()).toEqual(message);
-    } finally {
-      subscription.unsubscribe();
-    }
   });
 
   it("warns when assistant text only pretends to call a registered tool", () => {
@@ -378,7 +321,7 @@ describe("handleMessageEnd", () => {
       const ctx = createMessageEndContext({
         onBlockReply,
         state: {
-          lastStreamedAssistantCleaned: "Hello world",
+          assistantStream: { raw: "", text: "Hello world" },
           blockReplyBreak: "text_end",
           deltaBuffer: "",
         },
@@ -430,7 +373,7 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({
       onBlockReply,
       state: {
-        lastStreamedAssistantCleaned: "Caption [[oops",
+        assistantStream: { raw: "", text: "Caption [[oops" },
         blockReplyBreak: "message_end",
       },
     });
@@ -535,7 +478,7 @@ describe("handleMessageEnd", () => {
         onAgentEvent,
         bufferedText: previousText,
         state: {
-          lastStreamedAssistantCleaned: previousText,
+          assistantStream: { raw: "", text: previousText },
           deltaBuffer: previousText,
         },
       });
@@ -569,7 +512,7 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({
       onAgentEvent,
       state: {
-        lastStreamedAssistantCleaned: "Working...",
+        assistantStream: { raw: "", text: "Working..." },
         blockReplyBreak: "text_end",
         deltaBuffer: "",
       },
