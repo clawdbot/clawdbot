@@ -462,6 +462,7 @@ describe("tsdown config", () => {
         "@larksuiteoapi/node-sdk",
         "@matrix-org/matrix-sdk-crypto-nodejs",
         "@openclaw/ai",
+        "@openclaw/crabline",
         "@openclaw/fs-safe",
         "@vitest/expect",
         "jimp",

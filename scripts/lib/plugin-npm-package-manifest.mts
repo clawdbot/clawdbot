@@ -536,7 +536,9 @@ function isolatedPnpmPackageDirectory(
   if (Buffer.byteLength(filename) > maxLength || /[A-Z]/u.test(filename)) {
     let prefix = "";
     for (const character of filename) {
-      if (Buffer.byteLength(prefix + character) > Math.max(0, maxLength - 33)) break;
+      if (Buffer.byteLength(prefix + character) > Math.max(0, maxLength - 33)) {
+        break;
+      }
       prefix += character;
     }
     filename = `${prefix}_${createHash("sha256").update(filename).digest("hex").slice(0, 32)}`;
