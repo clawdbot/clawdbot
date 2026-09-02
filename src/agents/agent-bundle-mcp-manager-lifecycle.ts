@@ -208,10 +208,9 @@ export function createSessionMcpRuntimeManagerLifecycle(
       if (nowMs - runtime.lastUsedAt < DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS) {
         continue;
       }
-      // A requester resolve/install is serialized on this key but runs outside
-      // the runtime lease. Keep its current transport alive until that chain
-      // records the refreshed runtime, rather than racing it with disposal.
-      if (store.requesterWorkChains.has(runtimeKey) || store.createInFlight.has(runtimeKey)) {
+      // Requester work runs outside the runtime lease. Keep its current
+      // transport until the chain records the refreshed runtime.
+      if (store.requesterWorkChains.has(runtimeKey)) {
         continue;
       }
       store.runtimesBySessionId.delete(runtimeKey);
@@ -258,8 +257,12 @@ export function createSessionMcpRuntimeManagerLifecycle(
       .toSorted((a, b) => a.runtime.lastUsedAt - b.runtime.lastUsedAt)
       .slice(0, overflow);
     for (const { runtimeKey, runtime } of evictable) {
-      // Serialize with in-flight work on that key so eviction cannot clobber a
-      // concurrent reuse or install for the same requester.
+      // Do not queue opportunistic eviction behind active requester work: that
+      // would dispose the runtime the work just refreshed.
+      if (store.requesterWorkChains.has(runtimeKey)) {
+        continue;
+      }
+      // Claim the idle key before yielding so later requester work follows disposal.
       await runExclusiveOnRuntimeKey(runtimeKey, async () => {
         const current = store.runtimesBySessionId.get(runtimeKey);
         if (current !== runtime || (current.activeLeases ?? 0) > 0) {

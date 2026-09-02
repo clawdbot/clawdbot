@@ -10,7 +10,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   cleanupTempDirs,
   makeTempDir,
@@ -85,24 +85,24 @@ const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 
 async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
-  sessionId: () => string | undefined;
-  initializeCount: () => number;
+  session: { current?: string; closed?: string };
   close: () => Promise<void>;
 }> {
   const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
-  let sessionId: string | undefined;
-  let initializeCount = 0;
+  const session: { current?: string; closed?: string } = {};
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: randomUUID,
     onsessioninitialized(nextSessionId) {
-      sessionId = nextSessionId;
-      initializeCount += 1;
+      session.current = nextSessionId;
+    },
+    onsessionclosed(nextSessionId) {
+      session.closed = nextSessionId;
     },
   });
   server.registerTool(
     "requester_probe",
     { description: "Return the live requester-scoped MCP transport identity" },
-    async () => ({ content: [{ type: "text", text: JSON.stringify({ sessionId }) }] }),
+    async () => ({ content: [{ type: "text", text: session.current ?? "missing-session" }] }),
   );
   await server.connect(transport);
   const httpServer = http.createServer((request, response) => {
@@ -126,15 +126,23 @@ async function startRequesterScopedMcpProofServer(): Promise<{
   }
   return {
     url: `http://127.0.0.1:${address.port}/mcp`,
-    sessionId: () => sessionId,
-    initializeCount: () => initializeCount,
+    session,
     close: async () => {
       await server.close();
+      httpServer.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
       });
     },
   };
+}
+
+function readMcpText(result: CallToolResult, label: string): string {
+  const content = expectDefined(result.content[0], label);
+  if (content.type !== "text") {
+    throw new Error(`${label} did not contain text`);
+  }
+  return content.text;
 }
 
 async function writeListToolsMcpServer(params: {
@@ -3437,94 +3445,22 @@ process.on("SIGINT", shutdown);`,
     await manager.disposeAll();
   });
 
-  it("does not evict a requester runtime while its resolution chain is active", async () => {
-    let nowMs = 100_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const resolverTesting = await import("./mcp-connection-resolver.js");
-    let resolveRequester: (() => void) | undefined;
-    let requesterResolutionStarted: (() => void) | undefined;
-    const requesterStarted = new Promise<void>((resolve) => {
-      requesterResolutionStarted = resolve;
-    });
-    const releaseRequester = new Promise<void>((resolve) => {
-      resolveRequester = resolve;
-    });
-    let resolveCount = 0;
-    const disposed: string[] = [];
-    resolverTesting.testing.setMcpServerConnectionResolversForTest([
-      {
-        serverName: "user-mail",
-        resolve: async () => {
-          resolveCount += 1;
-          if (resolveCount === 2) {
-            requesterResolutionStarted?.();
-            await releaseRequester;
-          }
-          return { url: "https://mcp.example.test/user" };
-        },
-      },
-    ]);
-    resolverTesting.testing.setMcpConnectionRevalidateMsForTest(1);
-    const createRuntime: RuntimeFactory = (params) => ({
-      ...makeManagedRuntime(params),
-      dispose: async () => {
-        disposed.push(params.sessionId);
-      },
-    });
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime,
-      now: () => nowMs,
-      enableIdleSweepTimer: false,
-    });
-    const params = makeRequesterParams(
-      "session-deferred-sweep-race",
-      { mcp: { servers: { "user-mail": { transport: "streamable-http" } } } },
-      "sender-a",
-    );
-
-    try {
-      const initial = await manager.getOrCreateRequesterScoped(params);
-      expect(initial?.runtime).toBeDefined();
-
-      nowMs += 2;
-      const requesterRun = manager.getOrCreateRequesterScoped(params);
-      await requesterStarted;
-
-      nowMs += 10 * 60 * 1000;
-      expect(await manager.sweepIdleRuntimes()).toBe(0);
-      expect(disposed).toEqual([]);
-      expect(manager.listRuntimeKeys()).toHaveLength(1);
-
-      resolveRequester?.();
-      await expect(requesterRun).resolves.toMatchObject({ runtime: initial?.runtime });
-      expect(manager.listRuntimeKeys()).toHaveLength(1);
-    } finally {
-      resolveRequester?.();
-      clock.mockRestore();
-    }
-  });
-
   it("keeps a real requester-scoped MCP transport alive during an idle sweep", async () => {
     const proof = await startRequesterScopedMcpProofServer();
     const resolverTesting = await import("./mcp-connection-resolver.js");
-    let nowMs = Date.now();
+    let nowMs = 100_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let resolveCount = 0;
-    let releaseResolver: (() => void) | undefined;
-    let requesterResolutionStarted: (() => void) | undefined;
-    const releaseResolution = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    const resolutionStarted = new Promise<void>((resolve) => {
-      requesterResolutionStarted = resolve;
-    });
+    const releaseResolution = createDeferred();
+    const resolutionStarted = createDeferred();
     resolverTesting.testing.setMcpServerConnectionResolversForTest([
       {
         serverName: "real-requester",
         resolve: async () => {
           resolveCount += 1;
           if (resolveCount === 2) {
-            requesterResolutionStarted?.();
-            await releaseResolution;
+            resolutionStarted.resolve();
+            await releaseResolution.promise;
           }
           return {
             url: proof.url,
@@ -3538,17 +3474,14 @@ process.on("SIGINT", shutdown);`,
       now: () => nowMs,
       enableIdleSweepTimer: false,
     });
+    const declaredServer = {
+      transport: "streamable-http" as const,
+      url: "https://placeholder.invalid/mcp",
+    };
     const params = makeRequesterParams(
       "session-real-requester-sweep",
       {
-        mcp: {
-          servers: {
-            "real-requester": {
-              transport: "streamable-http",
-              url: "https://placeholder.invalid/mcp",
-            },
-          },
-        },
+        mcp: { servers: { "real-requester": declaredServer } },
       },
       "proof-requester",
     );
@@ -3556,47 +3489,39 @@ process.on("SIGINT", shutdown);`,
     try {
       const first = await manager.getOrCreateRequesterScoped(params);
       const firstRuntime = expectDefined(first?.runtime, "first requester runtime");
-      const firstResult = await firstRuntime.callTool("real-requester", "requester_probe", {});
-      const firstContent = expectDefined(firstResult.content[0], "first MCP result");
-      if (firstContent.type !== "text") {
-        throw new Error("first MCP result did not contain text");
-      }
-      const firstSessionId = JSON.parse(firstContent.text).sessionId;
+      const firstSessionId = readMcpText(
+        await firstRuntime.callTool("real-requester", "requester_probe", {}),
+        "first MCP result",
+      );
 
       nowMs += 2;
       const secondRequest = manager.getOrCreateRequesterScoped(params);
-      await resolutionStarted;
+      await resolutionStarted.promise;
 
-      nowMs += 10 * 60 * 1000;
-      const evictedWhileResolving = await manager.sweepIdleRuntimes();
-      expect(evictedWhileResolving).toBe(0);
+      const idleTtlMs = 10 * 60 * 1000;
+      nowMs += idleTtlMs;
+      expect(await manager.sweepIdleRuntimes()).toBe(0);
       expect(manager.listRuntimeKeys()).toHaveLength(1);
 
-      releaseResolver?.();
+      releaseResolution.resolve();
       const second = await secondRequest;
       expect(second?.runtime).toBe(firstRuntime);
-      const secondResult = await firstRuntime.callTool("real-requester", "requester_probe", {});
-      const secondContent = expectDefined(secondResult.content[0], "second MCP result");
-      if (secondContent.type !== "text") {
-        throw new Error("second MCP result did not contain text");
-      }
-      const secondSessionId = JSON.parse(secondContent.text).sessionId;
-      expect(secondSessionId).toBe(firstSessionId);
-      expect(proof.initializeCount()).toBe(1);
-      console.log(
-        JSON.stringify({
-          claim: "real requester-scoped MCP transport survives idle sweep during resolution",
-          evictedWhileResolving,
-          runtimeReused: true,
-          mcpSessionReused: true,
-          initializeCount: proof.initializeCount(),
-        }),
-      );
+      expect(
+        readMcpText(
+          await firstRuntime.callTool("real-requester", "requester_probe", {}),
+          "second MCP result",
+        ),
+      ).toBe(firstSessionId);
+      expect(proof.session.current).toBe(firstSessionId);
+
+      nowMs += idleTtlMs;
+      expect(await manager.sweepIdleRuntimes()).toBe(1);
+      expect(manager.listRuntimeKeys()).toEqual([]);
+      expect(proof.session.closed).toBe(firstSessionId);
     } finally {
-      releaseResolver?.();
+      releaseResolution.resolve();
       await manager.disposeAll();
-      resolverTesting.testing.setMcpServerConnectionResolversForTest();
-      resolverTesting.testing.setMcpConnectionRevalidateMsForTest();
+      clock.mockRestore();
       await proof.close();
     }
   });
