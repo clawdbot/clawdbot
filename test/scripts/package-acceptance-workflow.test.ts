@@ -2930,6 +2930,65 @@ describe("package acceptance workflow", () => {
     );
   });
 
+  it("fetches release diagnostics only for completed failed jobs", () => {
+    const root = tempDirs.make("release-failed-job-summary-");
+    const jobsPath = join(root, "jobs.json");
+    const callsPath = join(root, "log-requests");
+    writeFileSync(callsPath, "");
+    writeFileSync(
+      jobsPath,
+      JSON.stringify({
+        jobs: [
+          { databaseId: 101, name: "failed", status: "completed", conclusion: "failure" },
+          { databaseId: 102, name: "cancelled", status: "completed", conclusion: "cancelled" },
+          { databaseId: 103, name: "passed", status: "completed", conclusion: "success" },
+          { databaseId: 104, name: "skipped", status: "completed", conclusion: "skipped" },
+          { databaseId: 105, name: "running", status: "in_progress", conclusion: "" },
+          { databaseId: 106, name: "queued", status: "queued", conclusion: "" },
+        ],
+      }),
+    );
+    const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -euo pipefail
+gh() {
+  if [[ "$*" == *"--json jobs"* ]]; then
+    local query
+    for query; do :; done
+    jq "$query" "$JOBS_FILE"
+    return
+  fi
+  while (( $# )); do
+    if [[ "$1" == "--job" ]]; then
+      printf '%s\\n' "$2" >> "$LOG_REQUESTS"
+      return
+    fi
+    shift
+  done
+  return 1
+}
+${shellFunctionSource(source, "print_failed_run_summary")}
+print_failed_run_summary 404
+`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          JOBS_FILE: jobsPath,
+          LOG_REQUESTS: callsPath,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(callsPath, "utf8")).toBe("101\n102\n");
+  });
+
   it.each([
     { mode: "lagged", exit: 0, approvals: 1 },
     { mode: "approved-queued", exit: 0, approvals: 1 },

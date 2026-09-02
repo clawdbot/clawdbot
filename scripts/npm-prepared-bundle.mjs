@@ -264,7 +264,7 @@ export function verifyNpmBundleProducer({
   toolingSha,
   qualified = false,
   sourceCheck = false,
-  proofKind,
+  proofKind = undefined,
   requireCompletedParent = false,
   runGh = runReleaseToolingGh,
 }) {

@@ -256,7 +256,7 @@ print_failed_run_summary() {
   local failed_json
 
   failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
-    --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
+    --jq '.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
   if [[ -z "${failed_json}" ]]; then
     return 0
   fi
