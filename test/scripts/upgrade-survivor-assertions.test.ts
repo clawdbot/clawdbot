@@ -2,7 +2,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -632,6 +640,7 @@ function assertCompanionPluginRecords(
   ) => void,
   capabilityConsentSupported = true,
   recoveryPluginIds?: string[],
+  isolateAssertionRuntime = false,
 ): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companions-"));
   try {
@@ -710,34 +719,38 @@ function assertCompanionPluginRecords(
     });
     mkdirSync(join(stateDir, "plugins"), { recursive: true });
     writeJson(join(stateDir, "plugins", "installs.json"), { installRecords: records });
-    const inspectionsPath = join(root, "plugin-inspections.json");
     const officialNpmCompanions = [
       ["discord", "@openclaw/discord"],
       ["codex", "@openclaw/codex"],
     ] as const;
-    writeJson(
-      inspectionsPath,
-      Object.fromEntries(
-        officialNpmCompanions.map(
-          ([pluginId, packageName]) =>
-            [
-              pluginId,
-              {
-                plugin: {
-                  id: pluginId,
-                  packageName,
-                  trustedOfficialInstall: isTrustedOfficialPluginInstallRecord({
-                    pluginId,
-                    packageName,
-                    record: records[pluginId]! as PluginInstallRecord,
-                  }),
-                },
-                install: records[pluginId],
-              },
-            ] as const,
-        ),
-      ),
+    const trustDecisions = officialNpmCompanions.map(([pluginId, packageName]) => ({
+      packageName,
+      pluginId,
+      record: records[pluginId],
+      trusted: isTrustedOfficialPluginInstallRecord({
+        pluginId,
+        packageName,
+        record: records[pluginId]! as PluginInstallRecord,
+      }),
+    }));
+    const npmPrefix = join(root, "npm-prefix");
+    const candidatePackageRoot = join(npmPrefix, "lib", "node_modules", "openclaw");
+    const trustModuleDir = join(candidatePackageRoot, "dist", "plugins");
+    mkdirSync(trustModuleDir, { recursive: true });
+    writeJson(join(candidatePackageRoot, "package.json"), { type: "module" });
+    writeFileSync(
+      join(trustModuleDir, "official-external-install-records.js"),
+      `const decisions = ${JSON.stringify(trustDecisions)};\n` +
+        `export function isTrustedOfficialPluginInstallRecord(params) {\n` +
+        `  return decisions.some((decision) => decision.pluginId === params.pluginId && decision.packageName === params.packageName && JSON.stringify(decision.record) === JSON.stringify(params.record) && decision.trusted);\n` +
+        `}\n`,
     );
+    let assertionsPath = ASSERTIONS_PATH;
+    if (isolateAssertionRuntime) {
+      const isolatedLib = join(root, "production-assertion-runtime", "lib");
+      cpSync("scripts/e2e/lib", isolatedLib, { recursive: true });
+      assertionsPath = join(isolatedLib, "upgrade-survivor", "assertions.mjs");
+    }
     const updateFile = join(root, "update.json");
     if (recoveryPluginIds) {
       writeJson(updateFile, {
@@ -756,7 +769,7 @@ function assertCompanionPluginRecords(
     execFileSync(
       process.execPath,
       [
-        ASSERTIONS_PATH,
+        assertionsPath,
         ...(recoveryPluginIds
           ? ["assert-recovered-plugin-installs", updateFile, version, "", "2026.7.1-2"]
           : ["assert-companion-installs", version, capabilityConsentSupported ? "1" : "0"]),
@@ -764,8 +777,8 @@ function assertCompanionPluginRecords(
       {
         env: {
           ...process.env,
+          npm_config_prefix: npmPrefix,
           OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_UPGRADE_SURVIVOR_TEST_PLUGIN_INSPECTIONS: inspectionsPath,
         },
         stdio: "pipe",
       },
@@ -1364,6 +1377,10 @@ process.stdout.write(sessionDir + "\\n");
         discord.resolvedSpec = "@openclaw/discord@2026.8.1";
       }),
     ).not.toThrow();
+  });
+
+  it("loads the packaged trust boundary without repository development dependencies", () => {
+    expect(() => assertCompanionPluginRecords(undefined, true, undefined, true)).not.toThrow();
   });
 
   it("requires exact artifact-bound consent for an unverified companion install", () => {
