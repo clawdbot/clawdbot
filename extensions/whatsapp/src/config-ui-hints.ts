@@ -14,9 +14,11 @@ export const whatsAppChannelConfigUiHints = {
   allowFrom: { presentation: "phone-number" },
   defaultTo: { presentation: "phone-number" },
   groupAllowFrom: { presentation: "phone-number" },
+  groupIngestFrom: { presentation: "phone-number" },
   "accounts.*.allowFrom.*": { presentation: "phone-number" },
   "accounts.*.defaultTo": { presentation: "phone-number" },
   "accounts.*.groupAllowFrom.*": { presentation: "phone-number" },
+  "accounts.*.groupIngestFrom.*": { presentation: "phone-number" },
   selfChatMode: {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",

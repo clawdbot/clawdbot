@@ -34,6 +34,8 @@ type ResolvedWhatsAppInboundPolicy = {
   isSamePhone: (value?: string | null) => boolean;
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
   resolveConversationRequireMention: (conversationId: string) => boolean;
+  /** Senders ingested without agent turns; per-group ingestFrom replaces groupIngestFrom. */
+  resolveConversationIngestFrom: (conversationId: string) => string[];
 };
 
 function normalizeWhatsAppIngressPhone(value: string): string | null {
@@ -91,6 +93,13 @@ export function resolveWhatsAppInboundPolicy(params: {
   });
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
+  const resolveConversationGroupPolicy = (conversationId: string) =>
+    resolveChannelGroupPolicy({
+      cfg: resolvedGroupCfg,
+      channel: "whatsapp",
+      groupId: resolveWhatsAppGroupConversationId(conversationId),
+      hasGroupAllowFrom: groupAllowFrom.length > 0,
+    });
   return {
     account,
     dmPolicy,
@@ -101,13 +110,11 @@ export function resolveWhatsAppInboundPolicy(params: {
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
-    resolveConversationGroupPolicy: (conversationId) =>
-      resolveChannelGroupPolicy({
-        cfg: resolvedGroupCfg,
-        channel: "whatsapp",
-        groupId: resolveWhatsAppGroupConversationId(conversationId),
-        hasGroupAllowFrom: groupAllowFrom.length > 0,
-      }),
+    resolveConversationGroupPolicy,
+    resolveConversationIngestFrom: (conversationId) => {
+      const { groupConfig, defaultConfig } = resolveConversationGroupPolicy(conversationId);
+      return groupConfig?.ingestFrom ?? defaultConfig?.ingestFrom ?? account.groupIngestFrom ?? [];
+    },
     resolveConversationRequireMention: (conversationId) =>
       resolveChannelGroupRequireMention({
         cfg: resolvedGroupCfg,

@@ -33,6 +33,7 @@ export type ResolvedWhatsAppAccount = {
   selfChatMode?: boolean;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  groupIngestFrom?: string[];
   groupPolicy?: GroupPolicy;
   mentionPatterns?: WhatsAppAccountConfig["mentionPatterns"];
   dmPolicy?: DmPolicy;
@@ -140,6 +141,7 @@ export function resolveWhatsAppAccount(params: {
     dmPolicy: merged.dmPolicy,
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,
+    groupIngestFrom: merged.groupIngestFrom,
     groupPolicy: merged.groupPolicy,
     mentionPatterns: merged.mentionPatterns,
     historyLimit: merged.historyLimit,

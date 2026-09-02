@@ -32,6 +32,8 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
   execApprovals:
     "Approval prompts for commands that need operator sign-off, delivered in this channel.",
   groupAllowFrom: "Sender ids allowed in group chats. Falls back to allowFrom when unset.",
+  groupIngestFrom:
+    'Sender ids whose group messages are kept for context and hooks but never start an agent turn under "allowlist". Use ["*"] for everyone.',
   groupPolicy:
     'Who may use the agent in groups: "allowlist" trusts groupAllowFrom, "open" allows any group, "disabled" turns group chat off.',
   groups: "Per-group overrides, keyed by group id.",

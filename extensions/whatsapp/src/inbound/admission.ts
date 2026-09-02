@@ -169,6 +169,18 @@ export async function resolveWhatsAppAdmissionChannelIngress(
   return await ingressResolverByAdmission.get(admission)?.(contextBinding);
 }
 
+/**
+ * Group sender admitted through groupIngestFrom / groups.<jid>.ingestFrom: the
+ * message is kept for context and hooks but must never start an agent turn.
+ */
+export function isWhatsAppIngestOnlyAdmission(admission: WhatsAppInboundAdmission): boolean {
+  return (
+    admission.conversation.kind === "group" &&
+    admission.ingress.admission === "skip" &&
+    !admission.senderAccess.allowed
+  );
+}
+
 export function requireWhatsAppInboundAdmission(
   params: WhatsAppInboundAdmissionCarrier,
 ): WhatsAppInboundAdmission {

@@ -287,6 +287,23 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
 
     If `groupAllowFrom` is unset, sender checks fall back to `allowFrom` when it has entries. Sender allowlists are evaluated before mention/reply activation.
 
+    **Ingest without triggering.** Under `groupPolicy: "allowlist"`, senders outside `groupAllowFrom` are dropped before group history, hooks, or logging see the message. To keep their messages while only `groupAllowFrom` senders can start agent turns, list them in `channels.whatsapp.groupIngestFrom` (`"*"` for everyone). A per-group `groups.<jid>.ingestFrom` replaces the channel list for that group; an empty list turns ingestion off there. Ingested messages behave like unmentioned messages: they enter the pending group history and member roster, never start an agent turn (even with an @-mention, `/activation always`, or a control command), and skip audio transcription. Set `groups.<jid>.ingest: true` (or on `groups["*"]`) to also emit the internal `message:received` hook for every skipped group message, matching Signal and Telegram. Leaving `groupIngestFrom` unset keeps sender gating exactly as before.
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"], // may trigger the agent
+          groupIngestFrom: ["*"], // everyone else is kept for context, never answered
+          groups: {
+            "120363401234567890@g.us": { requireMention: true, ingest: true },
+          },
+        },
+      },
+    }
+    ```
+
     If no `channels.whatsapp` block exists at all, runtime falls back to `groupPolicy: "allowlist"` (with a warning log), even if `channels.defaults.groupPolicy` is set to something else.
 
     <Note>
@@ -689,7 +706,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
+| Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groupIngestFrom`, `groups`                          |
 | Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `enabled`                                                                                      |

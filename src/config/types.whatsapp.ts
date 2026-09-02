@@ -19,6 +19,13 @@ export type WhatsAppReactionLevel = ReactionLevel;
 
 export type WhatsAppGroupConfig = {
   requireMention?: boolean;
+  /** Emit internal message hooks for group messages that do not start an agent turn. */
+  ingest?: boolean;
+  /**
+   * Senders admitted for context and hooks without agent turns when they fail
+   * groupAllowFrom. Replaces groupIngestFrom for this group when set.
+   */
+  ingestFrom?: string[];
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Optional system prompt for this group. */
@@ -50,6 +57,12 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
   ChannelReactionConfig<never, WhatsAppReactionLevel, WhatsAppAckReactionConfig> & {
     /** Same-phone setup (bot uses your personal WhatsApp number). */
     selfChatMode?: boolean;
+    /**
+     * Group senders whose messages are ingested (context, hooks) without being
+     * able to start an agent turn when groupPolicy is "allowlist". Unset keeps
+     * sender gating unchanged.
+     */
+    groupIngestFrom?: string[];
     groups?: Record<string, WhatsAppGroupConfig>;
     /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
     direct?: Record<string, WhatsAppDirectConfig>;

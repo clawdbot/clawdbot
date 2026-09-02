@@ -128,6 +128,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       groupPolicy: "allowlist",
       groupAllowFrom: ["+15551234567"],
+      // Optional: keep other senders' group messages for context/hooks without agent turns.
+      groupIngestFrom: ["*"],
     },
   },
 }

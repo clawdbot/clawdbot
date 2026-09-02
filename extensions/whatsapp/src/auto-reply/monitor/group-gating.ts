@@ -2,6 +2,12 @@
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import {
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageReceivedContext,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
@@ -13,7 +19,10 @@ import {
   identitiesOverlap,
 } from "../../identity.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  isWhatsAppIngestOnlyAdmission,
+  requireWhatsAppInboundAdmission,
+} from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
@@ -126,8 +135,49 @@ function recordPendingGroupHistoryEntry(params: {
   });
 }
 
+// Mirrors Signal's groups.<id>.ingest: skipped messages still reach internal message hooks.
+function emitSkippedGroupMessageHook(params: {
+  msg: AdmittedWebInboundMessage;
+  body: string;
+  accountId: string;
+  sessionKey: string;
+}) {
+  const sender = getSenderIdentity(params.msg);
+  const conversationId = requireWhatsAppInboundAdmission(params.msg).conversation.id;
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent(
+        "message",
+        "received",
+        params.sessionKey,
+        toInternalMessageReceivedContext({
+          from: conversationId,
+          to: params.msg.platform.recipientJid,
+          content: params.body,
+          timestamp: params.msg.event.timestamp,
+          channelId: "whatsapp",
+          accountId: params.accountId,
+          conversationId,
+          messageId: params.msg.event.id,
+          senderId: getPrimaryIdentityId(sender) ?? undefined,
+          senderName: sender.name ?? undefined,
+          senderE164: sender.e164 ?? undefined,
+          provider: "whatsapp",
+          surface: "whatsapp",
+          originatingChannel: "whatsapp",
+          originatingTo: conversationId,
+          isGroup: true,
+          groupId: conversationId,
+        }),
+      ),
+    ),
+    "whatsapp: skipped group message hook failed",
+  );
+}
+
 function skipGroupMessageAndStoreHistory(
   params: ApplyGroupGatingParams,
+  ingest: { enabled: boolean; accountId: string },
   verboseMessage: string,
   body?: string,
 ) {
@@ -139,6 +189,14 @@ function skipGroupMessageAndStoreHistory(
     groupHistoryKey: params.groupHistoryKey,
     groupHistoryLimit: params.groupHistoryLimit,
   });
+  if (ingest.enabled) {
+    emitSkippedGroupMessageHook({
+      msg: params.msg,
+      body: body ?? params.msg.payload.body,
+      accountId: ingest.accountId,
+      sessionKey: params.sessionKey,
+    });
+  }
   return { shouldProcess: false } as const;
 }
 
@@ -176,6 +234,21 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     sender.name ?? undefined,
   );
 
+  const ingest = {
+    enabled:
+      (conversationGroupPolicy.groupConfig?.ingest ??
+        conversationGroupPolicy.defaultConfig?.ingest) === true,
+    accountId: inboundPolicy.account.accountId,
+  };
+  if (isWhatsAppIngestOnlyAdmission(admission)) {
+    // Sender is outside groupAllowFrom but inside ingestFrom: context only, never a turn.
+    return skipGroupMessageAndStoreHistory(
+      params,
+      ingest,
+      `Group message stored for context (sender not in groupAllowFrom) in ${conversationId}`,
+    );
+  }
+
   const baseMentionConfig = {
     ...params.baseMentionConfig,
     allowFrom: inboundPolicy.configuredAllowFrom,
@@ -210,6 +283,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   if (activationCommand.hasCommand && !owner) {
     return skipGroupMessageAndStoreHistory(
       params,
+      ingest,
       `Ignoring /activation from non-owner in group ${conversationId}`,
     );
   }
@@ -277,6 +351,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
         : formatAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
+      ingest,
       `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,
       pendingHistoryBody,
     );
