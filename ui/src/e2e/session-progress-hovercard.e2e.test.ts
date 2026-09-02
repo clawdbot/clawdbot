@@ -357,6 +357,7 @@ suite.define(() => {
         const otherParticipants = attribution.locator(".session-hovercard__attribution-others");
         await otherParticipants.hover();
         const participantMenu = attribution.locator(".session-hovercard__participant-menu");
+        await expect.poll(() => participantMenu.isVisible()).toBe(true);
         expect(
           await participantMenu.locator("a.session-hovercard__participant-link").allTextContents(),
         ).toEqual(["Mira", "Riley", "Sam", "Lee"]);
