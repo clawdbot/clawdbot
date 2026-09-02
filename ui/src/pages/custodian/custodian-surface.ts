@@ -19,6 +19,8 @@ import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
+import "../../styles/chat/message-layout.css";
+import "../../styles/chat/composer.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";

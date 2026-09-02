@@ -216,7 +216,7 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 /* Sits after the model and reasoning pickers: the footer row reads as the
    settings for the next turn, and how the session is recorded is the last of
    them, not the first thing between "+" and the model. The model control claims
-   order 3 in chat/layout.css, so this follows it.
+   order 3 in chat/composer.css, so this follows it.
    Box, type and rhythm come from the composer's chip family tokens rather than
    numbers of its own: this control is a peer of the pickers beside it, and it
    used to announce itself as a different component — smaller text, shorter box,

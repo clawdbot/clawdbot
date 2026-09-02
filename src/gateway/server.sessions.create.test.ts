@@ -7,7 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -2139,12 +2141,11 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     .spyOn(acpManagerModule, "getAcpSessionManager")
     .mockReturnValue({ resolveSession: () => null } as never);
   const { defaultRuntime } = await import("../runtime.js");
+  const prepareInitialRun = createDeferredCore();
   const preparedRuntime = vi.fn<(params: { cwd?: string; workspaceDir?: string }) => void>();
-  const preparationEntered = createDeferredCore();
-  const releasePreparation = createDeferredCore();
-  const mockPreparedRuntime = (beforePrepare?: () => Promise<void>) =>
+  const mockPreparedRuntime = () =>
     mockGetReplyFromConfigOnce(async (ctx, opts) => {
-      await beforePrepare?.();
+      await prepareInitialRun.promise;
       const sessionKey = requireNonEmptyString(ctx.SessionKey, "prepared session key");
       const loaded = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
       const workspaceDir =
@@ -2176,12 +2177,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
   });
 
   try {
-    mockPreparedRuntime(async () => {
-      preparationEntered.resolve();
-      await releasePreparation.promise;
-      // Transitive readers can retain real IO; polling must publish the fixture before they run.
-      actualConfigIo.getRuntimeConfig();
-    });
+    mockPreparedRuntime();
     const created = await rpcReq<{
       entry?: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
       key?: string;
@@ -2213,11 +2209,12 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       }),
     ).resolves.toContainEqual(expect.objectContaining({ cwd: requestedCwd, type: "session" }));
     const createRunId = requireNonEmptyString(created.payload?.runId, "roboclaw create run id");
-    await preparationEntered.promise;
-    // Polling must leave the fixture roster available to the still-running turn.
-    const waitingForCreate = rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
-    releasePreparation.resolve();
-    const createWait = await waitingForCreate;
+    const pendingCreateWait = rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
+    // Real-IO readers can run after the RPC fixture refresh, before the admitted turn
+    // prepares. They must see the same roster as creation, not pin the disk-only config.
+    actualConfigIo.getRuntimeConfig();
+    prepareInitialRun.resolve();
+    const createWait = await pendingCreateWait;
     expect(createWait, JSON.stringify(createWait)).toMatchObject({
       ok: true,
       payload: { status: "ok" },
@@ -2251,7 +2248,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       payload: { status: "ok" },
     });
   } finally {
-    releasePreparation.resolve();
+    prepareInitialRun.resolve();
     ws.close();
     getAcpSessionManager.mockRestore();
     await managedWorktrees.remove({
@@ -3545,7 +3542,9 @@ test.each([
         await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("preserve my work\n");
         expect(warnSpy).toHaveBeenCalledOnce();
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.branch));
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.path));
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(truncateUtf16Safe(sanitizeForLog(worktree.path), 256)),
+        );
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
       } else if (outcome === "failed") {
         expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();

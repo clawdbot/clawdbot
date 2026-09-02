@@ -146,6 +146,7 @@ async function handleChatMetadataRequest({
     // The router authorizes the session selector; only the persisted entry supplies auth profiles.
     const session = loadGatewaySessionEntryReadOnly(metadataParams.sessionKey, {
       agentId: requested.agentId,
+      projection: "list",
     });
     respond(
       true,
@@ -273,6 +274,7 @@ async function handleChatHistoryRequest({
         // Exact reads own their nested JSON; history only projects that snapshot.
         clone: false,
         includeStoreChildEntries: true,
+        projection: "list",
       }),
     {
       config: requestConfig,
