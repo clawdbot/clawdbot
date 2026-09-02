@@ -609,6 +609,18 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
+CURRENT_PHASE="apply-baseline-config-recipe"
+if [ -f scripts/e2e/lib/upgrade-survivor/config-recipe.mts ]; then
+  node --import tsx scripts/e2e/lib/upgrade-survivor/config-recipe.mts apply --summary "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/config-recipe.json" --baseline-version "$package_version" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-config-recipe.log" 2>&1 || true
+elif [ -f scripts/e2e/lib/upgrade-survivor/config-recipe.mjs ]; then
+  node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs apply --summary "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/config-recipe.json" --baseline-version "$package_version" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-config-recipe.log" 2>&1 || true
+fi
+CURRENT_PHASE="validate-baseline-config"
+openclaw config validate >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-config-validate.log" 2>&1 || true
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "cron-scheduled-authority" ] || [ "$SCENARIO" = "cron-scheduled-authority" ]; then
+  CURRENT_PHASE="seed-cron-state"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-cron
+fi
 echo "Checking dirty-state config before update..."
 CURRENT_PHASE="prepare-state"
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config

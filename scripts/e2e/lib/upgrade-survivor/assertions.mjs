@@ -345,6 +345,15 @@ function hasCoverage(coverage) {
   return Boolean(coverage);
 }
 
+function seedCronScheduledAuthorityState() {
+  assert(
+    getScenario() === "cron-scheduled-authority",
+    "seed-cron requires the cron-scheduled-authority scenario",
+  );
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  seedLegacyCronScheduledAuthority(stateDir);
+}
+
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -371,9 +380,6 @@ function seedState() {
   seedLegacySessionMetadata(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
-  }
-  if (scenario === "cron-scheduled-authority") {
-    seedLegacyCronScheduledAuthority(stateDir);
   }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     const fixture = readJson(
@@ -1513,6 +1519,8 @@ if (command === "list-scenarios") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   seedUpgradeVolume(stateDir);
+} else if (command === "seed-cron") {
+  seedCronScheduledAuthorityState();
 } else if (command === "assert-config") {
   assertConfigSurvived();
 } else if (command === "assert-state") {

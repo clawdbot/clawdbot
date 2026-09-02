@@ -1387,6 +1387,9 @@ phase install-baseline install_baseline
 phase seed-state seed_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 phase validate-baseline-config validate_baseline_config
+if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
+  phase seed-cron-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-cron
+fi
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
