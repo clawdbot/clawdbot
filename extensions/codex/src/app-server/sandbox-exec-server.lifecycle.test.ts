@@ -113,15 +113,17 @@ describe("Codex sandbox exec-server lifecycle", () => {
       let foreignRoot = path.join(testHome, "..", "foreign-state-path");
       let target = foreignRoot;
       const cleanup: string[] = [];
-      if (via === "symlink") {
-        // A state root that lexically sits inside the home but physically points outside.
-        foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-foreign-state-"));
-        target = path.join(testHome, "linked-state");
-        fs.symlinkSync(foreignRoot, target, "dir");
-        cleanup.push(target, foreignRoot);
-      }
       spawnMock.mockReturnValue(createFakeChild());
       try {
+        if (via === "symlink") {
+          // A state root that lexically sits inside the home but physically points outside.
+          // Register each path before the next fallible call so a failed setup still cleans up.
+          foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-foreign-state-"));
+          cleanup.push(foreignRoot);
+          target = path.join(testHome, "linked-state");
+          cleanup.push(target);
+          fs.symlinkSync(foreignRoot, target, "dir");
+        }
         await withEnvAsync({ [key]: target }, async () => {
           await expect(
             startProcess(
