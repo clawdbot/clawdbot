@@ -341,6 +341,29 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
+  linkpath: string | undefined;
+  archiveEntryPath: string;
+  assets: readonly BackupAsset[];
+}): string | undefined {
+  if (!params.linkpath || !path.isAbsolute(params.linkpath)) {
+    return params.linkpath;
+  }
+  const targetSourcePath = path.resolve(params.linkpath);
+  const targetAsset = params.assets.find((asset) =>
+    isPathWithin(targetSourcePath, asset.sourcePath),
+  );
+  if (!targetAsset) {
+    return params.linkpath;
+  }
+  const targetAssetRelativePath = path
+    .relative(targetAsset.sourcePath, targetSourcePath)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const targetArchivePath = path.posix.join(targetAsset.archivePath, targetAssetRelativePath);
+  return path.posix.relative(path.posix.dirname(params.archiveEntryPath), targetArchivePath);
+}
+
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
@@ -582,6 +605,11 @@ export async function createBackupArchive(
                   });
                   if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
                     try {
+                      entry.linkpath = remapDeclaredAbsoluteSymbolicLinkTarget({
+                        linkpath: entry.linkpath,
+                        archiveEntryPath,
+                        assets: result.assets,
+                      });
                       assertArchiveSymbolicLinkTarget({
                         archiveRoot,
                         entryPath: archiveEntryPath,

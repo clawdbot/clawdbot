@@ -2978,6 +2978,56 @@ describe("createBackupArchive", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves an absolute config symlink when its target is a declared backup asset",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-declared-config-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("declared-config-symlink.tar.gz");
+          const externalConfigPath = state.path("nix-store", "openclaw.json");
+          await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
+          await fs.rename(state.configPath, externalConfigPath);
+          await fs.symlink(externalConfigPath, state.configPath);
+
+          const result = await createBackupArchive({
+            output: outputPath,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 8, 2, 13, 0, 0),
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const configLink = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/state/openclaw.json")),
+            "archived config symlink",
+          );
+          const externalConfigEntry = expectDefined(
+            entries.find((entry) => entry.path.endsWith("/nix-store/openclaw.json")),
+            "archived external config target",
+          );
+
+          expect(configLink.type).toBe("SymbolicLink");
+          expect(configLink.linkpath).toBe(
+            path.posix.relative(path.posix.dirname(configLink.path), externalConfigEntry.path),
+          );
+          expect(result.assets).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ kind: "config", sourcePath: externalConfigPath }),
+            ]),
+          );
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+        },
+      );
+    },
+  );
+
   it("skips managed absolute runtime symlinks while preserving adjacent state", async () => {
     if (process.platform === "win32") {
       return;
