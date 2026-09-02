@@ -154,7 +154,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
       await run();
     };
     const executionStarted = vi.fn();
+    const workLaneAdmitted = vi.fn(() => {
+      expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
+      expect(executionStarted).not.toHaveBeenCalled();
+    });
     execution.params.io.emitExecutionStarted = executionStarted;
+    execution.params.io.emitWorkLaneAdmitted = workLaneAdmitted;
     dispatchAgentRunFromGateway.mockImplementationOnce((dispatch) => {
       dispatch.ingressOpts.onExecutionStarted?.();
     });
@@ -164,10 +169,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
     expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
     expect(executionStarted).not.toHaveBeenCalled();
+    expect(workLaneAdmitted).not.toHaveBeenCalled();
 
     releaseAdmission();
     await vi.waitFor(() => expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce());
 
+    expect(workLaneAdmitted).toHaveBeenCalledOnce();
     expect(executionStarted).toHaveBeenCalledOnce();
   });
 

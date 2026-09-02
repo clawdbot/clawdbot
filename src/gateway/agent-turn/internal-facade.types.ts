@@ -15,6 +15,7 @@ export type InternalAgentTurnDispatchOptions = {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  onWorkLaneAdmitted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;

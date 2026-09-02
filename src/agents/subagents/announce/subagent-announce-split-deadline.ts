@@ -41,7 +41,7 @@ export class AnnounceRunBudgetExceededError extends Error {
  * `runId` is the gateway run id of the announce turn — the same value the
  * dispatch passes as `idempotencyKey`, which the gateway adopts as its run id
  * (`agent-request-preflight.ts`). The in-process turn facade invokes
- * `onExecutionStarted` at the production lane-admission boundary, so that
+ * `onWorkLaneAdmitted` at the production lane-admission boundary, so that
  * callback switches this call from the admission budget to the run budget.
  */
 export async function runWithAnnounceSplitDeadlines<T>(params: {
@@ -52,7 +52,7 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
   run: (
     dispatchTimeoutMs: number,
     signal: AbortSignal,
-    onExecutionStarted: () => void,
+    onWorkLaneAdmitted: () => void,
   ) => Promise<T>;
 }): Promise<T> {
   let admitted = false;
@@ -78,7 +78,7 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
     controller.abort(new AnnounceNotAdmittedError(params.runId, params.admissionTimeoutMs));
   }, params.admissionTimeoutMs);
   admissionTimer.unref?.();
-  const onExecutionStarted = () => {
+  const onWorkLaneAdmitted = () => {
     if (admitted) {
       return;
     }
@@ -101,7 +101,7 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
     // promise. The dispatch owns cancellation of its accepted/queued Gateway
     // run before it rejects, so callers can safely choose another delivery
     // path without a late duplicate.
-    return await params.run(dispatchTimeoutMs, dispatchSignal, onExecutionStarted);
+    return await params.run(dispatchTimeoutMs, dispatchSignal, onWorkLaneAdmitted);
   } finally {
     clearDeadlines();
   }

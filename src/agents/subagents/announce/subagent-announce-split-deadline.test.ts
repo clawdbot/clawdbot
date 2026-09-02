@@ -32,17 +32,17 @@ function rejectsWhenAborted(_timeoutMs: number, signal: AbortSignal): Promise<ne
 }
 
 function createAbortableRun() {
-  let markExecutionStarted: (() => void) | undefined;
+  let markWorkLaneAdmitted: (() => void) | undefined;
   return {
-    run: (timeoutMs: number, signal: AbortSignal, onExecutionStarted: () => void) => {
-      markExecutionStarted = onExecutionStarted;
+    run: (timeoutMs: number, signal: AbortSignal, onWorkLaneAdmitted: () => void) => {
+      markWorkLaneAdmitted = onWorkLaneAdmitted;
       return rejectsWhenAborted(timeoutMs, signal);
     },
-    start: () => {
-      if (!markExecutionStarted) {
-        throw new Error("announce dispatch did not publish its admission callback");
+    admit: () => {
+      if (!markWorkLaneAdmitted) {
+        throw new Error("announce dispatch did not publish its work-lane admission callback");
       }
-      markExecutionStarted();
+      markWorkLaneAdmitted();
     },
   };
 }
@@ -116,7 +116,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       }).catch((error: unknown) => error);
 
       await vi.advanceTimersByTimeAsync(40);
-      abortable.start();
+      abortable.admit();
       await vi.advanceTimersByTimeAsync(79);
       expect(vi.getTimerCount()).toBeGreaterThan(0);
 
@@ -147,7 +147,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       runTimeoutMs: 80,
       run: abortable.run,
     });
-    abortable.start();
+    abortable.admit();
 
     await expect(call).rejects.toBeInstanceOf(AnnounceRunBudgetExceededError);
     await expect(call).rejects.toThrow(/announce run exceeded budget/);
@@ -195,7 +195,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       runTimeoutMs: 80,
       run: abortable.run,
     }).catch((err: unknown) => err);
-    abortable.start();
+    abortable.admit();
 
     const [first, second] = await Promise.all([notAdmitted, runExceeded]);
 

@@ -69,6 +69,7 @@ type DispatchGatewayMethodInProcessOptions = {
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  onWorkLaneAdmitted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;
@@ -351,6 +352,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
             onExecutionStarted: options?.onExecutionStarted,
+            onWorkLaneAdmitted: options?.onWorkLaneAdmitted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,
             timeoutMs: options?.timeoutMs,

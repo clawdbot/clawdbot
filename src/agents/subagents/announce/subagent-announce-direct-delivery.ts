@@ -96,7 +96,7 @@ async function runAnnounceAgentCall(params: {
   signal?: AbortSignal;
   runId: string;
   sessionKey: string;
-  onExecutionStarted: () => void;
+  onWorkLaneAdmitted: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
   let accepted = false;
@@ -125,7 +125,7 @@ async function runAnnounceAgentCall(params: {
       onAccepted: () => {
         accepted = true;
       },
-      onExecutionStarted: params.onExecutionStarted,
+      onWorkLaneAdmitted: params.onWorkLaneAdmitted,
       onSignalAbort: async () => {
         await abortRun();
       },
@@ -457,7 +457,7 @@ export async function sendSubagentAnnounceDirectly(params: {
             admissionTimeoutMs: announceAdmissionTimeoutMs,
             runTimeoutMs: announceRunTimeoutMs,
             signal: params.signal,
-            run: async (dispatchTimeoutMs, signal, onExecutionStarted) =>
+            run: async (dispatchTimeoutMs, signal, onWorkLaneAdmitted) =>
               await runAnnounceAgentCall({
                 agentParams: directAgentParams,
                 delegatedToolPolicyHandoff,
@@ -466,7 +466,7 @@ export async function sendSubagentAnnounceDirectly(params: {
                 signal,
                 runId: params.directIdempotencyKey,
                 sessionKey: canonicalRequesterSessionKey,
-                onExecutionStarted,
+                onWorkLaneAdmitted,
                 resolveGatewayContext: params.resolveGatewayContext,
               }),
           });

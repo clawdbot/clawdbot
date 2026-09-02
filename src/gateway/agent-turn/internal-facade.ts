@@ -126,6 +126,9 @@ export function createInternalAgentTurnFacade(
       ...(dispatchOptions.onExecutionStarted
         ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
         : {}),
+      ...(dispatchOptions.onWorkLaneAdmitted
+        ? { emitWorkLaneAdmitted: dispatchOptions.onWorkLaneAdmitted }
+        : {}),
     };
     const operation = runWithGatewayRequestEnvelope(
       method,
