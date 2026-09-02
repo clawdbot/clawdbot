@@ -266,6 +266,12 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    if (provider.supportedExecutionModes && !provider.provisionDelegated) {
+      reportRegistrationWarning(
+        record,
+        `worker provider ${id} advertises delegated placement without provisionDelegated; direct lifecycle remains available, but session placement is disabled. Implement WorkerProviderV2 and revalidate options.assertAuthorized before each external effect`,
+      );
+    }
   };
 
   const registerSpeechProvider = createProviderLikeRegistrar({

@@ -81,6 +81,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
     resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
     isCurrentNodePlacement?: WorkerNodePlacementAuthority;
+    isInterruptedDelegatedChild?: (sessionKey: string) => boolean;
   };
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
@@ -91,6 +92,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     failure,
     reportTransition: reportPlacementTransition,
+    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
   });
 
   // Background recovery observes previously requested cleanup; explicit Stop and
@@ -196,6 +198,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             projectPath,
             signal,
+            authorize,
           )
         : await environments.create(
             request.profileId,
@@ -204,6 +207,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             projectPath,
             signal,
+            authorize,
           );
       return await startup.continueProvisionedDispatch({
         request,
@@ -373,7 +377,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   };
 
   const abandonment = createWorkerPlacementMoveAbandonment(options);
-
   const moveService = createWorkerPlacementMoveService({
     placements,
     environments,
@@ -386,7 +389,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resolveDestination: options.resolveMoveDestination,
     prepareGatewayMove: options.prepareGatewayMove,
   });
-
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
@@ -397,7 +399,3 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resumeProvisioning: startup.resumeProvisioning,
   };
 }
-
-export type WorkerPlacementDispatchService = ReturnType<
-  typeof createWorkerPlacementDispatchService
->;

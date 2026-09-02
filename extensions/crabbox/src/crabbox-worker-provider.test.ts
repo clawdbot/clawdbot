@@ -38,6 +38,7 @@ const WORKER_WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
+const allowProvision = () => {};
 // These lifecycle cases opt out of capture; defaults and checkpoints have boundary coverage
 // in the warm-image suite and the classless plugin lifecycle cases.
 const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
@@ -119,6 +120,32 @@ function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
   return { leaseId, profile };
 }
 
+function defaultNodeEnrollment() {
+  return {
+    mode: "connect" as const,
+    setupCode: "secret-setup-value",
+    setupId: "setup-id",
+    openclawVersion: "2026.8.1",
+    nodeBootstrap: createNodeBootstrapFixture(),
+    displayName: "Cloud worker test",
+    waitForDeviceId: async () => "device-1",
+  };
+}
+
+function createProvisionAuthority() {
+  let authorized = true;
+  return {
+    assertAuthorized: () => {
+      if (!authorized) {
+        throw new Error("worker turn authority changed");
+      }
+    },
+    revoke: () => {
+      authorized = false;
+    },
+  };
+}
+
 function providerWithRawRunner(
   runCommand: CrabboxCommandRunner,
   warn?: (message: string) => void,
@@ -138,17 +165,12 @@ function providerWithRawRunner(
     provision: (profile, operationId, options) =>
       provider.provision(profile, operationId, {
         ...options,
-        beginNodeEnrollment:
-          options?.beginNodeEnrollment ??
-          (async () => ({
-            mode: "connect" as const,
-            setupCode: "secret-setup-value",
-            setupId: "setup-id",
-            openclawVersion: "2026.8.1",
-            nodeBootstrap: createNodeBootstrapFixture(),
-            displayName: "Cloud worker test",
-            waitForDeviceId: async () => "device-1",
-          })),
+        beginNodeEnrollment: options?.beginNodeEnrollment ?? (async () => defaultNodeEnrollment()),
+      }),
+    provisionDelegated: (profile, operationId, options) =>
+      provider.provisionDelegated!(profile, operationId, {
+        ...options,
+        beginNodeEnrollment: options.beginNodeEnrollment ?? (async () => defaultNodeEnrollment()),
       }),
   };
 }
@@ -172,8 +194,9 @@ function providerWithRunner(
 
 function failedNodeEnrollment(
   error: Error,
-): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
+): Parameters<NonNullable<WorkerProvider["provisionDelegated"]>>[2] {
   return {
+    assertAuthorized: allowProvision,
     beginNodeEnrollment: async () => ({
       mode: "connect",
       setupCode: "secret-setup-value",
@@ -839,6 +862,168 @@ describe("Crabbox worker provider", () => {
     for (const forbiddenArgument of ["remote-exec", "worker-turn", "ssh", "scp", "rsync"]) {
       expect(commandArguments).not.toContain(forbiddenArgument);
     }
+  });
+
+  it("checks revoked enrollment authority at final setup dispatch", async () => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      return argv[1] === "inspect"
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult();
+    });
+    const authority = createProvisionAuthority();
+    const provision = provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+      assertAuthorized: authority.assertAuthorized,
+      beginNodeEnrollment: async () => {
+        queueMicrotask(authority.revoke);
+        return defaultNodeEnrollment();
+      },
+    });
+
+    await expect(provision).rejects.toThrow("worker turn authority changed");
+    const enrollmentRuns = calls.filter(
+      (call) => call.argv[1] === "run" && String(call.options.input).includes("--ephemeral"),
+    );
+    expect(enrollmentRuns).toHaveLength(0);
+  });
+
+  it("cleans up when authority closes after enrollment completes", async () => {
+    const calls: string[][] = [];
+    const authority = createProvisionAuthority();
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return argv[1] === "inspect"
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+        beginNodeEnrollment: async () => ({
+          ...defaultNodeEnrollment(),
+          waitForDeviceId: async () => {
+            authority.revoke();
+            return "device-1";
+          },
+        }),
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(calls.some((argv) => argv[1] === "stop")).toBe(true);
+  });
+
+  it("does not allocate after authority closes during provider preflight", async () => {
+    const calls: string[][] = [];
+    const authority = createProvisionAuthority();
+    const provider = providerWithRawRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "config" && argv[2] === "show") {
+        authority.revoke();
+        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(calls.map((argv) => argv[1])).toEqual(["config"]);
+  });
+
+  it("cleans up when authority closes after warm allocation", async () => {
+    const calls: string[][] = [];
+    const authority = createProvisionAuthority();
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        authority.revoke();
+      }
+      return commandResult();
+    });
+
+    const error = await provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+      assertAuthorized: authority.assertAuthorized,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({ message: "worker turn authority changed" });
+    expect(WorkerProviderError.takeCleanupComplete(error)).toBe(true);
+    expect(WorkerProviderError.takeCleanupComplete(error)).toBe(false);
+    expect(calls.map((argv) => argv[1])).toEqual(["warmup", "stop"]);
+  });
+
+  it("stops readiness polling and cleans the lease when authority closes after inspect", async () => {
+    const calls: string[][] = [];
+    const authority = createProvisionAuthority();
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "inspect") {
+        authority.revoke();
+        return commandResult({ stdout: inspectJson({ ready: false, sshHostKey: HOST_KEY }) });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(calls.filter((argv) => argv[1] === "inspect")).toHaveLength(1);
+    expect(calls.some((argv) => argv[1] === "status")).toBe(false);
+    expect(calls.some((argv) => argv[1] === "stop")).toBe(true);
+  });
+
+  it("does not collect enrollment diagnostics after authority closes", async () => {
+    const calls: Array<{ argv: string[]; input: unknown }> = [];
+    const authority = createProvisionAuthority();
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, input: options.input });
+      return argv[1] === "inspect"
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+        beginNodeEnrollment: async () => ({
+          ...defaultNodeEnrollment(),
+          waitForDeviceId: async () => {
+            authority.revoke();
+            throw new Error("enrollment timed out");
+          },
+        }),
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(calls.some(({ input }) => String(input).includes("node.log tail"))).toBe(false);
+    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
+  });
+
+  it.each([
+    { name: "profile", profile: { ...PROFILE, setup: "echo profile" } },
+    { name: "desktop", profile: { ...PROFILE, desktop: true } },
+  ])("does not dispatch $name setup after authority closes", async ({ profile }) => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const authority = createProvisionAuthority();
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      if (argv[1] === "inspect") {
+        authority.revoke();
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(profile, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(calls.some(({ argv }) => argv[1] === "run")).toBe(false);
+    expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
   });
 
   it("rejects an unsupported execution mode before invoking Crabbox", async () => {
@@ -2321,6 +2506,40 @@ describe("Crabbox worker provider", () => {
       }
     },
   );
+
+  it("cleans up an allocated lease when authority aborts enrollment", async () => {
+    const calls: string[][] = [];
+    const controller = new AbortController();
+    const authority = createProvisionAuthority();
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return argv[1] === "inspect"
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+        beginNodeEnrollment: async () => ({
+          mode: "resume" as const,
+          deviceId: "device-bound",
+          openclawVersion: "2026.8.1",
+          nodeBootstrap: createNodeBootstrapFixture(),
+          displayName: "Bound worker",
+          signal: controller.signal,
+          waitForDeviceId: async () => {
+            authority.revoke();
+            controller.abort(new Error("worker turn authority changed"));
+            controller.signal.throwIfAborted();
+            return "device-bound";
+          },
+        }),
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+
+    expect(calls.some((argv) => argv[1] === "stop")).toBe(true);
+  });
 
   it.each([
     {

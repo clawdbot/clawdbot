@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForChildClose, waitForPidFile } from "../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -29,6 +29,59 @@ import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker tunnel manager", () => {
+  it("stops workspace mutation when dispatch authority closes after remote setup", async () => {
+    const manifestRef = `sha256:${"b".repeat(64)}`;
+    const { stdout: setupStdout } = workspaceSetup(
+      "/home/worker",
+      "worker:revoked-sync",
+      "session:revoked-sync",
+      1,
+    );
+    const localPath = tempDirs.make("openclaw-worker-revoked-sync-");
+    let authorized = true;
+    const fake = fakeRunner((argv, options) => {
+      if (argv[0] === "git") {
+        return { ...success(), code: 128 };
+      }
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
+        authorized = false;
+        return success(setupStdout);
+      }
+      if (argv.at(-1)?.includes("worker workspace symlink escapes")) {
+        return success(`${manifestRef}\n`);
+      }
+      return undefined;
+    });
+    const { handle } = await startConnectedTunnel(fake, "worker:revoked-sync", 1);
+    const mkdtemp = vi.spyOn(fs, "mkdtemp");
+
+    try {
+      await expect(
+        handle.syncWorkspace({
+          localPath,
+          sessionId: "session:revoked-sync",
+          generation: 1,
+          authorize: () => {
+            if (!authorized) {
+              throw new Error("session dispatch authority closed");
+            }
+          },
+        }),
+      ).rejects.toThrow("session dispatch authority closed");
+      expect(fake.runs.filter((entry) => entry.argv[0] === "git")).toHaveLength(0);
+      expect(fake.runs.filter((entry) => entry.argv[0] === "rsync")).toHaveLength(0);
+      expect(
+        mkdtemp.mock.calls.filter(([prefix]) => prefix.endsWith("openclaw-worker-workspace-sync-")),
+      ).toHaveLength(0);
+    } finally {
+      mkdtemp.mockRestore();
+      await handle.stop();
+    }
+  });
+
   it("syncs a dirty workspace over pinned rsync and records an immutable manifest", async () => {
     const manifestRef = `sha256:${"b".repeat(64)}`;
     const { remoteWorkspaceDir, stdout: setupStdout } = workspaceSetup(

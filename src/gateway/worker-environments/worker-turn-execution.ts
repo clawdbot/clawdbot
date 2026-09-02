@@ -127,11 +127,18 @@ export async function executeWorkerTurn(
     model: modelRef.model,
   });
 
+  const assertTurnClaimCurrent = () => {
+    turn.abortSignal?.throwIfAborted();
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Worker turn authority changed during tunnel startup");
+    }
+  };
   const credential = await params.environments.acquireTurnCredential(params.turnClaim);
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
+      authorize: assertTurnClaimCurrent,
     }),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,

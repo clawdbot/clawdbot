@@ -593,7 +593,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
           generation: params.ownerEpoch,
           localPath: localRequest.localPath,
           // Durable owner state is revalidated by the transfer service after every awaited I/O.
-          isAuthorized: params.isOwnerCurrent,
+          isAuthorized: () => { request.authorize?.(); return params.isOwnerCurrent(); },
           signal: params.ownerSignal,
         });
         try {
@@ -625,6 +625,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
             },
             timeoutMs: 10 * 60_000,
             transportRetry: "never",
+            assertCurrent: request.authorize,
           });
           if (
             transferred.termination !== "exit" ||

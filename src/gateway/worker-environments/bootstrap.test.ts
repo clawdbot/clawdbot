@@ -107,6 +107,39 @@ const bootstrapWorker = (
   );
 
 describe("bootstrapWorker", () => {
+  it("does not transfer a bundle after authority closes during SSH preflight", async () => {
+    let authorized = true;
+    const runner = fakeRunner(
+      [result({ stdout: tagged("install", REMOTE_TARBALL) }), result()],
+      (argv, options) => {
+        if (
+          argv[0] === "ssh" &&
+          typeof options.input === "string" &&
+          options.input.includes("expected_receipt=$2")
+        ) {
+          authorized = false;
+        }
+      },
+    );
+
+    await expect(
+      bootstrapWorker(
+        { ssh: SSH, artifact: BUNDLE },
+        {
+          resolveIdentity,
+          runCommand: runner.runCommand,
+          assertCurrent: () => {
+            if (!authorized) {
+              throw new Error("session dispatch authority closed");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("session dispatch authority closed");
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh"]);
+  });
+
   it("skips a matching installed bundle and uses the pinned host key", async () => {
     let knownHosts = "";
     const runner = fakeRunner(

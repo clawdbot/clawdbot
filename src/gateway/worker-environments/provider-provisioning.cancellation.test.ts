@@ -9,6 +9,8 @@ import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import * as support from "./service.test-support.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
+const authorize = () => {};
+
 function createRuntimeManager(
   transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>,
 ) {
@@ -172,6 +174,7 @@ describe("worker provisioning cancellation ownership", () => {
           "worker-turn",
           undefined,
           controller.signal,
+          authorize,
         )
         .catch((error: unknown) => error)
         .finally(() => {
@@ -324,6 +327,7 @@ describe("worker provisioning cancellation ownership", () => {
         "worker-turn",
         undefined,
         controller.signal,
+        authorize,
       )
       .catch((error: unknown) => error)
       .finally(() => {
@@ -410,7 +414,15 @@ describe("worker provisioning cancellation ownership", () => {
       },
     );
     const creation = service
-      .create("development", "runtime-before-enrollment", undefined, "worker-turn")
+      .create(
+        "development",
+        "runtime-before-enrollment",
+        undefined,
+        "worker-turn",
+        undefined,
+        undefined,
+        authorize,
+      )
       .catch((error: unknown) => error);
     try {
       const enrollment = await Promise.race([
@@ -537,6 +549,7 @@ describe("worker provisioning cancellation ownership", () => {
         "worker-turn",
         undefined,
         controller.signal,
+        authorize,
       )
       .catch((error: unknown) => error)
       .finally(() => {
@@ -728,6 +741,7 @@ describe("worker provisioning cancellation ownership", () => {
         "worker-turn",
         undefined,
         controller.signal,
+        authorize,
       )
       .catch((error: unknown) => error)
       .finally(() => {
@@ -802,6 +816,7 @@ describe("worker provisioning cancellation ownership", () => {
         "worker-turn",
         undefined,
         controller.signal,
+        authorize,
       )
       .catch((error: unknown) => error);
     await waiting.promise;

@@ -129,6 +129,23 @@ result includes the required `modelCatalog` with
 the selected physical-route metadata. Both builders use one metadata producer;
 callers must carry prepared rows forward rather than reconstructing them from IDs.
 
+### Worker provider delegated authority
+
+The 2026.8.2 Plugin SDK allowed a `WorkerProvider` to advertise session
+placement with `supportedExecutionModes`. That legacy type remains accepted for
+direct lifecycle operations through 2026-11-02, but advertised modes alone no
+longer enable delegated placement. The Gateway emits a registration warning and
+requires `WorkerProviderV2` with `provisionDelegated` before admitting new
+session placement.
+
+This security transition cannot use the ordinary compatibility adapter: core
+cannot safely reconstruct provider-owned authority checks around asynchronous
+allocation and setup. Migrate the provider to `WorkerProviderV2`, then call
+`options.assertAuthorized()` immediately before every provider-owned external
+effect and again after awaited work before the next effect or successful
+return. Keep ordinary `provision` for direct lifecycle callers; core never uses
+it as a delegated-placement fallback.
+
 ### Memory read missing results
 
 Memory managers now return `status: "ok"` for successful excerpts and

@@ -146,6 +146,9 @@ describe("worker environment service", () => {
       "request-unadvertised-persisted-ssh",
       undefined,
       "remote-exec",
+      undefined,
+      undefined,
+      () => {},
     );
     provider.supportedExecutionModes = undefined;
     support.testState.config.cloudWorkers!.profiles = {};
@@ -187,6 +190,9 @@ describe("worker environment service", () => {
         "request-unadvertised-persisted-node",
         undefined,
         "remote-exec",
+        undefined,
+        undefined,
+        () => {},
       );
       provider.supportedExecutionModes = supportedExecutionModes;
       support.getDevelopmentProfile().settings = { region: "edited" };
@@ -229,6 +235,9 @@ describe("worker environment service", () => {
         "request-persisted-multimode-node",
         undefined,
         "remote-exec",
+        undefined,
+        undefined,
+        () => {},
       );
       await initial.stop();
 

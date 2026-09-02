@@ -61,6 +61,7 @@ export async function runAgentResetPhase(params: {
   context: GatewayRequestHandlerOptions["context"];
   respond: GatewayRequestHandlerOptions["respond"];
   abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
+  assertRuntimeAuthorityCurrent?: () => void;
   setCommittedResetCompletion: (completion: CommittedResetCompletion) => void;
 }): Promise<AgentResetPhaseResult> {
   const base = {
@@ -92,6 +93,7 @@ export async function runAgentResetPhase(params: {
   }
   const resetReason =
     normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
+  params.assertRuntimeAuthorityCurrent?.();
   let resetResult: Awaited<ReturnType<typeof runSessionResetFromAgent>>;
   try {
     const creation = prepareSkillLibrarySessionCreation(
@@ -112,6 +114,7 @@ export async function runAgentResetPhase(params: {
         : {}),
       assertCurrent: () => {
         params.assertAdmissionCurrent?.();
+        params.assertRuntimeAuthorityCurrent?.();
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
       },
@@ -125,6 +128,7 @@ export async function runAgentResetPhase(params: {
         });
       },
     });
+    params.assertRuntimeAuthorityCurrent?.();
   } catch (err) {
     if (
       params.abortForLifecycleRotation({
@@ -186,8 +190,12 @@ export async function runAgentResetPhase(params: {
       sessionEntry: deliverySession?.entry,
       request: params.sessionKeyFromTo ? { ...params.request, to: undefined } : params.request,
       runId: params.runId,
-      assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
+      assertCurrent: () => {
+        params.assertRuntimeAuthorityCurrent?.();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      },
     });
+    params.assertRuntimeAuthorityCurrent?.();
     const responsePayload = buildBareSessionResetResponse({
       runId: params.runId,
       result: resetAckResult,

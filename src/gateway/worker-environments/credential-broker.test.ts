@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -78,6 +79,71 @@ describe("worker environment service", () => {
       state: "ready",
       attachedSessionIds: [],
     });
+  });
+
+  it("does not attach after dispatch authority closes during build preparation", async () => {
+    const prepared = createDeferred<typeof support.BUNDLE_ARTIFACT>();
+    support.testState.prepareInstallation = vi.fn(async () => await prepared.promise);
+    const environmentId = "worker-revoked-attach";
+    support.seedReady(environmentId);
+    const workerService = support.createService(support.createProvider());
+    let authorized = true;
+
+    const attaching = workerService.attachSession({
+      environmentId,
+      ownerEpoch: 1,
+      sessionId: "session-revoked-attach",
+      authorize: () => {
+        if (!authorized) {
+          throw new Error("session dispatch authority closed");
+        }
+      },
+    });
+    const rejected = expect(attaching).rejects.toThrow("session dispatch authority closed");
+    await support.waitForFast(() =>
+      expect(support.testState.prepareInstallation).toHaveBeenCalled(),
+    );
+    authorized = false;
+    prepared.resolve(support.BUNDLE_ARTIFACT);
+
+    await rejected;
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "ready",
+      attachedSessionIds: [],
+      ownerEpoch: 1,
+    });
+  });
+
+  it("revokes attachment when authority closes during tunnel teardown", async () => {
+    const environmentId = "worker-revoked-during-tunnel-stop";
+    support.seedReady(environmentId);
+    let authorized = true;
+    const tunnelManager = {
+      stop: vi.fn(async () => {
+        authorized = false;
+      }),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(support.createProvider(), { tunnelManager });
+
+    await expect(
+      workerService.attachSession({
+        environmentId,
+        ownerEpoch: 1,
+        sessionId: "session-revoked-during-tunnel-stop",
+        authorize: () => {
+          if (!authorized) {
+            throw new Error("session dispatch authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("session dispatch authority closed");
+
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "idle",
+      attachedSessionIds: [],
+    });
+    expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
   });
 
   it("returns a bounded error when another worker owns the session", async () => {

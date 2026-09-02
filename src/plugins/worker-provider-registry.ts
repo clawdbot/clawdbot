@@ -56,6 +56,15 @@ export function validateWorkerProviderContract(
     };
   }
   if (
+    provider.provisionDelegated !== undefined &&
+    typeof provider.provisionDelegated !== "function"
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration provisionDelegated must be a function",
+    };
+  }
+  if (
     provider.resolveSshIdentity !== undefined &&
     typeof provider.resolveSshIdentity !== "function"
   ) {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
@@ -42,6 +43,30 @@ describe("worker SSH preparation", () => {
       remove.mockRestore();
       await fs.rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("does not materialize resolved identity after authority closes", async () => {
+    const prefix = `openclaw-worker-authority-${process.pid}-`;
+    let authorityActive = true;
+
+    await expect(
+      prepareWorkerSsh({
+        assertCurrent: () => {
+          if (!authorityActive) {
+            throw new Error("worker authority closed");
+          }
+        },
+        ssh: SSH,
+        pinnedHostKey: SSH.hostKey,
+        resolveIdentity: async () => {
+          authorityActive = false;
+          return { kind: "material" as const, contents: "secret-key" };
+        },
+        temporaryDirectoryPrefix: prefix,
+      }),
+    ).rejects.toThrow("worker authority closed");
+
+    expect((await fs.readdir(os.tmpdir())).filter((entry) => entry.startsWith(prefix))).toEqual([]);
   });
 
   it("adapts pinned endpoint identity and every advertised port for sandbox SSH", () => {

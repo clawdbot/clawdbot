@@ -152,6 +152,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
         typeof nodeDeviceId === "string" &&
@@ -179,6 +180,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             openclawVersion: currentBundle.openclawVersion,
             protocolFeatures: [...currentBundle.protocolFeatures],
           },
+          authorize: request.authorize,
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;
@@ -193,11 +195,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // Workspace ownership is registered synchronously by the manager. Release the durable-state
       // lock while SSH identity material is prepared so drain/destroy can fence initialization.
       startup = tunnels.start({
-        ...request,
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
         bundleHash: currentBundle.bundleHash,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+        authorize: request.authorize,
       });
       stopStartup = async () => await tunnels.stop(record.environmentId, record.ownerEpoch);
     });

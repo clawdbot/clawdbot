@@ -73,6 +73,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
+  interruptedDelegatedChildSessionKeys?: ReadonlySet<string>;
   persistAbandonedPartial?: (request: {
     sessionId: string;
     sessionKey: string;
@@ -242,6 +243,8 @@ export function createGatewayWorkerPlacementRuntime(
           (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
         );
       },
+      isInterruptedDelegatedChild: (sessionKey) =>
+        params.interruptedDelegatedChildSessionKeys?.has(sessionKey) === true,
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({

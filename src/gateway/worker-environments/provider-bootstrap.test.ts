@@ -252,13 +252,17 @@ describe("worker environment service", () => {
     });
 
     await expect(
-      dispatch.dispatch({
-        sessionId: "session-bootstrap-failure",
-        sessionKey: "agent:main:session-bootstrap-failure",
-        agentId: "main",
-        profileId: "development",
-        executionMode: "remote-exec",
-      }),
+      dispatch.dispatch(
+        {
+          sessionId: "session-bootstrap-failure",
+          sessionKey: "agent:main:session-bootstrap-failure",
+          agentId: "main",
+          profileId: "development",
+          executionMode: "remote-exec",
+        },
+        undefined,
+        () => {},
+      ),
     ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
 
     const persisted = expectDefined(

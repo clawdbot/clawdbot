@@ -83,11 +83,13 @@ function replayAgentTurnIfCached(params: {
   }
   return true;
 }
-
 export function createAgentTurnService(
-  { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
+  options: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect"> & {
+    assertRuntimeAuthorityCurrent?: () => void;
+  },
   assertContextCurrent?: () => void,
 ) {
+  const { context, isWebchatConnect, assertRuntimeAuthorityCurrent } = options;
   const startTurn = async ({
     assertAdmissionCurrent,
     preflight,
@@ -271,6 +273,7 @@ export function createAgentTurnService(
         getCfgForAgent: () => cfgForAgent,
         getSessionPersisted: () => sessionPersistedBeforeGatewayAdmission,
         getSupersededSessionId: () => supersededSessionId,
+        assertRuntimeAuthorityCurrent,
         setAdmittedSessionId: (sessionId) => {
           admittedSessionId = sessionId;
         },
@@ -293,6 +296,7 @@ export function createAgentTurnService(
         context,
         respond,
         abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
+        assertRuntimeAuthorityCurrent,
         setCommittedResetCompletion: dedupeLifecycle.setCommittedResetCompletion,
       });
       requestedSessionKey = resetPhase.requestedSessionKey;
@@ -568,6 +572,7 @@ export function createAgentTurnService(
         abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
         acquireGatewayWorkAdmission: admissionController.acquire,
         assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
+        assertRuntimeAuthorityCurrent,
         hasGatewayAdmissionOutcome: admissionController.hasOutcome,
         respondToGatewayAdmissionOutcome: admissionController.respondToOutcome,
         admissionAgentId: admissionController.admissionAgentId,

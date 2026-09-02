@@ -371,10 +371,17 @@ export async function executeRemoteExecTurn(params: {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
   await recoverWorkspaceBeforeTurn(params);
+  const assertTurnClaimCurrent = () => {
+    params.turn.abortSignal?.throwIfAborted();
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Remote-exec turn authority changed during tunnel startup");
+    }
+  };
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: params.placement.environmentId,
       ownerEpoch: params.placement.activeOwnerEpoch,
+      authorize: assertTurnClaimCurrent,
     }),
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,

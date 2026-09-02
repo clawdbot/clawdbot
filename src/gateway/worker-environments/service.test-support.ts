@@ -240,11 +240,17 @@ export function createService(
 }
 
 export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
+  const provision =
+    overrides.provision ?? (async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }) as const);
   return {
     id: "fake",
     supportedExecutionModes: ["remote-exec"],
     resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
-    provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
+    provision,
+    provisionDelegated: async (profile, operationId, options) => {
+      options.assertAuthorized();
+      return await provision(profile, operationId, options);
+    },
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},
     ...overrides,

@@ -133,6 +133,14 @@ describe("worker node enrollment", () => {
   };
 
   beforeEach(async () => {
+    vi.mocked(ensureDevicePairSetupBootstrapToken)
+      .mockReset()
+      .mockImplementation(async ({ setupId }) => ({
+        status: "pending",
+        token: "bootstrap-token",
+        expiresAtMs: 10_000,
+        setupId,
+      }));
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-enrollment-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
@@ -617,6 +625,57 @@ describe("worker node enrollment", () => {
     const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
     await expect(manager.begin(record)).rejects.toMatchObject({ name: "AbortError" });
     expect(ensureEnrollment).not.toHaveBeenCalled();
+  });
+
+  it("does not return setup material after authority closes during token preparation", async () => {
+    const record = createProvisioning();
+    const issued = createDeferredCore<{
+      status: "pending";
+      token: string;
+      expiresAtMs: number;
+      setupId: string;
+    }>();
+    vi.mocked(ensureDevicePairSetupBootstrapToken).mockImplementationOnce(
+      async () => await issued.promise,
+    );
+    const manager = createManager();
+    let authorized = true;
+    const preparing = manager.begin(record, undefined, () => {
+      if (!authorized) {
+        throw new Error("session dispatch authority closed");
+      }
+    });
+    const rejected = expect(preparing).rejects.toThrow("session dispatch authority closed");
+    await vi.waitFor(() => expect(ensureDevicePairSetupBootstrapToken).toHaveBeenCalled());
+    authorized = false;
+    issued.resolve({
+      status: "pending",
+      token: "bootstrap-token",
+      expiresAtMs: 10_000,
+      setupId: record.nodeSetupId!,
+    });
+
+    await rejected;
+    expect(
+      transfer.authorize({ token: "bootstrap-token", artifactKey: artifact().tarballSha256 }),
+    ).toBeUndefined();
+  });
+
+  it("invalidates the retained device wait when authority closes", async () => {
+    const record = createProvisioning("device-pending");
+    let authorized = true;
+    const resolveAvailability = vi.fn(async () => ({ available: false as const }));
+    const manager = createManager({ resolveAvailability });
+    const enrollment = await manager.begin(record, undefined, () => {
+      if (!authorized) {
+        throw new Error("session dispatch authority closed");
+      }
+    });
+    authorized = false;
+
+    await expect(enrollment.waitForDeviceId()).rejects.toThrow("session dispatch authority closed");
+    expect(enrollment.signal?.aborted).toBe(true);
+    expect(resolveAvailability).not.toHaveBeenCalled();
   });
 
   it.each(["close", "retire", "shutdown", "destroy"] as const)(

@@ -143,8 +143,9 @@ export async function provisionWarmProfile(
   operationId = OPERATION_ID,
   machineClass?: string,
   options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
+  assertAuthorized: () => void = () => {},
 ) {
-  return provider.provision(profile, operationId, {
+  return provider.provisionDelegated!(profile, operationId, {
     ...options,
     ...(machineClass ? { machineClass } : {}),
     beginNodeEnrollment:
@@ -158,6 +159,7 @@ export async function provisionWarmProfile(
         displayName: "Warm cloud worker",
         waitForDeviceId: async () => "device-1",
       })),
+    assertAuthorized,
   });
 }
 

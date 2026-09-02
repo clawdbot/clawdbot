@@ -506,7 +506,10 @@ describe("worker session placement gate", () => {
     ).toMatchObject({ kind: "execute" });
 
     const restarted = createWorkerSessionPlacementStore({ database });
-    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
+    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 1,
+      interruptedChildSessionKeys: [],
+    });
     expect(
       restarted.beginWorkerSessionToolOperation({
         claim: binding,
@@ -516,5 +519,32 @@ describe("worker session placement gate", () => {
       }),
     ).toEqual({ kind: "unknown" });
     expect(() => restarted.releaseTurn(claim)).not.toThrow();
+  });
+
+  it("retains an interrupted child fence across repeated restart recovery", () => {
+    const claim = preclaim("run-worker-child-crash-recovery");
+    const binding = bindingFor(claim);
+    const childSessionKey = "agent:main:subagent:interrupted-child";
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "spawn-before-crash",
+        requestDigest: "spawn-before-crash-digest",
+        childSessionKey,
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    const firstRestart = createWorkerSessionPlacementStore({ database });
+    expect(firstRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 1,
+      interruptedChildSessionKeys: [childSessionKey],
+    });
+    const secondRestart = createWorkerSessionPlacementStore({ database });
+    expect(secondRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 0,
+      interruptedChildSessionKeys: [childSessionKey],
+    });
   });
 });

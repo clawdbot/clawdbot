@@ -493,8 +493,22 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       return abandoned;
     },
 
-    recoverWorkerSessionToolOperationsAfterRestart(): number {
+    recoverWorkerSessionToolOperationsAfterRestart(): {
+      count: number;
+      interruptedChildSessionKeys: string[];
+    } {
       return write((db) => {
+        const interruptedChildSessionKeys = executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom("worker_session_tool_operations")
+            .select("child_session_key")
+            .where("tool_name", "=", "sessions_spawn")
+            // Unknown is the durable crash fence. Keep returning its child until the
+            // owning turn lifecycle deletes the operation, including across restarts.
+            .where("status", "in", ["running", "unknown"])
+            .where("child_session_key", "is not", null),
+        ).rows.flatMap((row) => (row.child_session_key ? [row.child_session_key] : []));
         const result = executeSqliteQuerySync(
           db,
           query(db)
@@ -502,7 +516,7 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
             .set({ status: "unknown", updated_at_ms: now() })
             .where("status", "=", "running"),
         );
-        return Number(result.numAffectedRows);
+        return { count: Number(result.numAffectedRows), interruptedChildSessionKeys };
       });
     },
   };

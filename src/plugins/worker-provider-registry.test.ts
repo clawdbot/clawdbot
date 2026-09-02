@@ -133,12 +133,51 @@ describe("worker provider registry", () => {
     const provider = {
       ...createWorkerProvider("static-ssh"),
       supportedExecutionModes: ["worker-turn", "remote-exec"],
+      provisionDelegated: async () => {
+        throw new Error("not called");
+      },
     } satisfies WorkerProvider;
 
     pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
 
     expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
     expect(pluginRegistry.registry.diagnostics).toEqual([]);
+  });
+
+  it("warns legacy placement providers without dropping direct lifecycle support", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      supportedExecutionModes: ["remote-exec"],
+    } satisfies WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual({
+      level: "warn",
+      pluginId: "owner",
+      source: "/tmp/owner/index.js",
+      message:
+        "worker provider static-ssh advertises delegated placement without provisionDelegated; direct lifecycle remains available, but session placement is disabled. Implement WorkerProviderV2 and revalidate options.assertAuthorized before each external effect",
+    });
+  });
+
+  it("rejects a malformed delegated provisioning capability", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      provisionDelegated: true,
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration provisionDelegated must be a function",
+      }),
+    );
   });
 
   it.each([

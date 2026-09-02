@@ -12,6 +12,7 @@ import {
   captureWarmImage,
   commandResult,
   createWarmProvider,
+  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
@@ -22,6 +23,98 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox profile warm images", () => {
+  it("does not fall back to cold allocation when authority closes before a warm-image fork", async () => {
+    const initial = createWarmProvider();
+    await captureWarmImage(initial.provider);
+    let authorized = true;
+    const replay = createWarmProvider(({ argv }) => {
+      if (argv[1] === "checkpoint" && argv[2] === "inspect") {
+        authorized = false;
+      }
+      return undefined;
+    }, initial.stateDir);
+
+    await expect(
+      provisionWarmProfile(replay.provider, PROFILE, OPERATION_ID, undefined, undefined, () => {
+        if (!authorized) {
+          throw new Error("worker turn authority changed");
+        }
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(replay.calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+    expect(replay.calls.some(({ argv }) => argv[1] === "checkpoint" && argv[2] === "fork")).toBe(
+      false,
+    );
+  });
+
+  it("does not delete a pending warm image when authority closes during verification", async () => {
+    const initial = createWarmProvider();
+    await captureWarmImage(initial.provider);
+    let authorized = true;
+    const replay = createWarmProvider(({ argv }) => {
+      if (argv[1] === "checkpoint" && argv[2] === "inspect") {
+        authorized = false;
+        return commandResult({
+          stdout: JSON.stringify({
+            localState: "available",
+            providerState: "missing",
+            nextAction: "delete",
+          }),
+        });
+      }
+      return undefined;
+    }, initial.stateDir);
+
+    await expect(
+      provisionWarmProfile(replay.provider, PROFILE, OPERATION_ID, undefined, undefined, () => {
+        if (!authorized) {
+          throw new Error("worker turn authority changed");
+        }
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(replay.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+    expect(replay.calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  });
+
+  it("stops expired-image collection when allocation authority closes", async () => {
+    const now = Date.now();
+    let authorized = true;
+    const { provider, calls } = createWarmProvider(({ argv }) => {
+      if (argv[1] === "checkpoint" && argv[2] === "delete") {
+        authorized = false;
+      }
+      return undefined;
+    });
+    const store = openWarmImageStore();
+    for (const checkpointId of ["chk_expired_one", "chk_expired_two"]) {
+      store.register(checkpointId, {
+        version: 2,
+        allocations: {},
+        image: {
+          checkpointId,
+          kind: "aws-ebs-snapshot",
+          state: "available",
+          createdAtMs: now,
+          lastUsedAtMs: now,
+        },
+      });
+    }
+    vi.spyOn(Date, "now").mockReturnValue(now + 14 * 24 * 60 * 60 * 1_000);
+
+    await expect(
+      provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, undefined, () => {
+        if (!authorized) {
+          throw new Error("worker turn authority changed");
+        }
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+
+    expect(
+      calls.filter(({ argv }) => argv[1] === "checkpoint" && argv[2] === "delete"),
+    ).toHaveLength(1);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  });
+
   it("reuses captured images across managers, setup environment values, and setup environment order", async () => {
     const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
     vi.stubEnv("WARM_A", "first-secret");

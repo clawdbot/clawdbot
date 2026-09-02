@@ -74,6 +74,7 @@ export type PlacementRecoveryDeps = {
     agentId: string;
   }) => Promise<WorkspaceResultConflictLookup>;
   recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
+  isInterruptedDelegatedChild?: ((sessionKey: string) => boolean) | undefined;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   prepareGatewayMove?: (params: {
@@ -212,16 +213,28 @@ export async function recoverPendingWorkspaceResults(
   };
   const stagedResultOwners = new Set<string>();
   for (const pending of placements.listPendingWorkspaceResults()) {
+    const placement = placements.get(pending.sessionId);
+    if (environmentId !== undefined && placement?.environmentId !== environmentId) {
+      continue;
+    }
+    if (placement && deps.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+      const error = new Error(
+        "Delegated child placement lost its initiating worker turn during restart",
+      );
+      if (placement.state === "active" || placement.state === "draining") {
+        const failed = placements.failWorkspaceResultAndReleaseTurn(pending, error);
+        if (failed.state === "failed") {
+          await failure.retryFailedTeardown(failed);
+        }
+      }
+      continue;
+    }
     if (pending.stagedResultRef) {
       stagedResultOwners.add(pending.sessionId);
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
     if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
-      continue;
-    }
-    const placement = placements.get(pending.sessionId);
-    if (environmentId !== undefined && placement?.environmentId !== environmentId) {
       continue;
     }
     try {

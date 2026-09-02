@@ -95,6 +95,36 @@ describe("Gateway node worker bundle installer", () => {
       transfer.closeAll();
     }
     expect(await pending).toMatchObject({ name: "AbortError" });
+  });
+
+  it("does not dispatch an install after authority closes during node discovery", async () => {
+    const discovered = createDeferredCore<NodeWorkerSupervisorNodeProof[]>();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
+      listCurrentNodes: async () => await discovered.promise,
+      isCurrent: () => true,
+      invoke,
+    };
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer: createNodeWorkerBundleTransferService(),
+    });
+    let authorized = true;
+    const installing = ensure({
+      deviceId: node.nodeId,
+      artifact,
+      authorize: () => {
+        if (!authorized) {
+          throw new Error("session dispatch authority closed");
+        }
+      },
+    });
+    authorized = false;
+    discovered.resolve([node]);
+
+    await expect(installing).rejects.toThrow("session dispatch authority closed");
     expect(invoke).not.toHaveBeenCalled();
   });
 

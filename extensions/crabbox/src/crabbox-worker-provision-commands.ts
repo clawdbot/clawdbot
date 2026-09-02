@@ -21,6 +21,7 @@ export type InspectCommandResult =
   | { status: "found"; inspect: ParsedInspect }
   | { status: "unknown" };
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
+  assertAuthorized?: () => void;
   deadline: number;
   inspect: ParsedInspect;
   profile: ReturnType<typeof parseCrabboxProfile>;
@@ -46,6 +47,7 @@ const NON_RUNNABLE_STATES = new Set([
 ]);
 
 export async function inspectWithContext(params: {
+  assertAuthorized?: () => void;
   context: Omit<LeaseCommandContext, "id">;
   expectedLeaseId?: string;
   id: string;
@@ -55,6 +57,7 @@ export async function inspectWithContext(params: {
   signal?: AbortSignal;
 }): Promise<InspectCommandResult> {
   const action = params.waitForReady ? "status" : "inspect";
+  params.assertAuthorized?.();
   const result = await runCrabboxCommand({
     action,
     args: [
@@ -154,6 +157,7 @@ export async function waitForProvisionReady(
   const inspectAgain = async (): Promise<ParsedInspect> => {
     params.signal?.throwIfAborted();
     const replay = await inspectWithContext({
+      ...(params.assertAuthorized ? { assertAuthorized: params.assertAuthorized } : {}),
       context: { binary: params.binary, provider: params.provider },
       expectedLeaseId: inspect.id,
       id: inspect.id,
@@ -172,11 +176,13 @@ export async function waitForProvisionReady(
     return replay.inspect;
   };
   try {
+    params.assertAuthorized?.();
     inspect = params.refresh ? await inspectAgain() : params.inspect;
     params.signal?.throwIfAborted();
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
+      params.assertAuthorized?.();
       params.signal?.throwIfAborted();
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
       await params.sleep(
@@ -194,6 +200,11 @@ export async function waitForProvisionReady(
     }
     return inspect;
   } catch (error) {
+    try {
+      params.assertAuthorized?.();
+    } catch (authorityError) {
+      return await failProvisionAfterCleanup({ ...params, id: inspect.id }, authorityError);
+    }
     params.signal?.throwIfAborted();
     if (error instanceof WorkerProviderError) {
       return await failProvisionAfterCleanup({ ...params, id: inspect.id }, error);
@@ -216,8 +227,9 @@ export async function runProvisionSetup(
   try {
     const result = await withCrabboxWorkerEnvProfile(
       params.forwardedEnv,
-      (names, profilePath, childEnv) =>
-        runCrabboxCommand({
+      (names, profilePath, childEnv) => {
+        params.assertAuthorized?.();
+        return runCrabboxCommand({
           action: params.phase,
           args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
@@ -229,7 +241,8 @@ export async function runProvisionSetup(
             params.deadline,
             params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
           ),
-        }),
+        });
+      },
     );
     if (result.termination !== "exit" || result.code !== 0) {
       throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);
@@ -261,5 +274,5 @@ export async function failProvisionAfterCleanup(
   } catch (cleanupError) {
     throw WorkerProviderError.cleanupIndeterminate(params.id, provisionError, cleanupError);
   }
-  throw provisionError;
+  throw WorkerProviderError.cleanupComplete(provisionError);
 }

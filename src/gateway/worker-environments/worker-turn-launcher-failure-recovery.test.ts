@@ -564,17 +564,21 @@ describe("worker turn launcher failure recovery", () => {
       throw new Error("unexpected worker handoff");
     });
     const acknowledgeCredentialDelivery = vi.fn(() => true);
-    const startTunnel = vi.fn(async (): Promise<WorkerTunnelHandle> => ({
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      quiesceWorkspace: vi.fn(),
-      runWorkspaceCommand: vi.fn(),
-      measureLaunchTurn,
-      launchTurn,
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace: vi.fn(),
-      stop: vi.fn(async () => {}),
-    }));
+    const startTunnel = vi.fn(
+      async (
+        _request: Parameters<WorkerTurnEnvironmentService["startTunnel"]>[0],
+      ): Promise<WorkerTunnelHandle> => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        quiesceWorkspace: vi.fn(),
+        runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
+        launchTurn,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      }),
+    );
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {
@@ -602,6 +606,9 @@ describe("worker turn launcher failure recovery", () => {
     ).rejects.toThrow(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
 
     expect(startTunnel).toHaveBeenCalledOnce();
+    const tunnelAuthority = startTunnel.mock.calls[0]?.[0].authorize;
+    expect(tunnelAuthority).toBeTypeOf("function");
+    expect(tunnelAuthority).toThrow("Worker turn authority changed during tunnel startup");
     expect(launchTurn).not.toHaveBeenCalled();
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();

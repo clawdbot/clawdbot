@@ -1,12 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
-import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import {
   WorkerProviderError,
   type WorkerExecutionMode,
   type WorkerLease,
-  type WorkerProfile,
   type WorkerProvider,
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
@@ -24,11 +21,14 @@ import {
   retireMismatchedWorkerLease,
 } from "./provider-persisted-lease.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
+import { createWorkerSshProvisioning } from "./provider-ssh-provisioning.js";
 import {
   normalizeWorkerMachineOptions,
   requireProviderOperationTimeoutMs,
+  requireWorkerInstall,
   requireWorkerLease,
   requireWorkerLeaseStatus,
+  requireWorkerProfile,
   resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
 import type {
@@ -43,20 +43,13 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const { store, callBootstrap, callProvider, inState, move, saveError, serviceError } = options;
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
-  function requireWorkerProfile(value: unknown): WorkerProfile {
-    const error = validateCloudWorkerProfileSettings(value);
-    if (error) {
-      throw serviceError("invalid_profile", error);
-    }
-    return value as WorkerProfile;
-  }
-
+  const checkedProfile = (value: unknown) => requireWorkerProfile(value, serviceError);
   const identityResolverFor = (
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     leaseId: string,
   ) => {
-    const profile = requireWorkerProfile(record.profileSnapshot.settings);
+    const profile = checkedProfile(record.profileSnapshot.settings);
     const resolveSshIdentity = options.resolveSshIdentity;
     return async (keyRef: SecretRef) => {
       if (!resolveSshIdentity) {
@@ -85,7 +78,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     lifecycleLease,
     finishDestroy,
     destroy,
-  } = createWorkerProviderOwnerLifecycle({ ...options, providerFor, requireWorkerProfile });
+  } = createWorkerProviderOwnerLifecycle({
+    ...options,
+    providerFor,
+    requireWorkerProfile: checkedProfile,
+  });
 
   const listMachineOptions = async (profileId: string) => {
     const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
@@ -94,20 +91,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     const provider = options.resolveProvider(profile.provider);
     return normalizeWorkerMachineOptions(
-      await provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
+      await provider?.listMachineOptions?.(checkedProfile(profile.settings ?? {})),
     );
   };
 
-  const installFor = (record: WorkerEnvironmentRecord): WorkerInstallationArtifact["install"] => {
-    const install = record.profileSnapshot.install;
-    if (install === undefined || install === "bundle") {
-      return "bundle";
-    }
-    if (install === "npm") {
-      return "npm";
-    }
-    throw serviceError("invalid_profile", "Worker profile has an invalid install method");
-  };
+  const installFor = (record: WorkerEnvironmentRecord): WorkerInstallationArtifact["install"] =>
+    requireWorkerInstall(record.profileSnapshot.install, serviceError);
 
   const failBootstrap = async (
     record: WorkerEnvironmentRecord,
@@ -175,50 +164,28 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
   });
 
-  const finishBootstrap = async (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    installation: WorkerInstallationArtifact,
-    cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
-  ) => {
-    if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
-      throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
-    }
-    const leaseId = record.leaseId;
-    const sshEndpoint = record.sshEndpoint;
-    let receipt: WorkerAdmissionHandshake;
-    try {
-      receipt = await callBootstrap(installation, (signal) =>
-        options.bootstrapWorker({
-          operationId: record.provisionOperationId,
-          sshEndpoint,
-          installation,
-          resolveIdentity: identityResolverFor(record, provider, leaseId),
-          signal: cancellation ? AbortSignal.any([signal, cancellation.signal]) : signal,
-        }),
-      );
-      cancellation?.assertActive();
-      if (!verifyWorkerAdmissionHandshake(receipt, installation)) {
-        throw new Error("Worker bootstrap receipt does not match the expected build identity");
-      }
-    } catch (error) {
-      return await failBootstrap(record, leaseId, provider, error);
-    }
-    return commitReady(record, { ...receipt, installKind: "bundle" });
-  };
+  const finishBootstrap = createWorkerSshProvisioning({
+    bootstrapWorker: options.bootstrapWorker,
+    callBootstrap,
+    commitReady,
+    failBootstrap,
+    serviceError,
+  });
 
   const finishProvision = async (
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
+    authorize?: () => void,
   ) => {
     let lease: WorkerLease;
     let executionMode: WorkerExecutionMode | undefined;
     let enrollmentOperation: ReturnType<typeof nodeProvisioning.createEnrollmentOperation>;
     let projectOperation: ReturnType<typeof createWorkerProjectPreparation> | undefined;
+    let provisioning = record;
     try {
-      const profile = requireWorkerProfile(record.profileSnapshot.settings);
+      const profile = checkedProfile(record.profileSnapshot.settings);
       const requestedExecutionMode = record.profileSnapshot.executionMode;
       if (
         requestedExecutionMode !== undefined &&
@@ -250,6 +217,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         provider,
         cancellation?.signal,
         preparedInstallation,
+        authorize,
       );
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
@@ -264,11 +232,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           namespace: options.projectNamespace,
           signal: cancellation?.signal,
           requireCurrent: () => {
-            const current = requireCurrentOwner(record);
+            authorize?.();
+            const current = requireCurrentOwner(provisioning);
             if (
               options.isStopping() ||
               current.destroyRequestedAtMs !== null ||
-              current.provisionOperationId !== record.provisionOperationId ||
+              current.provisionOperationId !== provisioning.provisionOperationId ||
               !isDeepStrictEqual(current.profileSnapshot.project, project)
             ) {
               throw new Error("Worker project preparation owner is no longer current");
@@ -277,7 +246,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         });
       }
       const provisionOptions =
-        machineClass || executionMode || enrollmentOperation || projectOperation || cancellation
+        machineClass ||
+        executionMode ||
+        authorize ||
+        enrollmentOperation ||
+        projectOperation ||
+        cancellation
           ? {
               ...(machineClass ? { machineClass } : {}),
               ...(executionMode ? { executionMode } : {}),
@@ -292,12 +266,27 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
             }
           : undefined;
       cancellation?.assertActive();
+      if (authorize && !provider.provisionDelegated) {
+        throw serviceError(
+          "invalid_profile",
+          `Worker provider ${provider.id} does not support delegated provisioning`,
+        );
+      }
       const provision = () => {
         const current = requireCurrentOwner(record);
         if (options.isStopping() || current.destroyRequestedAtMs !== null) {
           throw new Error("Worker provisioning operation is closed");
         }
-        return provider.provision(profile, record.provisionOperationId, provisionOptions);
+        authorize?.();
+        if (provisioning.state === "requested") {
+          provisioning = move(provisioning, "provisioning");
+        }
+        return authorize
+          ? provider.provisionDelegated!(profile, provisioning.provisionOperationId, {
+              ...provisionOptions,
+              assertAuthorized: authorize,
+            })
+          : provider.provision(profile, provisioning.provisionOperationId, provisionOptions);
       };
       lease = requireWorkerLease(
         await callProvider(
@@ -308,7 +297,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       );
     } catch (error) {
       if (WorkerProviderError.isCleanupIndeterminate(error)) {
-        return preserveIndeterminateProvisionCleanup(record, error);
+        return preserveIndeterminateProvisionCleanup(provisioning, error);
       }
       // A cancelled attempt may already own a paid allocation, even when its late
       // provider error looks permanent. Keep it available for canonical teardown.
@@ -318,10 +307,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         error instanceof WorkerProviderError ||
         options.isServiceError(error, "invalid_profile")
       ) {
-        move(record, "failed", { lastError: detail });
+        move(provisioning, "failed", { lastError: detail });
         throw serviceError("invalid_profile", `Worker provider rejected profile: ${detail}`);
       }
-      saveError(record, error);
+      if (WorkerProviderError.takeCleanupComplete(error)) {
+        move(provisioning, "failed", { lastError: detail });
+      } else {
+        saveError(provisioning, error);
+      }
       throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
     } finally {
       projectOperation?.close();
@@ -347,7 +340,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     );
     if (leaseModeError) {
       return await failBootstrap(
-        record,
+        provisioning,
         lease.leaseId,
         provider,
         leaseModeError,
@@ -357,15 +350,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     if (lease.node) {
       return await nodeProvisioning.finish(
-        record,
+        provisioning,
         lease,
         provider,
         patch,
         preparedInstallation,
         cancellation,
+        authorize,
       );
     }
-    const bootstrapping = move(record, "bootstrapping", patch);
+    const bootstrapping = move(provisioning, "bootstrapping", patch);
     let installation = preparedInstallation;
     if (!installation) {
       try {
@@ -380,7 +374,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         return await failBootstrap(bootstrapping, lease.leaseId, provider, error);
       }
     }
-    return finishBootstrap(bootstrapping, provider, installation, cancellation);
+    return finishBootstrap(
+      bootstrapping,
+      provider,
+      installation,
+      identityResolverFor(bootstrapping, provider, lease.leaseId),
+      cancellation,
+      authorize,
+    );
   };
 
   const resumeProvision = async (
@@ -388,6 +389,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     provider = providerFor(record.providerId),
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
+    authorize?: () => void,
   ) => {
     const cancellation = signal
       ? createWorkerProvisionCancellation(store, record, signal)
@@ -397,7 +399,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     try {
       let installation: WorkerInstallationArtifact | undefined;
-      await nodeProvisioning.prepare(record, provider, signal);
+      await nodeProvisioning.prepare(record, provider, signal, authorize);
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
@@ -419,8 +421,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         cancellation?.assertActive();
       }
-      const provisioning = record.state === "requested" ? move(record, "provisioning") : record;
-      return await finishProvision(provisioning, provider, installation, cancellation);
+      // Fresh requests stay cancelable through preparation and provider-queue admission;
+      // finishProvision transitions them only inside the authorized provider callback.
+      return await finishProvision(record, provider, installation, cancellation, authorize);
     } finally {
       cancellation?.close();
     }
@@ -430,6 +433,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     initialRecord: WorkerEnvironmentRecord,
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
+    authorize?: () => void,
   ): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
@@ -462,10 +466,24 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     const leaseId = record.leaseId;
     if (!leaseId) {
+      if (
+        record.destroyRequestedAtMs === null &&
+        record.profileSnapshot.executionMode !== undefined &&
+        !authorize
+      ) {
+        const requested = store.requestDestroy({
+          environmentId: record.environmentId,
+          state: record.state,
+          terminalState: "failed",
+          lastError: "Worker placement provisioning authority is unavailable after restart",
+        });
+        await finishDestroy(requested, provider).catch(() => undefined);
+        return;
+      }
       await (
         record.destroyRequestedAtMs !== null
           ? finishDestroy(record, provider)
-          : resumeProvision(record, provider, signal, retainProviderSettlement)
+          : resumeProvision(record, provider, signal, retainProviderSettlement, authorize)
       ).catch(() => undefined);
       return;
     }
@@ -619,9 +637,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           retainProviderSettlement?.(cancellation.settled);
           cancellation.assertActive();
         }
-        await finishBootstrap(bootstrapping, provider, installation, cancellation).catch(
-          () => undefined,
-        );
+        await finishBootstrap(
+          bootstrapping,
+          provider,
+          installation,
+          identityResolverFor(bootstrapping, provider, leaseId),
+          cancellation,
+          authorize,
+        ).catch(() => undefined);
         return;
       } finally {
         cancellation?.close();
@@ -635,7 +658,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const createWithProfile = createWorkerProviderIntent({
     ...options,
     providerFor,
-    requireWorkerProfile,
+    requireWorkerProfile: checkedProfile,
     resumeProvision,
   });
 

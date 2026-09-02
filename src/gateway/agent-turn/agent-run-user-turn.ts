@@ -75,7 +75,9 @@ export async function prepareAgentRunUserTurn(params: {
   runId: string;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
+  assertRuntimeAuthorityCurrent?: () => void;
 }): Promise<PreparedAgentRunUserTurn> {
+  params.assertRuntimeAuthorityCurrent?.();
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
   let durableMediaIds: string[] = [];
@@ -149,6 +151,7 @@ export async function prepareAgentRunUserTurn(params: {
         logContext: "agent",
       });
       durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      params.assertRuntimeAuthorityCurrent?.();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
@@ -171,6 +174,7 @@ export async function prepareAgentRunUserTurn(params: {
       recorder = createUserTurnTranscriptRecorder({
         input,
         target: () => {
+          params.assertRuntimeAuthorityCurrent?.();
           const loaded = loadSessionEntry(params.resolvedSessionKey!, {
             agentId: params.activeSessionAgentId,
             clone: false,
@@ -196,7 +200,11 @@ export async function prepareAgentRunUserTurn(params: {
           };
         },
         errorContext: "gateway agent user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        beforeMessageWrite: (writeContext) => {
+          const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
+          params.assertRuntimeAuthorityCurrent?.();
+          return preparedMessage;
+        },
         onPersistenceError: (error) => {
           params.context.logGateway.warn(
             `gateway agent user transcript persistence failed: ${formatForLog(error)}`,

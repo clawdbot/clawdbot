@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -10,10 +11,36 @@ import {
   type WorkerLeaseStatus,
   type WorkerProvider,
   type WorkerMachineOption,
+  type WorkerProfile,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireWorkerProfile(
+  value: unknown,
+  serviceError: (code: "invalid_profile", message: string) => Error,
+): WorkerProfile {
+  const error = validateCloudWorkerProfileSettings(value);
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
+  // SAFETY: validation accepts only finite JSON objects, exactly WorkerProfile's value contract.
+  return value as WorkerProfile;
+}
+
+export function requireWorkerInstall(
+  value: unknown,
+  serviceError: (code: "invalid_profile", message: string) => Error,
+): "bundle" | "npm" {
+  if (value === undefined || value === "bundle") {
+    return "bundle";
+  }
+  if (value === "npm") {
+    return value;
+  }
+  throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+}
 
 export function requireInheritedWorkerProfileAuthorization(
   profileId: string,

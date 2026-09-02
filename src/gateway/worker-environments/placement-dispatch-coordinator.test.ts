@@ -12,7 +12,7 @@ import {
   preparedReclaim,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { WorkerPlacementDispatchService } from "./placement-dispatch-service.types.js";
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;

@@ -62,6 +62,8 @@ export class WorkerRunnerCapacityError extends Error {
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
+  /** In-process initiating-operation authority, rechecked immediately before tunnel startup. */
+  authorize?: () => void;
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
@@ -87,6 +89,8 @@ export type WorkerLocalWorkspaceSyncRequest = {
   gitAuthor?: { name?: string; email?: string };
   /** Immutable project identity from the owning environment's provisioning snapshot. */
   projectKey?: string;
+  /** In-process initiating-operation authority, never retained by the connected tunnel. */
+  authorize?: () => void;
 };
 
 type WorkerRepositoryCheckpointPayload = {

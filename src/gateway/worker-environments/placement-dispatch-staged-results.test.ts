@@ -250,6 +250,9 @@ describe("staged worker placement result recovery", () => {
         "session-dispatch:session-1:1",
         undefined,
         "remote-exec",
+        undefined,
+        undefined,
+        () => {},
       );
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,

@@ -25,6 +25,8 @@ type WorkerProviderIntentOptions = Pick<
     record: WorkerEnvironmentRecord,
     provider?: WorkerProvider,
     signal?: AbortSignal,
+    retainProviderSettlement?: (settled: Promise<void>) => void,
+    authorize?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -51,6 +53,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       executionMode?: WorkerExecutionMode;
       projectPath?: string;
       signal?: AbortSignal;
+      authorize?: () => void;
     } = {},
   ) => {
     const {
@@ -59,8 +62,15 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       executionMode,
       projectPath,
       signal,
+      authorize,
     } = createOptions;
     signal?.throwIfAborted();
+    if (executionMode && !authorize) {
+      throw serviceError(
+        "invalid_state",
+        "Worker placement provisioning requires live dispatch authority",
+      );
+    }
     const inherited = requestedInherited
       ? { ...requestedInherited, profileSnapshot: { ...requestedInherited.profileSnapshot } }
       : undefined;
@@ -83,6 +93,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
       signal?.throwIfAborted();
+      authorize?.();
       if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
@@ -115,7 +126,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           return existing;
         }
         if (!existing.leaseId && inState(existing, "requested", "provisioning")) {
-          return resumeProvision(existing, undefined, signal);
+          return resumeProvision(existing, undefined, signal, undefined, authorize);
         }
         return existing;
       }
@@ -180,6 +191,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           signal,
         });
         signal?.throwIfAborted();
+        authorize?.();
         if (options.isStopping()) {
           throw serviceError("invalid_state", "Worker environment service is stopping");
         }
@@ -187,6 +199,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           profileSnapshot = { ...profileSnapshot, project };
         }
       }
+      authorize?.();
       const intent = store.createIntent({
         environmentId,
         providerId,
@@ -194,7 +207,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         profileSnapshot,
         provisionOperationId,
       });
-      return resumeProvision(intent, provider, signal);
+      return resumeProvision(intent, provider, signal, undefined, authorize);
     });
   };
 }

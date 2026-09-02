@@ -792,7 +792,15 @@ describe("dispatch Stop before provider allocation", () => {
         patch: { environmentId: intent.environmentId },
       });
       await expect(
-        environments.create("development", key, undefined, REQUEST.executionMode),
+        environments.create(
+          "development",
+          key,
+          undefined,
+          REQUEST.executionMode,
+          undefined,
+          undefined,
+          () => {},
+        ),
       ).rejects.toMatchObject({ code: "provider_failure" });
       const cancelSessionWork = vi.fn(
         async (

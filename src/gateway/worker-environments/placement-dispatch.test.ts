@@ -100,6 +100,7 @@ describe("worker placement dispatch", () => {
       REQUEST.executionMode,
       path.join(root, "workspace"),
       undefined,
+      undefined,
     );
   });
 

@@ -191,6 +191,10 @@ class WorkerProvisionCleanupError extends AggregateError {
   }
 }
 
+// Preserve the provider's public error identity while carrying its cleanup proof to the
+// synchronous lifecycle catch; durable recovery must replay only indeterminate operations.
+const workerProvisionCleanupComplete = new WeakSet<Error>();
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -211,14 +215,53 @@ export class WorkerProviderError extends Error {
   static isCleanupIndeterminate(error: unknown): error is WorkerProvisionCleanupError {
     return error instanceof WorkerProvisionCleanupError;
   }
+
+  static cleanupComplete(provisionError: unknown): Error {
+    const error =
+      provisionError instanceof Error ? provisionError : new Error(String(provisionError));
+    workerProvisionCleanupComplete.add(error);
+    return error;
+  }
+
+  static takeCleanupComplete(error: unknown): error is Error {
+    return error instanceof Error && workerProvisionCleanupComplete.delete(error);
+  }
 }
+
+export type WorkerProvisionOptions = {
+  /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+  signal?: AbortSignal;
+  executionMode?: WorkerExecutionMode;
+  machineClass?: string;
+  prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
+  beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+  project?: {
+    key: string;
+    baseCommit: string;
+    signal: AbortSignal;
+    assertCurrent: () => void;
+    /** Bound to this provision attempt; retained callbacks reject after it closes. */
+    prepare: (transport: {
+      runScript: (script: string, signal: AbortSignal) => Promise<string>;
+      upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+    }) => Promise<{ seedKey: string; cacheHit: boolean }>;
+  };
+};
+
+export type WorkerDelegatedProvisionOptions = WorkerProvisionOptions & {
+  /** Revalidate the exact initiating turn immediately before every provider-owned effect. */
+  assertAuthorized: () => void;
+};
 
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
-  /** Omission advertises no placement support; multiple modes use their canonical order. */
+  /**
+   * Omission advertises no placement support; multiple modes use their canonical order.
+   * @deprecated Implement `WorkerProviderV2` to make these modes available for delegated use.
+   */
   supportedExecutionModes?:
     | readonly [WorkerExecutionMode]
     | readonly ["worker-turn", "remote-exec"];
@@ -247,25 +290,13 @@ export type WorkerProvider = {
   provision: (
     profile: WorkerProfile,
     operationId: string,
-    options?: {
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
-      signal?: AbortSignal;
-      executionMode?: WorkerExecutionMode;
-      machineClass?: string;
-      prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
-      beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
-      project?: {
-        key: string;
-        baseCommit: string;
-        signal: AbortSignal;
-        assertCurrent: () => void;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
-        prepare: (transport: {
-          runScript: (script: string, signal: AbortSignal) => Promise<string>;
-          upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
-        }) => Promise<{ seedKey: string; cacheHit: boolean }>;
-      };
-    },
+    options?: WorkerProvisionOptions,
+  ) => Promise<WorkerLease>;
+  /** Negotiates delegated placement support; core never falls back to `provision`. */
+  provisionDelegated?: (
+    profile: WorkerProfile,
+    operationId: string,
+    options: WorkerDelegatedProvisionOptions,
   ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
@@ -295,6 +326,16 @@ export type WorkerProvider = {
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
+};
+
+/** Worker provider with authority-bound delegated placement support. */
+export type WorkerProviderV2 = WorkerProvider & {
+  supportedExecutionModes: NonNullable<WorkerProvider["supportedExecutionModes"]>;
+  provisionDelegated: (
+    profile: WorkerProfile,
+    operationId: string,
+    options: WorkerDelegatedProvisionOptions,
+  ) => Promise<WorkerLease>;
 };
 
 /** Speech capability registered by a plugin. */

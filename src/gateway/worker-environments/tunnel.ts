@@ -140,20 +140,22 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     entries.set(request.environmentId, entry);
     void (async () => {
       await Promise.all(previous.map(stopEntry));
-      if (!isCurrent(entry)) {
-        throw new WorkerTunnelOwnerDisconnectedError();
-      }
+      const assertCurrent = () => {
+        request.authorize?.();
+        if (!isCurrent(entry)) {
+          throw new WorkerTunnelOwnerDisconnectedError();
+        }
+      };
+      assertCurrent();
       const prepared = await prepareWorkerSsh({
+        assertCurrent,
         ssh: request.ssh,
         pinnedHostKey: request.ssh.hostKey,
         resolveIdentity: request.resolveIdentity,
         temporaryDirectoryPrefix: "openclaw-worker-workspace-",
       });
-      if (!isCurrent(entry)) {
-        await prepared.dispose();
-        throw new WorkerTunnelOwnerDisconnectedError();
-      }
       entry.prepared = prepared;
+      assertCurrent();
       entry.status = "connected";
       return createHandle(entry);
     })().then(initializing.resolve, initializing.reject);

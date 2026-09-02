@@ -138,6 +138,7 @@ export async function prepareAgentRunDispatch(params: {
   abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
   assertGatewayWorkAdmissionAllowed: () => void;
+  assertRuntimeAuthorityCurrent?: () => void;
   hasGatewayAdmissionOutcome: () => boolean;
   respondToGatewayAdmissionOutcome: () => boolean;
   admissionAgentId: () => string | undefined;
@@ -598,6 +599,7 @@ export async function prepareAgentRunDispatch(params: {
       runId: params.runId,
       client: params.client,
       context: params.context,
+      assertRuntimeAuthorityCurrent: params.assertRuntimeAuthorityCurrent,
     });
     if (userTurn.recorder) {
       // Accepted input owns these media references before it enters the transcript.

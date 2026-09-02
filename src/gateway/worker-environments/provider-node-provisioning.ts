@@ -60,6 +60,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => {
     if (
       record.state !== "requested" ||
@@ -70,9 +71,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     }
     // Preparing the immutable runtime must finish before a fresh paid allocation.
     try {
-      await options.prepareNodeBootstrap(record, signal);
+      signal?.throwIfAborted();
+      authorize?.();
+      await options.prepareNodeBootstrap(record, signal, authorize);
+      signal?.throwIfAborted();
+      authorize?.();
     } catch (error) {
       signal?.throwIfAborted();
+      // Lost initiating-turn authority must leave the still-requested intent cancelable.
+      authorize?.();
       const current = options.store.get(record.environmentId);
       if (
         current?.state === "requested" &&
@@ -105,6 +112,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
     preparedInstallation?: WorkerInstallationArtifact,
+    authorize?: () => void,
   ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
@@ -141,6 +149,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       close();
     }
     const assertCurrent = () => {
+      authorize?.();
       const current = options.store.get(record.environmentId);
       if (
         !open ||
@@ -167,7 +176,12 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
             pendingRuntime ??= (async () => {
               const artifact = await prepareBundle(preparedInstallation, controller.signal);
               assertRuntimeCurrent();
-              const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
+              const prepared = await prepareNodeRuntime(
+                record,
+                artifact,
+                controller.signal,
+                authorize,
+              );
               try {
                 assertRuntimeCurrent();
               } catch (error) {
@@ -186,7 +200,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           options.closeNodeRuntime?.(runtime);
           runtime = undefined;
         }
-        pending ??= prepareNodeEnrollment(record, controller.signal).then((prepared) => {
+        pending ??= prepareNodeEnrollment(record, controller.signal, authorize).then((prepared) => {
           // A provider timeout can close this operation during artifact preparation.
           try {
             assertCurrent();
@@ -194,6 +208,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
             options.closeNodeEnrollment?.(prepared);
             throw error;
           }
+          authorize?.();
           enrollment = prepared;
           return prepared;
         });
@@ -210,6 +225,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
+    authorize?: () => void,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
@@ -223,14 +239,17 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       }
       const artifact = await prepareBundle(preparedInstallation, cancellation?.signal);
       cancellation?.assertActive();
+      authorize?.();
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
         // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
         prewarm: record.profileSnapshot.executionMode !== "remote-exec",
         signal: cancellation?.signal,
+        authorize,
       });
       cancellation?.assertActive();
+      authorize?.();
     } catch (error) {
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }

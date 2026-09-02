@@ -105,6 +105,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
+  isInterruptedDelegatedChild?: (sessionKey: string) => boolean;
   reportTransition: (
     observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
     placement: WorkerDispatchPlacement,
@@ -234,6 +235,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      authorize: params.authorize,
     });
     params.signal?.throwIfAborted();
     params.authorize?.();
@@ -249,6 +251,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       const tunnel = await environments.startTunnel({
         environmentId: provisioned.environmentId,
         ownerEpoch,
+        ...(params.authorize ? { authorize: params.authorize } : {}),
       });
       params.signal?.throwIfAborted();
       params.authorize?.();
@@ -310,6 +313,7 @@ export function createWorkerPlacementDispatchStartup(options: {
               sessionId: request.sessionId,
               generation: placement.generation,
               ...(gitAuthor ? { gitAuthor } : {}),
+              authorize: assertSyncOwner,
             });
       assertSyncOwner();
       params.signal?.throwIfAborted();
@@ -448,6 +452,11 @@ export function createWorkerPlacementDispatchStartup(options: {
       report(failed);
       return failed;
     };
+    if (options.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+      return await handleRecoveryFailure(
+        new Error("Delegated child placement lost its initiating worker turn during restart"),
+      );
+    }
     const recover = async (signal?: AbortSignal) => {
       try {
         if (!environmentId) {
@@ -465,6 +474,28 @@ export function createWorkerPlacementDispatchStartup(options: {
             recoveryRunStarted = true;
             try {
               signal?.throwIfAborted();
+              const assertRecoveryCurrent = () => {
+                signal?.throwIfAborted();
+                if (options.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+                  throw new Error(
+                    "Delegated child placement lost its initiating worker turn during restart",
+                  );
+                }
+                const current = placements.get(placement.sessionId);
+                if (
+                  current?.state !== recoveryOwnedPlacement.state ||
+                  current.generation !== recoveryOwnedPlacement.generation ||
+                  current.environmentId !== environmentId ||
+                  current.sessionKey !== placement.sessionKey ||
+                  current.agentId !== placement.agentId ||
+                  current.executionMode !== placement.executionMode
+                ) {
+                  throw new Error(
+                    "Worker placement authority changed during provisioning recovery",
+                  );
+                }
+              };
+              assertRecoveryCurrent();
               const initialEnvironment = environments.get(environmentId);
               if (initialEnvironment?.environmentId !== environmentId) {
                 throw new Error("Provisioning worker environment record is missing");
@@ -472,8 +503,8 @@ export function createWorkerPlacementDispatchStartup(options: {
               if (initialEnvironment.destroyRequestedAtMs !== null) {
                 throw new Error("Provisioning worker environment destruction was requested");
               }
-              await reconcileEnvironmentCore(signal);
-              signal?.throwIfAborted();
+              await reconcileEnvironmentCore(signal, undefined, assertRecoveryCurrent);
+              assertRecoveryCurrent();
               const current = placements.get(placement.sessionId);
               if (
                 current?.state !== "provisioning" ||
@@ -521,6 +552,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 onTransition: report,
                 signal,
                 recovery: true,
+                authorize: assertRecoveryCurrent,
               });
             } catch (error) {
               // Keep teardown under the same session lifecycle fence that admitted recovery.

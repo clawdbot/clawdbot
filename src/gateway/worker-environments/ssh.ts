@@ -128,11 +128,13 @@ export function resolveWorkerSshSandboxSettings(params: {
 
 /** Materializes one pinned identity/known-hosts context for a complete SSH ownership lifetime. */
 export async function prepareWorkerSsh(params: {
+  assertCurrent?: () => void;
   ssh: WorkerSshEndpoint;
   pinnedHostKey?: string;
   resolveIdentity: WorkerSshIdentityResolver;
   temporaryDirectoryPrefix?: string;
 }): Promise<PreparedWorkerSsh> {
+  params.assertCurrent?.();
   if (params.pinnedHostKey === undefined) {
     throw new Error(
       "Worker SSH setup is missing pinnedHostKey; WorkerProvider.provision() must return ssh.hostKey",
@@ -157,7 +159,9 @@ export async function prepareWorkerSsh(params: {
     ),
   );
   try {
+    params.assertCurrent?.();
     const identity = await params.resolveIdentity(params.ssh.keyRef);
+    params.assertCurrent?.();
     let identityPath: string;
     if (identity.kind === "path") {
       const resolvedPath = identity.path.trim();

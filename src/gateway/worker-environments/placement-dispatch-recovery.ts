@@ -64,7 +64,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       await failure.failActive(placement, error, { forceClaimFence: true });
       return;
     }
-    const environment = environments.get(placement.environmentId);
+    if (deps.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+      await failure.failActive(
+        placement,
+        new Error("Delegated child placement lost its initiating worker turn during restart"),
+        { forceClaimFence: true },
+      );
+      return;
+    }
+    const environment = placement.environmentId
+      ? environments.get(placement.environmentId)
+      : undefined;
     const disappearance = workerDisappearanceError(environment);
     if (disappearance || (environment && isUnavailableEnvironment(environment))) {
       await failure.reclaimActive(
@@ -116,7 +126,11 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcile = async (mode?: "startup"): Promise<void> => {
     if (mode === "startup") {
       // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
-      for (const { environmentId, state } of placements.listForReconcile()) {
+      for (const placement of placements.listForReconcile()) {
+        if (deps.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+          continue;
+        }
+        const { environmentId, state } = placement;
         if (environmentId && state !== "failed" && state !== "reclaimed") {
           await environments.reconcileEnvironment(environmentId);
         }
@@ -137,6 +151,26 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       if (placement.state === "local" || placement.state === "reclaimed") {
+        continue;
+      }
+      if (
+        placement.state !== "active" &&
+        placement.state !== "failed" &&
+        deps.isInterruptedDelegatedChild?.(placement.sessionKey)
+      ) {
+        const environment = placement.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        const exactEnvironment =
+          environment?.environmentId === placement.environmentId ? environment : undefined;
+        await failure.teardownEnvironment({
+          placement,
+          environmentId: exactEnvironment?.environmentId ?? null,
+          ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
+          primaryError: new Error(
+            "Delegated child placement lost its initiating worker turn during restart",
+          ),
+        });
         continue;
       }
       if (placement.state === "provisioning") {
