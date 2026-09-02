@@ -260,7 +260,11 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
             const style = getComputedStyle(element);
             const radius =
               corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
-            return [selector, { radius, shape: style.getPropertyValue("corner-shape") }];
+            const computedShape = style.getPropertyValue("corner-shape");
+            // The CSS computed-value contract serializes `round` as its equivalent exponent.
+            // Normalize that spelling so this probe keeps asserting the semantic shape.
+            const shape = computedShape === "superellipse(1)" ? "round" : computedShape;
+            return [selector, { radius, shape }];
           }),
         );
       },
