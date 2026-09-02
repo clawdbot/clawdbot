@@ -18,7 +18,7 @@ import {
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
-} from "../../skills/discovery/chat-commands.js";
+} from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import {
   copyReplyPayloadMetadata,
