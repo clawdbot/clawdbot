@@ -11,6 +11,7 @@ import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   resolveCleanupCompletionReason,
+  resolveAnnounceDeliveryDeadline,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
 import {
@@ -655,12 +656,34 @@ export const startSubagentAnnounceCleanupFlow = (
     cleanupGeneration,
     run: async () => {
       let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
+      const deadline = new AbortController();
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const now = Date.now();
+      const expiryMs =
+        entry.expectsCompletionMessage === true
+          ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
+          : ANNOUNCE_EXPIRY_MS;
+      const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
+      const abortDelivery = () => deadline.abort(new Error("subagent announce delivery expired"));
+      // Accepted handoffs can wait behind a busy parent without spending their
+      // execution timeout, but the lifecycle's delivery window still bounds that wait.
+      if (remainingMs <= 0) {
+        abortDelivery();
+      } else {
+        deadlineTimer = setTimeout(abortDelivery, remainingMs);
+        deadlineTimer.unref?.();
+      }
       try {
-        announceOutcome = await params.runSubagentAnnounceFlow(announceParams);
+        announceOutcome = await params.runSubagentAnnounceFlow({
+          ...announceParams,
+          signal: deadline.signal,
+        });
       } catch (error) {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );
+      } finally {
+        clearTimeout(deadlineTimer);
       }
       await finalizeAnnounceCleanup(announceOutcome);
     },

@@ -9,12 +9,18 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import {
+  listSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../../../src/config/sessions/session-accessor.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const MODEL = "mock-openai/progress-fixture";
@@ -51,6 +57,8 @@ async function startPresentationApi(
   adapter: CrablineAdapter,
   writes: WireWrite[],
   directory: string,
+  rejectStop = false,
+  clearOrigin?: () => Promise<void>,
 ) {
   const manifest = adapter.manifest;
   const messages = new Map<string, Record<string, unknown>>();
@@ -74,7 +82,7 @@ async function startPresentationApi(
         wire.accepted = {
           id,
           action,
-          text: String(message?.text ?? message?.content ?? "").slice(0, 250),
+          text: (readStringValue(message?.text ?? message?.content) ?? "").slice(0, 250),
         };
       };
       const reply = (result: unknown, status = 200) => {
@@ -88,16 +96,29 @@ async function startPresentationApi(
             ? body.ts
             : `1800000000.${String(++nextMessage).padStart(6, "0")}`;
         if (["chat.startStream", "chat.appendStream", "chat.stopStream"].includes(operation)) {
+          // The admitted final waits for this progress stream to start, so route
+          // loss here is deterministic without changing the agent's tool call.
+          if (rejectStop && operation === "chat.startStream") {
+            await clearOrigin?.();
+          }
+          if (rejectStop && operation === "chat.stopStream") {
+            reply({ ok: false, error: "internal_error" });
+            return;
+          }
           if (operation !== "chat.startStream" && !messages.has(ts)) {
             reply({ ok: false, error: "message_not_found" });
             return;
           }
-          const previous = messages.get(ts) ?? { text: "" };
+          const previous = messages.get(ts) ?? {
+            text: "",
+            channel: body.channel,
+            thread_ts: body.thread_ts,
+          };
           const text = readChunks(body.chunks)
             .filter((chunk) => chunk.type === "markdown_text")
-            .map((chunk) => String(chunk.text ?? ""))
+            .map((chunk) => readStringValue(chunk.text) ?? "")
             .join("");
-          messages.set(ts, { ...previous, text: String(previous.text ?? "") + text });
+          messages.set(ts, { ...previous, text: (readStringValue(previous.text) ?? "") + text });
           recordAccepted(ts, operation);
           reply({ ok: true, channel: body.channel, ts });
           return;
@@ -220,7 +241,9 @@ async function startPresentationApi(
           listener,
         )
       : createServer(listener);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("presentation API did not bind a loopback port");
@@ -256,7 +279,9 @@ async function startPresentationApi(
     socket.on("error", () => upstream.destroy());
     socket.on("close", () => upstream.destroy());
   });
-  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    proxy.listen(0, "127.0.0.1", resolve);
+  });
   const proxyAddress = proxy.address();
   if (!proxyAddress || typeof proxyAddress === "string") {
     throw new Error("proxy failed to bind");
@@ -270,13 +295,13 @@ async function startPresentationApi(
       for (const socket of tunnelSockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        proxy.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        proxy.close((error) => (error ? reject(error) : resolve()));
+      });
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -307,7 +332,6 @@ function progressConfig(
     messages: {
       ackReaction: "eyes",
       ackReactionScope: "all",
-      removeAckAfterReply: true,
       statusReactions: { enabled: true },
     },
     channels: {
@@ -366,12 +390,13 @@ describe("channel progress presentation through an isolated Gateway", () => {
   });
 
   it.each([
-    { channel: "discord" as const, native: false },
-    { channel: "slack" as const, native: true },
-    { channel: "slack" as const, native: false },
+    { channel: "discord" as const, native: false, rejectStop: false },
+    { channel: "slack" as const, native: true, rejectStop: false },
+    { channel: "slack" as const, native: false, rejectStop: false },
+    { channel: "slack" as const, native: true, rejectStop: true },
   ])(
-    "keeps $channel progress quiet (native=$native)",
-    async ({ channel, native }) => {
+    "keeps $channel progress quiet (native=$native, rejectStop=$rejectStop)",
+    async ({ channel, native, rejectStop }) => {
       const directory = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
       );
@@ -382,7 +407,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
         recorderPath: path.join(directory, "provider.jsonl"),
       });
       cleanups.push(() => adapter.close());
-      const api = await startPresentationApi(adapter, writes, directory);
+      let originCleared = false;
+      const api = await startPresentationApi(adapter, writes, directory, rejectStop, async () => {
+        await clearOrigin();
+        originCleared = true;
+      });
       cleanups.push(() => api.stop());
       const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
       cleanups.push(() => provider.stop());
@@ -396,7 +425,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
       const gateway = await owner.start({
         repoRoot: process.cwd(),
-        useRepoCli: true,
+        // The E2E runner owns the build; child startups must not rebuild dist
+        // beneath already-running test workers when the source tree is dirty.
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
+          cwd: process.cwd(),
+          usePackagedPlugins: true,
+        },
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         primaryModel: MODEL,
@@ -427,6 +463,32 @@ describe("channel progress presentation through an isolated Gateway", () => {
           })
         );
       }, `${channel} ready`);
+      const clearOrigin = async () => {
+        const scope = {
+          agentId: "qa",
+          env: gateway.runtimeEnv,
+          readConsistency: "latest" as const,
+        };
+        const sessions = listSessionEntriesReadOnly(scope).filter(
+          ({ entry }) =>
+            entry.delivery?.kind === "external" &&
+            entry.delivery.context.channel === "slack" &&
+            entry.delivery.context.to?.includes("C12345678"),
+        );
+        expect(sessions).toHaveLength(1);
+        const { sessionKey, entry } = sessions[0]!;
+        const target = { ...scope, sessionKey };
+        await updateSessionEntry(
+          target,
+          (current) => {
+            expect(current.sessionId).toBe(entry.sessionId);
+            return { delivery: { kind: "none" }, updatedAt: Date.now() };
+          },
+          { skipMaintenance: true, requireWriteSuccess: true },
+        );
+        expect(loadSessionEntryReadOnly(target)?.delivery).toEqual({ kind: "none" });
+      };
+      let expectedThreadTs: unknown;
       const inbound = adapter.createInbound({
         input: {
           conversation: {
@@ -445,6 +507,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
       expect(injected.ok).toBe(true);
       if (adapter.manifest.provider === "slack") {
         const payload = asRecord(await injected.json());
+        const event = asRecord(asRecord(payload.event).event);
+        expectedThreadTs = event.thread_ts ?? event.ts;
         const body = JSON.stringify(payload.event);
         const timestamp = String(Math.floor(Date.now() / 1000));
         const signature = createHmac("sha256", adapter.manifest.signingSecret)
@@ -459,7 +523,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           },
           body,
         });
-        expect(delivered.ok).toBe(true);
+        expect(delivered.ok, await delivered.text()).toBe(true);
       } else {
         await injected.arrayBuffer();
       }
@@ -467,9 +531,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
         writes.filter((write) => JSON.stringify(write.body).includes(FINAL_MARKER));
       const finalMessages = () =>
         [...api.messages.values()].filter((message) =>
-          String(message.text ?? message.content ?? "").includes(FINAL_MARKER),
+          (readStringValue(message.text ?? message.content) ?? "").includes(FINAL_MARKER),
         );
-      await waitForFact(() => finalMessages().length > 0, "accepted final answer");
+      if (!rejectStop) {
+        await waitForFact(() => finalMessages().length > 0, "accepted final answer");
+      }
       await waitForFact(
         () =>
           channel === "discord"
@@ -493,7 +559,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const progressText = progressWrites
         .map(({ body }) =>
           channel === "discord"
-            ? String(body.content ?? "")
+            ? (readStringValue(body.content) ?? "")
             : [
                 body.text,
                 JSON.stringify(readChunks(body.blocks)),
@@ -519,11 +585,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+      const evidenceName = `${channel}-${native ? "native" : "draft"}${rejectStop ? "-stop-failure" : ""}`;
       await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
-        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}-diagnostic.json`),
+        path.join(evidenceDir, `${evidenceName}-diagnostic.json`),
         JSON.stringify(
           {
+            rejectStop,
+            originCleared,
             writes: writes.slice(-80).map(({ at, method, route, body, accepted }) => ({
               at,
               method,
@@ -536,16 +605,17 @@ describe("channel progress presentation through an isolated Gateway", () => {
                   .filter((key) => body[key] !== undefined)
                   .map((key) => [
                     key,
-                    String(
-                      typeof body[key] === "string" ? body[key] : JSON.stringify(body[key]),
-                    ).slice(0, 250),
+                    (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
+                      0,
+                      250,
+                    ),
                   ]),
               ),
-              ...(accepted ? { accepted } : {}),
+              accepted,
             })),
             acceptedMessages: [...api.messages].slice(-80).map(([id, message]) => ({
               id,
-              text: String(message.text ?? message.content ?? "").slice(0, 250),
+              text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
             })),
           },
           null,
@@ -554,6 +624,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect(finalWrites()).toHaveLength(1);
       expect(finalMessages()).toHaveLength(1);
+      if (rejectStop) {
+        expect(originCleared).toBe(true);
+        expect(expectedThreadTs).toEqual(expect.any(String));
+        expect(finalMessages()[0]).toMatchObject({
+          channel: "C12345678",
+          thread_ts: expectedThreadTs,
+        });
+        expect(finalWrites()[0]?.accepted).toBeDefined();
+      }
       const tasks = writes
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
@@ -563,12 +642,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(tasks.at(-1)?.status).toBe("complete");
       }
       await fs.writeFile(
-        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}.json`),
+        path.join(evidenceDir, `${evidenceName}.json`),
         JSON.stringify(
           {
             kind: "mock-gateway",
             channel,
             native,
+            rejectStop,
+            originCleared,
             status: "pass",
             progressWrites: progressWrites.length,
             finalWrites: finalWrites().length,

@@ -6,8 +6,10 @@ import {
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -40,6 +42,7 @@ export async function runCliFallbackCandidate(
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     params.candidateRun.thinkingCatalog ?? [],
     params.provider,
@@ -133,14 +136,23 @@ export async function runCliFallbackCandidate(
     withLocalSessionPlacementTurnSettlement(
       {
         sessionId: turn.followupRun.run.sessionId,
-        sessionKey: turn.sessionKey,
+        sessionKey,
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
       async () => {
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
-        const sessionEntry = turn.getActiveSessionEntry();
+        const sessionEntry = sessionTarget
+          ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
+          : turn.getActiveSessionEntry();
+        if (
+          sessionTarget &&
+          (sessionEntry?.sessionId !== sessionTarget.sessionId ||
+            sessionEntry.lifecycleRevision !== expectedLifecycleRevision)
+        ) {
+          throw createAgentRunSupersededAbortError();
+        }
         const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
@@ -289,7 +301,7 @@ export async function runCliFallbackCandidate(
           runParams: {
             preparedRunAdmission: params.preparedRunAdmission,
             sessionId: turn.followupRun.run.sessionId,
-            sessionKey: turn.sessionKey,
+            sessionKey,
             sessionTarget,
             sessionEntry,
             chatType:
@@ -421,6 +433,12 @@ export async function runCliFallbackCandidate(
           });
         }
         return candidateResult;
+      },
+      {
+        lifecycleGeneration: params.lifecycleGeneration,
+        abortSignal: params.runAbortSignal,
+        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        inputProvenance: turn.followupRun.run.inputProvenance,
       },
     ),
   );
