@@ -101,7 +101,7 @@ export async function createBackupResourceInventory(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs: readonly string[];
-  excludedWorkspaceDirs?: readonly string[];
+  excludedWorkspaceDirs: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
@@ -181,16 +181,12 @@ export async function createBackupResourceInventory(params: {
       }),
   );
   const protectedPaths = Object.freeze([...protectedPathSet].toSorted());
-  // Excluded workspace trees stay out of the walk; nested agent roots stay
-  // protected and traversable. Do not weaken the archive symlink guard —
-  // that would hide unsafe links in included content.
-  const excludedWorkspacePaths = Object.freeze([
-    ...new Set((params.excludedWorkspaceDirs ?? []).map((dir) => path.resolve(dir))),
-  ]);
+  // Workspace exclusions stop traversal but are not regenerable resources;
+  // protected nested owners remain reachable through isIncluded below.
   const excludedPaths = Object.freeze(
     [
       ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
-      ...excludedWorkspacePaths,
+      ...new Set(params.excludedWorkspaceDirs.map((dir) => path.resolve(dir))),
     ].toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
   );
 
