@@ -81,11 +81,11 @@ function completedResponse(serviceTier: string): SdkResponse {
 describe("managed Responses transport service-tier pricing", () => {
   it("applies the canonical 2.5x gpt-5.5 priority multiplier to usage cost", async () => {
     sseState.outcomes.push(completedResponse("priority"));
-    const stream = createOpenAIResponsesTransportStreamFn()(
-      model,
-      { messages: [], tools: [] },
-      { apiKey: "test-key", sessionId: "session-pricing", transport: "sse" } as never,
-    );
+    const stream = createOpenAIResponsesTransportStreamFn()(model, { messages: [], tools: [] }, {
+      apiKey: "test-key",
+      sessionId: "session-pricing",
+      transport: "sse",
+    } as never);
     const result = await stream.result();
     // Base cost 2 + 10 = 12; gpt-5.5 priority is 2.5x = 30 (flat 2x would be 24).
     expect(result.usage.cost.total).toBeCloseTo(30, 6);
