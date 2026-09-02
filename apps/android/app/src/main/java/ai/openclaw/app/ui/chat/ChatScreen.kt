@@ -927,6 +927,7 @@ fun ChatScreen(
       voiceNoteLevel = voiceNoteLevel,
       recordVoiceNoteEnabled =
         !talkActive &&
+          !composerOwner.gatewayStableId.isNullOrBlank() &&
           pendingRunCount == 0 &&
           !micCaptureActive &&
           !dictationActive &&

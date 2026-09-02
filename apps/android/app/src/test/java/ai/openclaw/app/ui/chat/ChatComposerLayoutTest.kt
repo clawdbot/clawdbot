@@ -187,7 +187,7 @@ class ChatComposerLayoutTest {
     val recognitionAvailable = SpeechRecognizer.isOnDeviceRecognitionAvailable(app)
     ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(false)
     try {
-      showChat(viewportWidth = 320.dp)
+      val viewModel = showChat(viewportWidth = 320.dp)
       composeRule.runOnIdle {
         controller.handleGatewayEvent(
           "agent",
@@ -217,6 +217,20 @@ class ChatComposerLayoutTest {
       composeRule.onNodeWithText(nativeString("On-device speech recognition is unavailable.")).assertDoesNotExist()
       composeRule.onNodeWithText(nativeString("Record voice note")).assertDoesNotExist()
       editor.assertTextEquals("Existing draft")
+
+      composeRule.runOnIdle { viewModel.forgetGateway(AndroidScreenshotFixture.gatewayId) }
+      composeRule.waitUntil {
+        viewModel.activeGatewayStableId.value == null &&
+          prefs.gatewayRegistry.entries.value
+            .isEmpty()
+      }
+      assertTrue("Forgetting the last gateway leaves Chat accessible", viewModel.onboardingCompleted.value)
+      editor.performTextReplacement("Draft after forgetting")
+      dictation.performClick()
+      composeRule.onNodeWithText(nativeString("On-device speech recognition is unavailable.")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Record voice note")).assertDoesNotExist()
+      dictation.assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
+      editor.assertTextEquals("Draft after forgetting")
     } finally {
       ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(recognitionAvailable)
     }
