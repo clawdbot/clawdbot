@@ -168,28 +168,11 @@
 /* ---------- rows ---------- */
 
 /* Entity row inside a settings group: leading art tile, wrapping so
-   row-local messages can break onto a full-width line below the controls.
-   Tile and controls anchor to the plugin name; the shared `align-items: center`
-   drifts them into the middle of the copy block once a row grows past one line. */
+   row-local messages can break onto a full-width line below the controls. */
 .plugins-item {
   flex-wrap: wrap;
-  align-items: flex-start;
   content-visibility: auto;
   contain-intrinsic-block-size: auto 73px;
-}
-
-/* Registry descriptions run to paragraphs: two lines keep the shelf scannable
-   and the row near the intrinsic-size hint above. Opt in per row instead of
-   matching .settings-row__desc: only the plugin summary has a detail card
-   carrying its full text, while sibling rows put identity there (the MCP
-   target, the meta line) and must stay readable in the row itself. */
-.plugins-item__summary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 .plugins-item--clickable {

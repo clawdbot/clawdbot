@@ -325,10 +325,6 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-/* Zero flex base, never `auto`: wrapping rows (.plugins-item, and every row at
-   <=640px) break lines on hypothetical sizes, so an `auto` basis lets one long
-   description push the art tile and the control cluster onto lines of their own.
-   Only children with a definite full-width basis may start a new line. */
 .settings-row__text {
   display: flex;
   flex-direction: column;

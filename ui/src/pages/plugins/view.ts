@@ -749,7 +749,7 @@ function renderPluginRow(
           `,
           onShowDetails: () => props.onShowDetails(plugin.id),
         })}
-        <span class="settings-row__desc plugins-item__summary">
+        <span class="settings-row__desc">
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
         ${renderMetaLine([
