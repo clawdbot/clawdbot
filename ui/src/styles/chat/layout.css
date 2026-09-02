@@ -2952,16 +2952,6 @@ button.chat-reply-preview--message:disabled {
   height: 15px;
 }
 
-.chat-pr__icon svg,
-.chat-pr__warning svg,
-.chat-pr__dismiss svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .chat-pr__number {
   min-width: 0;
   font-weight: 650;
@@ -3187,8 +3177,8 @@ button.chat-pr__diff {
 }
 
 .chat-pr__publication-outcome {
-  grid-column: 1 / -1;
   display: grid;
+  grid-column: 1 / -1;
   gap: 2px;
   color: var(--muted);
   font-size: 12px;
@@ -3756,6 +3746,11 @@ button.chat-pr__diff {
 
 .agent-chat__composer-overlay:empty {
   display: none;
+}
+
+/* Reserve notice height beside interactive PR cards instead of covering them. */
+.chat-prs ~ .agent-chat__composer-shell .agent-chat__composer-overlay {
+  position: static;
 }
 
 .agent-chat__composer-overlay > * {
