@@ -2760,16 +2760,25 @@ describe("cron controller", () => {
     expect(state.cronJobsHasMore).toBe(false);
   });
 
-  it("treats whitespace-only local group and tag filters as unfiltered", () => {
-    const state = createState({
-      cronJobs: [
-        createCronJob({ id: "job-filter", name: "Visible", group: "Work", tags: ["daily"] }),
-      ],
+  it("omits whitespace-only group and tag filters from cron.list", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.list") {
+        expectRecordFields(requireRecord(payload, "cron.list payload"), {
+          group: undefined,
+          tag: undefined,
+        });
+        return cronJobsListResponse([], { snapshotRevision: "unfiltered-jobs" });
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, {
       cronJobsGroupFilter: "   ",
       cronJobsTagFilter: "\t",
     });
 
-    expect(getVisibleCronJobs(state)).toHaveLength(1);
+    await loadCronJobsPage(state);
+
+    expect(state.cronJobs).toHaveLength(0);
   });
 
   it("appends jobs only from the accepted snapshot revision", async () => {

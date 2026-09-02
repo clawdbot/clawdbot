@@ -803,67 +803,6 @@ export function updateCronJobsFilter(
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
 }
 
-export function getVisibleCronJobs(
-  state: Pick<
-    CronState,
-    | "cronJobs"
-    | "cronJobsScheduleKindFilter"
-    | "cronJobsLastStatusFilter"
-    | "cronJobsTriggerFilter"
-    | "cronJobsGroupFilter"
-    | "cronJobsTagFilter"
-  >,
-): CronJob[] {
-  const groupFilter = state.cronJobsGroupFilter.trim().toLowerCase();
-  const tagFilter = state.cronJobsTagFilter.trim().toLowerCase();
-  return state.cronJobs.filter((job) => {
-    const scheduleKind = resolveCronJobScheduleKind(job);
-    if (!scheduleKind) {
-      return false;
-    }
-    if (
-      state.cronJobsScheduleKindFilter !== "all" &&
-      scheduleKind !== state.cronJobsScheduleKindFilter
-    ) {
-      return false;
-    }
-    if (
-      state.cronJobsLastStatusFilter !== "all" &&
-      resolveCronJobLastRunStatus(job) !== state.cronJobsLastStatusFilter
-    ) {
-      return false;
-    }
-    if (state.cronJobsTriggerFilter === "conditional" && !job.trigger) {
-      return false;
-    }
-    if (state.cronJobsTriggerFilter === "unconditional" && job.trigger) {
-      return false;
-    }
-    const group = getCronJobGroup(job);
-    if (groupFilter && normalizeLowercaseStringOrEmpty(group) !== groupFilter) {
-      return false;
-    }
-    if (tagFilter && !job.tags?.some((tag) => normalizeLowercaseStringOrEmpty(tag) === tagFilter)) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function resolveCronJobScheduleKind(job: CronJob): string | null {
-  const scheduleKind = (job.schedule as { kind?: unknown } | null | undefined)?.kind;
-  if (
-    scheduleKind === "at" ||
-    scheduleKind === "every" ||
-    scheduleKind === "cron" ||
-    scheduleKind === "on-exit" ||
-    scheduleKind === "stream"
-  ) {
-    return scheduleKind;
-  }
-  return null;
-}
-
 function clearCronEditState(state: CronState) {
   state.cronError = null;
   state.cronEditingJob = null;
