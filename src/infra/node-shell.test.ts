@@ -114,8 +114,8 @@ describe("restoreLoginShellServicePath", () => {
       const probe = path.join(serviceBin, "openclaw-path-probe");
       fs.writeFileSync(probe, "#!/bin/sh\nprintf ok\n", { mode: 0o755 });
       try {
-        const servicePath = `${serviceBin}:/usr/bin:/bin`;
-        const baseEnv = { HOME: home, PATH: servicePath };
+        const spawnedPath = `${serviceBin}:/usr/bin:/bin`;
+        const baseEnv = { HOME: home, PATH: spawnedPath };
         const run = (command: string, env: Record<string, string>, rewrite: boolean) => {
           const built = buildNodeShellCommand(command, "linux");
           const { argv, env: spawnEnv } = rewrite
@@ -131,7 +131,7 @@ describe("restoreLoginShellServicePath", () => {
         const restoredPath = run('printf %s "$PATH"', baseEnv, true);
         // Mirrors the `${PATH:+:$PATH}` guard: an empty startup PATH must not
         // leave a trailing `:`, which a shell reads as the current directory.
-        expect(restoredPath).toBe(startupPath ? `${servicePath}:${startupPath}` : servicePath);
+        expect(restoredPath).toBe(startupPath ? `${spawnedPath}:${startupPath}` : spawnedPath);
         expect(run("command -v openclaw-path-probe", baseEnv, true)).toBe(probe);
       } finally {
         fs.rmSync(home, { recursive: true, force: true });
