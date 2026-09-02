@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import {
+  handleChatGatewayEvent,
+  normalizeChatErrorComparisonText,
+  type ChatEventPayload,
+} from "./chat-gateway.ts";
 import { getChatHistoryLoadState, loadChatHistory, type ChatState } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
@@ -4066,4 +4070,57 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatThinkingLevel).toBeNull();
   });
 });
+describe("normalizeChatErrorComparisonText", () => {
+  it.each([
+    ["⚠️ hello", "hello"],
+    ["⚠️⚠️ hello", "hello"],
+    ["⚠️ ⚠️ hello", "hello"],
+    ["⚠️\uFE0F hello", "hello"],
+    ["\u26A0 hello", "hello"],
+    ["Error: foo", "foo"],
+    ["Error: Error: foo", "foo"],
+    ["⚠️ Error: foo", "foo"],
+    ["Error: ⚠️ foo", "foo"],
+    ["⚠️ Error: ⚠️ Error: foo", "foo"],
+    ["  ⚠️   Error:  foo   bar ", "foo bar"],
+  ])("normalizes %s to %s", (input, expected) => {
+    expect(normalizeChatErrorComparisonText(input)).toBe(expected);
+  });
+
+  it("preserves body emoji", () => {
+    expect(normalizeChatErrorComparisonText("⚠️ hello ⚠️ world")).toBe("hello ⚠️ world");
+    expect(normalizeChatErrorComparisonText("Error: foo ⚠️ bar")).toBe("foo ⚠️ bar");
+  });
+
+  it("treats interleaved repeated prefixes as equal for error projection", () => {
+    const variants = [
+      "⚠️ gateway disconnected",
+      "⚠️⚠️ gateway disconnected",
+      "⚠️\uFE0F gateway disconnected",
+      "Error: gateway disconnected",
+      "Error: Error: gateway disconnected",
+      "⚠️ Error: gateway disconnected",
+      "⚠️ Error: ⚠️ Error: gateway disconnected",
+    ];
+    const normalized = variants.map((v) => normalizeChatErrorComparisonText(v));
+    for (const n of normalized) {
+      expect(n).toBe("gateway disconnected");
+    }
+    for (const errorVariant of variants) {
+      for (const messageVariant of variants) {
+        const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+        const payload: ChatEventPayload = {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "error",
+          errorMessage: errorVariant,
+          message: createTextChatMessage("assistant", messageVariant, undefined, 10),
+        };
+        expect(handleChatGatewayEvent(state, payload)).toBe("error");
+        expect(state.chatMessages).toHaveLength(0);
+      }
+    }
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

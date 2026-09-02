@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { stripErrorIconPrefix } from "../components/error-presentation.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   chatThreadDistanceFromBottom,
@@ -411,7 +412,7 @@ suite.define(() => {
 
         const gatewayErrorText =
           "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
-        const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
+        const errorText = stripErrorIconPrefix(gatewayErrorText);
         await gateway.emitGatewayEvent("chat", {
           errorMessage: gatewayErrorText,
           message: {
