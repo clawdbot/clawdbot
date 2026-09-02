@@ -376,6 +376,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@openclaw/crabline':
+        specifier: 0.1.17
+        version: 0.1.17
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -427,6 +430,18 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.11
         version: 4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11)
+      '@vitest/runner':
+        specifier: 4.1.11
+        version: 4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)
+      acpx:
+        specifier: 0.13.1
+        version: 0.13.1
+      apache-arrow:
+        specifier: 18.1.0
+        version: 18.1.0
+      baileys:
+        specifier: 7.0.0-rc14
+        version: 7.0.0-rc14(audio-decode@2.2.3)(supports-color@10.2.2)
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -451,6 +466,12 @@ importers:
       marked:
         specifier: 18.0.10
         version: 18.0.10
+      minipass:
+        specifier: 7.1.3
+        version: 7.1.3
+      nostr-tools:
+        specifier: 2.24.3
+        version: 2.24.3(typescript@6.0.3)
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0
@@ -472,6 +493,9 @@ importers:
       postcss-lit:
         specifier: 1.4.1
         version: 1.4.1(jiti@2.7.0)(postcss@8.5.26)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0)
+      postcss-selector-parser:
+        specifier: 7.1.5
+        version: 7.1.5
       shiki:
         specifier: 4.4.3
         version: 4.4.3
@@ -490,6 +514,9 @@ importers:
       stylelint-config-recommended:
         specifier: 18.0.0
         version: 18.0.0(stylelint@17.14.1(supports-color@10.2.2)(typescript@6.0.3))
+      tinyglobby:
+        specifier: 0.2.17
+        version: 0.2.17
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.12)(typescript@6.0.3)(unrun@0.3.1)

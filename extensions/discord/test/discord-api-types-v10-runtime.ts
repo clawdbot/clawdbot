@@ -1,4 +1,4 @@
-// Discord API types runtime helper loads discord-api-types v10 at runtime.
+// Resolve Discord API runtime values within their owning workspace package.
 import { createRequire } from "node:module";
 import type * as DiscordApiTypes from "discord-api-types/v10";
 

@@ -72,7 +72,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     clean: false,
     outExtensions: () => ({ js: ".js" }),
     deps: {
-      neverBundle: true,
+      // Root runtime dependencies stay external; bundled workspace code owns its private deps.
       alwaysBundle: (id) =>
         (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
         id !== "@openclaw/fs-safe" &&

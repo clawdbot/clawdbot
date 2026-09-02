@@ -99,6 +99,8 @@ const workspaces = Object.fromEntries(
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
           : [
               TEST_ENTRY_GLOB,
+              // Vitest's root aliases execute these Discord-owned runtime adapters.
+              ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next

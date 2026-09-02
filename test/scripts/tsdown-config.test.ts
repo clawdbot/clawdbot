@@ -94,7 +94,7 @@ describe("tsdown config", () => {
         ...manifest.dependencies,
         ...manifest.optionalDependencies,
       })) {
-        const installed = path.resolve("node_modules", name);
+        const installed = path.resolve("extensions/memory-lancedb/node_modules", name);
         if (!fs.existsSync(installed)) {
           continue;
         }
@@ -462,6 +462,7 @@ describe("tsdown config", () => {
         "@larksuiteoapi/node-sdk",
         "@matrix-org/matrix-sdk-crypto-nodejs",
         "@openclaw/ai",
+        "@openclaw/crabline",
         "@openclaw/fs-safe",
         "@vitest/expect",
         "jimp",
