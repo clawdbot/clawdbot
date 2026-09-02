@@ -180,10 +180,9 @@ func TestCodexTranslatorUsesExactGlossaryMatchWithoutPrompt(t *testing.T) {
 }
 
 func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
-	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
+	prompt := buildCodexTranslationPrompt("Hello\nworld")
 
 	for _, want := range []string{
-		"System prompt.",
 		"Return only the translated text",
 		"Do not wrap the response in an additional code fence",
 		"preserve every code fence already present in the input exactly",
@@ -216,6 +215,8 @@ set -eu
 out=""
 saw_effort=0
 saw_service=0
+saw_contract=0
+saw_project_docs_disabled=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output-last-message)
@@ -231,18 +232,34 @@ while [ "$#" -gt 0 ]; do
         service_tier=\"fast\")
           saw_service=1
           ;;
+        developer_instructions=\"Translate.\")
+          saw_contract=1
+          ;;
+        project_doc_max_bytes=0)
+          saw_project_docs_disabled=1
+          ;;
       esac
       ;;
   esac
   shift || true
 done
-cat >/dev/null
+input="$(cat)"
+case "$input" in
+  *"Translate."*)
+    echo "translation contract must not be repeated in user input" >&2
+    exit 1
+    ;;
+esac
 if [ "$saw_effort" != "1" ]; then
   echo "missing high reasoning effort config" >&2
   exit 1
 fi
 if [ "$saw_service" != "1" ]; then
   echo "missing fast service tier config" >&2
+  exit 1
+fi
+if [ "$saw_contract" != "1" ] || [ "$saw_project_docs_disabled" != "1" ]; then
+  echo "missing isolated developer translation contract" >&2
   exit 1
 fi
 if [ -z "${CODEX_HOME:-}" ]; then

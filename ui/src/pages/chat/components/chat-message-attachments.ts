@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
+import { isImageMediaPath, isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
@@ -23,14 +24,13 @@ import {
   renderAssistantAttachmentStatusCard,
 } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
+import { renderMessageImages } from "./chat-message-images.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
 import {
   isChatMediaResourceCurrent,
-  isImageMediaPath,
-  isSvgImageMediaPath,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
@@ -442,6 +442,25 @@ export function renderAssistantAttachments(
       });
     }
     const { attachment } = item;
+    const normalizedMimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    const inferTypeFromExtension =
+      !normalizedMimeType || normalizedMimeType === "application/octet-stream";
+    const imageAttachment =
+      attachment.kind === "image" ||
+      (attachment.kind === "document" &&
+        (isImageMediaPath(attachment.url, normalizedMimeType) ||
+          (inferTypeFromExtension && isImageMediaPath(attachment.label, undefined))));
+    const svgImage =
+      normalizedMimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(attachment.url, undefined) ||
+          isSvgImageMediaPath(attachment.label, undefined)));
+    if (imageAttachment && !svgImage && !isManagedOutgoingMediaSource(attachment.url)) {
+      return renderMessageImages(
+        [{ ...attachment, alt: attachment.label, fileName: attachment.label }],
+        options,
+      );
+    }
     const resolved = resolveAttachmentSource(attachment, options);
     if (resolved.status !== "available") {
       return renderAssistantAttachmentStatusCard({
@@ -503,27 +522,7 @@ export function renderAssistantAttachments(
                 : {}),
             })
         : undefined;
-    const normalizedMimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    const inferTypeFromExtension =
-      !normalizedMimeType || normalizedMimeType === "application/octet-stream";
-    const svgImage =
-      normalizedMimeType === "image/svg+xml" ||
-      (inferTypeFromExtension &&
-        (isSvgImageMediaPath(attachment.url, undefined) ||
-          isSvgImageMediaPath(attachmentUrl, undefined) ||
-          isSvgImageMediaPath(attachment.label, undefined)));
-    if (
-      attachment.kind === "image" ||
-      (attachment.kind === "document" &&
-        (svgImage ||
-          isImageMediaPath(
-            attachment.url,
-            inferTypeFromExtension ? undefined : attachment.mimeType,
-          ) ||
-          (inferTypeFromExtension &&
-            !isSvgImageMediaPath(attachment.label, undefined) &&
-            isImageMediaPath(attachment.label, undefined))))
-    ) {
+    if (imageAttachment) {
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
       if (svgImage) {
         return html`<openclaw-chat-svg-attachment

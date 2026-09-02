@@ -1,7 +1,7 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
 import { describe, expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -599,9 +599,9 @@ describe("toSanitizedMarkdownHtml links", () => {
 
     it("stays deterministic across streaming tail renders", () => {
       const options = { sessionLinks: true } as const;
-      const first = htmlFragment(toStreamingMarkdownHtml(`Open ${sessionKey}`, options));
+      const first = htmlFragment(toStreamingMarkdownParts(`Open ${sessionKey}`, options).join(""));
       const extended = htmlFragment(
-        toStreamingMarkdownHtml(`Open ${sessionKey} and continue`, options),
+        toStreamingMarkdownParts(`Open ${sessionKey} and continue`, options).join(""),
       );
       expect(first.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
       expect(extended.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);

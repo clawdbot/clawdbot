@@ -82,7 +82,7 @@ suite.define(() => {
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
-            await page.locator('[data-test-id="cron-list-tab-tasks"]').click();
+            await page.locator('[data-test-id="cron-tab-all"]').click();
             await page
               .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
               .click();

@@ -88,8 +88,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { laneTaskAbortController, laneTaskReleaseController, noteLaneTaskProgress } =
-    runInput.laneController;
+  const { createAttemptControls } = runInput.laneController;
   const {
     requestedModelId,
     expectedHarnessArtifact,
@@ -180,7 +179,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimePlan,
   });
   const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
+    runtime.agentHarness.id === CODEX_HARNESS_ID &&
+    !params.disableTrajectory &&
+    params.sessionPersistence !== "detached"
       ? createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
@@ -290,9 +291,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     control: {
       lifecycleGeneration,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
-      laneTaskAbortController,
-      laneTaskReleaseController,
-      noteLaneTaskProgress,
+      createAttemptControls,
       onToolOutcome: input.observeToolOutcome,
       isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

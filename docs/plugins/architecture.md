@@ -144,6 +144,8 @@ Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstra
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
 
+Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
+
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 - channel ownership

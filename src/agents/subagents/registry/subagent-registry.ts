@@ -69,6 +69,7 @@ const subagentRegistryBootstrapState: {
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS = 250;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 /** Admission pressure for recoverable completion deliveries; rows are never pruned for capacity. */
 export function getSubagentDeliveryBacklogPressure(): {
@@ -184,7 +185,7 @@ function scheduleSubagentDeliveryResumeRetry(
       }
       resumedRuns.delete(runId);
       resumeSubagentRun(runId);
-    }).catch((error: unknown) => {
+    }, "subagents:resume-retry").catch((error: unknown) => {
       log.warn("failed to resume subagent delivery retry", { runId, error });
       if (
         isGatewayRestartDraining() &&
@@ -212,7 +213,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
 ) {
   void runWithGatewayIndependentRootWorkAdmission(async () => {
     await finalizeResumedAnnounceGiveUp({ runId, entry, reason });
-  }).catch((error: unknown) => {
+  }, "subagents:delivery-finalize").catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
     if (
       isGatewayRestartDraining() &&
@@ -469,6 +470,71 @@ const subagentRunManager = createSubagentRunManager({
   completeCleanupBookkeeping,
   completeSubagentRun: async (params) => {
     await completionRuntime.completeSubagentRunWithRecovery(params, "subagent-wait");
+  },
+  reportSubagentWaitExpiry: async ({ entry, observedAt, startedAt }) => {
+    // The runtime owns configured execution deadlines and commonly emits its
+    // terminal event in the same clock tick as agent.wait expires. Give that
+    // authoritative event one brief turn to win before publishing a still-live
+    // observation; this avoids a duplicate provisional wake for normal timeouts.
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS);
+      timer.unref?.();
+    });
+    const current = subagentRuns.get(entry.runId);
+    if (
+      current !== entry ||
+      typeof entry.execution.endedAt === "number" ||
+      typeof entry.waitExpiryAnnouncedAt === "number" ||
+      (typeof entry.waitExpiryObservedAt === "number" && entry.waitExpiryObservedAt !== observedAt)
+    ) {
+      return;
+    }
+    entry.waitExpiryObservedAt ??= observedAt;
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      entry.execution = { ...entry.execution, startedAt };
+      entry.sessionStartedAt ??= startedAt;
+    }
+    persistSubagentRunsOrThrow(entry.runId);
+
+    if (entry.collect === true || entry.expectsCompletionMessage === false) {
+      return;
+    }
+    const announceResult = await subagentRegistryDeps.runSubagentAnnounceFlow({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterAgentId: entry.requesterAgentId,
+      requesterOrigin: entry.requesterOrigin,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: entry.task,
+      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt,
+      endedAt: observedAt,
+      label: entry.label,
+      outcome: { status: "timeout", disposition: "still-running" },
+      expectsCompletionMessage: entry.expectsCompletionMessage,
+      spawnMode: entry.spawnMode,
+      wakeOnDescendantSettle: entry.wakeOnDescendantSettle,
+      suppressChildSessionEffects: true,
+      isCompletionDeliveryAllowed: () =>
+        subagentRuns.get(entry.runId) === entry &&
+        typeof entry.execution.endedAt !== "number" &&
+        entry.waitExpiryObservedAt === observedAt,
+      resolveGatewayContext: getGatewayContextResolver(entry),
+    });
+    if (announceResult !== "delivered") {
+      throw new Error("subagent wait-expiry announcement was not delivered");
+    }
+    if (
+      subagentRuns.get(entry.runId) === entry &&
+      typeof entry.execution.endedAt !== "number" &&
+      entry.waitExpiryObservedAt === observedAt
+    ) {
+      entry.waitExpiryAnnouncedAt = Date.now();
+      persistSubagentRunsOrThrow(entry.runId);
+    }
   },
   resolveSubagentTask: findSubagentTaskForRun,
 });

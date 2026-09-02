@@ -918,6 +918,7 @@ export function collectGatewayWatchFindings(params: {
   cpuMs: number;
   distRuntimeByteGrowth: number;
   distRuntimeFileGrowth: number;
+  removedPaths: number;
   options: Pick<
     WatchOptions,
     "cpuFailMs" | "cpuWarnMs" | "distRuntimeByteGrowthMax" | "distRuntimeFileGrowthMax" | "windowMs"
@@ -930,6 +931,7 @@ export function collectGatewayWatchFindings(params: {
     cpuMs,
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
+    removedPaths,
     options,
     watchBuildReason,
     watchResult,
@@ -963,6 +965,13 @@ export function collectGatewayWatchFindings(params: {
     failures.push(
       "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
     );
+  } else if (watchTriggeredBuild) {
+    failures.push(
+      `gateway:watch unexpectedly rebuilt prebuilt artifacts (${watchBuildReason ?? "unknown reason"})`,
+    );
+  }
+  if (removedPaths > 0) {
+    failures.push(`gateway:watch removed ${removedPaths} prebuilt artifact paths`);
   }
   if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
     failures.push(
@@ -1042,16 +1051,13 @@ async function main() {
     writeBuildAndRuntimePostBuildStamps();
     preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
   }
-  if (
-    preflightBuildRequirement.shouldBuild &&
-    preflightBuildRequirement.reason === "dirty_watched_tree"
-  ) {
+  if (preflightBuildRequirement.shouldBuild) {
     const summary = {
       windowMs: options.windowMs,
       invalidated: true,
       invalidationReason: preflightBuildRequirement.reason,
       invalidationMessage:
-        "gateway-watch-regression cannot run on a dirty watched tree because run-node will intentionally rebuild during the watch window.",
+        "gateway-watch-regression requires a complete, current prebuilt artifact set; run-node would rebuild during the watch window.",
     };
     fs.writeFileSync(
       path.join(options.outputDir, "summary.json"),
@@ -1059,7 +1065,7 @@ async function main() {
     );
     console.log(JSON.stringify(summary, null, 2));
     fail(
-      "gateway-watch-regression invalid local run: dirty watched source tree would force a rebuild inside the watch window",
+      `gateway-watch-regression invalid local run: ${preflightBuildRequirement.reason} would force a rebuild inside the watch window`,
     );
     process.exit(1);
   }
@@ -1107,7 +1113,9 @@ async function main() {
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
     addedPaths: diff.added.length,
-    removedPaths: diff.removed.length,
+    // A previously absent tree becoming present removes only the snapshot's
+    // diagnostic sentinel, not an artifact (for example during metadata sync).
+    removedPaths: diff.removed.filter((entry) => !entry.endsWith(" (missing)")).length,
     watchExit: watchResult.exit,
     spawnError: watchResult.spawnError,
     stdoutPath: watchResult.stdoutPath,
@@ -1126,6 +1134,7 @@ async function main() {
     cpuMs,
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
+    removedPaths: summary.removedPaths,
     options,
     watchBuildReason,
     watchResult,

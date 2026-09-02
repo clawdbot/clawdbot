@@ -62,30 +62,33 @@ test.each([false, true])(
     const reclaimed = createDeferredCore();
     const releaseResult = createDeferredCore();
     let reclaimCalls = 0;
-    const service = coordinateWorkerPlacementDispatch({
-      reclaim: async (_request, authorize, beforeDrain, serialize) => {
-        const first = ++reclaimCalls === 1;
-        const result = await serialize!(async () => {
+    const service = coordinateWorkerPlacementDispatch(
+      {
+        reclaim: async (_request, authorize, beforeDrain, serialize) => {
+          const first = ++reclaimCalls === 1;
+          const result = await serialize!(async () => {
+            if (first) {
+              reclaimEntered.resolve();
+              await startReclaim.promise;
+            }
+            authorize?.();
+            beforeDrain?.();
+            placement = {
+              ...placement,
+              state: "reclaimed",
+              generation: placement.generation + 1,
+            } as WorkerSessionPlacementRecord;
+            return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+          });
           if (first) {
-            reclaimEntered.resolve();
-            await startReclaim.promise;
+            reclaimed.resolve();
+            await releaseResult.promise;
           }
-          authorize?.();
-          beforeDrain?.();
-          placement = {
-            ...placement,
-            state: "reclaimed",
-            generation: placement.generation + 1,
-          } as WorkerSessionPlacementRecord;
-          return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
-        });
-        if (first) {
-          reclaimed.resolve();
-          await releaseResult.promise;
-        }
-        return result;
-      },
-    } as WorkerPlacementDispatchService);
+          return result;
+        },
+      } as WorkerPlacementDispatchService,
+      (_request, run) => run(),
+    );
     const context = {
       workerPlacementDispatchService: service,
       workerSessionPlacementService: { getMany: () => new Map([[sourceSessionId, placement]]) },

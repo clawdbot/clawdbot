@@ -158,15 +158,3 @@ export async function worktreePathExists(target: string): Promise<boolean> {
     throw error;
   }
 }
-
-export async function removeEmptyParents(start: string, stop: string): Promise<void> {
-  let current = start;
-  while (current.startsWith(`${stop}${path.sep}`)) {
-    try {
-      await fs.rmdir(current);
-    } catch {
-      return;
-    }
-    current = path.dirname(current);
-  }
-}

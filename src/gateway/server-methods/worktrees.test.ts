@@ -102,7 +102,7 @@ describe("worktrees gateway methods", () => {
       undefined,
     ]);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: { maxCount: 30 },
+      limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });
@@ -253,7 +253,7 @@ describe("worktrees gateway methods", () => {
     const response = await call(handlers, "worktrees.gc", {}, { context });
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: { maxCount: 30 },
+      limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });

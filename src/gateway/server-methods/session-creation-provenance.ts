@@ -5,6 +5,7 @@ import type {
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 
 export type TrustedSessionCreation = {
+  skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */

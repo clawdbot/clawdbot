@@ -1,4 +1,4 @@
-// Applies local resource policy for expensive check commands.
+// Applies resource policy for expensive local and CI check commands.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,6 +11,8 @@ const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
 const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
+const CI_PARALLEL_MIN_CPUS = 8;
+export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 type Env = NodeJS.ProcessEnv;
 type Resources = {
@@ -37,6 +39,14 @@ export function isLocalCheckEnabled(env: Env) {
 
 function isCiLikeEnv(env: Env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+}
+
+// Small CI runners share one constraint check for shard concurrency and Go memory policy.
+export function isConstrainedCiCheckHost(hostResources: Resources) {
+  return (
+    hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES ||
+    hostResources.logicalCpuCount < CI_PARALLEL_MIN_CPUS
+  );
 }
 
 /** Ensure local check runs opt into safeguard environment outside CI. */
@@ -202,7 +212,7 @@ export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Re
   return { env: nextEnv, args: nextArgs };
 }
 
-/** Apply local oxlint defaults for type-aware checking and throttled worker settings. */
+/** Apply oxlint defaults for type-aware checking and throttled worker settings. */
 export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: Resources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
@@ -219,7 +229,10 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
-  if (shouldThrottleLocalChecks(nextEnv, hostResources)) {
+  if (
+    shouldThrottleLocalChecks(nextEnv, hostResources) ||
+    (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(hostResources))
+  ) {
     if (!hasFlag(nextArgs, "--threads")) {
       insertBeforeSeparator(nextArgs, "--threads=1");
     }

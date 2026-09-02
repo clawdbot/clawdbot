@@ -38,7 +38,7 @@ openclaw daemon uninstall
 - `status --port <port>`: selects a local Gateway using the invoking CLI config for auth and TLS. Cannot combine with `--url`; native service details remain diagnostic-only.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.
 - Node is the primary, default, and recommended service runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `install --runtime bun`.
-- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
+- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` normally uses the service manager directly; on Windows, commands launched from a Gateway service automatically use the [safe restart path](/cli/gateway#restart-the-gateway). Explicit lifecycle controls retain their behavior; `--force` is the immediate override.
 - `restart --safe --skip-deferral`: bypasses only the active-work deferral gate. Shutdown may still wait for pending replies to drain before the Gateway process exits. Requires `--safe`.
 
 ## Notes

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
   const authStorage = {
@@ -179,6 +180,7 @@ vi.mock("./agent-scope-config.js", async (importOriginal) => ({
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => undefined,
+  getRuntimeAuthProfileStoreCredentialsRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {

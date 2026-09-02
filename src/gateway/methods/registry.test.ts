@@ -62,6 +62,15 @@ describe("gateway method registry", () => {
     ).toThrow("gateway method already registered: example.duplicate");
   });
 
+  it("rejects unknown core handlers while accepting hidden core methods", () => {
+    expect(() => createCoreGatewayMethodDescriptors({ "example.unknown": handler })).toThrow(
+      "gateway method handler is missing a descriptor: example.unknown",
+    );
+    expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
+      { name: "config.openFile", advertise: false, handler },
+    ]);
+  });
+
   it("coerces reserved plugin namespaces to admin scope", () => {
     const descriptor = createPluginGatewayMethodDescriptor({
       pluginId: "demo",

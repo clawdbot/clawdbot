@@ -186,13 +186,15 @@ export async function persistActivatedSetupInference(input: {
   let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
     const initialCandidate = stageCandidate(cfg, "runtime");
     const initialRoute = await projectRoute(initialCandidate);
     const resolvedRoute = await resolveRoute(initialCandidate);
     if (
       !sameDefaultInferenceRoute(initialRoute, verifiedRoute) ||
       !resolvedRoute ||
-      resolvedRoute.modelLabel !== plan.modelRef ||
+      resolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
       resolvedRoute.authProfileId !== plan.authProfileId
     ) {
       throw new Error(
@@ -280,7 +282,7 @@ export async function persistActivatedSetupInference(input: {
         const resolvedRoute = await resolveRoute(stagedRuntime);
         if (
           !resolvedRoute ||
-          resolvedRoute.modelLabel !== plan.modelRef ||
+          resolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
           (plan.authProfileId && resolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
@@ -308,7 +310,7 @@ export async function persistActivatedSetupInference(input: {
         if (
           !sameDefaultInferenceRoute(nextRouteProjection, expectedSourceCandidateRoute) ||
           !nextResolvedRoute ||
-          nextResolvedRoute.modelLabel !== plan.modelRef ||
+          nextResolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
           (plan.authProfileId && nextResolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(

@@ -1,6 +1,6 @@
 // Live Docker Stage tests cover live docker stage script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,25 @@ const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("live Docker state staging", () => {
+  function linkFixtureNodeModules(root: string) {
+    symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"));
+  }
+
+  function writeFixturePackageSpecParser(root: string) {
+    const parserPath = path.join(root, "src", "infra", "npm-registry-spec.ts");
+    mkdirSync(path.dirname(parserPath), { recursive: true });
+    writeFileSync(
+      parserPath,
+      String.raw`
+export function parseRegistryNpmSpec(spec: string) {
+  return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[a-z0-9][a-z0-9._-]*)?$/u.test(spec)
+    ? { raw: spec }
+    : null;
+}
+`,
+    );
+  }
+
   it.each([
     { geminiKey: "test-gemini-key", googleKey: "", expectedType: "gemini-api-key" },
     { geminiKey: "", googleKey: "test-google-key", expectedType: "vertex-ai" },
@@ -59,11 +78,17 @@ describe("live Docker state staging", () => {
     const binDir = path.join(root, "bin");
     mkdirSync(binDir);
     const npmPath = path.join(binDir, "npm");
+    const timeoutPath = path.join(binDir, "timeout");
     writeFileSync(
       npmPath,
       '#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$3" >> "$INSTALL_LOG"\nprintf "#!/usr/bin/env bash\\nprintf fixture-ok" > "$CLI_PATH"\nchmod +x "$CLI_PATH"\n',
     );
     chmodSync(npmPath, 0o755);
+    writeFileSync(
+      timeoutPath,
+      '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
+    );
+    chmodSync(timeoutPath, 0o755);
     const installLog = path.join(root, "installs.log");
     const result = spawnSync(
       "bash",
@@ -162,6 +187,223 @@ describe("live Docker state staging", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("staged OpenClaw script entrypoint not found");
+  });
+
+  it("installs validated Docker packages from the staged metadata export", () => {
+    const root = tempDirs.make("openclaw-live-stage-packages-");
+    const binDir = path.join(root, "bin");
+    const installLog = path.join(root, "installs.log");
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    mkdirSync(binDir);
+    linkFixtureNodeModules(root);
+    writeFixturePackageSpecParser(root);
+    writeFileSync(
+      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+      'export async function resolveCliBackendDockerPackages() { return ["@fixture/cli@1.2.3", "fixture-cli"]; }\n',
+    );
+    writeFileSync(
+      path.join(binDir, "timeout"),
+      '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(binDir, "npm"),
+      '#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n',
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_prepare_cli_backend_docker_packages "fixture-provider" "fixture-provider/model"',
+        "test",
+        root,
+        stageScriptPath,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          INSTALL_LOG: installLog,
+          PATH: `${binDir}:${process.env.PATH}`,
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(installLog, "utf8").trim().split("\n")).toEqual([
+      "install -g @fixture/cli@1.2.3",
+      "install -g fixture-cli",
+    ]);
+  });
+
+  it("omits historical package setup only with explicit frozen-target authorization", () => {
+    const root = tempDirs.make("openclaw-live-stage-packages-missing-");
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    linkFixtureNodeModules(root);
+    writeFixturePackageSpecParser(root);
+    writeFileSync(
+      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+      "export const legacyMetadata = true;\n",
+    );
+    const command = [
+      "-c",
+      'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_prepare_cli_backend_docker_packages "" ""',
+      "test",
+      root,
+      stageScriptPath,
+    ];
+    const baseEnv = {
+      ...process.env,
+      OPENCLAW_SELECTED_SHA: "a".repeat(40),
+      OPENCLAW_TOOLING_SHA: "b".repeat(40),
+    };
+
+    const denied = spawnSync("bash", command, {
+      encoding: "utf8",
+      env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0" },
+    });
+    expect(denied.status).not.toBe(0);
+    expect(denied.stderr).toContain("does not export resolveCliBackendDockerPackages");
+
+    const authorized = spawnSync("bash", command, {
+      encoding: "utf8",
+      env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+    });
+    expect(authorized.status, authorized.stderr).toBe(0);
+    expect(authorized.stdout).toContain("preserving historical no-package-setup behavior");
+  });
+
+  it("lets staged metadata output flush through normal Node completion", () => {
+    const source = readFileSync(stageScriptPath, "utf8");
+    const moduleStart = source.indexOf("node --import tsx --input-type=module <<'NODE'");
+    const moduleEnd = source.indexOf("\nNODE\n", moduleStart);
+    expect(moduleStart).toBeGreaterThanOrEqual(0);
+    expect(moduleEnd).toBeGreaterThan(moduleStart);
+    const moduleSource = source.slice(moduleStart, moduleEnd);
+    expect(moduleSource).not.toContain("process.exit(");
+    expect(moduleSource.match(/process\.stdout\.write/gu)).toHaveLength(1);
+  });
+
+  it("rejects malformed staged package metadata before npm runs", () => {
+    const root = tempDirs.make("openclaw-live-stage-packages-malformed-");
+    const binDir = path.join(root, "bin");
+    const installLog = path.join(root, "installs.log");
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    mkdirSync(binDir);
+    linkFixtureNodeModules(root);
+    writeFixturePackageSpecParser(root);
+    writeFileSync(
+      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+      'export async function resolveCliBackendDockerPackages() { return ["--force"]; }\n',
+    );
+    writeFileSync(
+      path.join(binDir, "npm"),
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n',
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_prepare_cli_backend_docker_packages "" ""',
+        "test",
+        root,
+        stageScriptPath,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          INSTALL_LOG: installLog,
+          PATH: `${binDir}:${process.env.PATH}`,
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid Docker CLI package");
+    expect(() => readFileSync(installLog, "utf8")).toThrow();
+  });
+
+  it("defaults frozen-target omissions closed and rejects invalid identity", () => {
+    const command = [
+      "-c",
+      'set -euo pipefail; source "$1"; openclaw_frozen_target_omissions_authorized',
+      "test",
+      stageScriptPath,
+    ];
+    const run = (env: Record<string, string>) =>
+      spawnSync("bash", command, { encoding: "utf8", env: { ...process.env, ...env } });
+
+    expect(run({}).status).toBe(1);
+    const sameSha = run({
+      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+      OPENCLAW_SELECTED_SHA: "a".repeat(40),
+      OPENCLAW_TOOLING_SHA: "a".repeat(40),
+    });
+    expect(sameSha.status).toBe(2);
+    expect(sameSha.stderr).toContain("require distinct selected and tooling SHAs");
+
+    const malformed = run({
+      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "yes",
+      OPENCLAW_SELECTED_SHA: "a".repeat(40),
+      OPENCLAW_TOOLING_SHA: "b".repeat(40),
+    });
+    expect(malformed.status).toBe(2);
+    expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+  });
+
+  it.each([
+    "src/agents/subagent-announce.live.test.ts",
+    "src/agents/subagents/announce/subagent-announce.live.test.ts",
+  ])("resolves the staged announce test by unique basename: %s", (relativePath) => {
+    const root = tempDirs.make("openclaw-live-stage-announce-");
+    mkdirSync(path.join(root, path.dirname(relativePath)), { recursive: true });
+    writeFileSync(path.join(root, relativePath), "");
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$2"; relative="$(openclaw_live_resolve_unique_staged_file "$1/src/agents" subagent-announce.live.test.ts)"; printf "src/agents/%s\\n" "$relative"',
+        "test",
+        root,
+        stageScriptPath,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(relativePath);
+  });
+
+  it("rejects missing or ambiguous staged announce tests", () => {
+    const root = tempDirs.make("openclaw-live-stage-announce-invalid-");
+    const command = [
+      "-c",
+      'set -euo pipefail; source "$2"; openclaw_live_resolve_unique_staged_file "$1/src/agents" subagent-announce.live.test.ts',
+      "test",
+      root,
+      stageScriptPath,
+    ];
+
+    const missing = spawnSync("bash", command, { encoding: "utf8" });
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toContain("no staged file matched");
+
+    for (const directory of ["old", "current"]) {
+      mkdirSync(path.join(root, "src", "agents", directory), { recursive: true });
+      writeFileSync(
+        path.join(root, "src", "agents", directory, "subagent-announce.live.test.ts"),
+        "",
+      );
+    }
+    const ambiguous = spawnSync("bash", command, { encoding: "utf8" });
+    expect(ambiguous.status).not.toBe(0);
+    expect(ambiguous.stderr).toContain("multiple staged files matched");
   });
 
   it("keeps repo-local generated artifacts out of the source copy", () => {

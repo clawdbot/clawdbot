@@ -336,44 +336,60 @@ describe("migration provider runtime", () => {
     });
   });
 
-  it("does not reuse a standalone handle after the migration owner or config changes", () => {
-    const cfgA = { plugins: { allow: ["migration-a"] } } as OpenClawConfig;
-    const cfgB = { plugins: { allow: ["migration-b"] } } as OpenClawConfig;
-    const provider = createMigrationProvider("shared-import");
-    const loadedA = createEmptyPluginRegistry();
-    loadedA.migrationProviders.push({
-      pluginId: "migration-a",
-      pluginName: "Migration A",
-      source: "test",
-      provider,
-    } as never);
-    mocks.loadPluginRegistryHandle.mockReturnValue(loadedA);
-    mocks.listBundledPluginMetadata.mockReturnValue([
-      {
-        manifest: {
-          id: "migration-a",
-          contracts: { migrationProviders: ["shared-import"] },
+  it.each(["owner", "retired"])(
+    "does not reuse a standalone handle after %s changes",
+    async (change) => {
+      mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+      const cfgA = { plugins: { allow: ["migration-a"] } } as OpenClawConfig;
+      const cfgB = { plugins: { allow: ["migration-b"] } } as OpenClawConfig;
+      const provider = createMigrationProvider("shared-import");
+      const loadedA = createEmptyPluginRegistry();
+      loadedA.migrationProviders.push({
+        pluginId: "migration-a",
+        pluginName: "Migration A",
+        source: "test",
+        provider,
+      } as never);
+      mocks.loadPluginRegistryHandle.mockReturnValue(loadedA);
+      mocks.listBundledPluginMetadata.mockReturnValue([
+        {
+          manifest: {
+            id: "migration-a",
+            contracts: { migrationProviders: ["shared-import"] },
+          },
         },
-      },
-    ] as never);
+      ] as never);
 
-    ensureStandaloneMigrationProviderRegistryLoaded({
-      cfg: cfgA,
-      providerId: "shared-import",
-    });
-    mocks.listBundledPluginMetadata.mockReturnValue([
-      {
-        manifest: {
-          id: "migration-b",
-          contracts: { migrationProviders: ["shared-import"] },
+      ensureStandaloneMigrationProviderRegistryLoaded({
+        cfg: cfgA,
+        providerId: "shared-import",
+      });
+      expect(
+        resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgA }),
+      ).toBeDefined();
+      if (change === "retired") {
+        const { markPluginRegistryRetired } = await import("./registry-lifecycle.js");
+        markPluginRegistryRetired(loadedA);
+        expect(
+          resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgA }),
+        ).toBeUndefined();
+        expect(resolvePluginMigrationProviders({ cfg: cfgA })).toEqual([]);
+        return;
+      }
+      mocks.listBundledPluginMetadata.mockReturnValue([
+        {
+          manifest: {
+            id: "migration-b",
+            contracts: { migrationProviders: ["shared-import"] },
+          },
         },
-      },
-    ] as never);
+      ] as never);
 
-    expect(
-      resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgB }),
-    ).toBeUndefined();
-  });
+      expect(
+        resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgB }),
+      ).toBeUndefined();
+    },
+  );
 
   it("lists configured external migration providers alongside active providers", () => {
     const activeProvider = createMigrationProvider("active-import");

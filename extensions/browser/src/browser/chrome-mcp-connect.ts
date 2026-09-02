@@ -16,7 +16,7 @@ import {
   redactChromeMcpLocalPathForDiagnostic,
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
-import { buildChromeMcpArgsFromOptions, normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
+import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   closeTrackedChromeMcpSession,
   refreshChromeMcpCleanupProcess,
@@ -51,7 +51,7 @@ async function createRealSession(
 ): Promise<ChromeMcpSession> {
   const transport = new StdioClientTransport({
     command: options.command,
-    args: buildChromeMcpArgsFromOptions(options),
+    args: options.args,
     stderr: "pipe",
   });
   const client = new Client(

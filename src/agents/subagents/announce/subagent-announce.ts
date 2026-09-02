@@ -476,7 +476,9 @@ export async function runSubagentAnnounceFlow(params: {
 
     // Build status label
     const statusLabel = stillRunning
-      ? "still running; the wait for it expired, it did not"
+      ? outcome.error
+        ? `still running; last error while retrying: ${outcome.error}`
+        : "still running; the wait for it expired, it did not"
       : outcome.status === "ok"
         ? "completed; ready for parent review"
         : outcome.status === "timeout"

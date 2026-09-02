@@ -335,7 +335,6 @@ describe("tsdown config", () => {
     if (typeof neverBundle === "function") {
       expect(neverBundle("@anthropic-ai/vertex-sdk")).toBe(true);
       expect(neverBundle("@discordjs/voice")).toBe(true);
-      expect(neverBundle("@lancedb/lancedb")).toBe(true);
       expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
       expect(neverBundle("@slack/bolt")).toBe(true);
@@ -343,21 +342,18 @@ describe("tsdown config", () => {
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
       for (const dependency of [
         "@anthropic-ai/vertex-sdk",
         "@discordjs/voice",
-        "@lancedb/lancedb",
         "@larksuiteoapi/node-sdk",
         "@slack/bolt",
         "@slack/web-api",
         "@vitest/expect",
         "jimp",
         "matrix-js-sdk",
-        "sharp",
         "vitest",
       ]) {
         expect(neverBundle).toContain(dependency);
@@ -368,10 +364,9 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("jimp", undefined, false)).toBe(true);
-    expect(externalize("sharp", undefined, false)).toBe(true);
   });
 
-  it("always bundles plugin SDK package-local runtime dependencies", () => {
+  it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {
     const unifiedGraph = requireUnifiedDistGraph();
     const alwaysBundle = unifiedGraph.deps?.alwaysBundle;
 
@@ -379,8 +374,8 @@ describe("tsdown config", () => {
       throw new Error("expected unified graph alwaysBundle predicate");
     }
 
-    expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
-    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("@openclaw/fs-safe")).toBe(false);
+    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(false);
     expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
     expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
     expect(alwaysBundle("zod")).toBe(true);

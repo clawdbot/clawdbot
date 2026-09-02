@@ -278,6 +278,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         const probe = await probeDiscordAcpBindingHealth({
           cfg,
           sessionKey,
+          agentId: session.agentId,
           storedState: session.acp?.state,
           lastActivityAt: session.acp?.lastActivityAt,
           providerSessionRuntime: discordProviderSessionRuntime,

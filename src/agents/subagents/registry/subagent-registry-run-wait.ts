@@ -7,8 +7,7 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
-import type { AgentRunDisposition } from "../../internal-event-contract.js";
-import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
+import { waitForAgentRun } from "../../run-wait.js";
 import {
   type SubagentRunOutcome,
   withSubagentOutcomeTiming,
@@ -186,6 +185,11 @@ export type SubagentManagerOptions = {
     provisionalKill?: boolean;
   }): void;
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
+  reportSubagentWaitExpiry(args: {
+    entry: SubagentRunRecord;
+    observedAt: number;
+    startedAt?: number;
+  }): Promise<void>;
   resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
 };
 
@@ -247,6 +251,7 @@ export class SubagentWaitManager {
     capWaitToStoredDeadline = false,
   ): Promise<void> => {
     let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
+    let waitExpiryForRetry: Parameters<typeof this.options.reportSubagentWaitExpiry>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       this.options.scheduleSweep({ delayMs: 1_000 });
       const scheduledEntry = entry;
@@ -308,7 +313,7 @@ export class SubagentWaitManager {
         }
         return;
       }
-      if (waitStatus === "error" && !waitAborted && isRecoverableAgentWaitError(wait.error)) {
+      if (waitStatus === "error" && !waitAborted && wait.retryableTransportError) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }
@@ -319,14 +324,10 @@ export class SubagentWaitManager {
               childSessionKey: entry.childSessionKey,
               notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
-      const completeAsRunTimeout = async (
-        endedAt?: number,
-        startedAt?: number,
-        disposition: AgentRunDisposition = "exited",
-      ) => {
+      const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
         const timeoutCompletion: Parameters<typeof this.options.completeSubagentRun>[0] = {
           runId,
-          outcome: { status: "timeout", disposition },
+          outcome: { status: "timeout", disposition: "exited" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
@@ -397,12 +398,22 @@ export class SubagentWaitManager {
           }
           // Only `isTerminalWaitTimeout` carries evidence that the run stopped.
           // Reaching the stored deadline is clock arithmetic on our own budget:
-          // it earns the parent a wake, never the claim that the child ended.
-          await completeAsRunTimeout(
-            timeoutEndedAt,
-            observedStartedAt,
-            isTerminalWaitTimeout ? "exited" : "still-running",
-          );
+          // it earns the parent a wake, but must stay outside terminal completion
+          // because that path owns browser/MCP/session cleanup.
+          if (!isTerminalWaitTimeout) {
+            waitExpiryForRetry = {
+              entry,
+              observedAt: timeoutEndedAt ?? now,
+              startedAt: observedStartedAt,
+            };
+            await this.options.reportSubagentWaitExpiry(waitExpiryForRetry);
+            // Do not keep a second long-poll alive after the parent has been
+            // notified. The periodic registry sweeper remains the settlement
+            // backstop: once the run context disappears, it reconciles the
+            // persisted terminal session state or records a lost-context error.
+            return;
+          }
+          await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
           return;
         }
         if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
@@ -476,6 +487,14 @@ export class SubagentWaitManager {
             error: retryError,
           });
         }
+      }
+      if (waitExpiryForRetry && typeof current.execution.endedAt !== "number") {
+        scheduleWaitRetry(
+          current,
+          "failed to publish subagent wait expiry; scheduling recovery",
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
       }
       if (
         typeof current.execution.endedAt === "number" &&

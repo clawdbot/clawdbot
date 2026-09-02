@@ -8,11 +8,9 @@ import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
 import {
-  assertMigrationArtifactPublication,
+  moveMigrationArtifact,
   readMigrationArtifactIdentity,
-  sameMigrationArtifact,
   statMigrationPath,
 } from "./doctor-session-sqlite-artifact.js";
 import {
@@ -35,16 +33,16 @@ import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-t
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 const RESTORE_ARCHIVE_HASH_CHUNK_BYTES = 64 * 1024;
 
-export function restoreSessionSqliteMigrationRuns(params: {
+export async function restoreSessionSqliteMigrationRuns(params: {
   env: NodeJS.ProcessEnv;
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
-}): DoctorSessionSqliteRestoreReport {
+}): Promise<DoctorSessionSqliteRestoreReport> {
   const restoreReport: DoctorSessionSqliteRestoreReport = emptyRestoreReport();
   const contexts = loadRestoreManifestContexts(
     listSessionSqliteMigrationManifestPaths(params.env).toReversed(),
     params.trustedTargets,
   );
-  reconcileRestorePublications(contexts, params.env);
+  await reconcileRestorePublications(contexts, params.env);
   const restorePlan = createRestorePlan(contexts);
   for (const { manifest, manifestPath, targets } of contexts) {
     const manifestRestoreReport: DoctorSessionSqliteRestoreReport = {
@@ -52,7 +50,7 @@ export function restoreSessionSqliteMigrationRuns(params: {
       manifestPaths: [manifestPath],
     };
     restoreReport.manifestPaths.push(manifestPath);
-    restoreSessionSqliteMigrationManifest(
+    await restoreSessionSqliteMigrationManifest(
       manifest,
       manifestPath,
       targets,
@@ -68,12 +66,12 @@ export function restoreSessionSqliteMigrationRuns(params: {
 }
 
 /** Undo only recorded, still-linked publication intermediates before a fresh import or restore. */
-export function reconcileSessionSqliteMigrationPublications(params: {
+export async function reconcileSessionSqliteMigrationPublications(params: {
   env: NodeJS.ProcessEnv;
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
   sourcePath?: string;
-}): void {
-  reconcileRestorePublications(
+}): Promise<void> {
+  await reconcileRestorePublications(
     loadRestoreManifestContexts(
       listSessionSqliteMigrationManifestPaths(params.env),
       params.trustedTargets,
@@ -83,11 +81,11 @@ export function reconcileSessionSqliteMigrationPublications(params: {
   );
 }
 
-function reconcileRestorePublications(
+async function reconcileRestorePublications(
   contexts: readonly RestoreManifestContext[],
   env: NodeJS.ProcessEnv,
   sourcePath?: string,
-): void {
+): Promise<void> {
   const stateDir = path.dirname(
     canonicalMigrationFilePath(path.join(resolveStateDir(env), "anchor")),
   );
@@ -130,56 +128,46 @@ function reconcileRestorePublications(
           [context.manifestPath, ...resolveSqliteDatabaseFilePaths(target.sqlitePath)],
           [stateDir],
         );
-        const owner = inspectOpenClawAgentDatabaseOwner(target.sqlitePath);
-        if (owner.status !== "owned" || owner.agentId !== target.agentId) {
-          throw new Error("Cannot reconcile publication without the current destination owner");
-        }
-        assertMigrationArtifactPublication(
-          move.sourcePath,
+        // The exact recorded original stays at its source; reconciliation never needs
+        // the replacement SQLite database to exist or opens it for ownership inspection.
+        await moveMigrationArtifact(
           move.archivePath,
-          move.artifact.identity,
-        );
-        // The original already exists at its source. Record that restoration before removing the
-        // archive name, so a crash cannot turn a consumed original into unexplained missing history.
-        const consumed = collectRecordedConsumedArchives(context.manifest);
-        consumed.add(move.archivePath);
-        context.manifest.restore = {
-          attemptedAt: new Date().toISOString(),
-          consumedArchives: [...consumed].toSorted(),
-          conflicts: [],
-          restoredFiles: [
-            ...new Set([...(context.manifest.restore?.restoredFiles ?? []), move.sourcePath]),
-          ],
-          skippedFiles: [],
-          status: "restored",
-        };
-        writeSessionSqliteMigrationManifest(context);
-        requireDirectorySync(
-          syncDirectorySync(path.dirname(context.manifestPath)),
-          "Recovery restoration receipt",
-        );
-        assertSafeSessionSqliteMigrationMove(move, target);
-        assertMigrationArtifactPublication(
           move.sourcePath,
-          move.archivePath,
           move.artifact.identity,
+          () => {
+            assertSafeSessionSqliteMigrationMove(move, target);
+            recordRestoredMigrationMove(context.manifest, context.manifestPath, move);
+          },
         );
-        fs.unlinkSync(move.archivePath);
-        requireDirectorySync(
-          syncDirectorySync(path.dirname(move.archivePath)),
-          "Recovery publication reconciliation",
-        );
-        if (
-          !sameMigrationArtifact(
-            readMigrationArtifactIdentity(move.sourcePath),
-            move.artifact.identity,
-          )
-        ) {
-          throw new Error("Restored publication source changed");
-        }
       }
     }
   }
+}
+
+function recordRestoredMigrationMove(
+  manifest: SessionSqliteMigrationManifest,
+  manifestPath: string,
+  move: SessionSqliteMigrationMove,
+): void {
+  // Sessions and archives are siblings. Retry their parent sync even when a previous
+  // attempt created the sessions directory, before consuming its original archive.
+  requireDirectorySync(
+    syncDirectorySync(path.dirname(path.dirname(move.sourcePath))),
+    "Restored session directory",
+  );
+  // Commit consumption before unlinking the archive, so an interrupted restore cannot
+  // make a settled generation look like unexplained missing history.
+  const consumed = collectRecordedConsumedArchives(manifest);
+  consumed.add(move.archivePath);
+  manifest.restore = {
+    attemptedAt: new Date().toISOString(),
+    consumedArchives: [...consumed].toSorted(),
+    conflicts: [],
+    restoredFiles: [...new Set([...(manifest.restore?.restoredFiles ?? []), move.sourcePath])],
+    skippedFiles: [],
+    status: "restored",
+  };
+  writeSessionSqliteMigrationManifest({ manifest, manifestPath });
 }
 
 type RestoreManifestContext = {
@@ -536,11 +524,11 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
   }
 }
 
-export function restoreSessionSqliteMigrationRun(params: {
+export async function restoreSessionSqliteMigrationRun(params: {
   env?: NodeJS.ProcessEnv;
   manifestPath: string;
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
-}): DoctorSessionSqliteRestoreReport {
+}): Promise<DoctorSessionSqliteRestoreReport> {
   const restoreReport: DoctorSessionSqliteRestoreReport = {
     ...emptyRestoreReport(),
     manifestPaths: [params.manifestPath],
@@ -563,11 +551,11 @@ export function restoreSessionSqliteMigrationRun(params: {
     });
     return restoreReport;
   }
-  reconcileRestorePublications(
+  await reconcileRestorePublications(
     [{ manifest, manifestPath: params.manifestPath, targets: targetManifests }],
     params.env ?? process.env,
   );
-  restoreSessionSqliteMigrationManifest(
+  await restoreSessionSqliteMigrationManifest(
     manifest,
     params.manifestPath,
     targetManifests,
@@ -593,25 +581,26 @@ function emptyRestoreReport(): DoctorSessionSqliteRestoreReport {
   };
 }
 
-function restoreSessionSqliteMigrationManifest(
+async function restoreSessionSqliteMigrationManifest(
   manifest: SessionSqliteMigrationManifest,
   manifestPath: string,
   targets: readonly SessionSqliteMigrationTargetManifest[],
   restoreReport: DoctorSessionSqliteRestoreReport,
   restorePlan: ReadonlyMap<string, RestoreMovePlan>,
-): void {
-  const consumedArchives = collectRecordedConsumedArchives(manifest);
+): Promise<void> {
   for (const target of targets) {
     for (const move of uniqueRestoreMoves(target)) {
-      restoreMigrationMove({
-        consumedArchives,
+      await restoreMigrationMove({
+        manifest,
         manifestPath,
+        target,
         move,
         restorePlan,
         restoreReport,
       });
     }
   }
+  const consumedArchives = collectRecordedConsumedArchives(manifest);
   manifest.restore = {
     attemptedAt: new Date().toISOString(),
     ...(consumedArchives.size > 0 ? { consumedArchives: [...consumedArchives].toSorted() } : {}),
@@ -622,97 +611,99 @@ function restoreSessionSqliteMigrationManifest(
   };
 }
 
-function restoreMigrationMove(params: {
-  consumedArchives: Set<string>;
+async function restoreMigrationMove(params: {
+  manifest: SessionSqliteMigrationManifest;
   manifestPath: string;
+  target: SessionSqliteMigrationTargetManifest;
   move: SessionSqliteMigrationMove;
   restorePlan: ReadonlyMap<string, RestoreMovePlan>;
   restoreReport: DoctorSessionSqliteRestoreReport;
-}): void {
-  const { consumedArchives, manifestPath, move, restorePlan, restoreReport } = params;
-  const planned = restorePlan.get(restoreMovePlanKey(manifestPath, move)) ?? {
-    action: "standard",
-  };
-  if (planned.action === "conflict") {
+}): Promise<void> {
+  const { manifest, manifestPath, target, move, restorePlan, restoreReport } = params;
+  const recordConflict = (reason: string) => {
     restoreReport.conflicts.push({
       archivePath: move.archivePath,
-      reason: planned.reason,
+      reason,
       sourcePath: move.sourcePath,
     });
+  };
+  const planned = restorePlan.get(restoreMovePlanKey(manifestPath, move)) ?? { action: "standard" };
+  if (planned.action === "conflict") {
+    recordConflict(planned.reason);
     return;
   }
   if (planned.action === "skip-consumed" || planned.action === "skip-superseded") {
     restoreReport.skippedFiles.push(move.sourcePath);
     return;
   }
-  const sourceExists = fs.existsSync(move.sourcePath);
-  const archiveExists = fs.existsSync(move.archivePath);
-  if (!sourceExists && archiveExists) {
-    if (planned.action === "restore") {
-      const inspection = inspectRestoreArchive(move);
-      if (
-        inspection.state !== "available" ||
-        inspection.snapshot.digest !== planned.snapshot.digest ||
-        inspection.snapshot.size !== planned.snapshot.size ||
-        inspection.snapshot.legacyEntryCount !== planned.snapshot.legacyEntryCount
-      ) {
-        restoreReport.conflicts.push({
-          archivePath: move.archivePath,
-          reason: "archive changed after restore planning; refusing restore",
-          sourcePath: move.sourcePath,
-        });
-        return;
-      }
+  const sourceExists = statMigrationPath(move.sourcePath) !== undefined;
+  const archiveExists = statMigrationPath(move.archivePath) !== undefined;
+  if (sourceExists || !archiveExists) {
+    if (sourceExists && !archiveExists) {
+      restoreReport.skippedFiles.push(move.sourcePath);
+    } else {
+      recordConflict(
+        sourceExists
+          ? "source and archive both exist; refusing to overwrite source"
+          : "source and archive are both missing",
+      );
     }
+    return;
+  }
+  try {
     if (!isRegularFileWithoutFollowingSymlinks(move.archivePath)) {
-      restoreReport.conflicts.push({
-        archivePath: move.archivePath,
-        reason: "archive is not a regular file; refusing restore",
-        sourcePath: move.sourcePath,
-      });
-      return;
+      throw new Error("archive is not a regular file; refusing restore");
     }
-    const sourceDir = path.dirname(move.sourcePath);
-    const archiveDir = path.dirname(move.archivePath);
-    if (hasSymbolicLinkInDirectoryPath(sourceDir) || hasSymbolicLinkInDirectoryPath(archiveDir)) {
-      restoreReport.conflicts.push({
-        archivePath: move.archivePath,
-        reason: "source or archive parent is a symbolic link; refusing restore",
-        sourcePath: move.sourcePath,
-      });
-      return;
+    assertRestoreDirectories(move);
+    fs.mkdirSync(path.dirname(move.sourcePath), { recursive: true, mode: 0o700 });
+    assertRestoreDirectories(move);
+    const identity = move.artifact?.identity ?? readMigrationArtifactIdentity(move.archivePath);
+    // Publication rechecks these exact bytes; matching the plan also preserves its index count.
+    if (
+      planned.action === "restore" &&
+      (identity.sha256 !== planned.snapshot.digest || identity.size !== planned.snapshot.size)
+    ) {
+      throw new Error("archive changed after restore planning; refusing restore");
     }
-    fs.mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
-    if (hasSymbolicLinkInDirectoryPath(sourceDir) || hasSymbolicLinkInDirectoryPath(archiveDir)) {
-      restoreReport.conflicts.push({
-        archivePath: move.archivePath,
-        reason: "source or archive parent is a symbolic link; refusing restore",
-        sourcePath: move.sourcePath,
-      });
-      return;
+    if (!move.artifact) {
+      // Historical manifests need an identity before the first link so a crash is retryable.
+      // This proves the original's identity, not its import; cleanup must keep it protected.
+      move.artifact = {
+        identity,
+        classification: "protected",
+        reason: "historical-restore-original",
+        dependencies:
+          move.kind === "legacy-store"
+            ? uniqueRestoreMoves(target)
+                .filter((item) => item.kind === "transcript")
+                .map((item) => item.sourcePath)
+            : [],
+        disposal: { state: "retained" },
+      };
+      for (const recorded of [...target.plannedMoves, ...target.completedMoves]) {
+        if (migrationMoveKey(recorded) === migrationMoveKey(move)) {
+          recorded.artifact = move.artifact;
+        }
+      }
+      writeSessionSqliteMigrationManifest({ manifest, manifestPath });
     }
-    fs.renameSync(move.archivePath, move.sourcePath);
-    consumedArchives.add(move.archivePath);
-    restoreReport.restoredFiles.push(move.sourcePath);
-    return;
-  }
-  if (sourceExists && !archiveExists) {
-    restoreReport.skippedFiles.push(move.sourcePath);
-    return;
-  }
-  if (sourceExists && archiveExists) {
-    restoreReport.conflicts.push({
-      archivePath: move.archivePath,
-      reason: "source and archive both exist; refusing to overwrite source",
-      sourcePath: move.sourcePath,
+    await moveMigrationArtifact(move.archivePath, move.sourcePath, move.artifact.identity, () => {
+      assertRestoreDirectories(move);
+      recordRestoredMigrationMove(manifest, manifestPath, move);
     });
-    return;
+    restoreReport.restoredFiles.push(move.sourcePath);
+  } catch (error) {
+    recordConflict(error instanceof Error ? error.message : String(error));
   }
-  restoreReport.conflicts.push({
-    archivePath: move.archivePath,
-    reason: "source and archive are both missing",
-    sourcePath: move.sourcePath,
-  });
+}
+
+function assertRestoreDirectories(move: SessionSqliteMigrationMove): void {
+  if (
+    hasSymbolicLinkInDirectoryPath(path.dirname(move.sourcePath)) ||
+    hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))
+  ) {
+    throw new Error("source or archive parent is a symbolic link; refusing restore");
+  }
 }
 
 function resolveRestoreStatus(
@@ -726,9 +717,6 @@ function resolveRestoreStatus(
   }
   if (report.restoredFiles.length > 0) {
     return "restored";
-  }
-  if (report.skippedFiles.length > 0) {
-    return "noop";
   }
   return "noop";
 }

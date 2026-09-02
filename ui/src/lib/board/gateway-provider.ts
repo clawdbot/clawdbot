@@ -2,6 +2,7 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type {
   BoardChangedEvent,
   BoardCommandEvent,
+  BoardGetParams,
   BoardOp,
   BoardSnapshot,
   BoardWidget,
@@ -9,7 +10,11 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
-import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
+import {
+  normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
+  resolveUiConversationIdentity,
+} from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
 import {
@@ -51,7 +56,7 @@ export class GatewayBoardProvider implements BoardProvider {
   private snapshotLoaded = false;
 
   constructor(
-    readonly sessionKey: string,
+    private readonly session: BoardGetParams,
     client: BoardGatewayClient,
     connected = true,
     public readonly canPinWidgets = true,
@@ -59,7 +64,7 @@ export class GatewayBoardProvider implements BoardProvider {
     public readonly canMutate = true,
     public readonly canGrant = true,
   ) {
-    this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(sessionKey));
+    this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(this.sessionKey));
     this.snapshot$ = this.snapshotSignal;
     this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
@@ -69,6 +74,10 @@ export class GatewayBoardProvider implements BoardProvider {
     if (connected) {
       void this.activate();
     }
+  }
+
+  get sessionKey(): string {
+    return this.session.sessionKey;
   }
 
   attachClient(client: BoardGatewayClient, connected = true): void {
@@ -141,7 +150,7 @@ export class GatewayBoardProvider implements BoardProvider {
 
   async applyOps(ops: BoardOp[]): Promise<void> {
     await this.mutate("board.update", {
-      sessionKey: this.sessionKey,
+      ...this.session,
       ops,
     });
   }
@@ -153,7 +162,7 @@ export class GatewayBoardProvider implements BoardProvider {
       throw new Error(`Dashboard widget not found: ${name}`);
     }
     await this.mutate("board.widget.grant", {
-      sessionKey: this.sessionKey,
+      ...this.session,
       name,
       decision,
       revision: widget.revision,
@@ -184,7 +193,7 @@ export class GatewayBoardProvider implements BoardProvider {
     await this.mutate(
       "board.widget.put",
       {
-        sessionKey: this.sessionKey,
+        ...this.session,
         name,
         ...(title ? { title } : {}),
         content,
@@ -245,7 +254,7 @@ export class GatewayBoardProvider implements BoardProvider {
       widget,
       async () =>
         await client.request<BoardWidgetAppViewResult>("board.widget.appView", {
-          sessionKey: this.sessionKey,
+          ...this.session,
           name,
           revision,
           ...(widget.instanceId ? { instanceId: widget.instanceId } : {}),
@@ -277,19 +286,44 @@ export class GatewayBoardProvider implements BoardProvider {
         return;
       }
       if (event.event === "board.command") {
-        const payload = event.payload as Partial<BoardCommandEvent> | undefined;
-        if (payload?.command && this.matchesSession(payload.sessionKey)) {
-          this.eventStream.emit({ sessionKey: this.sessionKey, command: payload.command });
+        // The dashboard tool emits its admitted conversation pair, while board
+        // store events use the snapshot's observer-scoped key.
+        const payload = event.payload as
+          | (Partial<BoardCommandEvent> & { agentId?: string })
+          | undefined;
+        if (payload?.command && this.matchesSession(payload.sessionKey, payload.agentId)) {
+          this.eventStream.emit({
+            sessionKey: this.snapshotSignal.value.sessionKey,
+            command: payload.command,
+          });
         }
       }
     });
   }
 
-  private matchesSession(sessionKey: string | undefined): boolean {
+  private matchesSession(sessionKey: string | undefined, agentId?: string): boolean {
+    if (typeof sessionKey !== "string") {
+      return false;
+    }
+    const requested = resolveUiConversationIdentity({}, this.sessionKey, this.session.agentId);
+    if (agentId) {
+      const received = resolveUiConversationIdentity({}, sessionKey, agentId);
+      return requested.sessionKey === received.sessionKey && requested.agentId === received.agentId;
+    }
+    // Board replies acknowledge an owner-scoped event key. Retain that key for
+    // events; RPCs keep the prepared owner/key pair, never the observer alias.
+    if (!this.snapshotLoaded) {
+      const scoped = parseAgentSessionKey(sessionKey);
+      return Boolean(
+        scoped &&
+        scoped.agentId === requested.agentId &&
+        (normalizeSessionKeyForUiComparison(sessionKey) === requested.sessionKey ||
+          normalizeSessionKeyForUiComparison(scoped.rest) === requested.sessionKey),
+      );
+    }
     return (
-      typeof sessionKey === "string" &&
       normalizeSessionKeyForUiComparison(sessionKey) ===
-        normalizeSessionKeyForUiComparison(this.sessionKey)
+      normalizeSessionKeyForUiComparison(this.snapshotSignal.value.sessionKey)
     );
   }
 
@@ -332,9 +366,7 @@ export class GatewayBoardProvider implements BoardProvider {
       const client = this.client;
       const stateGeneration = this.stateGeneration;
       try {
-        const snapshot = await client.request<BoardSnapshot>("board.get", {
-          sessionKey: this.sessionKey,
-        });
+        const snapshot = await client.request<BoardSnapshot>("board.get", this.session);
         if (this.disposed) {
           return;
         }

@@ -146,6 +146,8 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
+      compaction?: "active" | "complete";
+      compactionId?: string;
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;
@@ -243,6 +245,7 @@ export type MessageGroup = {
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  visibleContent: "none" | "text" | "non-text";
   timestamp: number;
   isStreaming: boolean;
   runId?: string;
@@ -255,6 +258,10 @@ export type MessageContentItem =
       text?: string;
       name?: string;
       args?: unknown;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
     }
   | {
       type: "attachment";

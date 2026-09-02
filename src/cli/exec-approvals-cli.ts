@@ -749,15 +749,11 @@ async function resolvePendingApproval(
     }
   }
 
-  const expiresInDaysRaw =
-    opts.expiresInDays === undefined ? undefined : Number.parseInt(opts.expiresInDays, 10);
-  if (
-    expiresInDaysRaw !== undefined &&
-    (!Number.isInteger(expiresInDaysRaw) || expiresInDaysRaw < 1 || expiresInDaysRaw > 3650)
-  ) {
+  const expiresInDays = parseStrictPositiveInteger(opts.expiresInDays);
+  if (opts.expiresInDays !== undefined && (expiresInDays === undefined || expiresInDays > 3650)) {
     exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
   }
-  if (expiresInDaysRaw !== undefined && decision !== "allow-always") {
+  if (expiresInDays !== undefined && decision !== "allow-always") {
     exitWithError("--expires-in-days only applies to allow-always.");
   }
   const result = (await callGatewayFromCli(
@@ -767,7 +763,7 @@ async function resolvePendingApproval(
       id,
       kind: current.presentation.kind,
       decision,
-      ...(expiresInDaysRaw !== undefined ? { grantExpiresInDays: expiresInDaysRaw } : {}),
+      ...(expiresInDays !== undefined ? { grantExpiresInDays: expiresInDays } : {}),
     },
     approvalCallOptions,
   )) as ApprovalResolveResult;
@@ -971,6 +967,14 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       });
     }
   }
+  const mcpToolRows = Object.entries(agents).flatMap(([agentId, agent]) =>
+    (agent.mcpTools ?? []).map((grant) => ({
+      Agent: agentId,
+      Server: grant.server,
+      Tool: grant.tool,
+      Added: formatTimeAgo(Math.max(0, now - grant.addedAt)),
+    })),
+  );
 
   const summaryRows = [
     { Field: "Target", Value: targetLabel },
@@ -985,6 +989,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
     { Field: "Agents", Value: String(Object.keys(agents).length) },
     { Field: "Allowlist", Value: String(allowlistRows.length) },
+    { Field: "MCP tool grants", Value: String(mcpToolRows.length) },
   ];
 
   defaultRuntime.log(heading("Approvals"));
@@ -999,24 +1004,39 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     }).trimEnd(),
   );
 
-  if (allowlistRows.length === 0) {
-    defaultRuntime.log("");
+  defaultRuntime.log("");
+  if (allowlistRows.length > 0) {
+    defaultRuntime.log(heading("Allowlist"));
+    defaultRuntime.log(
+      renderTerminalSafeTable({
+        width: tableWidth,
+        columns: [
+          { key: "Target", header: "Target", minWidth: 10 },
+          { key: "Agent", header: "Agent", minWidth: 8 },
+          { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+          { key: "LastUsed", header: "Last Used", minWidth: 10 },
+        ],
+        rows: allowlistRows,
+      }).trimEnd(),
+    );
+  } else {
     defaultRuntime.log(muted("No allowlist entries."));
+  }
+  if (mcpToolRows.length === 0) {
     return;
   }
-
   defaultRuntime.log("");
-  defaultRuntime.log(heading("Allowlist"));
+  defaultRuntime.log(heading("MCP tool grants"));
   defaultRuntime.log(
     renderTerminalSafeTable({
       width: tableWidth,
       columns: [
-        { key: "Target", header: "Target", minWidth: 10 },
         { key: "Agent", header: "Agent", minWidth: 8 },
-        { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
-        { key: "LastUsed", header: "Last Used", minWidth: 10 },
+        { key: "Server", header: "Server", minWidth: 16, flex: true },
+        { key: "Tool", header: "Tool", minWidth: 16, flex: true },
+        { key: "Added", header: "Added", minWidth: 10 },
       ],
-      rows: allowlistRows,
+      rows: mcpToolRows,
     }).trimEnd(),
   );
 }
@@ -1109,6 +1129,7 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
     !agent.ask &&
     !agent.askFallback &&
     agent.autoAllowSkills === undefined &&
+    !agent.mcpTools?.length &&
     allowlist.length === 0
   );
 }

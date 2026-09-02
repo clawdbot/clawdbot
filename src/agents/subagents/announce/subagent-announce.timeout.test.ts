@@ -528,24 +528,6 @@ describe("subagent announce timeout config", () => {
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
-  it("keeps authoritative empty success intentional without transcript inference", async () => {
-    chatHistoryMessages = [
-      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-    ];
-
-    await runAnnounceFlowForTest("run-ok-empty-terminal", {
-      outcome: { status: "ok" },
-      roundOneReply: undefined,
-      terminalReply: { disposition: "empty" },
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("(no output)");
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-  });
-
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
     sessionStore["agent:main:subagent:worker"] = {
       sessionId: "child-session",
@@ -717,10 +699,15 @@ describe("subagent announce still-running disposition", () => {
     fallbackRequesterResolution = null;
   });
 
-  const runWaitExpiryAnnounce = async (runId: string, disposition?: "still-running") =>
+  const runWaitExpiryAnnounce = async (
+    runId: string,
+    disposition?: "still-running",
+    error?: string,
+  ) =>
     await runAnnounceFlowForTest(runId, {
       outcome: {
         status: "timeout",
+        ...(error ? { error } : {}),
         ...(disposition ? { disposition } : {}),
       },
       roundOneReply: undefined,
@@ -764,6 +751,21 @@ describe("subagent announce still-running disposition", () => {
     const { message } = readAnnouncedEvent();
     expect(message).toContain("has NOT finished");
     expect(message).toContain("do not start a replacement");
+  });
+
+  it("preserves the last retry-grace error while reporting the child as live", async () => {
+    await runWaitExpiryAnnounce(
+      "run-wait-expiry-error-grace",
+      "still-running",
+      "model returned an unrecoverable tool-call sequence",
+    );
+
+    const { event, message } = readAnnouncedEvent();
+    expect(event?.statusLabel).toBe(
+      "still running; last error while retrying: model returned an unrecoverable tool-call sequence",
+    );
+    expect(message).toContain("last error while retrying");
+    expect(message).toContain("model returned an unrecoverable tool-call sequence");
   });
 
   it("still reports a genuinely stopped child as timed out", async () => {

@@ -15,7 +15,6 @@ import {
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
-import { resolveModelIdNormalizationPolicies } from "../../config/io.context.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -931,7 +930,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.set",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;
@@ -995,9 +994,8 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
-    const modelIdNormalizationPolicies = resolveModelIdNormalizationPolicies(
-      writeOptions.basePluginMetadataSnapshot,
-    );
+    const modelIdNormalizationPolicies =
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies;
     if (!snapshot.valid) {
       respond(
         false,
@@ -1219,7 +1217,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.apply",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;

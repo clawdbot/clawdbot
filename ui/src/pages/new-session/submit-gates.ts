@@ -3,12 +3,17 @@
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
-import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+} from "../../lib/session-method-access.ts";
 import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
+import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
+import { resolveDraftSessionPlacement } from "./draft-session-placement.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
 import type {
   PendingSessionPlacementRecoveryState,
@@ -63,6 +68,45 @@ export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): str
     return t("newSession.gitCheckUnavailable");
   }
   return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
+}
+
+export function readNewSessionSubmissionAccess(
+  gateway: Parameters<typeof readSessionMethodAccess>[0],
+  place: DraftPlaceState,
+  pending: PendingSessionPlacementRecoveryState,
+  createParams: Record<string, unknown>,
+  hasInitialTurn: boolean,
+): SessionMethodAccess {
+  const pendingPlacement = Boolean(pending.sessionKey);
+  const { target } = resolveDraftSessionPlacement(pending, place);
+  const remoteProject = target || !hasInitialTurn ? place.browser.remoteProject : null;
+  if (!pendingPlacement && remoteProject && !remoteProject.projectId) {
+    const projectAccess = readSessionMethodAccess(gateway, {
+      method: "projects.add",
+      requiredScope: "operator.write",
+    });
+    if (!projectAccess.allowed) {
+      return projectAccess;
+    }
+  }
+  if (!target || !pendingPlacement || pending.phase === "creating") {
+    const createAccess = readSessionMethodAccess(gateway, {
+      method: "sessions.create",
+      params: createParams,
+    });
+    if (!createAccess.allowed || !target) {
+      return createAccess;
+    }
+  }
+  return readSessionMethodAccess(gateway, {
+    method: "sessions.dispatch",
+    requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+    params: sessionPlacementDispatchParams({
+      key: pending.sessionKey,
+      agentId: pending.agentId || place.agentId,
+      target,
+    }),
+  });
 }
 
 /** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */

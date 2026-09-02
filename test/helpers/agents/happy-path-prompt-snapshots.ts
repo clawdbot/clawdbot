@@ -298,6 +298,7 @@ const baseConfig: OpenClawConfig = {
   },
   agents: {
     defaults: {
+      userTimezone: "UTC",
       heartbeat: {
         every: "30m",
       },
@@ -410,6 +411,7 @@ function createAttempt(params: {
     sessionKey: params.sessionKey,
     sessionId: `session-${params.scenario.id}`,
     runId: `run-${params.scenario.id}`,
+    startedAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
     provider: "codex",
     modelId: MODEL_ID,
     model: happyPathModel,
@@ -861,16 +863,21 @@ function renderScenarioSnapshot(
   });
   const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
   const codexTurnPromptText = prependCodexOpenClawRuntimeContext(scenario.prompt);
-  const codexSnapshot = codexApi.buildCodexHarnessPromptSnapshot({
-    attempt,
-    cwd: WORKSPACE_DIR,
-    threadId: `thread-${scenario.id}`,
-    dynamicTools: scenario.dynamicTools,
-    appServer,
-    config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
-    promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
-  });
+  if (attempt.startedAtMs === undefined) {
+    throw new Error("Codex prompt snapshot attempt requires a fixed start time");
+  }
+  const codexSnapshot = withFixedDateNow(attempt.startedAtMs, () =>
+    codexApi.buildCodexHarnessPromptSnapshot({
+      attempt,
+      cwd: WORKSPACE_DIR,
+      threadId: `thread-${scenario.id}`,
+      dynamicTools: scenario.dynamicTools,
+      appServer,
+      config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
+      promptText: codexTurnPromptText,
+      turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
+    }),
+  );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
   const criticalToolSpecs = dynamicToolFunctions.filter((tool) =>
     ["message", "heartbeat_respond"].includes(tool.name),
@@ -936,6 +943,18 @@ function renderScenarioSnapshot(
     markdownFence("json", stableJson(criticalToolSpecs)),
     "",
   ].join("\n");
+}
+
+function withFixedDateNow<T>(nowMs: number, build: () => T): T {
+  // Snapshot generation is synchronous here. Restore the process clock so this fixture cannot
+  // leak its pinned calendar date into later scenarios or checks.
+  const readNow = Date.now;
+  Date.now = () => nowMs;
+  try {
+    return build();
+  } finally {
+    Date.now = readNow;
+  }
 }
 
 function renderReadme(scenarios: PromptScenario[]): string {

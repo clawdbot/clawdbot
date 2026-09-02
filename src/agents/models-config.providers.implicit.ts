@@ -11,6 +11,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
@@ -268,7 +269,7 @@ function mergeImplicitProviderConfig(params: {
   implicit: ProviderConfig;
   dynamicProviderModels?: boolean;
   sourceModelFields?: SourceModelFields;
-  manifestPlugins?: PluginMetadataSnapshot["manifestRegistry"]["plugins"];
+  manifestPlugins?: ManifestModelIdNormalizationSource;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -483,7 +484,7 @@ async function resolvePluginImplicitProviders(
           providerId,
         }),
         sourceModelFields: ctx.sourceModelFields,
-        manifestPlugins: ctx.pluginMetadataSnapshot?.manifestRegistry.plugins,
+        manifestPlugins: ctx.pluginMetadataSnapshot,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({
         ctx,

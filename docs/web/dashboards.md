@@ -67,7 +67,8 @@ never needs the agent.
 - **Fluid grid.** Drag widgets by their handle; everything reflows and
   compacts automatically. Resize by handle or pick a size preset (small,
   medium, large, extra large) from the widget menu. Nobody places pixels —
-  not you, not the agent.
+  not you, not the agent. On narrow boards, widgets stack at full width in
+  their saved order; widening the board restores their saved column widths.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.
@@ -111,10 +112,12 @@ explicit session mode, the equivalent configured exec approval policy applies.
 
 Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
 
-Grants are bound to the exact widget bytes and revision approved by your session
-policy. If the agent changes the widget and asks for _more_ than was approved,
-OpenClaw applies that policy again; refreshing content within the same
-permissions keeps the grant.
+Grants are bound to the exact widget bytes approved by your session policy.
+Changed HTML or registered-source bytes require a new decision even when the
+permissions stay the same or shrink. A grant is preserved only when the
+approved bytes still match and the requested permissions do not widen.
+The authoring result distinguishes pending, rejected, and granted access;
+saving a widget does not imply its capabilities were approved.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.
@@ -141,6 +144,18 @@ session notices that the agent sees on its next turn. If the widget declares
 and receives the `prompt` grant, its actions can instead send a visible prompt
 into the thread. Disabling the Canvas plugin removes the A2UI kind and leaves
 stored widgets visibly unavailable until the plugin is enabled again.
+
+## Retired Workspaces
+
+The experimental Workspaces plugin, its Control UI tab, `openclaw workspaces`
+CLI, and `workspace_*` tools have been removed. Session dashboards use a
+different storage model: each board belongs to a session and lives in the
+owning agent's database. Legacy Workspaces documents and databases are not
+automatically converted.
+
+Preserve any legacy documents, data, and widget assets before running
+`openclaw doctor --fix`: its Workspaces repair deletes identified legacy state
+under `<stateDir>/workspaces`, without importing that content into a dashboard.
 
 ## Good to know
 

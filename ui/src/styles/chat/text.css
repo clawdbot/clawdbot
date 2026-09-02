@@ -39,10 +39,10 @@
 }
 
 .chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
-  display: -webkit-box;
+  /* Legacy line clamp compresses hidden blocks that browser descendant reveal can
+     expose as overlapping text. Clip the natural Markdown layout instead. */
+  max-height: calc(var(--chat-text-size) * 1.5 * 5);
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
 }
 
 .chat-message-disclosure__toggle {
@@ -1039,5 +1039,102 @@
   /* Left padding stays 12px so the quote border inset matches desktop. */
   .chat-text :where(blockquote) {
     padding: 6px 10px 6px 12px;
+  }
+}
+
+/* ── Inline JSON disclosure ── */
+
+.chat-json-collapse {
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 60%, transparent);
+  overflow: hidden;
+}
+
+.chat-json-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  transition:
+    color 150ms ease,
+    background 150ms ease;
+}
+
+.chat-json-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-json-summary::before {
+  content: "▸";
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.chat-json-collapse[open] > .chat-json-summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-json-summary:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 50%, transparent);
+}
+
+.chat-json-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.chat-json-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-json-content {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.chat-json-content code {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+@media (max-width: 768px) {
+  .chat-json-content {
+    padding: 8px 10px;
+    max-height: 300px;
+  }
+}
+
+@media (max-width: 560px) {
+  .chat-json-content {
+    max-height: 200px;
   }
 }
