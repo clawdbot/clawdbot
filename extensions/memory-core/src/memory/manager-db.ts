@@ -24,11 +24,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
-import {
-  tryAcquireMemoryReindexLock,
-  waitForMemoryReindexLock,
-  type MemoryReindexLockHandle,
-} from "./manager-reindex-lock.js";
+import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 const MEMORY_INDEX_STATE_ID = 1;
@@ -341,78 +337,58 @@ export function removeMemoryDatabaseFiles(dbPath: string): void {
   }
 }
 
-/** Remove crash-left shadow databases only when no full reindex is active. */
+/** Remove crash-left shadows while the caller owns the reindex lease. */
 export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
   if (!isRegularFile(dbPath)) {
     return;
   }
-
-  let reindexLock: MemoryReindexLockHandle | undefined;
+  const dir = path.dirname(dbPath);
+  const databaseBaseName = path.basename(dbPath);
+  const shadowBaseNames = new Set<string>();
+  let entries: fs.Dirent[];
   try {
-    reindexLock = tryAcquireMemoryReindexLock(dbPath);
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return;
   }
-  if (!reindexLock) {
-    return;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const shadowBaseName = resolveMemoryReindexBaseName(databaseBaseName, entry.name);
+    if (shadowBaseName) {
+      shadowBaseNames.add(shadowBaseName);
+    }
   }
 
-  try {
-    const dir = path.dirname(dbPath);
-    const databaseBaseName = path.basename(dbPath);
-    const shadowBaseNames = new Set<string>();
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      const shadowBaseName = resolveMemoryReindexBaseName(databaseBaseName, entry.name);
-      if (shadowBaseName) {
-        shadowBaseNames.add(shadowBaseName);
-      }
-    }
-
-    for (const shadowBaseName of shadowBaseNames) {
-      const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
-        path.join(dir, `${shadowBaseName}${suffix}`),
-      );
-      const stats: fs.Stats[] = [];
-      let hasUnknownFileState = false;
-      for (const filePath of filePaths) {
-        try {
-          stats.push(fs.statSync(filePath));
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-            hasUnknownFileState = true;
-            break;
-          }
+  for (const shadowBaseName of shadowBaseNames) {
+    const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
+      path.join(dir, `${shadowBaseName}${suffix}`),
+    );
+    const stats: fs.Stats[] = [];
+    let hasUnknownFileState = false;
+    for (const filePath of filePaths) {
+      try {
+        stats.push(fs.statSync(filePath));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          hasUnknownFileState = true;
+          break;
         }
       }
-      if (hasUnknownFileState || stats.length === 0) {
-        continue;
-      }
-      if (
-        nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) <
-        MEMORY_REINDEX_ORPHAN_MIN_AGE_MS
-      ) {
-        continue;
-      }
-      for (const filePath of filePaths) {
-        try {
-          fs.rmSync(filePath, { force: true });
-        } catch {}
-      }
     }
-  } finally {
-    try {
-      reindexLock.release();
-    } catch {}
+    if (hasUnknownFileState || stats.length === 0) {
+      continue;
+    }
+    if (nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) < MEMORY_REINDEX_ORPHAN_MIN_AGE_MS) {
+      continue;
+    }
+    for (const filePath of filePaths) {
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {}
+    }
   }
 }
 

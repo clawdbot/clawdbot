@@ -495,13 +495,12 @@ describe("memory manager database publication", () => {
     }
   });
 
-  it("removes aged orphan shadows but preserves young and locked shadows", async () => {
+  it("removes aged orphan shadows under the maintenance lease but preserves young shadows", async () => {
     const databasePath = path.join(fixtureRoot, "agent.sqlite");
     const database = new DatabaseSync(databasePath);
     database.close();
     const oldShadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
     const youngShadow = `${databasePath}.memory-reindex-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
-    const lockedShadow = `${databasePath}.memory-reindex-99999999-aaaa-bbbb-cccc-dddddddddddd`;
     const old = new Date(Date.now() - 48 * 60 * 60_000);
 
     for (const suffix of ["", "-wal", "-journal"]) {
@@ -509,23 +508,20 @@ describe("memory manager database publication", () => {
       await fs.utimes(`${oldShadow}${suffix}`, old, old);
     }
     await fs.writeFile(youngShadow, "active");
-    await fs.writeFile(lockedShadow, "locked");
-    await fs.utimes(lockedShadow, old, old);
 
     const lock = tryAcquireMemoryReindexLock(databasePath);
     if (!lock) {
       throw new Error("expected test to acquire the memory reindex lock");
     }
-    cleanupAgedMemoryReindexTempFiles(databasePath);
-    await expect(fs.access(lockedShadow)).resolves.toBeUndefined();
-    lock.release();
-
-    cleanupAgedMemoryReindexTempFiles(databasePath);
+    try {
+      cleanupAgedMemoryReindexTempFiles(databasePath);
+    } finally {
+      lock.release();
+    }
 
     await expectPathMissing(oldShadow);
     await expectPathMissing(`${oldShadow}-wal`);
     await expectPathMissing(`${oldShadow}-journal`);
-    await expectPathMissing(lockedShadow);
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
   });
 });

@@ -247,11 +247,11 @@ openclaw memory index --agent <agent-id>
 ```
 
 Reset asks for confirmation; add `--yes` for non-interactive use. It clears only
-memory-owned derived tables, preserving all other database tables and files,
-including sessions, transcripts, and memory source files. It coordinates with
+memory-owned derived tables, preserving non-memory database tables, including
+sessions and transcripts, and memory source files. It coordinates with
 existing memory maintenance without restarting the Gateway, which can reindex
-retained sources afterward. Reset does not shrink the database file or recover
-already deleted data.
+retained sources afterward. If indexing is busy, let it finish and retry reset.
+Reset does not shrink the database file or recover already deleted data.
 
 If indexing fails or the database grows unexpectedly, keep the database and
 its sidecars, retain the verbose error, and [create and verify a backup](/cli/backup)

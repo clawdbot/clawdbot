@@ -93,10 +93,11 @@ required in a non-interactive terminal.
 
 Reset atomically drops and recreates only memory-owned derived tables in
 `agents/<agentId>/agent/openclaw-agent.sqlite`, clearing indexed content and
-cached embeddings while retaining required revision bookkeeping. All other
-tables and files remain untouched. An agent with no index is a successful
-no-op. Reset coordinates with existing memory maintenance and does not restart
-the Gateway; a running Gateway can reindex retained sources afterward.
+cached embeddings while retaining required revision bookkeeping. Non-memory
+database tables and memory source files remain untouched. An agent with no index
+is a successful no-op. Reset coordinates with existing memory maintenance and
+does not restart the Gateway; a running Gateway can reindex retained sources
+afterward. If indexing is busy, let it finish and retry reset.
 
 Rebuild from retained sources afterward:
 
