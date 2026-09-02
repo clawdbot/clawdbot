@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
-import { tryAcquireMemoryReindexLock, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
+import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
@@ -102,14 +102,6 @@ describe("memory manager reindex recovery", () => {
     }
     manager = result.manager as unknown as MemoryIndexManager;
     return manager;
-  }
-
-  function acquireTestReindexLock(databasePath: string) {
-    const lock = tryAcquireMemoryReindexLock(databasePath);
-    if (!lock) {
-      throw new Error("expected test to acquire the memory reindex lock");
-    }
-    return lock;
   }
 
   it("restores retry state after a shadow full reindex fails late", async () => {
@@ -333,7 +325,7 @@ describe("memory manager reindex recovery", () => {
   it("rejects a full reindex while another process owns the build lock", async () => {
     const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const lock = acquireTestReindexLock(databasePath);
+    const lock = await waitForMemoryReindexLock(databasePath);
 
     try {
       await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
@@ -407,7 +399,7 @@ describe("memory manager reindex recovery", () => {
   it("waits for the build lock without blocking the event loop", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const lock = acquireTestReindexLock(databasePath);
+    const lock = await waitForMemoryReindexLock(databasePath);
     let timerFired = false;
     let lockReleased = false;
 
