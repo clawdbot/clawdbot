@@ -549,6 +549,21 @@ final class MacNodeModeCoordinator: NSObject {
                     retryDelay = 1_000_000_000
                     continue
                 }
+                if let conflict = DeviceIdentityConflictError.unpack(error) {
+                    let recovered = DeviceIdentityConflictRecovery.presentIfNeeded(conflict: conflict)
+                    if recovered {
+                        await NodesStore.shared.prepareLocalNodeIdentity()
+                        retryDelay = 1_000_000_000
+                        continue
+                    }
+                    self.logger.error(
+                        "mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
+                    self.channelStatus.record(.unavailable(
+                        reason: "Conflicting device identities",
+                        diagnostic: conflict.localizedDescription))
+                    guard await refreshIterator.next() != nil else { return }
+                    continue
+                }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
                 let failure = Self.nodeHostWorkerFailure(error)
                 self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
@@ -839,6 +854,11 @@ final class MacNodeModeCoordinator: NSObject {
 
     func enqueueRouteInvalidationForTesting() {
         self.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
+    }
+
+    /// Wakes the node connect loop after the operator reconciles a blocked identity.
+    func retryAfterIdentityRecovery() {
+        self.enqueueRouteInvalidation(mode: .reconnectRefresh)
     }
 
     func generationsForTesting() -> (endpointAttempt: UInt64, routeAuthority: UInt64, completedRouteAuthority: UInt64) {

@@ -16,6 +16,7 @@ enum DeviceIdentitySQLiteStore {
     private static let maximumLegacyIdentityBytes = 64 * 1024
     private static let doctorClaimSuffix = ".doctor-importing"
     private static let nativeClaimSuffix = ".native-importing"
+    private static let conflictArchiveSuffixPrefix = ".conflict-archived-"
     private static let appSandboxed: Bool = {
         #if os(macOS) && canImport(Security)
         guard let task = SecTaskCreateFromSelf(nil) else {
@@ -83,7 +84,8 @@ enum DeviceIdentitySQLiteStore {
         profile: GatewayDeviceIdentityProfile,
         legacySources: [DeviceIdentityPaths.LegacyIdentitySource] = [],
         beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)? = nil,
-        afterLegacyCommit: (() throws -> Void)? = nil) throws
+        afterLegacyCommit: (() throws -> Void)? = nil,
+        reconciliation: DeviceIdentityReconciliationChoice? = nil) throws
         -> DeviceIdentity
     {
         try self.secureDirectory(destinationStateDirURL)
@@ -98,7 +100,8 @@ enum DeviceIdentitySQLiteStore {
                 profile: profile,
                 legacySources: legacySources,
                 beforeLegacyClaim: beforeLegacyClaim,
-                afterLegacyCommit: afterLegacyCommit)
+                afterLegacyCommit: afterLegacyCommit,
+                reconciliation: reconciliation)
             try coordinator.release()
             return identity
         } catch {
@@ -135,7 +138,8 @@ enum DeviceIdentitySQLiteStore {
         profile: GatewayDeviceIdentityProfile,
         legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
         beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?,
-        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
+        afterLegacyCommit: (() throws -> Void)?,
+        reconciliation: DeviceIdentityReconciliationChoice?) throws -> DeviceIdentity
     {
         do {
             return try self.loadOrCreateNativeState(
@@ -144,7 +148,8 @@ enum DeviceIdentitySQLiteStore {
                 profile: profile,
                 legacySources: legacySources,
                 beforeLegacyClaim: beforeLegacyClaim,
-                afterLegacyCommit: afterLegacyCommit)
+                afterLegacyCommit: afterLegacyCommit,
+                reconciliation: reconciliation)
         } catch let error as OpenClawNativeStateError {
             throw DeviceIdentityStore.storageError(error.message)
         }
@@ -156,7 +161,8 @@ enum DeviceIdentitySQLiteStore {
         profile: GatewayDeviceIdentityProfile,
         legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
         beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?,
-        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
+        afterLegacyCommit: (() throws -> Void)?,
+        reconciliation: DeviceIdentityReconciliationChoice?) throws -> DeviceIdentity
     {
         // SQLite owns an existing profile; leave any downgrade-recreated legacy source for Doctor.
         if self.pathMayExist(databaseURL),
@@ -179,7 +185,8 @@ enum DeviceIdentitySQLiteStore {
                 destinationStateDirURL: destinationStateDirURL,
                 profile: profile,
                 claims: claims,
-                afterLegacyCommit: afterLegacyCommit)
+                afterLegacyCommit: afterLegacyCommit,
+                reconciliation: reconciliation)
         } catch {
             do {
                 try self.restoreClaimedLegacyIdentities(claims)
@@ -197,10 +204,14 @@ enum DeviceIdentitySQLiteStore {
         destinationStateDirURL: URL,
         profile: GatewayDeviceIdentityProfile,
         claims: [LegacyClaim],
-        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
+        afterLegacyCommit: (() throws -> Void)?,
+        reconciliation: DeviceIdentityReconciliationChoice?) throws -> DeviceIdentity
     {
-        try self.requireConsistentClaims(claims)
-        let generatedMaterial = claims.isEmpty ? DeviceIdentityStore.generateMaterial() : nil
+        let resolved = try self.resolveLegacyClaims(
+            claims,
+            profile: profile,
+            reconciliation: reconciliation)
+        let generatedMaterial = resolved.working.isEmpty ? DeviceIdentityStore.generateMaterial() : nil
         let writeTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
 
         let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
@@ -212,7 +223,7 @@ enum DeviceIdentitySQLiteStore {
                 stateDirectoryURL: destinationStateDirURL)
             let selected: DeviceIdentityMaterial
             if let existing {
-                if let migrated = claims.first?.material,
+                if let migrated = resolved.working.first?.material,
                    !self.hasSameKeyMaterial(migrated, existing)
                 {
                     throw DeviceIdentityStore.storageError(
@@ -221,7 +232,7 @@ enum DeviceIdentitySQLiteStore {
                 }
                 selected = existing
             } else {
-                guard let candidate = claims.first?.material ?? generatedMaterial else {
+                guard let candidate = resolved.working.first?.material ?? generatedMaterial else {
                     throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
                 }
                 selected = candidate
@@ -246,7 +257,7 @@ enum DeviceIdentitySQLiteStore {
             return authoritative
         }
 
-        if !claims.isEmpty {
+        if !resolved.working.isEmpty {
             try afterLegacyCommit?()
             // The committed reread is the destructive-cleanup receipt. Doctor cannot alter the
             // row while the native claim remains visible to every Node identity entry point.
@@ -260,11 +271,16 @@ enum DeviceIdentitySQLiteStore {
                     "Committed SQLite identity changed before legacy cleanup; native claim preserved")
             }
             try self.relocateLegacyAuthIfNeeded(
-                claims: claims,
+                claims: resolved.working,
                 destinationStateDirURL: destinationStateDirURL,
                 profile: profile,
                 deviceId: authoritative.identity.deviceId)
-            try self.removeClaimedLegacyIdentities(claims)
+            try self.removeClaimedLegacyIdentities(resolved.working)
+        }
+        do {
+            try self.archiveClaimedLegacyIdentities(resolved.archiveAfterCommit)
+        } catch {
+            try? self.restoreClaimedLegacyIdentities(resolved.archiveAfterCommit)
         }
         return authoritative.identity
     }
@@ -735,11 +751,53 @@ enum DeviceIdentitySQLiteStore {
         }
     }
 
-    private static func requireConsistentClaims(_ claims: [LegacyClaim]) throws {
-        guard let first = claims.first else { return }
-        guard claims.dropFirst().allSatisfy({ self.hasSameKeyMaterial($0.material, first.material) }) else {
-            throw DeviceIdentityStore.storageError("Legacy device identity sources conflict; all sources preserved")
+    private static func resolveLegacyClaims(
+        _ claims: [LegacyClaim],
+        profile: GatewayDeviceIdentityProfile,
+        reconciliation: DeviceIdentityReconciliationChoice?) throws
+        -> (working: [LegacyClaim], archiveAfterCommit: [LegacyClaim])
+    {
+        if claims.isEmpty {
+            return ([], [])
         }
+        if claims.dropFirst().allSatisfy({ self.hasSameKeyMaterial($0.material, claims[0].material) }) {
+            return (claims, [])
+        }
+        // Different-key sources stay preserved until the operator chooses. Auto-selecting
+        // would rotate the Mac off a still-approved identity; throwing here is the recovery gate.
+        let conflict = DeviceIdentityConflictError(
+            candidates: claims.map(self.conflictCandidate(from:)),
+            profile: profile)
+        switch reconciliation {
+        case nil:
+            throw conflict
+        case let .select(fingerprint):
+            let selected = claims.filter { self.fingerprint(for: $0) == fingerprint }
+            guard !selected.isEmpty else {
+                throw DeviceIdentityStore.storageError(
+                    "Selected device identity is no longer present; all sources preserved")
+            }
+            guard selected.dropFirst().allSatisfy({
+                self.hasSameKeyMaterial($0.material, selected[0].material)
+            }) else {
+                throw DeviceIdentityStore.storageError(
+                    "Selected device identity fingerprint is ambiguous; all sources preserved")
+            }
+            return (selected, claims.filter { self.fingerprint(for: $0) != fingerprint })
+        case .rePair:
+            return ([], claims)
+        }
+    }
+
+    private static func conflictCandidate(from claim: LegacyClaim) -> DeviceIdentityConflictCandidate {
+        DeviceIdentityConflictCandidate(
+            sourcePath: DeviceIdentityConflictError.redactedSourcePath(claim.source.identityURL),
+            fingerprint: self.fingerprint(for: claim),
+            createdAtMs: claim.material.identity.createdAtMs)
+    }
+
+    private static func fingerprint(for claim: LegacyClaim) -> String {
+        DeviceIdentityConflictError.redactedFingerprint(deviceId: claim.material.identity.deviceId)
     }
 
     private static func hasSameKeyMaterial(
@@ -867,6 +925,45 @@ enum DeviceIdentitySQLiteStore {
                 "Could not restore every native device identity claim: " +
                     restorationErrors.joined(separator: "; "))
         }
+    }
+
+    private static func archiveClaimedLegacyIdentities(_ claims: [LegacyClaim]) throws {
+        // Archived names must not match device.json or the native/doctor claim suffixes;
+        // Doctor and native import ignore anything else. Deleting here would destroy the
+        // only remaining copy of the unselected key.
+        for claim in claims {
+            guard self.pathMayExist(claim.identityURL) else { continue }
+            try self.archiveClaimedLegacyIdentity(claim)
+        }
+    }
+
+    private static func archiveClaimedLegacyIdentity(_ claim: LegacyClaim) throws {
+        let timestamp = String(Int64(Date().timeIntervalSince1970 * 1000))
+        for disambiguator in 0..<16 {
+            let suffix = disambiguator == 0 ? timestamp : "\(timestamp)-\(disambiguator)"
+            let archiveURL = URL(
+                fileURLWithPath: claim.source.identityURL.path + self.conflictArchiveSuffixPrefix + suffix,
+                isDirectory: false)
+            let renameResult = claim.identityURL.path.withCString { claimedPath in
+                archiveURL.path.withCString { destinationPath in
+                    renamex_np(claimedPath, destinationPath, UInt32(RENAME_EXCL))
+                }
+            }
+            if renameResult == 0 {
+                return
+            }
+            let renameError = errno
+            if renameError == ENOENT, !self.pathMayExist(claim.identityURL) {
+                return
+            }
+            if renameError == EEXIST {
+                continue
+            }
+            throw DeviceIdentityStore.storageError(
+                "Could not archive conflicting device identity: \(String(cString: strerror(renameError)))")
+        }
+        throw DeviceIdentityStore.storageError(
+            "Could not archive conflicting device identity: no unique archive name")
     }
 
     private static func restoreClaimedLegacyIdentity(identityURL: URL, sourceURL: URL) throws {

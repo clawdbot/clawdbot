@@ -89,6 +89,9 @@ struct StatusMenuHeaderView: View {
             self.pairingRow(
                 String(localized: "Pairing approval pending") + " (\(self.pairingPrompter.pendingCount))")
         }
+        if DeviceIdentityConflictError.lastRecorded() != nil {
+            self.identityConflictRow
+        }
         if self.devicePairingPrompter.pendingCount > 0 {
             let repairCount = self.devicePairingPrompter.pendingRepairCount
             let repairs = repairCount > 0
@@ -306,6 +309,19 @@ struct StatusMenuHeaderView: View {
         }
         .buttonStyle(.plain)
         .help(String(localized: "Show pairing requests"))
+    }
+
+    private var identityConflictRow: some View {
+        Button {
+            DeviceIdentityConflictRecovery.presentFromMenu()
+        } label: {
+            self.statusLine(
+                label: String(localized: "Conflicting device identities"),
+                diagnostic: String(localized: "Choose one identity or create a new one"),
+                color: .red)
+        }
+        .buttonStyle(.plain)
+        .help(String(localized: "Reconcile preserved Mac identities"))
     }
 
     private func loadBrowserEnabled() async {

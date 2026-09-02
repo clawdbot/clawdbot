@@ -637,6 +637,7 @@ describe("legacy device identity Doctor migration", () => {
     const result = await migrate(stateDir, env);
 
     expect(result.warnings.join("\n")).toContain("Native device identity import is pending");
+    expect(result.warnings.join("\n")).toContain("open the Mac app");
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(nativeClaimPath)).toBe(true);
     expect(identityRow(env)).toBeUndefined();

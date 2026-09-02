@@ -97,6 +97,36 @@ struct GatewayErrorsTests {
         #expect(problem.actionLabelPresentation?.localizationKey == "Approve on gateway")
     }
 
+    @Test func `legacy identity conflict stays typed and pauses reconnect`() throws {
+        let conflict = DeviceIdentityConflictError(candidates: [
+            DeviceIdentityConflictCandidate(
+                sourcePath: "~/Library/Group Containers/group.ai.openclaw/identity/device.json",
+                fingerprint: "0123456789ab",
+                createdAtMs: 1_800_000_000_000),
+            DeviceIdentityConflictCandidate(
+                sourcePath: "~/.openclaw/identity/device.json",
+                fingerprint: "fedcba987654",
+                createdAtMs: 1_800_000_000_100),
+        ], profile: .primary)
+        let wrapped = NSError(
+            domain: "ai.openclaw.device-identity-store",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Could not access the persisted device identity",
+                NSUnderlyingErrorKey: conflict,
+            ])
+
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: wrapped))
+
+        #expect(problem.kind == .legacyIdentityConflict)
+        #expect(problem.pauseReconnect == true)
+        #expect(problem.retryable == false)
+        #expect(problem.docsURL?.absoluteString == "https://docs.openclaw.ai/platforms/macos")
+        #expect(problem.titlePresentation.localizationKey == "Conflicting device identities")
+        #expect(DeviceIdentityConflictError.unpack(wrapped) == conflict)
+        #expect(GatewayConnectionProblemMapper.map(error: conflict) == problem)
+    }
+
     @Test func `gateway supplied copy remains verbatim`() throws {
         let error = GatewayConnectAuthError(
             message: "pairing required",

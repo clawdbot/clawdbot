@@ -295,6 +295,11 @@ final class ControlChannel {
         if let authIssue = RemoteGatewayAuthIssue(error: error) {
             return authIssue.statusMessage
         }
+        if DeviceIdentityConflictError.unpack(error) != nil
+            || DeviceIdentityConflictError.lastRecorded() != nil
+        {
+            return "Conflicting device identities. Choose one identity or create a new one from the menu bar."
+        }
 
         let mode = ConnectionModeResolver.resolve(root: configRoot).mode
         let transport = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)

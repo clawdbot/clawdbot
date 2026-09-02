@@ -164,7 +164,7 @@ describe("node-host startup state migrations", () => {
     expect(fs.existsSync(nativeClaimPath)).toBe(true);
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
-      "Native device identity import is pending; restart the native app before running Doctor.",
+      "Native device identity import is pending; open the Mac app to finish the import or reconcile preserved identities. Doctor will not consume the native claim.",
     );
   });
 

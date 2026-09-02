@@ -47,7 +47,8 @@ private final class DeviceIdentityMigrationFixture {
         profile: GatewayDeviceIdentityProfile = .primary,
         sources: [DeviceIdentityPaths.LegacyIdentitySource] = [],
         beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)? = nil,
-        afterLegacyCommit: (() throws -> Void)? = nil) throws -> DeviceIdentity
+        afterLegacyCommit: (() throws -> Void)? = nil,
+        reconciliation: DeviceIdentityReconciliationChoice? = nil) throws -> DeviceIdentity
     {
         try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: self.databaseURL,
@@ -55,7 +56,8 @@ private final class DeviceIdentityMigrationFixture {
             profile: profile,
             legacySources: sources,
             beforeLegacyClaim: beforeLegacyClaim,
-            afterLegacyCommit: afterLegacyCommit)
+            afterLegacyCommit: afterLegacyCommit,
+            reconciliation: reconciliation)
     }
 }
 
@@ -771,6 +773,102 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `divergent legacy sources fail closed without a canonical row`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let firstMaterial = DeviceIdentityStore.generateMaterial()
+        let secondMaterial = DeviceIdentityStore.generateMaterial()
+        let first = try fixture.source("first", contents: Self.rawIdentityJSON(firstMaterial.identity))
+        let second = try fixture.source("second", contents: Self.rawIdentityJSON(secondMaterial.identity))
+
+        do {
+            _ = try fixture.load(sources: [first, second])
+            Issue.record("Expected divergent legacy sources to throw")
+        } catch let error as DeviceIdentityConflictError {
+            #expect(error.candidates.count == 2)
+            #expect(Set(error.candidates.map(\.fingerprint)) == [
+                DeviceIdentityConflictError.redactedFingerprint(deviceId: firstMaterial.identity.deviceId),
+                DeviceIdentityConflictError.redactedFingerprint(deviceId: secondMaterial.identity.deviceId),
+            ])
+            #expect(error.candidates.allSatisfy { !$0.sourcePath.isEmpty })
+            #expect(error.profile == .primary)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: first.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: second.identityURL.path))
+        #expect(try Self.deviceIdentityCount(fixture.databaseURL) == 0)
+    }
+
+    @Test
+    func `operator select imports one divergent identity and archives the other`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let firstMaterial = DeviceIdentityStore.generateMaterial()
+        let secondMaterial = DeviceIdentityStore.generateMaterial()
+        let first = try fixture.source("first", contents: Self.rawIdentityJSON(firstMaterial.identity))
+        let second = try fixture.source("second", contents: Self.rawIdentityJSON(secondMaterial.identity))
+        let selectedFingerprint = DeviceIdentityConflictError.redactedFingerprint(
+            deviceId: firstMaterial.identity.deviceId)
+
+        let identity = try fixture.load(
+            sources: [first, second],
+            reconciliation: .select(fingerprint: selectedFingerprint))
+
+        #expect(identity.deviceId == firstMaterial.identity.deviceId)
+        #expect(!FileManager.default.fileExists(atPath: first.identityURL.path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.claimURL(for: first).path))
+        #expect(!FileManager.default.fileExists(atPath: second.identityURL.path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.claimURL(for: second).path))
+        #expect(try Self.conflictArchives(for: first).isEmpty)
+        #expect(try Self.conflictArchives(for: second).count == 1)
+        #expect(try Self.scalarText(
+            fixture.databaseURL,
+            "SELECT device_id FROM device_identities WHERE identity_key = 'primary'") ==
+            firstMaterial.identity.deviceId)
+    }
+
+    @Test
+    func `operator re-pair archives every divergent source and creates a new identity`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let firstMaterial = DeviceIdentityStore.generateMaterial()
+        let secondMaterial = DeviceIdentityStore.generateMaterial()
+        let first = try fixture.source("first", contents: Self.rawIdentityJSON(firstMaterial.identity))
+        let second = try fixture.source("second", contents: Self.rawIdentityJSON(secondMaterial.identity))
+
+        let identity = try fixture.load(sources: [first, second], reconciliation: .rePair)
+
+        #expect(identity.deviceId != firstMaterial.identity.deviceId)
+        #expect(identity.deviceId != secondMaterial.identity.deviceId)
+        #expect(!FileManager.default.fileExists(atPath: first.identityURL.path))
+        #expect(!FileManager.default.fileExists(atPath: second.identityURL.path))
+        #expect(try Self.conflictArchives(for: first).count == 1)
+        #expect(try Self.conflictArchives(for: second).count == 1)
+        #expect(try Self.scalarText(
+            fixture.databaseURL,
+            "SELECT device_id FROM device_identities WHERE identity_key = 'primary'") == identity.deviceId)
+    }
+
+    @Test
+    func `unknown reconciliation fingerprint preserves every divergent source`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let firstMaterial = DeviceIdentityStore.generateMaterial()
+        let secondMaterial = DeviceIdentityStore.generateMaterial()
+        let first = try fixture.source("first", contents: Self.rawIdentityJSON(firstMaterial.identity))
+        let second = try fixture.source("second", contents: Self.rawIdentityJSON(secondMaterial.identity))
+
+        do {
+            _ = try fixture.load(
+                sources: [first, second],
+                reconciliation: .select(fingerprint: "deadbeefdead"))
+            Issue.record("Expected unknown fingerprint to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription.contains("no longer present"))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: first.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: second.identityURL.path))
+        #expect(try Self.deviceIdentityCount(fixture.databaseURL) == 0)
+    }
+
+    @Test
     func `source reappearance preserves both native claim and recreated source`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         let legacyData = try Self.nodePEMIdentityJSON()
@@ -1162,6 +1260,29 @@ extension DeviceIdentityStoreTests {
             withIntermediateDirectories: true)
         try contents.write(to: source.identityURL, atomically: true, encoding: .utf8)
         return source
+    }
+
+    fileprivate static func rawIdentityJSON(_ identity: DeviceIdentity) throws -> String {
+        let data = try JSONEncoder().encode(identity)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw DeviceIdentityStore.storageError("Could not encode generated identity JSON")
+        }
+        return json
+    }
+
+    fileprivate static func conflictArchives(
+        for source: DeviceIdentityPaths.LegacyIdentitySource) throws -> [URL]
+    {
+        let prefix = source.identityURL.lastPathComponent + ".conflict-archived-"
+        return try FileManager.default.contentsOfDirectory(
+            at: source.identityURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(prefix) }
+    }
+
+    fileprivate static func deviceIdentityCount(_ databaseURL: URL) throws -> Int {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else { return 0 }
+        return Int(try self.scalarInt(databaseURL, "SELECT COUNT(*) FROM device_identities"))
     }
 
     fileprivate static func legacyIdentitySource(

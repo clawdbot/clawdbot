@@ -51,4 +51,16 @@ import Testing
         let issue = GatewayConnectionIssue.detect(from: "Connected")
         #expect(issue == .none)
     }
+
+    @Test func `detects structured legacy identity conflict`() {
+        let problem = GatewayConnectionProblem(
+            kind: .legacyIdentityConflict,
+            owner: .unknown,
+            title: "Conflicting device identities",
+            message: "This Mac has preserved device identities with different keys.",
+            retryable: false,
+            pauseReconnect: true)
+        let issue = GatewayConnectionIssue.detect(problem: problem)
+        #expect(issue == .unknown("This Mac has preserved device identities with different keys."))
+    }
 }

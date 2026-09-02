@@ -4,7 +4,7 @@ import Foundation
 import Security
 #endif
 
-public enum GatewayDeviceIdentityProfile: String, Sendable {
+public enum GatewayDeviceIdentityProfile: String, Sendable, Equatable {
     case primary
     case node
     case shareExtension
@@ -210,6 +210,84 @@ struct DeviceIdentityMaterial: Equatable {
     let privateKeyPEM: String
 }
 
+/// Operator-visible identity candidate after a no-row, different-key legacy import conflict.
+public struct DeviceIdentityConflictCandidate: Equatable, Sendable {
+    public let sourcePath: String
+    public let fingerprint: String
+    public let createdAtMs: Int64
+
+    public init(sourcePath: String, fingerprint: String, createdAtMs: Int64) {
+        self.sourcePath = sourcePath
+        self.fingerprint = fingerprint
+        self.createdAtMs = createdAtMs
+    }
+}
+
+/// Operator choice recorded before a conflicting legacy identity may become canonical.
+public enum DeviceIdentityReconciliationChoice: Equatable, Sendable {
+    case select(fingerprint: String)
+    case rePair
+}
+
+/// Fail-closed conflict: every claimed source is preserved until the operator chooses.
+public struct DeviceIdentityConflictError: Error, LocalizedError, Equatable, Sendable {
+    public let candidates: [DeviceIdentityConflictCandidate]
+    public let profile: GatewayDeviceIdentityProfile
+
+    public init(candidates: [DeviceIdentityConflictCandidate], profile: GatewayDeviceIdentityProfile) {
+        self.candidates = candidates
+        self.profile = profile
+    }
+
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var lastRecordedError: DeviceIdentityConflictError?
+
+    public var errorDescription: String? {
+        let listed = self.candidates.map { "\($0.sourcePath) [\($0.fingerprint)]" }
+            .joined(separator: "; ")
+        return "Legacy device identity sources conflict; all sources preserved. \(listed)"
+    }
+
+    public static func unpack(_ error: Error) -> DeviceIdentityConflictError? {
+        if let conflict = error as? DeviceIdentityConflictError {
+            return conflict
+        }
+        let nsError = error as NSError
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return self.unpack(underlying)
+        }
+        return nil
+    }
+
+    public static func lastRecorded() -> DeviceIdentityConflictError? {
+        self.lock.withLock { self.lastRecordedError }
+    }
+
+    static func record(_ error: DeviceIdentityConflictError) {
+        self.lock.withLock { self.lastRecordedError = error }
+    }
+
+    static func clearRecorded() {
+        self.lock.withLock { self.lastRecordedError = nil }
+    }
+
+    static func redactedFingerprint(deviceId: String) -> String {
+        String(deviceId.prefix(12))
+    }
+
+    static func redactedSourcePath(_ url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        if path == home {
+            return "~"
+        }
+        if path.hasPrefix(home + "/") {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
+}
+
 public enum DeviceIdentityStore {
     static let ed25519SPKIPrefix = Data([
         0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65,
@@ -275,15 +353,22 @@ public enum DeviceIdentityStore {
 
     /// Loads or creates an identity and preserves the storage failure for callers that can report it.
     static func loadOrCreatePersistedOrThrow(
-        profile: GatewayDeviceIdentityProfile = .primary) throws -> DeviceIdentity
+        profile: GatewayDeviceIdentityProfile = .primary,
+        reconciliation: DeviceIdentityReconciliationChoice? = nil) throws -> DeviceIdentity
     {
         let stateDirURL = DeviceIdentityPaths.stateDirURL()
         do {
-            return try DeviceIdentitySQLiteStore.loadOrCreate(
+            let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
                 databaseURL: self.databaseURL(stateDirURL: stateDirURL),
                 destinationStateDirURL: stateDirURL,
                 profile: profile,
-                legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
+                legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile),
+                reconciliation: reconciliation)
+            DeviceIdentityConflictError.clearRecorded()
+            return identity
+        } catch let conflict as DeviceIdentityConflictError {
+            DeviceIdentityConflictError.record(conflict)
+            throw conflict
         } catch {
             throw NSError(
                 domain: "ai.openclaw.device-identity-store",
@@ -294,6 +379,14 @@ public enum DeviceIdentityStore {
                     NSUnderlyingErrorKey: error,
                 ])
         }
+    }
+
+    /// Imports one preserved legacy identity or generates a replacement after an explicit operator choice.
+    public static func reconcileConflictingLegacyIdentities(
+        profile: GatewayDeviceIdentityProfile = .primary,
+        choice: DeviceIdentityReconciliationChoice) throws -> DeviceIdentity
+    {
+        try self.loadOrCreatePersistedOrThrow(profile: profile, reconciliation: choice)
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
