@@ -4831,13 +4831,18 @@ class ChatController internal constructor(
           }
         }
       if (applied !is HistoryRefreshResult.Applied) return applied
+      // Canonical history retires delivered rows before further RPCs can delay that proof.
+      // Resuming their queued successors still waits for branch reconciliation and health.
+      val outboxChanged =
+        commandOutbox != null && requestCacheScope != null &&
+          reconcileDurableSendsAgainstHistory(commandOutbox, requestCacheScope.gatewayId, history, requestAgentId)
+      publishOutbox()
       appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
       if (refreshBranches && branchSnapshot != null) {
         refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
       }
       pollHealthIfNeeded(sessionKey, generation)
-      confirmDurableSendsFromHistory(requestCacheScope, history, requestAgentId)
-      publishOutbox()
+      if (outboxChanged) kickFlushForRoutedBacklog()
       return applied
     } finally {
       finishHistoryHealth(healthRefresh, generation)
@@ -4856,21 +4861,6 @@ class ChatController internal constructor(
           }?.ready
       }
     readiness?.await()
-  }
-
-  /** Canonical history is the only proof that retires journaled sends; every apply checks it. */
-  private suspend fun confirmDurableSendsFromHistory(
-    requestCacheScope: ChatCacheScope?,
-    history: ChatHistory,
-    ownerAgentId: String,
-  ) {
-    val outbox = commandOutbox ?: return
-    val gatewayId = requestCacheScope?.gatewayId ?: return
-    if (reconcileDurableSendsAgainstHistory(outbox, gatewayId, history, ownerAgentId)) {
-      publishOutbox()
-      // Retired rows may have been session heads holding queued successors; resume delivery.
-      kickFlushForRoutedBacklog()
-    }
   }
 
   private suspend fun reconcileOutboxHistory(
@@ -5441,14 +5431,11 @@ class ChatController internal constructor(
       }.await()
   }
 
-  // Gateway-health transition is the single reconnect trigger for the outbox flush; it avoids a
-  // second reachability source (ConnectivityManager) that could disagree with gateway state.
+  // A healthy observation also releases work whose history waiter was cancelled after retirement.
+  // The single-flight dispatcher rechecks branch readiness and connection ownership before sending.
   private fun markHealthOk() {
-    val wasOk = _healthOk.value
     _healthOk.value = true
-    if (!wasOk && commandOutbox != null) {
-      requestOutboxFlush()
-    }
+    requestOutboxFlush()
   }
 
   private fun hasCurrentChatMetadata(): Boolean {
