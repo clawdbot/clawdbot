@@ -1,6 +1,6 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -45,6 +45,21 @@ describe("gateway network client", () => {
         ok: true,
         sessions: { count: 0, path: "/state/sessions", recent: [] },
         ts: Date.now(),
+      },
+    };
+  }
+
+  function connectResponse(
+    methods: unknown = [
+      "gateway.suspend.prepare",
+      "gateway.suspend.status",
+      "gateway.suspend.resume",
+    ],
+  ) {
+    return {
+      ok: true,
+      payload: {
+        features: { methods },
       },
     };
   }
@@ -300,9 +315,7 @@ describe("gateway network client", () => {
     await expect(frame).rejects.toThrow();
   });
 
-  function createNetworkClientHarness(
-    responses: Array<{ error?: { message?: string }; ok: boolean }>,
-  ) {
+  function createNetworkClientHarness(responses: GatewayFrame[]) {
     const frames = [...responses];
     const sentMethods: string[] = [];
     const stdout: string[] = [];
@@ -329,10 +342,13 @@ describe("gateway network client", () => {
           predicate: (frame: GatewayFrame) => boolean,
           _timeoutMs?: number,
         ) => {
+          const response = frames.shift();
           const frame = {
             type: "res",
             id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
-            ...frames.shift(),
+            ...(sentMethods.at(-1) === "connect" && response?.ok && !response.payload
+              ? connectResponse()
+              : response),
           };
           expect(predicate(frame)).toBe(true);
           return frame;
@@ -357,6 +373,52 @@ describe("gateway network client", () => {
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.stdout).toEqual(["ok"]);
     expect(harness.closeCount).toBe(1);
+  });
+
+  it.each([
+    {
+      methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
+      expected: "supported",
+    },
+    { methods: ["health", "status"], expected: "unsupported" },
+  ])("records $expected suspension support from connect hello methods", async (testCase) => {
+    const workDir = tempDirs.make("openclaw-gateway-network-capabilities-");
+    const capabilitiesPath = join(workDir, "capabilities.json");
+    const harness = createNetworkClientHarness([
+      connectResponse(testCase.methods),
+      healthResponse(),
+    ]);
+
+    await expect(
+      runGatewayNetworkClient(
+        {
+          capabilitiesPath,
+          token: "test-token",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 1000,
+        },
+        harness.deps,
+      ),
+    ).resolves.toEqual({ suspension: testCase.expected });
+    expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({
+      suspension: testCase.expected,
+    });
+    expect(harness.sentMethods).toEqual(["connect", "health"]);
+  });
+
+  it.each([
+    ["partial", ["gateway.suspend.prepare", "gateway.suspend.status"]],
+    ["malformed", "gateway.suspend.prepare"],
+  ])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
+    const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
+
+    await expect(
+      runGatewayNetworkClient(
+        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
+        harness.deps,
+      ),
+    ).rejects.toThrow(/suspension methods/u);
+    expect(harness.sentMethods).toEqual(["connect", "health"]);
   });
 
   it("bounds socket and frame waits by the client deadline", async () => {

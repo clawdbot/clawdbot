@@ -123,6 +123,13 @@ operator approval flow used by Ask OpenClaw; the approval summary names the
 requesting agent. OpenClaw remains the executor, and approved creation records
 that requesting agent as the new agent's creator.
 
+Delegated creation remains tied to the requesting run. If that run ends or loses
+authority during preparation, OpenClaw stops before starting the next persistent
+write. A write already in progress may finish, and workspace files created earlier
+are not automatically removed. Check `openclaw agents list` before retrying from
+an active run; an agent whose creation already completed is not removed when its
+requesting run ends.
+
 Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.

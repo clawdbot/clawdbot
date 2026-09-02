@@ -253,7 +253,8 @@ function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
   for (const name of Object.keys(options.coreGatewayHandlers ?? {})) {
     names.add(name);
   }
-  return Array.from(names).toSorted();
+  // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a private array.
+  return Array.from(names).sort();
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {

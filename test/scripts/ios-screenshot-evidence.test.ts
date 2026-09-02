@@ -104,7 +104,7 @@ function writeFamilySource(
 }
 
 function containerName(family: Family, targetSha = TARGET_SHA) {
-  const shard = family === "watch" ? "iphone" : family;
+  const shard = family === "watch" ? "ipad-13" : family;
   return `ios-release-screenshot-shard-${shard}-${targetSha}`;
 }
 
@@ -314,6 +314,14 @@ describe("iOS screenshot evidence", () => {
         fs.renameSync(ipad, iphone);
         fs.renameSync(temporary, ipad);
       },
+    },
+    {
+      label: "Watch in the iPhone shard",
+      mutate: (input: string) =>
+        fs.renameSync(
+          familyDirectory(input, "watch"),
+          path.join(input, containerName("iphone"), "watch"),
+        ),
     },
   ])("rejects $label artifact container topology", ({ mutate }) => {
     const root = tempDirs.make("ios-screenshot-topology-");

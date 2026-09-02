@@ -130,15 +130,18 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(log.isEnabled("info", "console")).toBe(false);
   });
 
-  it("falls back to an unknown subsystem label when a malformed logger emits", () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = installConsoleMethodSpy("warn");
-    const log = createSubsystemLogger(undefined as unknown as string);
+  it.each([undefined, "constructor", "toString", "__proto__"])(
+    "emits console output for subsystem label %s",
+    (subsystem) => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warn = installConsoleMethodSpy("warn");
+      const log = createSubsystemLogger(subsystem as unknown as string);
 
-    log.warn("missing subsystem label");
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(firstMockArgAsString(warn)).toContain("[unknown]");
-  });
+      log.warn("subsystem diagnostic");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(firstMockArgAsString(warn)).toContain(`[${subsystem ?? "unknown"}]`);
+    },
+  );
 
   it("suppresses probe warnings for embedded subsystems based on structured run metadata", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
@@ -271,21 +274,29 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(written).toContain("Bearer ");
   });
 
-  it("redacts before colorizing subsystem console messages so ANSI reset codes survive", () => {
-    vi.stubEnv("FORCE_COLOR", "1");
-    setLoggerOverride({ level: "silent", consoleLevel: "info" });
-    const logSpy = installConsoleMethodSpy("log");
-    const log = createSubsystemLogger("gateway/auth");
-    const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
+  it.each(["pretty", "compact"] as const)(
+    "preserves redaction and ANSI resets as color settings change in %s style",
+    (consoleStyle) => {
+      vi.stubEnv("NO_COLOR", "1");
+      setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle });
+      const logSpy = installConsoleMethodSpy("log");
+      const log = createSubsystemLogger("gateway/auth");
+      const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
 
-    log.info(`provider API_KEY=${secret}`);
+      for (const forceColor of ["1", "0", "1"]) {
+        vi.stubEnv("FORCE_COLOR", forceColor);
+        logSpy.mockClear();
+        log.info(`provider API_KEY=${secret}`);
 
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    const written = firstMockArgAsString(logSpy);
-    expect(written).not.toContain(secret);
-    expect(written).toContain("API_KEY=***");
-    expect(written.endsWith("\u001B[39m")).toBe(true);
-  });
+        expect(logSpy).toHaveBeenCalledTimes(1);
+        const written = firstMockArgAsString(logSpy);
+        expect(written).not.toContain(secret);
+        expect(written).toContain("API_KEY=***");
+        expect(written).toContain("[auth]");
+        expect(written.endsWith("\u001B[39m")).toBe(forceColor === "1");
+      }
+    },
+  );
 
   it("redacts sensitive tokens from raw subsystem console output", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "info" });

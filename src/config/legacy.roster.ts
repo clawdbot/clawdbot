@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   retainLegacyDefaultAgentId,
@@ -17,6 +18,37 @@ type MigrationResult = {
   insertedPaths?: string[][];
   retainedLegacyDefaultAgentId?: string;
 };
+
+/** Keeps Doctor's allocated identities tied to their original authored list positions. */
+export function projectLegacyAgentRosterEntries(list: unknown[]) {
+  const entries: { sourceIndex: number; id: string; config: Record<string, unknown> }[] = [];
+  const diagnostics: string[] = [];
+  const ids = new Set<string>();
+  for (const [sourceIndex, value] of list.entries()) {
+    if (!isRecord(value)) {
+      diagnostics.push(`Removed malformed agents.list[${sourceIndex}] entry.`);
+      continue;
+    }
+    const rawId = typeof value.id === "string" && value.id.trim() ? value.id.trim() : "agent";
+    const requestedId = normalizeAgentId(rawId);
+    if (requestedId !== rawId) {
+      diagnostics.push(`Normalized agents.list id "${rawId}" → agents.entries.${requestedId}.`);
+    }
+    let id = requestedId;
+    let suffix = 2;
+    while (ids.has(id)) {
+      id = `${requestedId}-${suffix}`;
+      suffix += 1;
+    }
+    const { id: _id, ...config } = value;
+    entries.push({ sourceIndex, id, config });
+    ids.add(id);
+    if (id !== requestedId) {
+      diagnostics.push(`Moved duplicate agents.list id "${requestedId}" to agents.entries.${id}.`);
+    }
+  }
+  return { entries, diagnostics };
+}
 
 /** Converts a valid legacy roster without applying ownership or runtime migrations. */
 export function parseLegacyAgentRoster(

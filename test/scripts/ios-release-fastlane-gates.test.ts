@@ -580,7 +580,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(shardJob).toContain("max-parallel: 2");
     expect(shardJob).toContain("device_family: [iphone, ipad-13]");
     expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');
-    expect(shardJob).toContain("if: matrix.device_family == 'iphone'");
+    expect(shardJob).toContain("if: matrix.device_family == 'ipad-13'");
     expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");

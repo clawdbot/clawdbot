@@ -471,7 +471,9 @@ struct GatewayProcessManagerTests {
             manager._testSetLaunchAgentDisableWaitHook(nil)
             events.continuation.finish()
             var order: [String] = []
-            while let event = await iterator.next() { order.append(event) }
+            while let event = await iterator.next() {
+                order.append(event)
+            }
 
             #expect(attached)
             #expect(order == ["disable-finished", "attach"])
@@ -1210,8 +1212,22 @@ struct GatewayProcessManagerTests {
     @Test func `responsive startup progress extends readiness without launchd status proof`() async throws {
         let port = 19119
         let url = try #require(URL(string: "ws://example.invalid"))
-        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(healthSucceedsAfter: 1)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if sendIndex == 2 {
+                    let response = Data(
+                        """
+                        {"type":"res","id":"\(id)","ok":false,
+                         "error":{"code":"UNAVAILABLE","message":"gateway awaiting authorization"}}
+                        """.utf8)
+                    task.emitReceiveSuccess(.data(response))
+                } else {
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                }
+            })
         }
 
         try await self.withLaunchAgentEnvironment(
@@ -1225,6 +1241,9 @@ struct GatewayProcessManagerTests {
                 manager._testClearLaunchAgentReadinessFailure()
             }
 
+            // Establish the socket first; the unavailable health reply must exercise
+            // readiness extension without spending its window on the handshake.
+            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
             manager._testStartLaunchdGatewayReadiness(
                 port: port,
                 pid: 4242,
@@ -1232,6 +1251,10 @@ struct GatewayProcessManagerTests {
                 firstInstallReadinessBudget: 0.5)
             await manager.waitForStartupAttempt()
 
+            #expect(session.snapshotMakeCount() == 1)
+            #expect(session.latestTask()?.snapshotSendCount() == 4)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "status" }.isEmpty)
             #expect(manager.status == .running(details: "pid 4242"))
             #expect(manager.lastFailureReason == nil)
             #expect(!manager._testHasLaunchAgentReadinessFailure())

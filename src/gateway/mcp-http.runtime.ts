@@ -2,10 +2,12 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -32,7 +34,8 @@ type CachedScopedTools = {
   toolSchema: McpToolSchemaEntry[];
 };
 
-type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
+type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner" | "skillWorkshop"> & {
+  skillWorkshop?: SkillWorkshopRunOptions;
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
@@ -40,6 +43,8 @@ type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> &
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  nodeExecAvailability?: Awaited<ReturnType<typeof loadNodeExecAvailability>>;
+  signal?: AbortSignal;
 };
 
 type LoopbackToolsAllowMode = "exact" | "policy";
@@ -69,6 +74,19 @@ function resolveMediatedNativeTools(
   );
 }
 
+async function resolveNodeExecScope(
+  params: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): Promise<McpLoopbackScopeParams> {
+  if (
+    params.nodeExecAllowed !== true ||
+    resolveMediatedNativeTools(params.toolsAllow, mode).size > 0
+  ) {
+    return params;
+  }
+  return { ...params, nodeExecAvailability: await loadNodeExecAvailability(params.signal) };
+}
+
 function resolveMcpLoopbackTools(
   params: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
@@ -77,6 +95,7 @@ function resolveMcpLoopbackTools(
   workspaceDir?: string;
   tools: McpLoopbackTool[];
 } {
+  params.signal?.throwIfAborted();
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
@@ -92,6 +111,8 @@ function resolveMcpLoopbackTools(
     toolsAllow: _toolsAllow,
     authProfileStoreAgentDir,
     grantToken: _grantToken,
+    nodeExecAvailability,
+    signal: _signal,
     ...scopeParams
   } = params;
   const scoped = resolveGatewayScopedTools({
@@ -102,6 +123,7 @@ function resolveMcpLoopbackTools(
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
+    nodeExecAvailable: nodeExecAvailability?.isAvailable,
   });
   return {
     agentId: scoped.agentId,
@@ -114,20 +136,20 @@ function resolveMcpLoopbackTools(
 }
 
 /** Resolves loopback-visible tools from the exact names carried by a minted grant. */
-export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
+export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
   agentId: string | undefined;
   workspaceDir?: string;
   tools: McpLoopbackTool[];
-} {
-  return resolveMcpLoopbackTools(params, "exact");
+}> {
+  return resolveMcpLoopbackTools(await resolveNodeExecScope(params, "exact"), "exact");
 }
 
 /** Materializes runtime policy expressions against the concrete loopback catalog. */
-export function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): {
+export async function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
   agentId: string | undefined;
   tools: McpLoopbackTool[];
-} {
-  return resolveMcpLoopbackTools(params, "policy");
+}> {
+  return resolveMcpLoopbackTools(await resolveNodeExecScope(params, "policy"), "policy");
 }
 
 /**
@@ -173,8 +195,13 @@ export class McpLoopbackToolCache {
   #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
   // Revocation needs the config scopes where one grant may have cached tools.
   #grantConfigScopes = new Map<string, Set<OpenClawConfig>>();
+  #epoch = 0;
 
-  resolve(params: McpLoopbackScopeParams): CachedScopedTools {
+  async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
+    const epoch = this.#epoch;
+    // Availability belongs to the current connection, not the schema TTL.
+    const params = await resolveNodeExecScope(input, "exact");
+    input.signal?.throwIfAborted();
     // Callers differing only in capabilities must not share cached tool lists.
     const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
@@ -213,6 +240,7 @@ export class McpLoopbackToolCache {
       params.delegationCapability === "report_only" ? "delegation:report_only" : "",
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
+      params.nodeExecAvailability?.cacheKey ?? "",
       params.execSession?.execHost ?? "",
       params.execSession?.execNode ?? "",
       params.execSession?.permissionMode ?? "",
@@ -253,13 +281,17 @@ export class McpLoopbackToolCache {
       return cached;
     }
 
-    const next = resolveMcpLoopbackScopedTools(params);
+    const next = resolveMcpLoopbackTools(params, "exact");
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,
       workspaceDir: next.workspaceDir,
       tools: next.tools,
       toolSchema: buildMcpToolSchema(next.tools),
     };
+    // Revocation may overtake discovery before a grant owns any cached rows.
+    if (epoch !== this.#epoch) {
+      return nextEntry;
+    }
     this.#entries.set(cacheKey, nextEntry, params.cfg);
     if (params.grantToken) {
       const scopes = this.#grantConfigScopes.get(params.grantToken) ?? new Set<OpenClawConfig>();
@@ -270,6 +302,7 @@ export class McpLoopbackToolCache {
   }
 
   evictGrant(token: string): boolean {
+    this.#epoch += 1;
     const scopes = this.#grantConfigScopes.get(token);
     if (!scopes) {
       return false;
@@ -283,6 +316,7 @@ export class McpLoopbackToolCache {
   }
 
   clear(): void {
+    this.#epoch += 1;
     this.#entries.clear();
     this.#grantConfigScopes.clear();
   }

@@ -142,11 +142,10 @@ export function buildStatusLastHeartbeatValue(params: {
     return params.muted("none");
   }
   const age = params.formatTimeAgo(Date.now() - params.lastHeartbeat.ts);
-  const channel = params.lastHeartbeat.channel ?? "unknown";
   const accountLabel = params.lastHeartbeat.accountId
     ? `account ${params.lastHeartbeat.accountId}`
     : null;
-  return [params.lastHeartbeat.status, `${age} ago`, channel, accountLabel]
+  return [params.lastHeartbeat.status, age, params.lastHeartbeat.channel, accountLabel]
     .filter(Boolean)
     .join(" · ");
 }

@@ -14,6 +14,7 @@ import {
   listBuiltRuntimeEntryCandidates,
 } from "../src/plugins/package-entrypoints.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
+import { resolveNpmJsonString } from "./lib/npm-json-output.mts";
 import { sleep } from "./lib/sleep.mjs";
 
 const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
@@ -256,7 +257,7 @@ export function parseNpmReadmeMetadata(raw: string) {
   } catch {
     return "";
   }
-  return typeof parsed === "string" ? parsed.trim() : "";
+  return resolveNpmJsonString(parsed);
 }
 
 function npmViewReadme(spec: string) {

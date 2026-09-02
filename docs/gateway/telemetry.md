@@ -64,7 +64,7 @@ tracking identifier.
 
 The service responds with the latest version and, optionally, a short
 operator-facing note. OpenClaw displays an available update and its note through
-the existing update notice. Unreachable services, timeouts, invalid responses,
+the existing update notice. Unreachable services, timeouts, oversized or invalid responses,
 and other failed checks do not interrupt startup or normal operation.
 
 A successful response and its timestamp are cached in the existing shared state

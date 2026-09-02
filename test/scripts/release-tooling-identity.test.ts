@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import JSZip from "jszip";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  downloadFullReleaseNpmPreflight,
+  resolveFullReleaseNpmPreflight,
   validateNpmPreflightProducer,
+  validateFullReleaseNpmPreflight,
+  verifyNpmPreflightProducer,
   verifyReleasePreflightToolingIdentity,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
@@ -9,6 +17,9 @@ import {
   validateReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
 } from "../../scripts/release-tooling-identity.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -464,7 +475,9 @@ describe("historical npm preflight tooling", () => {
     };
     const runGh = vi.fn((args: string[]) => {
       const route = args[1]?.replace("repos/openclaw/openclaw/", "");
-      if (!route || !(route in responses)) throw new Error("unavailable provenance");
+      if (!route || !(route in responses)) {
+        throw new Error("unavailable provenance");
+      }
       return JSON.stringify(responses[route]);
     });
     return { ...protectedIdentity(), publisherSha: OTHER_SHA, runGh };
@@ -501,9 +514,7 @@ describe("historical npm preflight tooling", () => {
     ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
     ["missing ancestry", `compare/${SHA}...${OTHER_SHA}`, {}],
   ])("rejects %s", (_name, route, response) => {
-    expect(() =>
-      verifyReleasePreflightToolingIdentity(proof({ [String(route)]: response })),
-    ).toThrow();
+    expect(() => verifyReleasePreflightToolingIdentity(proof({ [route]: response }))).toThrow();
   });
 
   it("fails closed when provenance cannot be read", () => {
@@ -524,4 +535,325 @@ describe("historical npm preflight tooling", () => {
   ])("rejects invalid producer or publisher identity %j", (override) => {
     expect(() => verifyReleasePreflightToolingIdentity({ ...proof(), ...override })).toThrow();
   });
+});
+
+describe.each([
+  {
+    label: "FRV-owned",
+    workflowPath: ".github/workflows/full-release-validation.yml",
+    fullRunId: RUN_ID,
+    fullRunAttempt: "1",
+  },
+  {
+    label: "independent producer after FRV rerun",
+    workflowPath: ".github/workflows/full-release-artifacts.yml",
+    fullRunId: PARENT_RUN_ID,
+    fullRunAttempt: "3",
+  },
+])("$label npm qualification", ({ workflowPath, fullRunId, fullRunAttempt }) => {
+  const producer = {
+    repository: "openclaw/openclaw",
+    workflowRef: `openclaw/openclaw/${workflowPath}@refs/heads/main`,
+    workflowSha: SHA,
+    runId: RUN_ID,
+    runAttempt: "1",
+    jobId: "999",
+    jobName: "Qualify release npm artifacts / Qualify prepared npm package",
+    producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
+  };
+  const manifest = {
+    version: 3,
+    releaseSha: OTHER_SHA,
+    tarballName: "openclaw.tgz",
+    tarballSha256: "c".repeat(64),
+    producer,
+    preparedBundle: {
+      schema: "openclaw.prepared-npm-bundle/v1",
+      source: { sha: OTHER_SHA },
+      package: { sha256: "c".repeat(64) },
+      producer: { repository: producer.repository, workflowSha: SHA },
+    },
+  };
+  const qualified = {
+    schema: "openclaw.qualified-npm-preflight/v1",
+    source: { sha: OTHER_SHA },
+    producer,
+    manifestSha256: "d".repeat(64),
+    artifact: {
+      id: "555",
+      name: `openclaw-npm-preflight-${OTHER_SHA}`,
+      digest: "e".repeat(64),
+      runId: RUN_ID,
+      runAttempt: "1",
+    },
+  };
+  const fullReleaseManifest = {
+    workflowName: "Full Release Validation",
+    runId: fullRunId,
+    runAttempt: fullRunAttempt,
+    workflowFullRef: "refs/heads/main",
+    targetSha: OTHER_SHA,
+    workflowSha: SHA,
+    publicationArtifacts: { npmPreflight: qualified },
+  };
+  const input = {
+    manifest,
+    repository: producer.repository,
+    workflowFullRef: "refs/heads/main",
+    workflowSha: SHA,
+    workflowPath,
+    runId: RUN_ID,
+    runAttempt: "1",
+    fullReleaseManifest,
+    fullReleaseRunId: fullRunId,
+    fullReleaseRunAttempt: fullRunAttempt,
+    manifestSha256: "d".repeat(64),
+  };
+  const resolutionInput = {
+    manifest: fullReleaseManifest,
+    repository: producer.repository,
+    runId: fullRunId,
+    runAttempt: fullRunAttempt,
+    sourceSha: OTHER_SHA,
+    toolingSha: SHA,
+  };
+  function reader(jobOverrides = {}, artifactOverrides = {}, runOverrides = {}) {
+    const job = {
+      id: 999,
+      name: producer.jobName,
+      run_id: Number(RUN_ID),
+      run_attempt: 1,
+      head_sha: SHA,
+      status: "completed",
+      conclusion: "success",
+      ...jobOverrides,
+    };
+    return (args: string[]) => {
+      const endpoint = args[1];
+      if (!endpoint) {
+        throw new Error("Expected GitHub API endpoint.");
+      }
+      if (endpoint.endsWith("/artifacts/555")) {
+        return JSON.stringify({
+          id: 555,
+          name: qualified.artifact.name,
+          digest: `sha256:${qualified.artifact.digest}`,
+          expired: false,
+          workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+          ...artifactOverrides,
+        });
+      }
+      if (endpoint.includes("/jobs?")) {
+        return JSON.stringify({ total_count: 1, jobs: [job] });
+      }
+      if (endpoint.endsWith("/attempts/1")) {
+        return JSON.stringify({
+          id: Number(RUN_ID),
+          run_attempt: 1,
+          head_sha: SHA,
+          path: workflowPath,
+          head_branch: "main",
+          event: "workflow_dispatch",
+          status: "completed",
+          conclusion: "success",
+          repository: { full_name: producer.repository },
+          head_repository: { full_name: producer.repository },
+          ...runOverrides,
+        });
+      }
+      throw new Error(`Unexpected proof request: ${endpoint}`);
+    };
+  }
+  it("requires the exact successful qualifier and immutable artifact from the selected FRV", () => {
+    const runGh = vi.fn(reader());
+    expect(resolveFullReleaseNpmPreflight({ ...resolutionInput, runGh })).toMatchObject({
+      producer: { runId: RUN_ID, runAttempt: "1" },
+      artifact: { id: 555 },
+    });
+    expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
+      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
+    );
+    expect(verifyNpmPreflightProducer({ ...input, runGh: reader() })).toMatchObject({
+      provenance: "immutable-manifest",
+    });
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, runGh: reader({ conclusion: "failure" }) }),
+    ).toThrow("completed producer job");
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, manifestSha256: "f".repeat(64), runGh: reader() }),
+    ).toThrow("exact full release qualification");
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, fullReleaseManifest: undefined, runGh: reader() }),
+    ).toThrow("qualified npm preflight");
+  });
+  it("rejects stale source or attempt and raw-only package evidence", () => {
+    expect(() =>
+      verifyNpmPreflightProducer({ ...input, manifest: { version: 1 }, runGh: reader() }),
+    ).toThrow("qualified version 3");
+    const expected = {
+      manifest: fullReleaseManifest,
+      runId: fullRunId,
+      runAttempt: fullRunAttempt,
+      sourceSha: OTHER_SHA,
+      toolingSha: SHA,
+    };
+    expect(() => validateFullReleaseNpmPreflight({ ...expected, sourceSha: SHA })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() => validateFullReleaseNpmPreflight({ ...expected, runAttempt: "2" })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() =>
+      validateNpmPreflightProducer({
+        ...input,
+        manifest: {
+          ...manifest,
+          producer: { ...producer, jobName: "Prepare publishable npm package" },
+        },
+      }),
+    ).toThrow("qualification");
+  });
+
+  it.each(["run", "attempt", "tooling", "workflow", "repository", "ref"])(
+    "rejects a descriptor detached from its %s binding",
+    (mismatch) => {
+      const changed = structuredClone(fullReleaseManifest);
+      const descriptor = changed.publicationArtifacts.npmPreflight;
+      if (mismatch === "run") {
+        descriptor.artifact.runId = "99999";
+      }
+      if (mismatch === "attempt") {
+        descriptor.artifact.runAttempt = "2";
+      }
+      if (mismatch === "tooling") {
+        descriptor.producer.workflowSha = OTHER_SHA;
+      }
+      if (mismatch === "workflow") {
+        descriptor.producer.workflowRef = producer.workflowRef.replace(
+          workflowPath,
+          ".github/workflows/ci.yml",
+        );
+      }
+      if (mismatch === "repository") {
+        descriptor.producer.repository = "other/repository";
+      }
+      if (mismatch === "ref") {
+        descriptor.producer.workflowRef = producer.workflowRef.replace(
+          "refs/heads/main",
+          "refs/heads/other",
+        );
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({ ...resolutionInput, manifest: changed, runGh: reader() }),
+      ).toThrow();
+    },
+  );
+
+  it.each(["run", "attempt", "tooling", "workflow", "repository", "unfinished", "artifact"])(
+    "rejects changed live %s evidence before downloading package bytes",
+    (mismatch) => {
+      const runOverrides: Record<string, unknown> = {};
+      const artifactOverrides: Record<string, unknown> = {};
+      if (mismatch === "run") {
+        runOverrides.id = 777;
+      }
+      if (mismatch === "attempt") {
+        runOverrides.run_attempt = 2;
+      }
+      if (mismatch === "tooling") {
+        runOverrides.head_sha = OTHER_SHA;
+      }
+      if (mismatch === "workflow") {
+        runOverrides.path = ".github/workflows/ci.yml";
+      }
+      if (mismatch === "repository") {
+        runOverrides.repository = { full_name: "other/repository" };
+      }
+      if (mismatch === "unfinished") {
+        Object.assign(runOverrides, { status: "in_progress", conclusion: null });
+      }
+      if (mismatch === "artifact") {
+        artifactOverrides.workflow_run = { id: 777, head_sha: SHA };
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({
+          ...resolutionInput,
+          runGh: reader({}, artifactOverrides, runOverrides),
+        }),
+      ).toThrow();
+    },
+  );
+
+  it.each(["valid", "archive changed", "manifest changed"])(
+    "downloads only the exact qualified archive (%s)",
+    async (outcome) => {
+      const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+      const tarballBytes = Buffer.from("prepared package bytes");
+      const zip = new JSZip();
+      zip.file("preflight-manifest.json", manifestBytes);
+      zip.file(manifest.tarballName, tarballBytes);
+      zip.file("dependency-evidence/dependency-evidence-manifest.json", "{}", {
+        createFolders: false,
+      });
+      const archive = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "STORE",
+        platform: "UNIX",
+      });
+      const selected = structuredClone(fullReleaseManifest);
+      selected.publicationArtifacts.npmPreflight.artifact.digest = createHash("sha256")
+        .update(archive)
+        .digest("hex");
+      selected.publicationArtifacts.npmPreflight.manifestSha256 =
+        outcome === "manifest changed"
+          ? "f".repeat(64)
+          : createHash("sha256").update(manifestBytes).digest("hex");
+      const metadata = {
+        id: 555,
+        name: qualified.artifact.name,
+        digest: `sha256:${selected.publicationArtifacts.npmPreflight.artifact.digest}`,
+        size_in_bytes: archive.length,
+        expired: false,
+        expires_at: "2099-10-01T00:00:00Z",
+        workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+      };
+      const delivered = Buffer.from(archive);
+      if (outcome === "archive changed") {
+        delivered.writeUInt8(delivered.readUInt8(0) ^ 1, 0);
+      }
+      const fetchImpl: typeof fetch = async (url) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        return requestUrl.endsWith("/zip")
+          ? new Response(new Uint8Array(delivered))
+          : Response.json(metadata);
+      };
+      const outputDir = join(tempDirs.make("qualified-npm-preflight-"), "qualified");
+      const download = downloadFullReleaseNpmPreflight({
+        ...resolutionInput,
+        manifest: selected,
+        outputDir,
+        token: "test-artifact-token",
+        runGh: reader({}, metadata),
+        fetchImpl,
+      });
+      if (outcome === "valid") {
+        await expect(download).resolves.toMatchObject({
+          producer: { runId: RUN_ID, runAttempt: "1" },
+        });
+        expect(readFileSync(join(outputDir, "preflight-manifest.json"))).toEqual(manifestBytes);
+        expect(readFileSync(join(outputDir, manifest.tarballName))).toEqual(tarballBytes);
+        expect(
+          readFileSync(
+            join(outputDir, "dependency-evidence/dependency-evidence-manifest.json"),
+            "utf8",
+          ),
+        ).toBe("{}");
+      } else {
+        await expect(download).rejects.toThrow(
+          outcome === "archive changed" ? "digest" : "qualified descriptor",
+        );
+        expect(existsSync(outputDir)).toBe(false);
+      }
+    },
+  );
 });

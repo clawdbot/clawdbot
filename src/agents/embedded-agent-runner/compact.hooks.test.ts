@@ -1180,6 +1180,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionKey: "agent:main:subagent:worker",
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+      cwd: join(TEST_WORKSPACE_DIR, "task-repo"),
     });
 
     expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
@@ -1188,6 +1189,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
       expect.objectContaining({
         promptMode: "minimal",
+        workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        runtimeCwd: join(TEST_WORKSPACE_DIR, "task-repo"),
         promptSurface: "subagent",
         nativeCommandGuidanceLines: ["Subagent compact command guidance."],
       }),
@@ -1662,6 +1665,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("uses the caller context token budget during runtime compaction", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      runId: "manual-compaction-operation",
       sessionKey: TEST_SESSION_KEY,
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
@@ -1673,6 +1677,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
     expectRecordFields(mockCallArg(guardSessionManagerMock, 0, 1), {
       contextWindowTokens: 64_000,
+      runId: "manual-compaction-operation",
     });
     expectRecordFields(mockCallArg(createPreparedEmbeddedAgentSettingsManagerMock), {
       contextTokenBudget: 64_000,

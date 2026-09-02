@@ -40,7 +40,8 @@
     "defaults": {
       "heartbeat": {
         "every": "30m"
-      }
+      },
+      "userTimezone": "UTC"
     },
     "entries": {
       "main": {
@@ -143,6 +144,10 @@
     "openclaw_current_sender": {
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+    },
+    "openclaw_temporal_context": {
+      "kind": "application",
+      "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC\nFor the exact current time, use `session_status`."
     }
   },
   "approvalPolicy": "never",

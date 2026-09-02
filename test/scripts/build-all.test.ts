@@ -1,5 +1,6 @@
 // Build All tests cover build all script behavior.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,7 @@ import {
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
+import { runNodeMain } from "../../scripts/run-node.mts";
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -789,6 +791,99 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
     ]);
+  });
+
+  it.each([undefined, "0", "1"])(
+    "preserves source-run declaration choice %s through the canonical runtime build",
+    async (skipDts) => {
+      const cwd = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-rebuild-")),
+      );
+      const childEnv = {
+        OPENCLAW_BUILD_PRIVATE_QA: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts,
+      };
+      const spawn = vi.fn((_command: string, _args: string[], _options: SpawnOptions) => {
+        const child = new EventEmitter();
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      });
+      const postbuild = vi.fn();
+      try {
+        expect(
+          await runNodeMain({
+            cwd,
+            env: childEnv,
+            args: ["status"],
+            spawn,
+            spawnSync: () => ({ status: 1 }),
+            stderr: { write: () => true },
+            runRuntimePostBuild: postbuild,
+          }),
+        ).toBe(0);
+        expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
+          ["--import", "tsx", "scripts/build-all.mts", "qaRuntime"],
+          ["openclaw.mjs", "status"],
+        ]);
+        const env = spawn.mock.calls[0]![2].env!;
+        const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+        const result = await runBuildAllSteps("qaRuntime", {
+          env,
+          logger: { error: vi.fn(), warn: vi.fn() },
+          resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+          runStep(invocation) {
+            invocations.push(invocation);
+            return { status: 0 };
+          },
+        });
+        expect(result.exitCode).toBe(0);
+        const compiler = invocations.find((call) =>
+          call.args.includes("scripts/tsdown-build.mts"),
+        )!;
+        expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
+        expect(
+          invocations.every((call) => call.options.env.OPENCLAW_BUILD_PRIVATE_QA === "1"),
+        ).toBe(true);
+        expect(result.timings.map(({ label }) => label)).toEqual([
+          "plugins:assets:build",
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "plugins:assets:copy",
+          "runtime-postbuild",
+          "build-stamp",
+          "runtime-postbuild-stamp",
+        ]);
+        expect(postbuild).not.toHaveBeenCalled();
+        expect(fs.existsSync(path.join(cwd, ".artifacts/run-node-build.lock"))).toBe(false);
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"],
+    ["runtime-postbuild", "scripts/runtime-postbuild.mjs"],
+  ])("does not stamp qaRuntime after %s fails", async (label, script) => {
+    const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+    const result = await runBuildAllSteps("qaRuntime", {
+      env: {},
+      logger: { error: vi.fn(), warn: vi.fn() },
+      resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+      runStep(invocation) {
+        invocations.push(invocation);
+        return { status: invocation.args.includes(script) ? 23 : 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(23);
+    expect(result.timings.at(-1)).toMatchObject({ label, status: "failed" });
+    expect(invocations.at(-1)?.args).toContain(script);
+    for (const invocation of invocations) {
+      expect(invocation.args).not.toContain("scripts/build-stamp.mts");
+      expect(invocation.args).not.toContain("scripts/runtime-postbuild-stamp.mts");
+    }
   });
 
   it("uses the full runtime artifact surface without declaration work when DTS is disabled", () => {

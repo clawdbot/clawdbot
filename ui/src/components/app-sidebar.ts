@@ -193,13 +193,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
     this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows);
-    const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
     const identityIds =
       this.sidebarMenus.agentMenuPosition === null
-        ? [chip.activeId]
-        : chip.agents.map((agent) => agent.id);
+        ? [this.expandedAgentId()]
+        : this.activeChipAgent().agents.map((agent) => agent.id);
     this.ensureAgentIdentities(identityIds);
   }
 

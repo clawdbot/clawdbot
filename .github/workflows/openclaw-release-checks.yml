@@ -242,10 +242,10 @@ jobs:
             refs/heads/*) normalized_context_ref="${normalized_context_ref#refs/heads/}" ;;
             refs/tags/*) normalized_context_ref="${normalized_context_ref#refs/tags/}" ;;
           esac
-          if [[ "$normalized_context_ref" =~ ^(release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*|extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
+          if [[ "$normalized_context_ref" =~ ^(release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-[1-9][0-9]*)?|extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
             context_kind=branch
             fetch_ref="refs/heads/${normalized_context_ref}"
-          elif [[ "$normalized_context_ref" =~ ^v[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?$ ]]; then
+          elif [[ "$normalized_context_ref" =~ ^v[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
             context_kind=tag
             fetch_ref="refs/tags/${normalized_context_ref}"
           else
@@ -1255,6 +1255,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/install-smoke-reusable.yml
     with:
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true

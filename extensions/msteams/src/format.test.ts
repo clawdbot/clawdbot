@@ -1,3 +1,4 @@
+import MarkdownIt from "markdown-it";
 import { describe, expect, it } from "vitest";
 import { formatMSTeamsMarkdown } from "./format.js";
 
@@ -145,6 +146,17 @@ describe("formatMSTeamsMarkdown", () => {
       expect(formatMSTeamsMarkdown(fixture.before, "off")).toBe(fixture.after);
     });
   }
+
+  it.each([
+    ["`foo `", "<code>foo </code>"],
+    ["` `", "<code> </code>"],
+    ["before `  foo  ` after", "before <code> foo </code> after"],
+  ])("preserves rendered inline-code whitespace in %j", (markdown, html) => {
+    const parser = new MarkdownIt();
+    // Code-span padding is syntax; compare parsed content without trimming literal spaces.
+    expect(parser.renderInline(markdown)).toBe(html);
+    expect(parser.renderInline(formatMSTeamsMarkdown(markdown, "off"))).toBe(html);
+  });
 
   it("keeps raw tables when table conversion is disabled", () => {
     const table = ["| Name | State |", "|---|---|", "| deploy | ready |"].join("\n");

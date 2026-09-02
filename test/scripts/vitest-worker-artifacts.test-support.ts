@@ -278,7 +278,8 @@ export function workerProbe(
           expect(snapshot.prepare('SELECT value FROM probe').get()).toEqual({value:'current source'});
           snapshot.close();
           const args = cp.execFile.mock.calls[0][1];
-          const generation = runtimeProcessEntrypoints.sqliteReadOnly.currentModuleUrl;
+          // The executable identifies the generation; its descriptor may live in a shared chunk.
+          const generation = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly).href;
           const sourceMode = ${mode === "auto" ? "generation.endsWith('.ts')" : mode === "source"};
           await expect(runSqliteTranscriptArchivePublishWorker([])).resolves.toEqual([]);
           const [archiveUrl] = Worker.mock.calls.at(-1);
@@ -292,7 +293,7 @@ export function workerProbe(
           }
           expect(args.includes('tsx')).toBe(sourceMode);
           expect(args[sourceMode ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
-          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:vectorKnnProcessEntrypoint.currentModuleUrl})+'\\n');
+          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {

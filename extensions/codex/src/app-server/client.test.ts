@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SemVer } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -14,6 +15,7 @@ const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
+  const newerMinorVersion = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
 
   function startInitialize() {
     const harness = createClientHarness();
@@ -500,9 +502,9 @@ describe("CodexAppServerClient", () => {
 
   it.each([
     ["0.149.0", 0],
-    ["0.152.0-alpha.4", 1],
-    ["0.152.0", 1],
-    ["1.0.0", 1],
+    [`${newerMinorVersion}-alpha.4`, 1],
+    [newerMinorVersion, 1],
+    [new SemVer(CODEX_APP_SERVER_VERSION).inc("major").version, 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, initializing, outbound } = startInitialize();

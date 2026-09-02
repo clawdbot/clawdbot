@@ -105,7 +105,7 @@ cleanup_registry() {
 trap cleanup_registry EXIT
 rm -f "$registry_port_file"
 OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version" \
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}" \
   node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_port_file" \
     openclaw \

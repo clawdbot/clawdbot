@@ -51,7 +51,12 @@ export async function startGatewayTailscaleExposure(params: {
 
   let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
   try {
-    claim = await claimTailscaleRoute(params.tailscaleMode, backendTarget);
+    claim = await claimTailscaleRoute(
+      params.tailscaleMode,
+      backendTarget,
+      params.port,
+      params.logTailscale.info,
+    );
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch(() => null);

@@ -75,6 +75,7 @@ type OfficialExternalCatalogChannel = PluginPackageChannel & {
 /** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
   legacyPluginIds?: readonly string[];
+  legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];
   plugin?: {
     id?: string;

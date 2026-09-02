@@ -143,8 +143,9 @@ a workflow fix that the existing parent run cannot consume.
   SHA gate unless the operator explicitly waives it. Run independent validation
   lanes in parallel where safe, but do not start changelog or package
   finalization until the Code SHA is green. After the changelog-only Release SHA
-  exists, run npm preflight and the package/install/update acceptance roster
-  against its exact bytes. If a product defect appears, return to a new Code
+  exists, its Full Release Validation run prepares and qualifies the final npm
+  package and Docker artifacts while reusing product evidence. Run the
+  package/install/update acceptance roster against those exact bytes. If a product defect appears, return to a new Code
   SHA; if a release-tooling or publication child fails, repair/resume that child
   without changing the candidate. After a published beta needs a code fix,
   increment the beta number and repeat. Defer its forward-port until after
@@ -266,12 +267,15 @@ on pinned current `main` as the exact command and validation contract.
    `### Fixes`. Carry the full current-main Docker
    release-channel unit: workflow, promoter, policy, shared classifier, tests,
    and workflow validation. Run focused checks and freeze the untagged tip SHA.
-2. From that branch, run npm preflight with the SHA as `tag`,
-   `preflight_only=true`, and `npm_dist_tag=extended-stable`; save the run ID.
+2. Keep the frozen SHA and canonical branch as the validation target; Full
+   Release Validation derives `npm_dist_tag=extended-stable` from the version.
 3. Run complete Full Release Validation against the canonical branch with
    `release_profile=stable`; save its run ID and successful `run_attempt`.
    Prefer the trusted main-pinned harness, which attests the immutable target
-   SHA in its v3 manifest. Any candidate branch change invalidates both gates.
+   SHA in its manifest. Current manifests include qualified npm and prepared
+   Docker artifacts; use that same run ID for npm preflight evidence. Historical
+   manifests without them still need a separate npm preflight. Any candidate
+   branch change invalidates both gates.
 4. Require the tip still equals the frozen SHA, then create signed `vYYYY.M.P`.
    Never move or delete a final tag; later source changes need a new patch.
 5. Require the saved validation run to be complete and successful, bind its
@@ -898,10 +902,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The npm workflow and the release-ops mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
-- Real npm publish requires a prior successful npm preflight run id plus the
-  successful Full Release Validation run id and exact run attempt for the same
-  tag/SHA so the publish job promotes the prepared tarball instead of rebuilding
-  it and attaches the correct release evidence.
+- Real npm publish requires qualified npm artifacts and successful Full Release
+  Validation for the same tag/SHA. Current validation manifests own both: pass
+  the same run ID as `preflight_run_id` and `full_release_validation_run_id`,
+  with its exact successful attempt. Historical manifests without publication
+  artifacts still require a separate successful npm preflight. Publication
+  promotes the verified tarball without rebuilding it.
 - Real release-ops mac publish requires a prior successful release-ops mac
   preflight run id so the publish job promotes the prepared artifacts instead of
   rebuilding or renotarizing them again.
@@ -1059,9 +1065,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     returns to step 6.
 11. Dispatch Full Release Validation for the Release SHA with evidence reuse
     enabled. It must select `changelog-only-release-v1`, reuse the green Code SHA
-    product matrix, and run no product lanes again.
-12. Run npm preflight and release-note/package/install/update acceptance against
-    the exact Release SHA and prepared tarball. A package or install failure that
+    product matrix, and prepare and qualify fresh publication artifacts for the
+    Release SHA without rerunning product lanes. Regular final artifacts include
+    SDK reports for both `beta` and `latest`; publication selects its report.
+12. Wait for that run's npm qualification and Docker preparation, then run
+    release-note/package/install/update acceptance against the exact Release
+    SHA and prepared tarball. A package or install failure that
     exposes a product defect returns to step 6; a tooling failure keeps the
     Release SHA unchanged. Review the preflight job's Plugin SDK API diff. If it
     reports changes, record the 8-character acknowledgement digest printed by
@@ -1075,9 +1084,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 16. Do not create or publish the matching GitHub release page yet. The real
     publish workflow creates or undrafts it only after postpublish verification
     and release evidence upload pass.
-17. Run `pnpm release:candidate -- --tag <tag> --full-release-run
-<release-sha-validation-run-id> --npm-preflight-run <preflight-run-id>
---plugin-sdk-api-acknowledgement <reviewed-8-character-digest> --skip-dispatch`
+17. Run `pnpm release:candidate -- --tag <tag> --full-release-run <release-sha-validation-run-id> --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> --skip-dispatch`
     when the preflight reported Plugin SDK API changes. Omit the acknowledgement
     option when it reported none. This consumes the existing reused full
     evidence and exact Release SHA preflight instead of dispatching either

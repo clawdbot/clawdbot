@@ -403,6 +403,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     private struct OpenClawMetadata: Codable {
         let kind: String?
         let id: String?
+        let runId: String?
         let idempotencyKey: String?
         let truncated: Bool?
         let tokensBefore: Double?
@@ -411,6 +412,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
     public var id: UUID = .init()
     public var transcriptMessageID: String?
+    public let transcriptRunID: String?
     public var isTruncated = false
     public let role: String
     public let content: [OpenClawChatMessageContent]
@@ -455,6 +457,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         content: [OpenClawChatMessageContent],
         timestamp: Double?,
         transcriptMessageID: String? = nil,
+        transcriptRunID: String? = nil,
         isTruncated: Bool = false,
         idempotencyKey: String? = nil,
         toolCallId: String? = nil,
@@ -469,6 +472,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     {
         self.id = id
         self.transcriptMessageID = transcriptMessageID
+        self.transcriptRunID = transcriptRunID
         self.isTruncated = isTruncated
         self.role = role
         self.content = content
@@ -510,6 +514,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
         self.role = decodedRole
         self.transcriptMessageID = decodedOpenClaw?.id
+        self.transcriptRunID = decodedOpenClaw?.runId
         self.timestamp = decodedTimestamp
         self.idempotencyKey = decodedIdempotencyKey
         self.toolCallId = decodedToolCallId
@@ -622,11 +627,14 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
-        if self.transcriptMessageID != nil || self.isTruncated || self.historyMarker != nil {
+        if self.transcriptMessageID != nil || self.transcriptRunID != nil || self.isTruncated || self
+            .historyMarker != nil
+        {
             try container.encode(
                 OpenClawMetadata(
                     kind: self.historyMarker?.kind,
                     id: self.historyMarker?.id ?? self.transcriptMessageID,
+                    runId: self.transcriptRunID,
                     idempotencyKey: nil,
                     truncated: self.isTruncated ? true : nil,
                     tokensBefore: self.historyMarker?.tokensBefore,
@@ -669,12 +677,18 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
 }
 
 public struct OpenClawChatHistoryPayload: Codable, Sendable {
+    public struct InputConsumption: Codable, Sendable {
+        public let runId: String
+        public let consumedByEventId: String
+    }
+
     public let sessionKey: String
     public let sessionId: String?
     public let messages: [AnyCodable]?
     public let thinkingLevel: String?
     public let sessionInfo: OpenClawChatSessionInfo?
     public let inFlightRun: OpenClawChatInFlightRun?
+    public let inputConsumptions: [InputConsumption]?
 
     public init(
         sessionKey: String,
@@ -682,7 +696,8 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         messages: [AnyCodable]?,
         thinkingLevel: String?,
         sessionInfo: OpenClawChatSessionInfo? = nil,
-        inFlightRun: OpenClawChatInFlightRun? = nil)
+        inFlightRun: OpenClawChatInFlightRun? = nil,
+        inputConsumptions: [InputConsumption]? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -690,6 +705,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.thinkingLevel = thinkingLevel
         self.sessionInfo = sessionInfo
         self.inFlightRun = inFlightRun
+        self.inputConsumptions = inputConsumptions
     }
 }
 

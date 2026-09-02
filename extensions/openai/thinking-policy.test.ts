@@ -14,6 +14,18 @@ function levelIds(params: {
 }
 
 describe("OpenAI thinking route provenance", () => {
+  it.each([
+    { efforts: ["low", "high", "ultra"], expected: ["off", "low", "high", "ultra"] },
+    { efforts: ["low", "high", "max"], expected: ["off", "low", "high", "max"] },
+    { efforts: [], expected: ["off"] },
+  ])("uses native account efforts without a host transport: $efforts", ({ efforts, expected }) => {
+    expect(
+      resolveUnifiedOpenAIThinkingProfile("account-model", "codex", {
+        supportedReasoningEfforts: efforts,
+      }).levels.map((level) => level.id),
+    ).toEqual(expected);
+  });
+
   it("keeps native fallback capabilities for a direct OpenAI route", () => {
     expect(
       levelIds({

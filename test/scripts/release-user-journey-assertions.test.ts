@@ -269,7 +269,7 @@ describe("release user journey assertions", () => {
     try {
       writeJson(path.join(home, ".openclaw", "openclaw.json"), {
         plugins: {
-          entries: {},
+          entries: { [pluginId]: { enabled: false } },
           allow: [],
           deny: [],
         },
@@ -297,7 +297,7 @@ describe("release user journey assertions", () => {
     try {
       writeJson(path.join(home, ".openclaw", "openclaw.json"), {
         plugins: {
-          entries: {},
+          entries: { "journey-plugin-a": { enabled: false } },
           allow: [],
           deny: [],
         },

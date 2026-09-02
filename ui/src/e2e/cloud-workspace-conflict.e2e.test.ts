@@ -336,6 +336,7 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
         expect(await alert.textContent()).not.toContain("stale terminal worker failure");
         await capture(page, `05-${failedState}-collapsed-error.png`);
         const summary = alert.locator("summary");
+        const copy = alert.getByRole("button", { name: "Copy error", exact: true });
         const diagnostic = alert.locator("pre");
         const expected = `${failedState === "request" ? "" : "Runner failed: "}${workerFailureDiagnostic}`;
         expect(await summary.count()).toBe(1);
@@ -369,6 +370,8 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
           expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
           expect(bounds.scrollHeight).toBeGreaterThan(bounds.clientHeight);
           await page.keyboard.press("Tab");
+          expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+          await page.keyboard.press("Tab");
           expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
           await page.keyboard.press("PageDown");
           await expect.poll(() => diagnostic.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
@@ -382,7 +385,6 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
               return selection?.toString();
             }),
           ).toBe(expected);
-          const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           await copy.focus();
           await page.keyboard.press("Enter");
           await expect

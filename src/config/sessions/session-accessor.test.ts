@@ -83,7 +83,7 @@ import {
 } from "./session-accessor.js";
 import {
   readSessionEntryCount,
-  readSessionEntryKeys,
+  iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import * as sessionEntryStore from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -323,7 +323,7 @@ describe("session accessor seam", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
 
     expect(readSessionEntryCount(database)).toBe(1);
-    expect(readSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(["agent:main:logical-entry"]);
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(2);
   });
 
@@ -1465,10 +1465,10 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
+          shouldAppend: () => {
             // Simulate a concurrent reset rotating the session id between target
-            // resolution and the transcript append.
-            await replaceSessionEntry(
+            // resolution and the transcript append. Sync writers bypass the process queue.
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-rotate-session", updatedAt: Date.now() },
             );
@@ -1512,8 +1512,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath: expectedStorePath },
               { sessionId: "new-default-rotate", updatedAt: Date.now() },
             );
@@ -1637,8 +1637,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "durable-fallback-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-durable-fallback", updatedAt: Date.now() },
             );

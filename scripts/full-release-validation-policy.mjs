@@ -3,6 +3,7 @@ import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 // Full profiles carry over 500 job records. Keep complete evidence under one
 // shared wire budget instead of letting producers exceed smaller reader limits.
@@ -278,7 +279,7 @@ function booleanValue(value) {
 }
 
 // Omission retains the historical full inventory. Reduced coverage is an
-// explicit release decision, bound to the exact beta version and sealed plan.
+// explicit release decision, bound to the exact version and sealed plan.
 export function normalizeReleaseCoveragePolicy({
   coveragePolicy,
   releaseProfile,
@@ -290,16 +291,26 @@ export function normalizeReleaseCoveragePolicy({
   if (coveragePolicy === undefined) {
     return undefined;
   }
+  const target = parseReleaseVersion(stringValue(targetVersion));
+  const beta =
+    coveragePolicy === "npm-beta-v1" &&
+    releaseProfile === "beta" &&
+    (runReleaseSoak === false || runReleaseSoak === "false") &&
+    target?.channel === "beta";
+  const stable =
+    coveragePolicy === "npm-stable-v1" &&
+    releaseProfile === "stable" &&
+    (runReleaseSoak === true || runReleaseSoak === "true") &&
+    target !== null &&
+    classifyReleaseTrain(target) === "stable";
   if (
-    coveragePolicy !== "npm-beta-v1" ||
-    releaseProfile !== "beta" ||
+    (!beta && !stable) ||
     rerunGroup !== "all" ||
-    (runReleaseSoak !== false && runReleaseSoak !== "false") ||
-    !/^[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*-beta\.[1-9][0-9]*$/u.test(targetVersion ?? "") ||
+    target?.version !== targetVersion ||
     (candidateVersion !== undefined && candidateVersion !== targetVersion)
   ) {
     throw new Error(
-      "release coverage policy requires the exact beta version, all group, and no soak",
+      "release coverage policy requires an exact beta without soak or regular stable with soak, the matching profile, and all group",
     );
   }
   return coveragePolicy;
@@ -588,10 +599,15 @@ export function validateReleaseChildDispatchBinding({
     const scopes = [...String(log).matchAll(/\bCI_RELEASE_SCOPE: ([^\s]+)/gu)].map(
       (match) => match[1],
     );
-    const expectedScope = coveragePolicy === "npm-beta-v1" ? "npm-beta" : "full";
+    const expectedScope =
+      coveragePolicy === "npm-beta-v1"
+        ? "npm-beta"
+        : coveragePolicy === "npm-stable-v1"
+          ? "npm-stable"
+          : "full";
     if (
       scopes.some((scope) => scope !== expectedScope) ||
-      (coveragePolicy === "npm-beta-v1" && scopes.length === 0)
+      (coveragePolicy !== undefined && scopes.length === 0)
     ) {
       throw new Error("release normal CI dispatch scope differs from its coverage policy");
     }
@@ -722,7 +738,8 @@ export function buildReleaseExecutionPlan(input) {
     },
     {
       name: "Verify Docker runtime image assets",
-      required: !reused && rerunGroup === "all",
+      required:
+        !reused && rerunGroup === "all" && stringValue(input.targetVersion).includes("-alpha."),
       result: stringValue(input.dockerPreflightResult, "skipped"),
     },
     {

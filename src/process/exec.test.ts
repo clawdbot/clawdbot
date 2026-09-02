@@ -432,33 +432,48 @@ describe("runCommandWithTimeout", () => {
     expect(result.termination).toBe("signal");
   });
 
-  it("keeps truncated UTF-8 output on code point boundaries", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('a😀z')"],
-      {
-        maxOutputBytes: 3,
-        timeoutMs: 3_000,
-      },
-    );
+  it.each([
+    ["tail", Buffer.from("a😀z"), 3, "z", 5],
+    ["head", Buffer.from("abcdef"), 4, "abcd", 2],
+    ["head", Buffer.from("a¢z"), 2, "a", 3],
+    ["head", Buffer.from("a€z"), 3, "a", 4],
+    ["head", Buffer.from("a😀z"), 4, "a", 5],
+    ["head", Buffer.from("\ufeffa😀z"), 6, "\ufeffa", 5],
+    ["head", Buffer.from([0x61, 0xff, 0x62, 0xe2, 0x82, 0xac, 0x7a]), 5, "a�b�", 2],
+  ] as const)(
+    "preserves truncated UTF-8 %s output (%#)",
+    async (outputCapture, input, maxOutputBytes, expected, truncatedBytes) => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+        {
+          input,
+          maxOutputBytes,
+          outputCapture,
+          timeoutMs: 3_000,
+        },
+      );
 
-    expect(result.stdout).toBe("z");
-    expect(result.stdout).not.toContain("�");
-    expect(result.stdoutTruncatedBytes).toBe(5);
-  });
+      expect(result.stdout).toBe(expected);
+      expect(result.stdoutTruncatedBytes).toBe(truncatedBytes);
+    },
+  );
 
-  it("discards an entirely partial UTF-8 head", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('😀')"],
-      {
-        maxOutputBytes: 3,
-        outputCapture: "head",
-        timeoutMs: 3_000,
-      },
-    );
+  it.each([1, 2, 3])(
+    "discards an entirely partial UTF-8 head at %i bytes",
+    async (maxOutputBytes) => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdout.write('😀')"],
+        {
+          maxOutputBytes,
+          outputCapture: "head",
+          timeoutMs: 3_000,
+        },
+      );
 
-    expect(result.stdout).toBe("");
-    expect(result.stdoutTruncatedBytes).toBe(4);
-  });
+      expect(result.stdout).toBe("");
+      expect(result.stdoutTruncatedBytes).toBe(4);
+    },
+  );
 
   it("keeps argv values out of transport errors", async () => {
     const privateArg = "private-command-argument";

@@ -156,7 +156,7 @@ async function navigateToClaudeCatalog(page: Page) {
 }
 
 async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
-  const row = page.locator('[data-session-key^="catalog:"]').filter({
+  const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
@@ -423,6 +423,10 @@ suite.define(() => {
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "claude-terminal-ready.png") });
+      }
     });
   });
 

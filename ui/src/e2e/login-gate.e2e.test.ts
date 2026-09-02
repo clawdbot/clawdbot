@@ -4,7 +4,10 @@ import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -19,9 +22,16 @@ beforeEach(() => {
 });
 
 async function renderLoginGate(page: Page): Promise<void> {
+  const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
-
+  await gateway.waitForRequest("connect");
+  await gateway.rejectDeferred("connect", {
+    code: "INVALID_REQUEST",
+    message: "token missing",
+    details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+  });
+  await page.locator(".login-gate").waitFor();
   await mountLoginGate(page);
 }
 
@@ -339,6 +349,39 @@ suite.define(() => {
       expectedTitle: "Auth required",
     },
     {
+      name: "missing identity header",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED },
+      },
+      expectedKind: "trusted-proxy",
+      expectedTitle: "Proxy authentication required",
+    },
+    {
+      name: "proxy account rejection",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: {
+          code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+          authReason: "trusted_proxy_user_not_allowed",
+        },
+      },
+      expectedKind: "trusted-proxy",
+      expectedTitle: "Proxy authentication required",
+    },
+    {
+      name: "disallowed browser origin",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "origin not allowed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+      },
+      expectedKind: "origin-not-allowed",
+      expectedTitle: "Browser origin not allowed",
+    },
+    {
       name: "pairing approval",
       error: {
         code: "NOT_PAIRED",
@@ -387,14 +430,19 @@ suite.define(() => {
       recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const gateway = await installMockGateway(page, {
+      methodResponses: { connect: { __mockError: fixture.error } },
+    });
 
     try {
       await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
-      await gateway.rejectDeferred("connect", fixture.error);
 
       await page.locator(".login-gate__failure").waitFor();
+      // Retryable guidance must survive a real reconnect, including time spent capturing proof.
+      if (fixture.error.code === "UNAVAILABLE") {
+        await gateway.waitForRequest("connect", { after: 1 });
+      }
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
         fullPage: true,
@@ -405,6 +453,12 @@ suite.define(() => {
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
         fixture.expectedTitle,
       );
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: `login-guidance-${fixture.name}`,
+      });
+      throw error;
     } finally {
       await closeContext(context);
     }

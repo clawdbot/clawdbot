@@ -1,4 +1,5 @@
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { listCronJobsFromGateway } from "../cli/cron-cli/list-jobs.js";
 import {
   callGatewayFromCli,
   isImplicitLocalGatewayTargetFromCli,
@@ -6,7 +7,6 @@ import {
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { CronJob } from "../cron/types.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -73,16 +73,6 @@ function buildScheduledArgv(
     ...(options.push ? ["--push"] : []),
     ...(redactSecrets ? ["--exclude-secrets"] : []),
   ];
-}
-
-async function findScheduledBackup(options: GatewayRpcOpts): Promise<CronJob | undefined> {
-  const response = (await callGatewayFromCli("cron.list", options, {
-    includeDisabled: true,
-    query: BACKUP_CRON_JOB_NAME,
-    limit: 200,
-    offset: 0,
-  })) as { jobs?: CronJob[] };
-  return response.jobs?.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
 }
 
 async function assertLocalGatewayScheduleTarget(options: GatewayRpcOpts): Promise<void> {
@@ -153,7 +143,8 @@ export async function backupDisableCommand(
   options: GatewayRpcOpts,
 ): Promise<{ removed: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const existing = await findScheduledBackup(options);
+  const { jobs } = await listCronJobsFromGateway(options, { includeDisabled: true });
+  const existing = jobs.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
   if (!existing) {
     runtime.log("Scheduled Git backups are already disabled.");
     return { removed: false };

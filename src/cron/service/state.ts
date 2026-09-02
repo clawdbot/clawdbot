@@ -189,6 +189,10 @@ export type CronServiceDeps = {
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
+  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
+  resolveHeartbeatTimeoutMs?: (
+    opts: HeartbeatWakeRequest & { agentId: string },
+  ) => number | undefined;
   runSkillCollectionReview?: (params: {
     agentId: string;
     abortSignal?: AbortSignal;
@@ -292,7 +296,8 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
-    onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+    /** Persists the transport-owned terminal fact before Gateway work admission releases. */
+    onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
@@ -464,6 +469,8 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  /** Selected revisions captured from a validated caller session, never public input. */
+  skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
   /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */

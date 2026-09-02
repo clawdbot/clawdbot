@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+live_docker_stage_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$live_docker_stage_dir/frozen-target-compat.sh"
+unset live_docker_stage_dir
+
 openclaw_live_stage_mounted_auth() {
   if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" = "1" ]; then
     return 0
@@ -98,6 +102,139 @@ openclaw_live_prepare_cli_backend() {
     echo "ERROR: CLI backend executable was not provisioned: $command_path (package=${package:-none})." >&2
     return 127
   fi
+}
+
+openclaw_live_prepare_cli_backend_docker_packages() {
+  local requested_providers="${1:-}"
+  local requested_models="${2:-}"
+  local metadata_json
+
+  metadata_json="$(
+    OPENCLAW_REQUESTED_PROVIDERS="$requested_providers" \
+      OPENCLAW_REQUESTED_MODELS="$requested_models" \
+      node --import tsx --input-type=module <<'NODE'
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+
+const modulePath = pathToFileURL(
+  path.resolve("scripts/print-cli-backend-live-metadata.ts"),
+).href;
+const specParserPath = pathToFileURL(path.resolve("src/infra/npm-registry-spec.ts")).href;
+const metadata = await import(modulePath);
+const specParser = await import(specParserPath);
+if (typeof specParser.parseRegistryNpmSpec !== "function") {
+  throw new Error("staged target is missing parseRegistryNpmSpec");
+}
+let result;
+if (!Object.prototype.hasOwnProperty.call(metadata, "resolveCliBackendDockerPackages")) {
+  result = { kind: "missing-export", packages: [] };
+} else {
+  if (typeof metadata.resolveCliBackendDockerPackages !== "function") {
+    throw new Error("resolveCliBackendDockerPackages export must be a function");
+  }
+  const splitCsv = (value) => (value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+  const packages = await metadata.resolveCliBackendDockerPackages(
+    splitCsv(process.env.OPENCLAW_REQUESTED_PROVIDERS),
+    splitCsv(process.env.OPENCLAW_REQUESTED_MODELS),
+  );
+  if (!Array.isArray(packages)) {
+    throw new Error("resolveCliBackendDockerPackages must return an array");
+  }
+  const seen = new Set();
+  for (const npmPackage of packages) {
+    if (typeof npmPackage !== "string" || !specParser.parseRegistryNpmSpec(npmPackage)) {
+      throw new Error(`invalid Docker CLI package: ${JSON.stringify(npmPackage)}`);
+    }
+    if (seen.has(npmPackage)) {
+      throw new Error(`duplicate Docker CLI package: ${npmPackage}`);
+    }
+    seen.add(npmPackage);
+  }
+  result = { kind: "supported", packages };
+}
+process.stdout.write(JSON.stringify(result));
+NODE
+  )" || return $?
+
+  local capability
+  capability="$(
+    printf '%s' "$metadata_json" | node -e '
+      const fs = require("node:fs");
+      const value = JSON.parse(fs.readFileSync(0, "utf8"));
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !["missing-export", "supported"].includes(value.kind) ||
+        !Array.isArray(value.packages)
+      ) {
+        throw new Error("invalid staged Docker package capability output");
+      }
+      process.stdout.write(value.kind);
+    '
+  )" || return $?
+
+  if [[ "$capability" == "missing-export" ]]; then
+    local authorization_status
+    if openclaw_frozen_target_omissions_authorized; then
+      echo "Staged target does not export resolveCliBackendDockerPackages; preserving historical no-package-setup behavior."
+      return 0
+    else
+      authorization_status=$?
+    fi
+    if ((authorization_status == 2)); then
+      return "$authorization_status"
+    fi
+    echo "staged target does not export resolveCliBackendDockerPackages and frozen-target omissions are not authorized" >&2
+    return 1
+  fi
+
+  local packages
+  packages="$(
+    printf '%s' "$metadata_json" | node -e '
+      const fs = require("node:fs");
+      const value = JSON.parse(fs.readFileSync(0, "utf8"));
+      process.stdout.write(value.packages.join("\n"));
+    '
+  )" || return $?
+  while IFS= read -r npm_package; do
+    [[ -n "$npm_package" ]] || continue
+    openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$npm_package" ||
+      return $?
+  done <<<"$packages"
+}
+
+openclaw_live_resolve_unique_staged_file() {
+  local root_dir="${1:?staged root required}"
+  local basename="${2:?staged file basename required}"
+  if [[ ! -d "$root_dir" ]]; then
+    echo "no staged file matched basename: $basename" >&2
+    return 1
+  fi
+  local matches
+  matches="$(
+    find "$root_dir" \
+      \( -path "$root_dir/.git" -o -path "$root_dir/dist" -o -path "$root_dir/node_modules" \) \
+      -prune -o -type f -name "$basename" -print |
+      LC_ALL=C sort
+  )" || return $?
+
+  local count=0
+  local match=""
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    count=$((count + 1))
+    match="$candidate"
+  done <<<"$matches"
+
+  if ((count == 0)); then
+    echo "no staged file matched basename: $basename" >&2
+    return 1
+  fi
+  if ((count != 1)); then
+    echo "multiple staged files matched basename: $basename" >&2
+    return 1
+  fi
+  printf '%s\n' "${match#"$root_dir"/}"
 }
 
 openclaw_live_run_staged_script() {

@@ -156,8 +156,9 @@ function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
 
 function createStartedThreadHarness(
   requestImpl?: Parameters<typeof createSharedStartedThreadHarness>[0],
+  options?: Parameters<typeof createSharedStartedThreadHarness>[1],
 ) {
-  const harness = createSharedStartedThreadHarness(requestImpl);
+  const harness = createSharedStartedThreadHarness(requestImpl, options);
   return {
     ...harness,
     async completeTurn(status: "completed" | "failed" = "completed", threadId = "thread-1") {
@@ -731,15 +732,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
       })),
     });
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/resume") {
-        return threadStartResult("thread-bootstrapped");
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-fresh");
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-bootstrapped");
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-fresh");
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-bootstrapped"] },
+    );
     const params = createParams(sessionFile, workspaceDir);
     params.agentDir = agentDir;
     params.contextEngine = contextEngine;
@@ -757,7 +761,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -1362,22 +1368,25 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
-    const harness = createStartedThreadHarness(async (method, requestParams) => {
-      const request = requireRecord(requestParams, `${method} params`);
-      if (method === "thread/resume") {
-        return threadStartResult("thread-old");
-      }
-      if (method === "turn/start" && request.threadId === "thread-old") {
-        throw new Error("Codex ran out of room in the model's context window");
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-fresh");
-      }
-      if (method === "turn/start" && request.threadId === "thread-fresh") {
-        return turnStartResult("turn-fresh");
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(
+      async (method, requestParams) => {
+        const request = requireRecord(requestParams, `${method} params`);
+        if (method === "thread/resume") {
+          return threadStartResult("thread-old");
+        }
+        if (method === "turn/start" && request.threadId === "thread-old") {
+          throw new Error("Codex ran out of room in the model's context window");
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-fresh");
+        }
+        if (method === "turn/start" && request.threadId === "thread-fresh") {
+          return turnStartResult("turn-fresh");
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-old"] },
+    );
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
@@ -1385,7 +1394,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() =>
       expect(harness.requests.map((request) => request.method)).toEqual([
+        "thread/read",
         "thread/resume",
+        "thread/inject_items",
         "turn/start",
         "thread/start",
         "turn/start",
@@ -1447,21 +1458,29 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
       }),
     });
-    const harness = createStartedThreadHarness(async (method, requestParams) => {
-      const request = requireRecord(requestParams, `${method} params`);
-      if (method === "thread/resume") {
-        return threadStartResult("thread-old");
-      }
-      if (method === "turn/start" && request.threadId === "thread-old") {
-        throw new Error("Codex ran out of room in the model's context window");
-      }
-      if (method === "thread/start") {
-        throw Object.assign(new Error("managed executable selection changed during startup"), {
-          code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-        });
-      }
-      return undefined;
-    });
+    const successorStart = vi.fn(() => threadStartResult("thread-fresh"));
+    const harness = createStartedThreadHarness(
+      async (method, requestParams) => {
+        const request = requireRecord(requestParams, `${method} params`);
+        if (method === "thread/resume") {
+          return threadStartResult("thread-old");
+        }
+        if (method === "turn/start" && request.threadId === "thread-old") {
+          // Selection changes after the original turn writes; the successor is rejected locally.
+          harness.client.setThreadSessionRequestGuard(async () => {
+            throw Object.assign(new Error("managed executable selection changed during startup"), {
+              code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+            });
+          });
+          throw new Error("Codex ran out of room in the model's context window");
+        }
+        if (method === "thread/start") {
+          return successorStart();
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-old"] },
+    );
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
@@ -1476,11 +1495,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       replaySafe: true,
     });
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "turn/start",
       "thread/start",
       "thread/unsubscribe",
     ]);
+    expect(successorStart).not.toHaveBeenCalled();
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
   });
 
@@ -1520,24 +1542,27 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
-    const harness = createStartedThreadHarness(async (method, requestParams) => {
-      const request = requireRecord(requestParams, `${method} params`);
-      if (method === "thread/resume") {
-        return threadStartResult("thread-old");
-      }
-      if (method === "turn/start" && request.threadId === "thread-old") {
-        await writeCodexAppServerBinding(sessionFile, {
-          threadId: "thread-new",
-          cwd: workspaceDir,
-          dynamicToolsFingerprint: "[]",
-        });
-        throw new Error("Codex ran out of room in the model's context window");
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-fresh");
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(
+      async (method, requestParams) => {
+        const request = requireRecord(requestParams, `${method} params`);
+        if (method === "thread/resume") {
+          return threadStartResult("thread-old");
+        }
+        if (method === "turn/start" && request.threadId === "thread-old") {
+          await writeCodexAppServerBinding(sessionFile, {
+            threadId: "thread-new",
+            cwd: workspaceDir,
+            dynamicToolsFingerprint: "[]",
+          });
+          throw new Error("Codex ran out of room in the model's context window");
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-fresh");
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-old"] },
+    );
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
@@ -1548,7 +1573,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -1592,15 +1619,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/resume") {
-        return threadStartResult("thread-old");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-old");
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-old");
+        }
+        if (method === "turn/start") {
+          return turnStartResult("turn-old");
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-old"] },
+    );
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
@@ -1627,7 +1657,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
     expect(compact).not.toHaveBeenCalled();
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/read",
       "thread/resume",
+      "thread/inject_items",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -1748,22 +1780,25 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
-    const harness = createStartedThreadHarness(async (method, requestParams) => {
-      const request = requireRecord(requestParams, `${method} params`);
-      if (method === "thread/resume") {
-        return threadStartResult("thread-old");
-      }
-      if (method === "turn/start" && request.threadId === "thread-old") {
-        throw new Error("Codex ran out of room in the model's context window");
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-fresh");
-      }
-      if (method === "turn/start" && request.threadId === "thread-fresh") {
-        return turnStartResult("turn-fresh");
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness(
+      async (method, requestParams) => {
+        const request = requireRecord(requestParams, `${method} params`);
+        if (method === "thread/resume") {
+          return threadStartResult("thread-old");
+        }
+        if (method === "turn/start" && request.threadId === "thread-old") {
+          throw new Error("Codex ran out of room in the model's context window");
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-fresh");
+        }
+        if (method === "turn/start" && request.threadId === "thread-fresh") {
+          return turnStartResult("turn-fresh");
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-old"] },
+    );
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
@@ -1772,7 +1807,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await vi.waitFor(
       () =>
         expect(harness.requests.map((request) => request.method)).toEqual([
+          "thread/read",
           "thread/resume",
+          "thread/inject_items",
           "turn/start",
           "thread/start",
           "turn/start",

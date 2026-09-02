@@ -6,15 +6,15 @@ import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
 import { renderSessionAppearancePicker } from "./session-icon-picker.ts";
 import {
-  compactSessionOwnerOptions,
+  renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
-  renderCompactSessionMenuView,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
 import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import {
   renderSessionOwnerAssignmentMenu,
+  renderSessionOwnerAssignmentOptions,
   sessionOwnerAssignmentFromMenuValue,
 } from "./session-owner-menu.ts";
 
@@ -306,23 +306,24 @@ export class SessionMenuActions {
     view: Exclude<CompactSessionMenuView, "root">,
     label: string,
     icon: TemplateResult,
-    body: () => TemplateResult,
     disabled = false,
+    title?: string,
   ) {
     if (this.readState().compact) {
-      return renderCompactSessionMenuNavigationItem({ view, label, icon, disabled });
+      return renderCompactSessionMenuNavigationItem({ view, label, icon, disabled, title });
     }
+    const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
       class="session-menu__item"
       ?disabled=${disabled}
-      data-shortcut=${view === "icon" ? "i" : view === "copy" ? "c" : nothing}
-      aria-keyshortcuts=${view === "icon" ? "I" : view === "copy" ? "C" : nothing}
+      title=${title ?? nothing}
+      data-shortcut=${shortcut ?? nothing}
+      aria-keyshortcuts=${shortcut?.toUpperCase() ?? nothing}
       @submenu-opening=${view === "icon" ? this.focusAppearanceOnOpen : nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
-      ${view === "icon" ? menuShortcutHint("i") : view === "copy" ? menuShortcutHint("c") : nothing}
-      ${body()}
+      ${shortcut ? menuShortcutHint(shortcut) : nothing} ${this.renderSubmenuBody(view)}
     </wa-dropdown-item>`;
   }
 
@@ -387,14 +388,13 @@ export class SessionMenuActions {
             "icon",
             t("sessionsView.setIconColorMenu"),
             icons.palette,
-            () => this.renderAppearancePicker(),
             this.actionDisabled("set-icon") && this.actionDisabled("set-color"),
           )}
       ${this.renderGroupAction()}
       ${batch
         ? nothing
         : state.compact
-          ? compactSessionOwnerOptions(state.ownerOptions, state.selfOwner).length > 0
+          ? state.selfOwner || state.ownerOptions.length > 0
             ? renderCompactSessionMenuNavigationItem({
                 view: "assign-owner",
                 label: t("sessionsView.assignTo"),
@@ -423,49 +423,30 @@ export class SessionMenuActions {
         shortcut: "f",
         title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
       })}
-      ${this.renderSubmenu("copy", t("common.copy"), icons.copy, () => this.renderCopySubmenu())}
+      ${this.renderSubmenu("copy", t("common.copy"), icons.copy)}
       ${state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
-        ? this.renderSubmenu(
-            "open-in",
-            t("sessionsView.openInEditorMenu"),
-            icons.externalLink,
-            () => this.renderOpenSubmenu(),
-          )
+        ? this.renderSubmenu("open-in", t("sessionsView.openInEditorMenu"), icons.externalLink)
         : nothing}
     `;
   }
 
-  renderGroupAction() {
+  private renderGroupAction() {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     const count = String(state.selectionCount);
     if (state.session.isChild === true) {
       return nothing;
     }
-    if (state.compact) {
-      return renderCompactSessionMenuNavigationItem({
-        view: "group",
-        label: batch
-          ? t("sessionsView.moveToGroupMenuCount", { count })
-          : t("sessionsView.moveToGroupMenu"),
-        icon: icons.folder,
-        disabled: this.actionDisabled("move-to-group"),
-        title: state.actionDisabledReasons["move-to-group"],
-      });
-    }
-    return html`<wa-dropdown-item
-      class="session-menu__item"
-      ?disabled=${this.actionDisabled("move-to-group")}
-      title=${this.actionTitle("move-to-group")}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-      <span class="session-menu__text"
-        >${batch
-          ? t("sessionsView.moveToGroupMenuCount", { count })
-          : t("sessionsView.moveToGroupMenu")}</span
-      >
-      ${this.renderGroupSubmenu()}
-    </wa-dropdown-item>`;
+    const label = batch
+      ? t("sessionsView.moveToGroupMenuCount", { count })
+      : t("sessionsView.moveToGroupMenu");
+    return this.renderSubmenu(
+      "group",
+      label,
+      icons.folder,
+      this.actionDisabled("move-to-group"),
+      state.actionDisabledReasons["move-to-group"],
+    );
   }
 
   renderDeleteAction() {
@@ -478,18 +459,36 @@ export class SessionMenuActions {
   }
 
   renderCompactView(view: CompactSessionMenuView) {
+    return view === "root"
+      ? nothing
+      : renderCompactSessionMenuFrame(this.renderSubmenuBody(view, true));
+  }
+
+  private renderSubmenuBody(view: Exclude<CompactSessionMenuView, "root">, inline = false) {
     const state = this.readState();
-    return renderCompactSessionMenuView({
-      view,
-      ownerOptions: compactSessionOwnerOptions(state.ownerOptions, state.selfOwner),
-      currentOwnerId: state.currentOwnerId,
-      assignOwnerDisabled: this.actionDisabled("assign-owner"),
-      assignOwnerDisabledReason: state.actionDisabledReasons["assign-owner"],
-      renderOpenIn: () => this.renderOpenSubmenu(true),
-      renderCopy: () => this.renderCopySubmenu(true),
-      renderIcon: () => this.renderAppearancePicker(true),
-      renderGroup: () => this.renderGroupSubmenu(true),
-    });
+    switch (view) {
+      case "copy":
+        return this.renderCopySubmenu(inline);
+      case "open-in":
+        return this.renderOpenSubmenu(inline);
+      case "icon":
+        return this.renderAppearancePicker(inline);
+      case "group":
+        return this.renderGroupSubmenu(inline);
+      case "assign-owner":
+        return renderSessionOwnerAssignmentOptions(
+          {
+            ownerOptions: state.ownerOptions,
+            selfOwner: state.selfOwner,
+            currentOwnerId: state.currentOwnerId,
+            disabled: this.actionDisabled("assign-owner"),
+            disabledReason: state.actionDisabledReasons["assign-owner"],
+          },
+          inline,
+        );
+      default:
+        return view satisfies never;
+    }
   }
 
   private renderCopySubmenu(inline = false) {

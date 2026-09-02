@@ -1,10 +1,10 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import type { SandboxContext } from "./sandbox/types.js";
+import { settleRequesterAfterSessionSpawns } from "./subagents/registry/subagent-registry.js";
 
 export type LocalTurnPlacementClaim = {
   sessionId: string;
@@ -52,25 +52,6 @@ const state = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionPlacementAdmissionState"),
   (): SessionPlacementAdmissionState => ({}),
 );
-// Carry exact local-turn cleanup until the embedded handle captures it; never recover by session id.
-const forcedTerminalSettlement = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"),
-  () => new AsyncLocalStorage<() => Promise<void>>(),
-);
-
-export function withSessionPlacementForcedTerminalSettlement<T>(
-  settle: () => Promise<void>,
-  task: () => Promise<T>,
-): Promise<T> {
-  return forcedTerminalSettlement.run(settle, task);
-}
-
-export function resolveSessionPlacementForcedTerminalSettlement():
-  | (() => Promise<void>)
-  | undefined {
-  return forcedTerminalSettlement.getStore();
-}
-
 export function installSessionPlacementAdmissionProvider(
   provider: SessionPlacementAdmissionProvider,
 ): () => void {
@@ -114,21 +95,40 @@ export async function withSessionPlacementTurnAdmission(
     return task();
   };
   const provider = state.provider;
-  if (!provider) {
-    return await runAdmittedLocalTurn();
+  const result = provider
+    ? await provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
+    : await runAdmittedLocalTurn();
+  if (result.meta.executionTrace?.runner === "cli") {
+    settleYieldedRequesterAfterPlacementRelease(claim, result);
   }
-  return await provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn);
+  return result;
 }
 
-export async function withLocalSessionPlacementTurnAdmission<T>(
+/** Runs a CLI turn and settles accepted child ownership after placement releases it. */
+export async function withLocalSessionPlacementTurnSettlement(
   claim: LocalTurnPlacementClaim,
-  task: () => Promise<T>,
-): Promise<T> {
+  task: () => Promise<EmbeddedAgentRunResult>,
+): Promise<EmbeddedAgentRunResult> {
   const provider = state.provider;
-  if (!provider) {
-    return await task();
+  const result = provider ? await provider.executeLocalTurn(claim, task) : await task();
+  settleYieldedRequesterAfterPlacementRelease(claim, result);
+  return result;
+}
+
+function settleYieldedRequesterAfterPlacementRelease(
+  claim: LocalTurnPlacementClaim,
+  result: EmbeddedAgentRunResult,
+): void {
+  if (!claim.sessionKey || result.meta.yielded !== true || !result.acceptedSessionSpawns?.length) {
+    return;
   }
-  return await provider.executeLocalTurn(claim, task);
+  settleRequesterAfterSessionSpawns({
+    requesterSessionKey: claim.sessionKey,
+    requesterAgentId: claim.agentId,
+    requesterTurnRunId: claim.runId,
+    requesterYielded: true,
+    acceptedSessionSpawns: result.acceptedSessionSpawns,
+  });
 }
 
 /** Resolves an authoritative sandbox only when the live placement owns remote execution. */

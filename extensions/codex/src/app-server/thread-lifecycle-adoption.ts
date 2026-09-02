@@ -14,7 +14,7 @@ import {
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { captureExclusiveSharedCodexAppServerClient } from "./shared-client.js";
+import { captureCodexAppServerClientLifetime } from "./shared-client.js";
 import { shouldRotateCodexGpt56MultiAgentBinding } from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
@@ -30,11 +30,14 @@ import type {
   CodexThreadRequestContext,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
-import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
+import {
+  withCodexAppServerThreadMutation,
+  withExclusiveCodexAppServerThread,
+} from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 
 /** Passive refusal must precede releasing or acquiring any native subscription. */
-export async function assertAdoptedCodexThreadResumeAllowed(
+async function assertAdoptedCodexThreadResumeAllowed(
   params: CodexStartOrResumeThreadParams,
   threadId: string,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
@@ -57,7 +60,7 @@ export async function assertAdoptedCodexThreadResumeAllowed(
   return thread;
 }
 
-/** Preserve attach's native-queue-before-binding-lease order when consuming pending intent. */
+/** All bound preparation follows attach's native-queue-before-binding-lease order. */
 export async function withCodexThreadLifecycleBinding(
   params: CodexStartOrResumeThreadParams,
   run: (
@@ -72,35 +75,32 @@ export async function withCodexThreadLifecycleBinding(
     config: params.params.config,
   });
   const snapshot = await params.bindingStore.read(identity);
-  const pendingThreadId = snapshot?.pendingResumeConfiguration ? snapshot.threadId : undefined;
   const runWithLease = () =>
     params.bindingStore.withLease(identity, async () => {
       const binding = await params.bindingStore.read(identity);
-      if (
-        pendingThreadId &&
-        (binding?.threadId !== pendingThreadId || !binding.pendingResumeConfiguration)
-      ) {
+      // Never prepare a replacement under the queue selected for an obsolete snapshot.
+      if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
         throw new CodexThreadBindingConflictError(
-          pendingThreadId,
-          "acquiring a pending resume configuration",
+          binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
+          "acquiring thread lifecycle ownership",
         );
       }
-      if (!pendingThreadId && binding?.pendingResumeConfiguration) {
-        throw new CodexThreadBindingConflictError(
-          binding.threadId,
-          "acquiring a pending resume configuration",
-        );
-      }
+      params.params.hostCapabilities.assertActive();
+      params.signal?.throwIfAborted();
       return await run(identity, binding);
     });
-  return pendingThreadId
+  // Ordinary resumes own their binding key even when a legacy row omits sessionId.
+  // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
+  return snapshot?.pendingResumeConfiguration
     ? await withExclusiveCodexAppServerThread({
         bindingStore: params.bindingStore,
         identity,
-        threadId: pendingThreadId,
+        threadId: snapshot.threadId,
         run: runWithLease,
       })
-    : await runWithLease();
+    : snapshot
+      ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+      : await runWithLease();
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
@@ -197,9 +197,16 @@ async function preparePendingCodexThreadResume(
   if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
     throw fail("the thread is claimed by active work; stop that run before resuming");
   }
-  // Codex can reuse a concurrently resumed child while ignoring overrides.
-  // Only an uninterrupted sole client lease makes the unload receipt conclusive.
-  const assertCurrent = captureExclusiveSharedCodexAppServerClient(params.client);
+  const assertClient = captureCodexAppServerClientLifetime(params.client, "native-process");
+  const assertCurrent = () => {
+    params.params.hostCapabilities.assertActive();
+    params.signal?.throwIfAborted();
+    assertClient();
+    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
+      throw new CodexAdoptedThreadActiveError();
+    }
+  };
+  assertCurrent();
   const { thread } = await params.client.request(
     "thread/read",
     { threadId: binding.threadId, includeTurns: false },
@@ -244,24 +251,30 @@ async function preparePendingCodexThreadResume(
   }
 }
 
-/** Known supervision keeps its native home; manual adoption's home restrictions stay separate. */
-export function prepareSupervisedCodexThreadResume(
+/** Observe teardown before release; a successful resume alone can acknowledge ignored overrides. */
+export async function prepareCodexThreadResume(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
-  thread: CodexThread,
+  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
 ) {
-  assertCodexSupervisionThreadLineage(binding, thread);
-  if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-    throw new CodexAdoptedThreadActiveError();
-  }
-  const assertExclusive = captureExclusiveSharedCodexAppServerClient(params.client);
+  const assertClient = captureCodexAppServerClientLifetime(
+    params.client,
+    binding.connectionScope === "supervision" ? "connection" : "native-process",
+  );
   const assertCurrent = () => {
     params.params.hostCapabilities.assertActive();
     params.signal?.throwIfAborted();
-    assertExclusive();
-    assertCodexSupervisionThreadLineage(binding, thread);
+    assertClient();
+    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
+      throw new CodexAdoptedThreadActiveError();
+    }
   };
   assertCurrent();
+  const thread = await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, context);
+  assertCurrent();
+  // Known supervision keeps its native home; manual adoption's stricter home and catalog
+  // checks remain in preparePendingCodexThreadResume, before this common handoff.
+  assertCodexSupervisionThreadLineage(binding, thread);
   return { ...observeCodexThreadConfiguration(params, thread, assertCurrent), assertCurrent };
 }
 
@@ -290,7 +303,8 @@ function observeCodexThreadConfiguration(
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber
-      // or failed shutdown retains the session. Only notLoaded proves teardown.
+      // or failed shutdown retains the session. notLoaded proves teardown, not a
+      // reservation against native-internal reloads outside OpenClaw's thread queue.
       if (!unloaded) {
         throw new Error(
           "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.",

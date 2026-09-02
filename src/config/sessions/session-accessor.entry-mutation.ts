@@ -69,11 +69,10 @@ export async function createSessionEntryWithTranscript<TError = string>(
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  // The incognito sentinel is scoped to env; its path alone cannot identify the memory store.
+  const storeScope = { agentId, env: scope.env, storePath };
   const store = Object.fromEntries(
-    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesCore(storeScope).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: scope.sessionKey });
   const created = await createEntry({
@@ -87,10 +86,9 @@ export async function createSessionEntryWithTranscript<TError = string>(
   try {
     await appendTranscriptEvent(
       {
-        agentId,
+        ...storeScope,
         sessionId: created.entry.sessionId,
         sessionKey: resolved.normalizedKey,
-        storePath,
       },
       createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
       options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : undefined,
@@ -108,8 +106,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
 
   const entry = created.entry;
   await applySessionEntryLifecycleMutation({
-    agentId,
-    storePath,
+    ...storeScope,
     removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,

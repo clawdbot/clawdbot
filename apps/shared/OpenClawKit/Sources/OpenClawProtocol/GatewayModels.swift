@@ -6755,22 +6755,122 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
     }
 }
 
+public struct SessionGitHubOptionsParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionGitHubOptionsResult: Codable, Sendable {
+    public let personal: AnyCodable
+    public let shared: AnyCodable
+    public let pendingpersonal: AnyCodable
+
+    public init(
+        personal: AnyCodable,
+        shared: AnyCodable,
+        pendingpersonal: AnyCodable)
+    {
+        self.personal = personal
+        self.shared = shared
+        self.pendingpersonal = pendingpersonal
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case personal
+        case shared
+        case pendingpersonal = "pendingPersonal"
+    }
+}
+
+public struct SessionGitHubStatusParams: Codable, Sendable {
+    public let sessionkey: String
+    public let requestid: String
+
+    public init(
+        sessionkey: String,
+        requestid: String)
+    {
+        self.sessionkey = sessionkey
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case requestid = "requestId"
+    }
+}
+
+public struct SessionGitHubStatusResult: Codable, Sendable {
+    public let result: SessionGitHubPublicationResult
+    public let confirmation: AnyCodable
+
+    public init(
+        result: SessionGitHubPublicationResult,
+        confirmation: AnyCodable)
+    {
+        self.result = result
+        self.confirmation = confirmation
+    }
+}
+
+public struct SessionGitHubConfirmParams: Codable, Sendable {
+    public let sessionkey: String
+    public let requestid: String
+    public let generation: String
+    public let account: [String: AnyCodable]
+    public let requestdigest: String
+
+    public init(
+        sessionkey: String,
+        requestid: String,
+        generation: String,
+        account: [String: AnyCodable],
+        requestdigest: String)
+    {
+        self.sessionkey = sessionkey
+        self.requestid = requestid
+        self.generation = generation
+        self.account = account
+        self.requestdigest = requestdigest
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case requestid = "requestId"
+        case generation
+        case account
+        case requestdigest = "requestDigest"
+    }
+}
+
 public struct SessionGitHubPublishParams: Codable, Sendable {
     public let sessionkey: String?
     public let idempotencykey: String
     public let title: String?
     public let body: String?
+    public let selection: AnyCodable?
 
     public init(
         sessionkey: String? = nil,
         idempotencykey: String,
         title: String? = nil,
-        body: String? = nil)
+        body: String? = nil,
+        selection: AnyCodable? = nil)
     {
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
         self.title = title
         self.body = body
+        self.selection = selection
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6778,26 +6878,35 @@ public struct SessionGitHubPublishParams: Codable, Sendable {
         case idempotencykey = "idempotencyKey"
         case title
         case body
+        case selection
     }
 }
 
 public struct SessionGitHubPublicationRequested: Codable, Sendable {
     public let requestid: String
+    public let publisher: [String: AnyCodable]?
+    public let effect: [String: AnyCodable]?
     public let status: String
     public let message: String
 
     public init(
         requestid: String,
+        publisher: [String: AnyCodable]? = nil,
+        effect: [String: AnyCodable]? = nil,
         status: String,
         message: String)
     {
         self.requestid = requestid
+        self.publisher = publisher
+        self.effect = effect
         self.status = status
         self.message = message
     }
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+        case publisher
+        case effect
         case status
         case message
     }
@@ -6805,21 +6914,29 @@ public struct SessionGitHubPublicationRequested: Codable, Sendable {
 
 public struct SessionGitHubPublicationPublishing: Codable, Sendable {
     public let requestid: String
+    public let publisher: [String: AnyCodable]?
+    public let effect: [String: AnyCodable]?
     public let status: String
     public let message: String
 
     public init(
         requestid: String,
+        publisher: [String: AnyCodable]? = nil,
+        effect: [String: AnyCodable]? = nil,
         status: String,
         message: String)
     {
         self.requestid = requestid
+        self.publisher = publisher
+        self.effect = effect
         self.status = status
         self.message = message
     }
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+        case publisher
+        case effect
         case status
         case message
     }
@@ -6827,6 +6944,8 @@ public struct SessionGitHubPublicationPublishing: Codable, Sendable {
 
 public struct SessionGitHubPublicationPublished: Codable, Sendable {
     public let requestid: String
+    public let publisher: [String: AnyCodable]?
+    public let effect: [String: AnyCodable]?
     public let status: String
     public let url: String
     public let repository: String
@@ -6835,6 +6954,8 @@ public struct SessionGitHubPublicationPublished: Codable, Sendable {
 
     public init(
         requestid: String,
+        publisher: [String: AnyCodable]? = nil,
+        effect: [String: AnyCodable]? = nil,
         status: String,
         url: String,
         repository: String,
@@ -6842,6 +6963,8 @@ public struct SessionGitHubPublicationPublished: Codable, Sendable {
         headcommit: String)
     {
         self.requestid = requestid
+        self.publisher = publisher
+        self.effect = effect
         self.status = status
         self.url = url
         self.repository = repository
@@ -6851,6 +6974,8 @@ public struct SessionGitHubPublicationPublished: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+        case publisher
+        case effect
         case status
         case url
         case repository
@@ -6861,6 +6986,8 @@ public struct SessionGitHubPublicationPublished: Codable, Sendable {
 
 public struct SessionGitHubPublicationFailed: Codable, Sendable {
     public let requestid: String
+    public let publisher: [String: AnyCodable]?
+    public let effect: [String: AnyCodable]?
     public let status: String
     public let code: AnyCodable
     public let message: String
@@ -6868,12 +6995,16 @@ public struct SessionGitHubPublicationFailed: Codable, Sendable {
 
     public init(
         requestid: String,
+        publisher: [String: AnyCodable]? = nil,
+        effect: [String: AnyCodable]? = nil,
         status: String,
         code: AnyCodable,
         message: String,
         nextaction: String)
     {
         self.requestid = requestid
+        self.publisher = publisher
+        self.effect = effect
         self.status = status
         self.code = code
         self.message = message
@@ -6882,10 +7013,42 @@ public struct SessionGitHubPublicationFailed: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+        case publisher
+        case effect
         case status
         case code
         case message
         case nextaction = "nextAction"
+    }
+}
+
+public struct SessionGitHubPublicationNeedsConfirmation: Codable, Sendable {
+    public let requestid: String
+    public let publisher: [String: AnyCodable]?
+    public let effect: [String: AnyCodable]?
+    public let status: String
+    public let message: String
+
+    public init(
+        requestid: String,
+        publisher: [String: AnyCodable]? = nil,
+        effect: [String: AnyCodable]? = nil,
+        status: String,
+        message: String)
+    {
+        self.requestid = requestid
+        self.publisher = publisher
+        self.effect = effect
+        self.status = status
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case publisher
+        case effect
+        case status
+        case message
     }
 }
 
@@ -8043,6 +8206,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
     public let terminalreason: String?
     public let terminalatms: Int?
     public let recoveryerror: String
+    public let recoveryaction: String?
 
     public init(
         state: String,
@@ -8062,7 +8226,8 @@ public struct FailedSessionPlacement: Codable, Sendable {
         workspaceresultconflict: [String: AnyCodable]? = nil,
         terminalreason: String? = nil,
         terminalatms: Int? = nil,
-        recoveryerror: String)
+        recoveryerror: String,
+        recoveryaction: String? = nil)
     {
         self.state = state
         self.generation = generation
@@ -8082,6 +8247,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         self.terminalreason = terminalreason
         self.terminalatms = terminalatms
         self.recoveryerror = recoveryerror
+        self.recoveryaction = recoveryaction
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8103,6 +8269,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         case terminalreason = "terminalReason"
         case terminalatms = "terminalAtMs"
         case recoveryerror = "recoveryError"
+        case recoveryaction = "recoveryAction"
     }
 }
 
@@ -11527,6 +11694,137 @@ public struct AuditListResult: Codable, Sendable {
     }
 }
 
+public struct PersonalGitHubStatus: Codable, Sendable {
+    public let state: AnyCodable
+    public let generation: AnyCodable
+    public let account: AnyCodable
+    public let accessexpiresatms: AnyCodable
+    public let refreshstate: AnyCodable
+    public let pending: AnyCodable
+
+    public init(
+        state: AnyCodable,
+        generation: AnyCodable,
+        account: AnyCodable,
+        accessexpiresatms: AnyCodable,
+        refreshstate: AnyCodable,
+        pending: AnyCodable)
+    {
+        self.state = state
+        self.generation = generation
+        self.account = account
+        self.accessexpiresatms = accessexpiresatms
+        self.refreshstate = refreshstate
+        self.pending = pending
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case generation
+        case account
+        case accessexpiresatms = "accessExpiresAtMs"
+        case refreshstate = "refreshState"
+        case pending
+    }
+}
+
+public struct UsersGitHubStatusParams: Codable, Sendable {}
+
+public struct UsersGitHubStatusResult: Codable, Sendable {
+    public let personal: PersonalGitHubStatus
+    public let system: GitHubIdentityFacts
+
+    public init(
+        personal: PersonalGitHubStatus,
+        system: GitHubIdentityFacts)
+    {
+        self.personal = personal
+        self.system = system
+    }
+}
+
+public struct UsersGitHubAuthorizeStartParams: Codable, Sendable {}
+
+public struct UsersGitHubAuthorizeStartResult: Codable, Sendable {
+    public let requestid: String
+    public let usercode: String
+    public let verificationuri: String
+    public let expiresinms: Int
+    public let pollafterms: Int
+
+    public init(
+        requestid: String,
+        usercode: String,
+        verificationuri: String,
+        expiresinms: Int,
+        pollafterms: Int)
+    {
+        self.requestid = requestid
+        self.usercode = usercode
+        self.verificationuri = verificationuri
+        self.expiresinms = expiresinms
+        self.pollafterms = pollafterms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case usercode = "userCode"
+        case verificationuri = "verificationUri"
+        case expiresinms = "expiresInMs"
+        case pollafterms = "pollAfterMs"
+    }
+}
+
+public struct UsersGitHubAuthorizePollParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct UsersGitHubAuthorizeCancelParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct UsersGitHubAuthorizeCancelResult: Codable, Sendable {
+    public let cancelled: Bool
+
+    public init(
+        cancelled: Bool)
+    {
+        self.cancelled = cancelled
+    }
+}
+
+public struct UsersGitHubDisconnectParams: Codable, Sendable {}
+
+public struct UsersGitHubDisconnectResult: Codable, Sendable {
+    public let disconnected: Bool
+
+    public init(
+        disconnected: Bool)
+    {
+        self.disconnected = disconnected
+    }
+}
+
 public struct UsersPrefsChangedEvent: Codable, Sendable {
     public let profileid: String
     public let keys: [String]
@@ -14085,6 +14383,141 @@ public struct WebLoginWaitParams: Codable, Sendable {
     }
 }
 
+public struct SkillsLibraryListParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let scope: AnyCodable?
+
+    public init(
+        sessionkey: String? = nil,
+        scope: AnyCodable? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.scope = scope
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case scope
+    }
+}
+
+public struct SkillsLibraryReadParams: Codable, Sendable {
+    public let skillid: String
+    public let revision: String?
+    public let sessionkey: String?
+
+    public init(
+        skillid: String,
+        revision: String? = nil,
+        sessionkey: String? = nil)
+    {
+        self.skillid = skillid
+        self.revision = revision
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillid = "skillId"
+        case revision
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SkillsLibrarySaveParams: Codable, Sendable {
+    public let skillid: String?
+    public let expectedrevision: AnyCodable
+    public let slug: String
+    public let content: String
+    public let files: [[String: AnyCodable]]?
+
+    public init(
+        skillid: String? = nil,
+        expectedrevision: AnyCodable,
+        slug: String,
+        content: String,
+        files: [[String: AnyCodable]]? = nil)
+    {
+        self.skillid = skillid
+        self.expectedrevision = expectedrevision
+        self.slug = slug
+        self.content = content
+        self.files = files
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillid = "skillId"
+        case expectedrevision = "expectedRevision"
+        case slug
+        case content
+        case files
+    }
+}
+
+public struct SkillsLibraryMutateParams: Codable, Sendable {
+    public let skillid: String
+    public let expectedrevision: String
+    public let action: AnyCodable
+    public let revision: String?
+
+    public init(
+        skillid: String,
+        expectedrevision: String,
+        action: AnyCodable,
+        revision: String? = nil)
+    {
+        self.skillid = skillid
+        self.expectedrevision = expectedrevision
+        self.action = action
+        self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillid = "skillId"
+        case expectedrevision = "expectedRevision"
+        case action
+        case revision
+    }
+}
+
+public struct SkillsLibraryActivateParams: Codable, Sendable {
+    public let sessionkey: String
+    public let action: AnyCodable
+    public let skillid: String?
+    public let revision: String?
+
+    public init(
+        sessionkey: String,
+        action: AnyCodable,
+        skillid: String? = nil,
+        revision: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.action = action
+        self.skillid = skillid
+        self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case action
+        case skillid = "skillId"
+        case revision
+    }
+}
+
+public struct SkillsLibraryImportParams: Codable, Sendable {
+    public let slug: String
+    public let source: [String: AnyCodable]
+
+    public init(
+        slug: String,
+        source: [String: AnyCodable])
+    {
+        self.slug = slug
+        self.source = source
+    }
+}
+
 public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let kind: AgentKind?
@@ -15222,17 +15655,20 @@ public struct CommandEntry: Codable, Sendable {
 }
 
 public struct CommandsListParams: Codable, Sendable {
+    public let sessionkey: String?
     public let agentid: String?
     public let provider: String?
     public let scope: AnyCodable?
     public let includeargs: Bool?
 
     public init(
+        sessionkey: String? = nil,
         agentid: String? = nil,
         provider: String? = nil,
         scope: AnyCodable? = nil,
         includeargs: Bool? = nil)
     {
+        self.sessionkey = sessionkey
         self.agentid = agentid
         self.provider = provider
         self.scope = scope
@@ -15240,6 +15676,7 @@ public struct CommandsListParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
         case agentid = "agentId"
         case provider
         case scope
@@ -15259,15 +15696,19 @@ public struct CommandsListResult: Codable, Sendable {
 
 public struct SkillsStatusParams: Codable, Sendable {
     public let agentid: String?
+    public let sessionkey: String?
 
     public init(
-        agentid: String? = nil)
+        agentid: String? = nil,
+        sessionkey: String? = nil)
     {
         self.agentid = agentid
+        self.sessionkey = sessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case sessionkey = "sessionKey"
     }
 }
 
@@ -19674,6 +20115,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let scope: ApprovalScope?
     public let toolname: String?
     public let toolcallid: String?
+    public let mcptool: [String: AnyCodable]?
     public let alloweddecisions: [String]?
     public let agentid: String?
     public let sessionkey: String?
@@ -19694,6 +20136,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         scope: ApprovalScope? = nil,
         toolname: String? = nil,
         toolcallid: String? = nil,
+        mcptool: [String: AnyCodable]? = nil,
         alloweddecisions: [String]? = nil,
         agentid: String? = nil,
         sessionkey: String? = nil,
@@ -19713,6 +20156,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.scope = scope
         self.toolname = toolname
         self.toolcallid = toolcallid
+        self.mcptool = mcptool
         self.alloweddecisions = alloweddecisions
         self.agentid = agentid
         self.sessionkey = sessionkey
@@ -19734,6 +20178,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case scope
         case toolname = "toolName"
         case toolcallid = "toolCallId"
+        case mcptool = "mcpTool"
         case alloweddecisions = "allowedDecisions"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
@@ -23211,6 +23656,7 @@ public enum SessionGitHubPublicationResult: Codable, Sendable {
     case publishing(SessionGitHubPublicationPublishing)
     case published(SessionGitHubPublicationPublished)
     case failed(SessionGitHubPublicationFailed)
+    case needsConfirmation(SessionGitHubPublicationNeedsConfirmation)
 
     private enum CodingKeys: String, CodingKey {
         case discriminator = "status"
@@ -23224,6 +23670,7 @@ public enum SessionGitHubPublicationResult: Codable, Sendable {
         case "publishing": self = try .publishing(SessionGitHubPublicationPublishing(from: decoder))
         case "published": self = try .published(SessionGitHubPublicationPublished(from: decoder))
         case "failed": self = try .failed(SessionGitHubPublicationFailed(from: decoder))
+        case "needs_confirmation": self = try .needsConfirmation(SessionGitHubPublicationNeedsConfirmation(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -23239,6 +23686,7 @@ public enum SessionGitHubPublicationResult: Codable, Sendable {
         case .publishing(let value): try value.encode(to: encoder)
         case .published(let value): try value.encode(to: encoder)
         case .failed(let value): try value.encode(to: encoder)
+        case .needsConfirmation(let value): try value.encode(to: encoder)
         }
     }
 }
@@ -23433,6 +23881,105 @@ public enum AuditRunIdentityV1: Codable, Sendable {
         case .unknown(let value): try value.encode(to: encoder)
         case .unsupported(let value): try value.encode(to: encoder)
         case .ambiguous(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct UsersGitHubAuthorizePollResultSuccess: Codable, Sendable {
+    public let status: String
+    public let personal: PersonalGitHubStatus
+
+    public init(
+        personal: PersonalGitHubStatus
+    )
+    {
+        self.status = "success"
+        self.personal = personal
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case personal
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "personal"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UsersGitHubAuthorizePollResultSuccess: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "success" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal success"
+            )
+        }
+        self.status = "success"
+        self.personal = try container.decode(PersonalGitHubStatus.self, forKey: .personal)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("success", forKey: .status)
+        try container.encode(personal, forKey: .personal)
+    }
+}
+
+public enum UsersGitHubAuthorizePollResult: Codable, Sendable {
+    case pending(ToolsGitHubAuthorizePendingResult)
+    case slowDown(ToolsGitHubAuthorizeSlowDownResult)
+    case accessDenied(ToolsGitHubAuthorizeAccessDeniedResult)
+    case expired(ToolsGitHubAuthorizeExpiredResult)
+    case incorrectDeviceCode(ToolsGitHubAuthorizeIncorrectDeviceCodeResult)
+    case networkError(ToolsGitHubAuthorizeNetworkErrorResult)
+    case failed(ToolsGitHubAuthorizeFailedResult)
+    case success(UsersGitHubAuthorizePollResultSuccess)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "pending": self = try .pending(ToolsGitHubAuthorizePendingResult(from: decoder))
+        case "slow_down": self = try .slowDown(ToolsGitHubAuthorizeSlowDownResult(from: decoder))
+        case "access_denied": self = try .accessDenied(ToolsGitHubAuthorizeAccessDeniedResult(from: decoder))
+        case "expired": self = try .expired(ToolsGitHubAuthorizeExpiredResult(from: decoder))
+        case "incorrect_device_code": self = try .incorrectDeviceCode(ToolsGitHubAuthorizeIncorrectDeviceCodeResult(from: decoder))
+        case "network_error": self = try .networkError(ToolsGitHubAuthorizeNetworkErrorResult(from: decoder))
+        case "failed": self = try .failed(ToolsGitHubAuthorizeFailedResult(from: decoder))
+        case "success": self = try .success(UsersGitHubAuthorizePollResultSuccess(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown UsersGitHubAuthorizePollResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .pending(let value): try value.encode(to: encoder)
+        case .slowDown(let value): try value.encode(to: encoder)
+        case .accessDenied(let value): try value.encode(to: encoder)
+        case .expired(let value): try value.encode(to: encoder)
+        case .incorrectDeviceCode(let value): try value.encode(to: encoder)
+        case .networkError(let value): try value.encode(to: encoder)
+        case .failed(let value): try value.encode(to: encoder)
+        case .success(let value): try value.encode(to: encoder)
         }
     }
 }
@@ -24118,6 +24665,214 @@ public enum TalkClientCreateResult: Codable, Sendable {
         case .providerWebsocket(let value): try value.encode(to: encoder)
         case .gatewayRelay(let value): try value.encode(to: encoder)
         case .managedRoom(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct SkillsLibraryUploadParamsBegin: Codable, Sendable {
+    public let action: String
+    public let slug: String
+    public let sizebytes: Int
+    public let sha256: String
+
+    public init(
+        slug: String,
+        sizebytes: Int,
+        sha256: String
+    )
+    {
+        self.action = "begin"
+        self.slug = slug
+        self.sizebytes = sizebytes
+        self.sha256 = sha256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case slug
+        case sizebytes = "sizeBytes"
+        case sha256
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "slug", "sizeBytes", "sha256"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SkillsLibraryUploadParamsBegin: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "begin" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal begin"
+            )
+        }
+        self.action = "begin"
+        self.slug = try container.decode(String.self, forKey: .slug)
+        self.sizebytes = try container.decode(Int.self, forKey: .sizebytes)
+        self.sha256 = try container.decode(String.self, forKey: .sha256)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("begin", forKey: .action)
+        try container.encode(slug, forKey: .slug)
+        try container.encode(sizebytes, forKey: .sizebytes)
+        try container.encode(sha256, forKey: .sha256)
+    }
+}
+
+public struct SkillsLibraryUploadParamsChunk: Codable, Sendable {
+    public let action: String
+    public let uploadid: String
+    public let offset: Int
+    public let data: String
+
+    public init(
+        uploadid: String,
+        offset: Int,
+        data: String
+    )
+    {
+        self.action = "chunk"
+        self.uploadid = uploadid
+        self.offset = offset
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case uploadid = "uploadId"
+        case offset
+        case data
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "uploadId", "offset", "data"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SkillsLibraryUploadParamsChunk: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "chunk" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal chunk"
+            )
+        }
+        self.action = "chunk"
+        self.uploadid = try container.decode(String.self, forKey: .uploadid)
+        self.offset = try container.decode(Int.self, forKey: .offset)
+        self.data = try container.decode(String.self, forKey: .data)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("chunk", forKey: .action)
+        try container.encode(uploadid, forKey: .uploadid)
+        try container.encode(offset, forKey: .offset)
+        try container.encode(data, forKey: .data)
+    }
+}
+
+public struct SkillsLibraryUploadParamsCommit: Codable, Sendable {
+    public let action: String
+    public let uploadid: String
+
+    public init(
+        uploadid: String
+    )
+    {
+        self.action = "commit"
+        self.uploadid = uploadid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case uploadid = "uploadId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["action", "uploadId"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SkillsLibraryUploadParamsCommit: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedAction = try container.decode(String.self, forKey: .action)
+        guard decodedAction == "commit" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "Expected action to equal commit"
+            )
+        }
+        self.action = "commit"
+        self.uploadid = try container.decode(String.self, forKey: .uploadid)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("commit", forKey: .action)
+        try container.encode(uploadid, forKey: .uploadid)
+    }
+}
+
+public enum SkillsLibraryUploadParams: Codable, Sendable {
+    case begin(SkillsLibraryUploadParamsBegin)
+    case chunk(SkillsLibraryUploadParamsChunk)
+    case commit(SkillsLibraryUploadParamsCommit)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "action"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "begin": self = try .begin(SkillsLibraryUploadParamsBegin(from: decoder))
+        case "chunk": self = try .chunk(SkillsLibraryUploadParamsChunk(from: decoder))
+        case "commit": self = try .commit(SkillsLibraryUploadParamsCommit(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown SkillsLibraryUploadParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .begin(let value): try value.encode(to: encoder)
+        case .chunk(let value): try value.encode(to: encoder)
+        case .commit(let value): try value.encode(to: encoder)
         }
     }
 }

@@ -76,7 +76,7 @@ function createProgressNarrator(params: {
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryImmediate = false;
   // Each turn owns cancellation; replacing it fences old continuations without
-  // discarding the prepared model shared by queued turns.
+  // discarding the model selection shared by queued turns.
   let turnController = new AbortController();
   let userMessage = params.userMessage ?? "";
 
@@ -143,8 +143,8 @@ function createProgressNarrator(params: {
       disableNarration();
       return null;
     }
-    const { provider, modelId, profileId } = prepared.selection;
-    utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
+    const { provider, model, authProfileId } = prepared;
+    utilityModelLabel = `${provider}/${model}${authProfileId ? ` via ${authProfileId}` : ""}`;
     return await generateNarrationWithUtilityModel({
       cfg: params.cfg,
       prepared,
