@@ -161,10 +161,25 @@ class ChatControllerOutboxTest {
       id: String,
       retryCount: Int,
       lastError: String?,
+    ): Int = claimForSending(id, retryCount, lastError, expectedAttemptVersion = null)
+
+    override suspend fun claimForSendingIfAttempt(
+      id: String,
+      expectedAttemptVersion: Int,
+      retryCount: Int,
+      lastError: String?,
+    ): Int = claimForSending(id, retryCount, lastError, expectedAttemptVersion)
+
+    private suspend fun claimForSending(
+      id: String,
+      retryCount: Int,
+      lastError: String?,
+      expectedAttemptVersion: Int?,
     ): Int {
       claimGate?.await()
       sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
+      if (expectedAttemptVersion != null && current.attemptVersion != expectedAttemptVersion) return 0
       if (current.status != ChatOutboxStatus.Queued) return 0
       rows[id] = current.copy(status = ChatOutboxStatus.Sending, retryCount = retryCount, lastError = lastError)
       onStatusUpdated?.invoke(ChatOutboxStatus.Sending)
@@ -192,11 +207,38 @@ class ChatControllerOutboxTest {
       return removed
     }
 
+    override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int =
+      confirmDelivered(
+        ids.filter { (id, attemptVersion) -> rows[id]?.attemptVersion == attemptVersion }.keys,
+      )
+
     override suspend fun updateStatus(
       id: String,
       status: ChatOutboxStatus,
       retryCount: Int,
       lastError: String?,
+    ): Int = writeStatus(id, status, retryCount, lastError, deliveryAttemptVersion = null)
+
+    // Room rejects stale attempts and status snapshots; the interface default ignores both.
+    override suspend fun updateStatusIfAttempt(
+      id: String,
+      expectedAttemptVersion: Int,
+      status: ChatOutboxStatus,
+      retryCount: Int,
+      lastError: String?,
+      expectedStatus: ChatOutboxStatus?,
+    ): Int {
+      val current = rows[id] ?: return 0
+      if (current.attemptVersion != expectedAttemptVersion || (expectedStatus != null && current.status != expectedStatus)) return 0
+      return writeStatus(id, status, retryCount, lastError, deliveryAttemptVersion = expectedAttemptVersion)
+    }
+
+    private fun writeStatus(
+      id: String,
+      status: ChatOutboxStatus,
+      retryCount: Int,
+      lastError: String?,
+      deliveryAttemptVersion: Int?,
     ): Int {
       if (status == ChatOutboxStatus.Failed && deleteOnFailedStatus) {
         rows.remove(id)
@@ -208,9 +250,38 @@ class ChatControllerOutboxTest {
       if (status == ChatOutboxStatus.Queued) queuedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
-      rows[id] = current.copy(status = status, retryCount = retryCount, lastError = lastError)
+      rows[id] =
+        current.copy(
+          status = status,
+          retryCount = retryCount,
+          lastError = lastError,
+          attemptVersion = deliveryAttemptVersion?.let { it + if (status == ChatOutboxStatus.Queued) 1 else 0 } ?: current.attemptVersion,
+          hadUnacknowledgedSend = deliveryAttemptVersion != null || current.hadUnacknowledgedSend,
+        )
       onStatusUpdated?.invoke(status)
       return 1
+    }
+
+    override suspend fun requeueForRetryIfCurrent(
+      gatewayId: String,
+      id: String,
+      expectedAttemptVersion: Int,
+      expectedRetryCount: Int,
+      expectedLastError: String?,
+      nowMs: Long,
+      gatedEpoch: Long?,
+      ownerAgentId: String?,
+      replacementId: String?,
+    ): Int {
+      val current = rows[id] ?: return 0
+      if (
+        current.attemptVersion != expectedAttemptVersion ||
+        current.retryCount != expectedRetryCount ||
+        current.lastError != expectedLastError
+      ) {
+        return 0
+      }
+      return requeueForRetry(gatewayId, id, nowMs, gatedEpoch, ownerAgentId)
     }
 
     override suspend fun requeueForRetry(
@@ -231,6 +302,9 @@ class ChatControllerOutboxTest {
           createdAtMs = createdAt,
           gatedEpoch = gatedEpoch,
           ownerAgentId = current.ownerAgentId ?: ownerAgentId,
+          attemptVersion = current.attemptVersion + 1,
+          parkedWasAccepted = false,
+          hadUnacknowledgedSend = false,
         )
       // Mirror the Room store: queued same-session successors follow the retried row.
       val successors =
