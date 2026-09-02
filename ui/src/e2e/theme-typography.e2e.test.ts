@@ -89,6 +89,7 @@ async function openThemedChat(theme: string, mode: "dark" | "light", basePath = 
 async function renderAssistantProse(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   page: Awaited<ReturnType<typeof openThemedChat>>["page"],
+  text = "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.",
 ) {
   await page.locator(".agent-chat__composer-combobox textarea").fill("say something");
   await page.getByRole("button", { name: "Send message" }).click();
@@ -97,8 +98,6 @@ async function renderAssistantProse(
     requireRecord(sendRequest.params).idempotencyKey,
     "chat send idempotency key",
   );
-  const text =
-    "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
   await gateway.emitGatewayEvent("chat", {
     message: { content: [{ text, type: "text" }], role: "assistant", timestamp: Date.now() },
     runId,
@@ -106,7 +105,7 @@ async function renderAssistantProse(
     state: "final",
   });
   // first() is the prompt this test just sent; the assistant reply is last.
-  await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("Typography");
+  await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain(text);
 }
 
 async function captureTypography(
@@ -167,7 +166,12 @@ suite.define(() => {
     );
     await page.evaluate(() => document.fonts.ready);
     expect(new Set(fontRequests())).toEqual(
-      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
+      new Set([
+        "dm-sans.css 200",
+        "fraunces.css 200",
+        "noto-sans-vietnamese.css 200",
+        "jetbrains-mono.css 200",
+      ]),
     );
     const families = () =>
       preview.evaluate((panel) => ({
@@ -189,7 +193,7 @@ suite.define(() => {
     await captureTypography(page, "picker-default");
     await openPicker(ui);
     await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
-    await expect.poll(() => fontRequests().length).toBe(9);
+    await expect.poll(() => fontRequests().length).toBe(10);
     await captureTypography(page, "picker-specimens");
     await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
@@ -228,6 +232,44 @@ suite.define(() => {
       ),
     ).toEqual(["", ""]);
   });
+
+  it.each(["claw", "dash"])(
+    "renders Vietnamese chat glyphs through a bundled fallback in %s",
+    async (theme) => {
+      const { gateway, page } = await openThemedChat(theme, "dark");
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const vietnamese = "ếệắặ";
+      await renderAssistantProse(gateway, page, `${vietnamese}${vietnamese.normalize("NFD")}`);
+      const chat = page.locator(".chat-text").last();
+      await chat.evaluate((element) => {
+        element.id = "vietnamese-font-proof";
+      });
+      await page.evaluate(() => document.fonts.ready);
+
+      const session = await page.context().newCDPSession(page);
+      try {
+        await session.send("DOM.enable");
+        await session.send("CSS.enable");
+        const { root } = await session.send("DOM.getDocument");
+        const { nodeId } = await session.send("DOM.querySelector", {
+          nodeId: root.nodeId,
+          selector: "#vietnamese-font-proof",
+        });
+        const { fonts } = await session.send("CSS.getPlatformFontsForNode", { nodeId });
+        expect(
+          fonts.every((font) => font.isCustomFont),
+          JSON.stringify(fonts),
+        ).toBe(true);
+        expect(fonts).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ familyName: "Noto Sans", isCustomFont: true }),
+          ]),
+        );
+      } finally {
+        await session.detach();
+      }
+    },
+  );
 
   it.each([
     ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"], "antialiased"],
@@ -273,17 +315,20 @@ suite.define(() => {
         };
       });
 
-      // Every theme also declares the mono face: base.css --mono names
-      // JetBrains Mono for code spans regardless of the active family.
-      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
+      // Every bundled theme also declares the Vietnamese fallback and mono face.
+      const expectedFaces = [...new Set([...faces, "noto-sans-vietnamese", "jetbrains-mono"])];
       expect(report.linkHrefs).toEqual(expectedFaces.map((face) => `/fonts/${face}.css`));
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
       // Serif chat faces opt out of the app-wide `antialiased` thinning
       // (applyChatFontSmoothing) so their hairlines stay crisp.
       expect(report.chatFontSmoothing).toBe(chatSmoothing);
-      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
-      expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
+      // Mono glyphs pull JetBrains Mono; Noto may load when the active face misses a glyph.
+      const requiredLoaded = [...new Set([body, chat, "JetBrains Mono"])];
+      expect(report.loaded).toEqual(expect.arrayContaining(requiredLoaded));
+      expect(
+        report.loaded.every((face) => requiredLoaded.includes(face) || face === "Noto Sans"),
+      ).toBe(true);
       expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
       await captureTypography(page, `${theme}-chat-dark`);

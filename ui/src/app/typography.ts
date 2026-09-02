@@ -4,12 +4,18 @@ import type { ThemeName } from "./theme.ts";
 
 export type TypefaceId = (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
 type TypefacePair = { ui: TypefaceId; chat: TypefaceId };
+type TypefaceStylesheetAsset = `fonts/${string}.css`;
 
 const FONT_FALLBACKS = {
   sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   serif: 'Georgia, "Times New Roman", serif',
   mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace',
 };
+const VIETNAMESE_FALLBACK = {
+  asset: "fonts/noto-sans-vietnamese.css",
+  family: "Noto Sans",
+  id: "noto-sans-vietnamese",
+} as const;
 const TYPEFACE_METADATA: Record<
   TypefaceId,
   { label: string; family?: string; kind: keyof typeof FONT_FALLBACKS }
@@ -33,7 +39,10 @@ const TYPEFACE_METADATA: Record<
 export const TYPEFACES = Object.fromEntries(
   UI_APPEARANCE_TYPEFACE_VALUES.map((id) => {
     const { label, family = label, kind } = TYPEFACE_METADATA[id];
-    const stack = id === "system" ? FONT_FALLBACKS.sans : `"${family}", ${FONT_FALLBACKS[kind]}`;
+    const stack =
+      id === "system"
+        ? FONT_FALLBACKS.sans
+        : `"${family}", "${VIETNAMESE_FALLBACK.family}", ${FONT_FALLBACKS[kind]}`;
     return [id, { label, stack, asset: id === "system" ? undefined : `fonts/${id}.css` }] as const;
   }),
   // SAFETY: Mapping the complete wire tuple emits one typed entry for every TypefaceId.
@@ -74,17 +83,20 @@ export function resolveTypefaces(
 
 // Load faces only when selected or previewed; retain them so switching slots
 // or reopening specimens never replaces an already loaded stylesheet.
-function loadTypefaceStylesheet(face: TypefaceId): void {
-  const id = `openclaw-typeface-${face}`;
-  const asset = TYPEFACES[face].asset;
-  if (!asset || document.getElementById(id)) {
+function loadStylesheet(id: string, asset: TypefaceStylesheetAsset | undefined): void {
+  const elementId = `openclaw-typeface-${id}`;
+  if (!asset || document.getElementById(elementId)) {
     return;
   }
   const link = document.createElement("link");
-  link.id = id;
+  link.id = elementId;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
   document.head.append(link);
+}
+
+function loadTypefaceStylesheet(face: TypefaceId): void {
+  loadStylesheet(face, TYPEFACES[face].asset);
 }
 
 export function syncTypefaceStylesheets(faces: TypefacePair): void {
@@ -93,6 +105,9 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
+  if (faces.ui !== "system" || faces.chat !== "system") {
+    loadStylesheet(VIETNAMESE_FALLBACK.id, VIETNAMESE_FALLBACK.asset);
+  }
   // base.css --mono names JetBrains Mono for every theme's code spans, but only
   // the @font-face declaration here makes that true; the woff2 itself downloads
   // lazily on the first rendered code glyph, so this costs one small stylesheet.
@@ -100,6 +115,7 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
 }
 
 export function loadTypefaceSpecimens(): void {
+  loadStylesheet(VIETNAMESE_FALLBACK.id, VIETNAMESE_FALLBACK.asset);
   UI_APPEARANCE_TYPEFACE_VALUES.forEach(loadTypefaceStylesheet);
 }
 

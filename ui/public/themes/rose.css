@@ -72,7 +72,8 @@
 
   --grid-line: rgba(224, 222, 244, 0.04);
 
-  --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body:
+    "DM Sans", "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
 }
@@ -150,7 +151,8 @@
 
   --grid-line: rgba(60, 45, 70, 0.04);
 
-  --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body:
+    "DM Sans", "Noto Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
 }
