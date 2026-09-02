@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { ApprovalScope } from "./approval-scope.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -55,7 +55,7 @@ export function requireValidExecTarget(value?: unknown): ExecTarget | null {
   );
 }
 
-export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+export function normalizeExecSecurity(value?: unknown): ExecSecurity | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
@@ -63,7 +63,7 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
   return null;
 }
 
-export function normalizeExecAsk(value?: string | null): ExecAsk | null {
+export function normalizeExecAsk(value?: unknown): ExecAsk | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized;
@@ -244,6 +244,7 @@ export type ExecApprovalsDefaults = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  mcpTools?: McpToolGrant[];
 };
 
 export type ExecApprovalsFile = {

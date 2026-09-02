@@ -77,8 +77,14 @@ class ClawHubSkillRuntimeTest {
             result.error?.let { throw GatewayRequestRejected(it) }
             checkNotNull(result.payloadJson)
           }
-          "skills.status" -> skillsStatus(installed = false)
-          else -> error("unexpected method $method")
+
+          "skills.status" -> {
+            skillsStatus(installed = false)
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -121,8 +127,14 @@ class ClawHubSkillRuntimeTest {
           installCalls.incrementAndGet()
           throw GatewayRequestOutcomeUnknown("response lost")
         }
-        "skills.status" -> skillsStatus(installed)
-        else -> error("unexpected method $method")
+
+        "skills.status" -> {
+          skillsStatus(installed)
+        }
+
+        else -> {
+          error("unexpected method $method")
+        }
       }
     }
 

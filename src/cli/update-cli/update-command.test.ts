@@ -14,7 +14,7 @@ import { testing as updateCommandPluginsTesting } from "./update-command-plugins
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
-  resolvePostInstallDoctorEnv,
+  resolveUpdateTargetEnv,
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
@@ -189,12 +189,13 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
   });
 });
 
-describe("resolvePostInstallDoctorEnv", () => {
+describe("resolveUpdateTargetEnv", () => {
   it("uses the managed service profile paths for post-install doctor", () => {
-    const env = resolvePostInstallDoctorEnv({
+    const env = resolveUpdateTargetEnv({
       invocationCwd: "/srv/openclaw",
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
@@ -209,6 +210,7 @@ describe("resolvePostInstallDoctorEnv", () => {
     });
 
     expect(env.PATH).toBe("/bin");
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
@@ -219,15 +221,17 @@ describe("resolvePostInstallDoctorEnv", () => {
   });
 
   it("keeps the caller env when no managed service env is available", () => {
-    const env = resolvePostInstallDoctorEnv({
+    const env = resolveUpdateTargetEnv({
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/caller/state",
         OPENCLAW_PROFILE: "caller",
       },
     });
 
     expect(env.PATH).toBe("/bin");
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
@@ -585,18 +589,6 @@ describe("collectMissingPluginInstallPayloads", () => {
   });
 });
 
-describe("resolvePostSyncPluginUpdateSkipIds", () => {
-  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
-    expect(
-      updateCommandPluginsTesting.resolvePostSyncPluginUpdateSkipIds({
-        switchedToClawHub: ["whatsapp"],
-        switchedToNpm: ["voice-call"],
-        repairedMissingPayloadIds: new Set(["telegram"]),
-      }),
-    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
-  });
-});
-
 describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
   it("never restarts package updates through the pre-update process", () => {
     expect(
@@ -916,13 +908,8 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   });
 });
 
-describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
-  it("returns status:error (not skipped) when configSnapshot is invalid, so the pre-restart gate fires", async () => {
-    // The pre-restart gate in `updateCommand` is literally
-    //   if (postCorePluginUpdate?.status === "error") { exit(1) }
-    // so asserting that this function returns status:"error" on invalid
-    // config is sufficient to prove the gate fires end-to-end. We pass
-    // `json: true` to suppress logging side-effects without mocking.
+describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
+  it("reports invalid config as an error with repair guidance", async () => {
     const result = await updatePluginsAfterCoreUpdate({
       root: "/tmp/openclaw-test",
       channel: "stable",
@@ -933,7 +920,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
       } as unknown as Awaited<
         ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
       >,
-      opts: { json: true } as never,
+      json: true,
       timeoutMs: 1000,
     });
     expect(result.status).toBe("error");
@@ -954,7 +941,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
 });
 
 describe("buildInvalidConfigPostCoreUpdateResult", () => {
-  it("returns status:error so the existing pre-restart gate exits 1 instead of restarting on invalid config", () => {
+  it("builds an error result for invalid post-core config", () => {
     const built = updateCommandPluginsTesting.buildInvalidConfigPostCoreUpdateResult();
     expect(built.result.status).toBe("error");
     expect(built.result.reason).toBe("invalid-config");

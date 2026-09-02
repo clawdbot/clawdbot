@@ -215,6 +215,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           routeSessionKey: resolved.route.sessionKey,
         });
         throw err;
+      } finally {
+        // Match the real buffered dispatcher's ownership of typing timers.
+        resolved.dispatcherOptions?.typingCallbacks?.onIdle?.();
       }
       await params.adapter.onFinalize?.(result);
       return result;
@@ -1168,6 +1171,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("sends typing + read receipt for allowed DMs", async () => {
+    vi.useFakeTimers();
     const handler = createTestHandler({
       cfg: createDirectConfig(),
       account: "+15550009999",
@@ -1177,26 +1181,33 @@ describe("signal createSignalEventHandler inbound context", () => {
       sendReadReceipts: true,
     });
 
-    await receiveMessage(handler, { message: "hi" });
+    try {
+      await receiveMessage(handler, { message: "hi" });
 
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
-      cfg: {
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-      },
-      baseUrl: "http://localhost",
-      account: "+15550009999",
-      accountId: "default",
-    });
-    expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-      cfg: {
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-      },
-      baseUrl: "http://localhost",
-      account: "+15550009999",
-      accountId: "default",
-    });
+      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        baseUrl: "http://localhost",
+        account: "+15550009999",
+        accountId: "default",
+      });
+      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        baseUrl: "http://localhost",
+        account: "+15550009999",
+        accountId: "default",
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops DM commands in open mode without allowlists", async () => {

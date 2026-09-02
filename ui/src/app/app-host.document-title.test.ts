@@ -67,13 +67,6 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("OpenClaw Control");
   });
 
-  it("uses the route title for a connected route", () => {
-    const shell = createShell(createContext({ sessions: null }));
-    shell.routeState = { routeId: "usage" };
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("Usage — OpenClaw");
-  });
-
   it("does not read stored outboxes for a connected document title", () => {
     const shell = createShell(createContext({}));
     const summarizeStoredChatOutboxes = vi.fn(() => ({ total: 3 }));

@@ -106,6 +106,7 @@ export async function tryDispatchAcpReplyHook(
     onReplyStart: ctx.onReplyStart,
     onAgentRunStart: ctx.onAgentRunStart,
     userTurnTranscriptRecorder: ctx.userTurnTranscriptRecorder,
+    prepareAssistantTranscriptMessage: ctx.prepareAssistantTranscriptMessage,
     recordProcessed: ctx.recordProcessed,
     markIdle: ctx.markIdle,
   });

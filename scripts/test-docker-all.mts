@@ -437,7 +437,7 @@ export function validateDockerCandidateEnvironment(
   if (!strictCandidate || !plan.needs.package) {
     baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ &&= path.resolve(baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ);
     const registryDir = baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
-    if (!plan.needs.prepublishPluginRegistry || !registryDir) {
+    if (!registryDir) {
       delete baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
       return;
     }
@@ -1397,9 +1397,8 @@ async function runLane(
     if (result.status === 0 || attempt >= maxAttempts) {
       break;
     }
-    const retryable =
-      result.timedOut || (await laneLogMatchesRetryPattern(logFile, lane.retryPatterns));
-    if (!retryable) {
+    // An exhausted lane deadline alone does not diagnose a transient failure.
+    if (!(await laneLogMatchesRetryPattern(logFile, lane.retryPatterns))) {
       break;
     }
   }

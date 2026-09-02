@@ -499,7 +499,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledOnce();
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-fast-abort");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-fast-abort",
+      undefined,
+      expect.objectContaining({ channel: "telegram", accountId: "default" }),
+    );
   });
 
   it("fast-resolves /approve before acquiring the active session operation", async () => {
@@ -1189,7 +1193,11 @@ describe("dispatchReplyFromConfig", () => {
       accountId: "default",
       conversationId: "C123",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-acp-current");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-acp-current",
+      undefined,
+      boundConversationBinding.conversation,
+    );
     expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
       storePath: sourceStorePath,
       sessionKey: sourceSessionKey,

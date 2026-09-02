@@ -520,6 +520,7 @@ describe("ACP diagnostic events", () => {
 
     expect(captured.at(-1)?.data).toMatchObject({
       phase: "end",
+      executionSettled: true,
       aborted: true,
       stopReason: "stop",
       status: "cancelled",
@@ -654,6 +655,7 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
     const data = captured[0]?.data as Record<string, unknown> | undefined;
     expect(data?.phase).toBe("error");
     expect(data?.error).toBe("Error: something went wrong");
+    expect(data?.executionSettled).toBe(true);
   });
 
   it("formats non-Error values without crashing", () => {

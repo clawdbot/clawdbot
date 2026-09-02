@@ -15,6 +15,7 @@ import {
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   dispatchInboundMessageMock,
@@ -107,6 +108,10 @@ describe("Gateway ACP completion ownership", () => {
       name: "post-hook text",
       text: "rendered reply",
       transform: () => ({ text: "rendered reply" }),
+    },
+    {
+      name: "successful runtime with post-hook warning",
+      transform: (payload) => ({ ...payload, isError: true }),
     },
     { name: "post-hook suppression", suppressed: true, transform: () => null },
     { name: "live block replies", live: true },
@@ -410,11 +415,10 @@ describe("Gateway ACP completion ownership", () => {
           const assistant = messages.findLast((message) => message.role === "assistant");
           expect
             .soft(
-              Array.isArray(assistant?.content) &&
-                assistant.content.some((block: unknown) => {
-                  const content = asOptionalRecord(block);
-                  return content !== undefined && content.type !== "text";
-                }),
+              readAssistantDisplayContent(assistant).some((block: unknown) => {
+                const content = asOptionalRecord(block);
+                return content !== undefined && content.type !== "text";
+              }),
             )
             .toBe(true);
         }

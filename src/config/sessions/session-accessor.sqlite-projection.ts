@@ -132,7 +132,7 @@ export async function applySessionStoreProjection<T>(params: {
     sessionKey: params.activeSessionKey ?? "",
     storePath: params.storePath,
   });
-  const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
+  const preparedWrite = await runPreparedSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const before = readSessionEntryStore(database);
     const projected = structuredClone(before);
@@ -209,9 +209,11 @@ export async function applySessionStoreProjection<T>(params: {
       },
     };
   });
+  const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
+    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
 }
@@ -242,6 +244,7 @@ function readProjectedRemovalEntry(
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySessionEntryLifecycleMutation(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   storePath: string;
   removals?: Iterable<SessionEntryLifecycleRemoval>;
   upserts?: Iterable<SessionEntryLifecycleUpsert>;
@@ -259,9 +262,12 @@ export async function applySessionEntryLifecycleMutation(params: {
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
   /** Synchronous caller-authority guard checked immediately before lifecycle writes. */
   beforeCommitInTransaction?: () => void;
+  /** Runs after the SQLite commit and before fallible artifact publication. */
+  onLifecycleCommitted?: () => void;
 }): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    env: params.env,
     sessionKey: "",
     storePath: params.storePath,
   });
@@ -278,7 +284,7 @@ export async function applySessionEntryLifecycleMutation(params: {
   let projected: ProjectedLifecycleMutation;
   let materializedRemovalPlans: MaterializedSessionStateDeletePlan[] = [];
   let removalArchiveMaterializationFailed = false;
-  const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
+  const preparedWrite = await runPreparedSqliteSessionWrite(resolved, async () => {
     projected = await projectSessionEntryLifecycleMutation(toDatabaseOptions(resolved), {
       ...(params.allowCanonicalRepair ? { allowCanonicalRepair: true } : {}),
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
@@ -313,6 +319,8 @@ export async function applySessionEntryLifecycleMutation(params: {
         ),
     };
   });
+  const committed = preparedWrite.result;
+  params.onLifecycleCommitted?.();
 
   function commitProjectedLifecycleMutation(
     removalPlans: MaterializedSessionStateDeletePlan[],
@@ -395,7 +403,9 @@ export async function applySessionEntryLifecycleMutation(params: {
         }
         if (resetBoundary && expectedEntry?.sessionId) {
           const event = buildSessionResetBoundaryEvent({
-            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId),
+            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId, {
+              projection: "reset-boundary",
+            }),
             ...resetBoundary,
           });
           const appended = appendTranscriptEventsInTransaction(
@@ -491,6 +501,7 @@ export async function applySessionEntryLifecycleMutation(params: {
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
+      { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
     );
   let publishedRemovalTranscripts: SessionLifecycleArchivedTranscript[] = [];
   try {
@@ -630,6 +641,7 @@ export async function purgeDeletedAgentSessionEntries(
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
+      { deletedEntriesBeforeMaintenance: prepared.entryRemovals.length },
     );
   const archivedTranscripts = [
     ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),

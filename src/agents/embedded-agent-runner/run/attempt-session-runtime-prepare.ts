@@ -48,6 +48,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   effectiveWorkspace: string;
   initialSystemPrompt: string;
   isRawModelRun: boolean;
+  nestedToolActivities: AgentSessionInput["nestedToolActivities"];
   sessionManager: Pick<
     SessionManagerInput,
     | "replayAllowedToolNames"
@@ -137,20 +138,24 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
+    nestedToolActivities: input.nestedToolActivities,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
   await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
-  const boundary = prepareEmbeddedAttemptSessionBoundary({
-    activeSession,
-    attempt,
-    ...preparedSessionManager.userMessageBoundary,
-    isRawModelRun: input.isRawModelRun,
-    sessionManager,
-    setActiveSessionSystemPrompt,
-  });
+  const boundary = await input.sessionManager.withOwnedTranscriptWrite(() =>
+    prepareEmbeddedAttemptSessionBoundary({
+      abortSignal: input.agentSession.runAbortSignal,
+      activeSession,
+      attempt,
+      ...preparedSessionManager.userMessageBoundary,
+      isRawModelRun: input.isRawModelRun,
+      sessionManager,
+      setActiveSessionSystemPrompt,
+    }),
+  );
   state.prePromptMessageCount = activeSession.messages.length;
 
   // Session-owned projections survive attempt teardown so already-sent tool results

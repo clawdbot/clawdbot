@@ -130,6 +130,19 @@ describe("internal runtime context codec", () => {
     expect(hasInternalRuntimeContext(preface)).toBe(true);
     expect(stripInternalRuntimeContext(preface)).toBe("");
     expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+    expect(
+      stripInternalRuntimeContext(
+        ` \t${header}\r\n ${OPENCLAW_RUNTIME_CONTEXT_NOTICE} \r\n\r\nVisible reply`,
+      ),
+    ).toBe("Visible reply");
+  });
+
+  it.each([
+    [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_END}`, "Visible reply"],
+    [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nprivate`, "Visible reply"],
+    [" \tVisible reply\r\n\r\n", " \tVisible reply\r\n\r\n"],
+  ])("preserves delimiter cleanup and ordinary whitespace in %j", (text, expected) => {
+    expect(stripInternalRuntimeContext(text)).toBe(expected);
   });
 
   it("preserves text when the runtime-context header or notice does not match", () => {

@@ -103,7 +103,7 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
           cfg: { scope, workspaceAccess: "ro", workspaceRoot: "/tmp/openclaw-sandboxes" },
           rawSessionKey: `agent:shared:${sandboxPrincipalId}`,
           agentId: "shared",
-          sandboxPrincipalId,
+          isolationSubject: { kind: "profile", profileId: sandboxPrincipalId },
           workspaceDir: workspaceA,
         });
         return {
@@ -134,7 +134,7 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
           cfg: { scope, workspaceAccess: "ro", workspaceRoot: "/tmp/openclaw-sandboxes" },
           rawSessionKey,
           agentId: "shared",
-          sandboxPrincipalId: "guest-a",
+          isolationSubject: { kind: "profile", profileId: "guest-a" },
           workspaceDir: workspaceA,
         });
         return {

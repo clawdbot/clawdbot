@@ -19,12 +19,21 @@ async function assertPrepublishRequests(
   requestedPackage,
   version,
   securityMode = "required",
+  attempts = "1",
+  minimumAttempts = "1",
 ) {
   if (!baseUrl || !requestedPackage || !version) {
     throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
   }
   if (securityMode !== "required" && securityMode !== "absent") {
     throw new Error("assert-prepublish-requests security mode must be required or absent");
+  }
+  if (attempts !== "1" && attempts !== "2" && attempts !== "complete") {
+    throw new Error("assert-prepublish-requests attempts must be 1, 2, or complete");
+  }
+  const minimumCount = Number(minimumAttempts);
+  if (!Number.isInteger(minimumCount) || minimumCount < 1 || minimumCount > 16) {
+    throw new Error("assert-prepublish-requests minimum attempts must be an integer from 1 to 16");
   }
   const response = await fetch(new URL("/__fixture__/requests", baseUrl));
   if (!response.ok) {
@@ -42,9 +51,18 @@ async function assertPrepublishRequests(
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
   ];
-  if (JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+  // Multi-command upgrade recovery can stage an artifact in several convergence
+  // phases. Every request must still belong to a complete authorized audit sequence.
+  const count =
+    attempts === "complete" ? payload.requests.length / expected.length : Number(attempts);
+  if (!Number.isInteger(count) || count < minimumCount || count > 16) {
+    throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
+  }
+  const expectedRequests = Array.from({ length: count }, () => expected).flat();
+  if (JSON.stringify(payload.requests) !== JSON.stringify(expectedRequests)) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
   }
+  console.log(`Verified ${count} complete ClawHub artifact audit sequence(s).`);
 }
 
 async function assertNoRequests(baseUrl) {
@@ -70,7 +88,7 @@ function startPrepublishArtifactServer() {
     throw new Error("prepublish artifact manifest must contain packages");
   }
   const artifacts = new Map(
-    manifest.packages.map((entry) => {
+    manifest.packages.flatMap((entry) => {
       if (
         typeof entry.name !== "string" ||
         typeof entry.version !== "string" ||
@@ -87,29 +105,37 @@ function startPrepublishArtifactServer() {
           encoding: "utf8",
         }),
       );
+      if (
+        sha256 !== entry.sha256 ||
+        packedPackage.name !== entry.name ||
+        packedPackage.version !== entry.version
+      ) {
+        throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
+      }
+      // The shared npm set also carries root and core packages; only declared
+      // plugin entrypoints belong in the ClawHub install fixture.
+      if (!Array.isArray(packedPackage.openclaw?.extensions)) {
+        return [];
+      }
       const packedPlugin = JSON.parse(
         execFileSync("tar", ["-xOf", tarballPath, "package/openclaw.plugin.json"], {
           encoding: "utf8",
         }),
       );
-      if (
-        sha256 !== entry.sha256 ||
-        packedPackage.name !== entry.name ||
-        packedPackage.version !== entry.version ||
-        typeof packedPlugin.id !== "string" ||
-        packedPlugin.id.length === 0
-      ) {
+      if (typeof packedPlugin.id !== "string" || packedPlugin.id.length === 0) {
         throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
       }
       return [
-        entry.name,
-        {
-          ...entry,
-          archive,
-          runtimeId: packedPlugin.id,
-          npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
-          npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
-        },
+        [
+          entry.name,
+          {
+            ...entry,
+            archive,
+            runtimeId: packedPlugin.id,
+            npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+            npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
+          },
+        ],
       ];
     }),
   );
@@ -647,7 +673,14 @@ profiles["catalog-search"] = {
 };
 
 if (profile === "assert-prepublish-requests") {
-  assertPrepublishRequests(portFile, artifactManifestFile, process.argv[5], process.argv[6]).catch(
+  assertPrepublishRequests(
+    portFile,
+    artifactManifestFile,
+    process.argv[5],
+    process.argv[6],
+    process.argv[7],
+    process.argv[8],
+  ).catch(
     /** @param {unknown} error */ (error) => {
       console.error(error);
       process.exit(1);

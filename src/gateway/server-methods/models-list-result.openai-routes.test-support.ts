@@ -55,6 +55,7 @@ export async function listModels(params: {
   staticEntries?: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
+  catalogComplete?: boolean;
   preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -66,7 +67,7 @@ export async function listModels(params: {
     ({
       agentId,
       agentDir: params.agentDir ?? "/tmp/models-list-openai-agent",
-      catalogComplete: false,
+      catalogComplete: params.catalogComplete ?? false,
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
       authModes: params.preparedAuthModes ?? {},

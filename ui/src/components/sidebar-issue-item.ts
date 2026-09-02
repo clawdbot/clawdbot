@@ -12,7 +12,6 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
 
@@ -41,40 +40,6 @@ function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
   >
     ${icons.x}
   </button>`;
-}
-
-export function renderSidebarAskOpenClawButton(params: {
-  count: number;
-  severity: "error" | "warning" | null;
-  snapshot: ApplicationContext["gateway"]["snapshot"] | undefined;
-}) {
-  if (!canCallGatewayMethod(params.snapshot, "openclaw.chat", "operator.admin")) {
-    return nothing;
-  }
-  const label = params.count
-    ? t(params.count === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
-        count: String(params.count),
-      })
-    : t("nav.askOpenClaw");
-  return html`<openclaw-tooltip .content=${label}>
-    <button
-      type="button"
-      class="sidebar-brand__icon sidebar-footer-bar__custodian sidebar-issues-panel__ask"
-      aria-label=${label}
-      @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-    >
-      <span class="sidebar-footer-bar__custodian-glyph">
-        ${icons.lobster}
-        ${params.count
-          ? html`<span
-              class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${params.severity ??
-              "warning"}"
-              aria-hidden="true"
-            ></span>`
-          : nothing}
-      </span>
-    </button>
-  </openclaw-tooltip>`;
 }
 
 export function renderSidebarApprovalItem(params: {

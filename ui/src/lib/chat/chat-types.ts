@@ -29,6 +29,15 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
@@ -47,6 +56,7 @@ export type ChatGoalDraft = { sessionId?: string } & (
 export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;
   attachments: ChatAttachment[];
@@ -82,6 +92,9 @@ export type ChatQueueItem = {
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
+  /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
+  attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
+  attachmentStorageError?: "capacity" | "unavailable" | "missing";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -133,6 +146,8 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
+      compaction?: "active" | "complete";
+      compactionId?: string;
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;
@@ -226,9 +241,11 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  visibleContent: "none" | "text" | "non-text";
   timestamp: number;
   isStreaming: boolean;
   runId?: string;
@@ -241,6 +258,10 @@ export type MessageContentItem =
       text?: string;
       name?: string;
       args?: unknown;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
     }
   | {
       type: "attachment";
@@ -280,6 +301,7 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };

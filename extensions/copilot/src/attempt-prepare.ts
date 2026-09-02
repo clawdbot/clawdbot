@@ -6,8 +6,8 @@ import {
   isHostScopedAgentToolActive,
   resolveAgentDir,
   resolveSandboxContext as defaultResolveSandboxContext,
-  resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readNonEmptyString, readResolvedAttemptPath, resolveModelRef } from "./attempt-config.js";
 import type {
   AttemptParamsLike,
@@ -63,7 +63,7 @@ export function prepareCopilotAttemptContext(
     readNonEmptyString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
     readNonEmptyString((input as { sessionKey?: unknown }).sessionKey) ??
     readNonEmptyString(input.sessionId);
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
     agentId: readNonEmptyString(params.agentId),
@@ -85,7 +85,7 @@ export function prepareCopilotAttemptContext(
     runId: input.runId,
     jobId: input.jobId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: readNonEmptyString(input.sessionKey) ?? sandboxSessionKey,
     sessionId: input.sessionId,
     workspaceDir: resolvedWorkspaceForSandbox,
     modelProviderId: modelRef.provider,
@@ -125,6 +125,7 @@ export async function resolveCopilotAttemptSandbox(params: {
       ? params.input.sandbox
       : await resolveSandbox({
           config: params.input.config,
+          agentId: params.input.sandboxAgentId,
           sessionKey: params.sandboxSessionKey,
           workspaceDir: params.resolvedWorkspaceForSandbox,
         });

@@ -21,6 +21,7 @@ export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
   hotReloadStatus?: () => GatewayHotReloadStatus;
   notifyPluginMetadataChanged: () => void;
+  isConfigReloadSettled: () => boolean;
 };
 
 /** Mutable handles owned by a running gateway server process. */
@@ -65,6 +66,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     configReloader: {
       stop: async () => {},
       notifyPluginMetadataChanged: () => {},
+      isConfigReloadSettled: () => false,
     } satisfies GatewayConfigReloaderHandle,
     agentUnsub: null as (() => Promise<void> | void) | null,
     heartbeatUnsub: null as (() => void) | null,

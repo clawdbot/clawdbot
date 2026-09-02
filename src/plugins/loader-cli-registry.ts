@@ -11,11 +11,7 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import {
-  getReusableCachedPluginRegistry,
-  isPluginRegistryCacheEnabled,
-  setCachedPluginRegistry,
-} from "./loader-cache.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -42,9 +38,11 @@ import {
   validatePluginConfig,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule } from "./types.js";
@@ -61,7 +59,7 @@ export async function loadOpenClawPluginCliRegistry(
   const cacheKey = `cli-metadata::${context.cacheKey}`;
   const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry(cacheKey);
+    const cached = pluginLoaderCacheState.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -135,6 +133,7 @@ export async function loadOpenClawPluginCliRegistry(
           config: context.normalized,
           rootConfig: context.cfg,
           enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          channelIds: manifestRecord.channels,
           activationSource: context.activationSource,
           autoEnabledReason: formatAutoEnabledActivationReason(
             context.autoEnabledReasons[pluginId],
@@ -162,6 +161,7 @@ export async function loadOpenClawPluginCliRegistry(
           config: context.normalized,
           rootConfig: context.cfg,
           enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          channelIds: manifestRecord.channels,
           activationSource: context.activationSource,
         });
     const entry = context.normalized.entries[policyId];
@@ -199,6 +199,7 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const validatedConfig = validatePluginConfig({
+      origin: candidate.origin,
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
@@ -248,6 +249,11 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+      pluginId,
+      packageName: candidate.packageName,
+      packageBuild: candidate.packageManifest?.build,
+    });
     let mod: OpenClawPluginModule | null;
     try {
       mod = withProfile(
@@ -267,6 +273,7 @@ export async function loadOpenClawPluginCliRegistry(
         error,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
+        missingDependencyHint,
       });
       continue;
     }
@@ -361,11 +368,12 @@ export async function loadOpenClawPluginCliRegistry(
         error,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
         diagnosticMessagePrefix: "plugin failed during register: ",
+        missingDependencyHint,
       });
     }
   }
   if (cacheEnabled) {
-    setCachedPluginRegistry(cacheKey, registry);
+    pluginLoaderCacheState.set(cacheKey, registry);
   }
   return registry;
 }

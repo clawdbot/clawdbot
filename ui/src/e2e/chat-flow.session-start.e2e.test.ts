@@ -53,6 +53,7 @@ suite.define(() => {
         },
       ],
       sessionKey: "global",
+      sessionScope: "global",
     });
 
     try {
@@ -91,7 +92,7 @@ suite.define(() => {
             },
           ],
         },
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:global",
         thinkingLevel: null,
       });
 
@@ -176,7 +177,7 @@ suite.define(() => {
               role: "assistant",
             },
           ],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
       },

@@ -1,8 +1,8 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -10,6 +10,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI continue in terminal mocked Gateway E2E",
@@ -18,8 +19,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/header-session-menu");
-const basePath = "/nested/$&;=()+,![]{}'`/%25PATH%25";
+const basePath = new URL("/nested/$&;=()+,![]{}'`/%25PATH%25", "http://localhost").pathname;
 const agentId = "runner";
 const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
 
@@ -51,23 +51,20 @@ const sharedManagementActions = [
   "Pin session",
   "Mark as unread",
   "Rename…",
-  "Assign to me",
   "Assign to…",
-  "Set icon",
-  "Fork",
-  "Copy session ID",
+  "Icon & color",
+  "Fork conversation",
+  "Copy",
+  "Open in",
   "Move to group",
   "Archive session",
   "Delete…",
 ] as const;
-const compactManagementActions = sharedManagementActions.filter(
-  (label) => label !== "Assign to me",
-);
+const compactManagementActions = sharedManagementActions;
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {
-    await rm(artifactDir, { recursive: true, force: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("header-session-menu");
     await suite.withPage(
       {
         locale: "en-US",
@@ -100,7 +97,9 @@ suite.define(() => {
         await context.grantPermissions(["clipboard-read", "clipboard-write"], {
           origin: pageUrl.origin,
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.goto(
+          controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
+        );
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         await expect
           .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
@@ -123,6 +122,7 @@ suite.define(() => {
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
+        await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
@@ -146,6 +146,7 @@ suite.define(() => {
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.press("Enter");
+        await openSessionMenuSubmenu(page, "Open in");
         await action.click();
         await dialog.waitFor({ state: "visible" });
         const socketCount = await gateway.getSocketCount();
@@ -159,7 +160,7 @@ suite.define(() => {
   });
 
   it("keeps the canonical session actions reachable in the mobile header menu", async () => {
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("header-session-menu");
     await suite.withPage(
       {
         locale: "en-US",
@@ -187,7 +188,9 @@ suite.define(() => {
           presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
           sessionKey,
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.goto(
+          controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
+        );
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         // Mock history also renders in the retained boot pane. Wait for this session's pane
         // before Playwright resolves a control that can stay mounted beneath its replacement.
@@ -214,6 +217,10 @@ suite.define(() => {
           fullPage: true,
           path: path.join(artifactDir, "03-mobile-menu.png"),
         });
+        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
+        await dropdown
+          .getByText("Continue in terminal…", { exact: true })
+          .waitFor({ state: "visible" });
       },
     );
   });

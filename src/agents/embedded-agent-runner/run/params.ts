@@ -13,6 +13,7 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
+import type { PrepareAssistantTranscriptMessage } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
@@ -33,6 +34,7 @@ import type {
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
+import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -105,6 +107,8 @@ export type RunEmbeddedAgentParams = {
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
+  sandboxAgentId?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -184,8 +188,6 @@ export type RunEmbeddedAgentParams = {
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
-  /** Restrict one internal post-mutation recovery attempt to audited core reads. */
-  forceCodeModeReconciliationTools?: boolean;
   /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
   forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
@@ -211,6 +213,7 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
+  skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -268,6 +271,8 @@ export type RunEmbeddedAgentParams = {
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Prepared fallback availability fact shared by selection and failure reporting. */
+  modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** True when the pinned non-default harness owns model selection for this session. */
@@ -374,6 +379,7 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
@@ -384,6 +390,8 @@ export type RunEmbeddedAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
+  /** Reports a committed generic recovery compaction before its retry starts. */
+  onAutoCompactionSucceeded?: (count: number) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
   onToolStreamBoundary?: () => void | Promise<void>;
   /**
@@ -471,6 +479,7 @@ export type RunEmbeddedAgentParams = {
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,
   | "agentDir"
+  | "sandboxAgentId"
   | "promptCacheKey"
   | "reasoningLevel"
   | "messageChannel"

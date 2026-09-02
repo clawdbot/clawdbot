@@ -257,6 +257,23 @@ export async function projectInferenceRoute(
       ? agent.model
       : agent?.model?.primary ||
         (typeof defaults?.model === "string" ? defaults.model : defaults?.model?.primary);
+  const agentRouteOverrides = agent
+    ? {
+        model: structuredClone(agent.model),
+        params: structuredClone(agent.params),
+        tools: structuredClone(agent.tools),
+        models: projectRelevantModelMap({
+          models: agent.models,
+          providerIds,
+          modelId: route?.model,
+          rawModel,
+        }),
+        agentRuntime: structuredClone(agent.agentRuntime),
+      }
+    : undefined;
+  const hasAgentRouteOverrides =
+    agentRouteOverrides !== undefined &&
+    Object.values(agentRouteOverrides).some((value) => value !== undefined);
   let projectedRoute: DefaultInferenceRouteProjection["route"] = null;
   if (route) {
     const { runConfig: _runConfig, ...routeWithoutConfig } = route;
@@ -286,21 +303,11 @@ export async function projectInferenceRoute(
       }),
       agentRuntime: structuredClone(defaults?.agentRuntime),
     },
-    ...(agent
+    ...(agent && hasAgentRouteOverrides
       ? {
           agent: {
             id: normalizeAgentId(agent.id),
-            agentDir: agent.agentDir,
-            model: structuredClone(agent.model),
-            params: structuredClone(agent.params),
-            tools: structuredClone(agent.tools),
-            models: projectRelevantModelMap({
-              models: agent.models,
-              providerIds,
-              modelId: route?.model,
-              rawModel,
-            }),
-            agentRuntime: structuredClone(agent.agentRuntime),
+            ...agentRouteOverrides,
           },
         }
       : {}),

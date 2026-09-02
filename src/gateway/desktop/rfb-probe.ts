@@ -1,4 +1,5 @@
 import net from "node:net";
+import { Duplex } from "node:stream";
 
 const RFB_BANNER_BYTES = 12;
 const RFB_37_MINOR = 7;
@@ -18,7 +19,7 @@ type ParsedRfbVersion = {
 };
 
 /** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
-function parseRfbVersionBanner(
+export function parseRfbVersionBanner(
   buffer: Buffer,
 ): ParsedRfbVersion | { kind: "not-rfb"; banner: string } {
   const banner = buffer.subarray(0, RFB_BANNER_BYTES).toString("ascii");
@@ -43,7 +44,7 @@ function parseRfbVersionBanner(
 }
 
 type ParsedRfbSecurity =
-  | { kind: "complete"; securityTypes: number[]; bytesConsumed: number }
+  | { kind: "complete"; securityTypes: number[] }
   | { kind: "incomplete"; requiredBytes: number };
 
 /** Parses the post-version RFB security offer from a standalone buffer. */
@@ -56,7 +57,6 @@ function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfb
     return {
       kind: "complete",
       securityTypes: securityType === 0 ? [] : [securityType],
-      bytesConsumed: 4,
     };
   }
 
@@ -71,10 +71,9 @@ function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfb
       : {
           kind: "complete",
           securityTypes: [...buffer.subarray(1, requiredBytes)],
-          bytesConsumed: requiredBytes,
         };
   }
-  return { kind: "complete", securityTypes: [], bytesConsumed: 1 };
+  return { kind: "complete", securityTypes: [] };
 }
 
 class SocketEndedError extends Error {
@@ -86,8 +85,6 @@ class SocketEndedError extends Error {
 class SocketTimeoutError extends Error {}
 
 function createSocketReader(socket: net.Socket) {
-  let buffered = Buffer.alloc(0);
-  let ended = false;
   let failure: Error | undefined;
   const waiters = new Set<() => void>();
   const wake = () => {
@@ -96,55 +93,148 @@ function createSocketReader(socket: net.Socket) {
     }
     waiters.clear();
   };
-  socket.on("data", (chunk: Buffer) => {
-    buffered = Buffer.concat([buffered, chunk]);
+  const onEnd = () => {
+    failure ??= new SocketEndedError(socket.read() ?? Buffer.alloc(0));
     wake();
-  });
-  socket.once("end", () => {
-    ended = true;
-    wake();
-  });
-  socket.once("error", (error) => {
+  };
+  const onError = (error: Error) => {
     failure = error;
     wake();
-  });
-  socket.once("timeout", () => {
-    failure = new SocketTimeoutError("RFB handshake timed out");
-    wake();
-  });
-
+  };
+  // Readable mode leaves unread bytes in the socket's bounded buffer for handoff.
+  socket.on("readable", wake);
+  socket.once("end", onEnd);
+  socket.once("close", onEnd);
+  socket.once("error", onError);
   return {
     async readExactly(length: number): Promise<Buffer> {
-      while (buffered.length < length) {
+      for (;;) {
+        const value: Buffer | null = socket.read(length);
+        if (value) {
+          if (value.length !== length) {
+            throw new SocketEndedError(value);
+          }
+          return value;
+        }
         if (failure) {
           throw failure;
-        }
-        if (ended) {
-          throw new SocketEndedError(buffered);
         }
         await new Promise<void>((resolve) => {
           waiters.add(resolve);
         });
       }
-      const value = buffered.subarray(0, length);
-      buffered = buffered.subarray(length);
-      return value;
+    },
+    detach(): void {
+      socket.pause();
+      socket.off("readable", wake);
+      socket.off("end", onEnd);
+      socket.off("close", onEnd);
+      socket.off("error", onError);
     },
   };
 }
 
-/** Connects to a loopback RFB server and reads only its version and security offer. */
-export async function probeRfbServer(params: {
+/** Replays the inspected prefix while keeping authentication on the same TCP connection. */
+class ConnectedRfbStream extends Duplex {
+  private version = Buffer.alloc(0);
+
+  constructor(
+    private readonly socket: net.Socket,
+    private readonly versionReply: Buffer,
+  ) {
+    super({ allowHalfOpen: false });
+    // The caller may still be reading credentials when the peer closes. Retain an
+    // error listener through that handoff; the transport checks destroyed/errored.
+    this.on("error", () => undefined);
+    socket.on("data", (chunk: Buffer) => {
+      if (!this.push(chunk)) {
+        socket.pause();
+      }
+    });
+    socket.once("end", () => {
+      this.push(null);
+      // Stop client writes at native EOF even if the readable tail is still paused.
+      this.end();
+    });
+    socket.once("close", () => {
+      // Normal EOF may leave unread bytes in this Duplex while its consumer is paused.
+      // Let them drain before auto-destroy; only a premature close discards the stream.
+      if (!socket.readableEnded) {
+        this.destroy(new Error("RFB peer closed before ending the stream"));
+      }
+    });
+    socket.once("error", (error) => this.destroy(error));
+  }
+
+  override _read(): void {
+    this.socket.resume();
+  }
+
+  override _write(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    let remaining = chunk;
+    if (this.version.length < RFB_BANNER_BYTES) {
+      const consumed = Math.min(RFB_BANNER_BYTES - this.version.length, chunk.length);
+      this.version = Buffer.concat([this.version, chunk.subarray(0, consumed)]);
+      remaining = chunk.subarray(consumed);
+      if (this.version.length === RFB_BANNER_BYTES && !this.version.equals(this.versionReply)) {
+        callback(new Error("RFB client changed the inspected protocol version"));
+        return;
+      }
+    }
+    if (remaining.length) {
+      this.socket.write(remaining, callback);
+    } else {
+      callback();
+    }
+  }
+
+  override _final(callback: (error?: Error | null) => void): void {
+    this.socket.end(callback);
+  }
+
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    this.socket.destroy();
+    callback(error);
+  }
+}
+
+type ConnectedRfbResult =
+  | { kind: "rfb"; securityTypes: number[]; stream: Duplex }
+  | Exclude<RfbProbeResult, { kind: "rfb" }>;
+
+/** Inspects an RFB offer and retains that connection for its authenticated stream. */
+export async function connectRfbServer(params: {
   host: "127.0.0.1";
   port: number;
   timeoutMs: number;
-}): Promise<RfbProbeResult> {
-  const socket = net.createConnection(params.port, params.host);
+  signal?: AbortSignal;
+}): Promise<ConnectedRfbResult> {
+  params.signal?.throwIfAborted();
+  // ConnectedRfbStream alone drains and ends writes; native auto-finalization
+  // would race the wrapper's queued writes when FIN arrives with unread output.
+  const socket = net.createConnection({
+    port: params.port,
+    host: params.host,
+    allowHalfOpen: true,
+  });
   const deadline = setTimeout(() => {
     socket.destroy(new SocketTimeoutError("RFB handshake timed out"));
   }, params.timeoutMs);
   deadline.unref();
   const reader = createSocketReader(socket);
+  let retained = false;
+  const onAbort = () =>
+    socket.destroy(
+      params.signal?.reason instanceof Error
+        ? params.signal.reason
+        : new Error("RFB connection aborted"),
+    );
+  params.signal?.addEventListener("abort", onAbort, { once: true });
+  socket.once("close", () => params.signal?.removeEventListener("abort", onAbort));
   try {
     await new Promise<void>((resolve, reject) => {
       socket.once("connect", resolve);
@@ -154,6 +244,7 @@ export async function probeRfbServer(params: {
     try {
       bannerBytes = await reader.readExactly(RFB_BANNER_BYTES);
     } catch (error) {
+      params.signal?.throwIfAborted();
       if (error instanceof SocketEndedError) {
         return { kind: "not-rfb", banner: error.buffered.toString("ascii") };
       }
@@ -175,17 +266,41 @@ export async function probeRfbServer(params: {
       ]);
       parsed = parseRfbSecurityTypes(securityBuffer, version.minor);
     }
-    return { kind: "rfb", securityTypes: parsed.securityTypes };
+    params.signal?.throwIfAborted();
+    reader.detach();
+    const stream = new ConnectedRfbStream(socket, version.reply);
+    // The Gateway still receives the original RFB wire contract. Only its version
+    // reply is consumed locally, since inspection already sent it to this peer.
+    socket.unshift(Buffer.concat([bannerBytes, securityBuffer]));
+    retained = true;
+    return { kind: "rfb", securityTypes: parsed.securityTypes, stream };
   } catch (error) {
+    params.signal?.throwIfAborted();
     if (error instanceof SocketTimeoutError) {
       return { kind: "timeout" };
     }
     return { kind: "unreachable" };
   } finally {
     clearTimeout(deadline);
-    socket.end();
-    socket.destroy();
+    if (!retained) {
+      reader.detach();
+      socket.destroy();
+    }
   }
+}
+
+/** Status-only inspection; streaming callers retain the connected result instead. */
+export async function probeRfbServer(params: {
+  host: "127.0.0.1";
+  port: number;
+  timeoutMs: number;
+}): Promise<RfbProbeResult> {
+  const result = await connectRfbServer(params);
+  if (result.kind !== "rfb") {
+    return result;
+  }
+  result.stream.destroy();
+  return { kind: "rfb", securityTypes: result.securityTypes };
 }
 
 /** Maps standard RFB security numbers into the credential UX supported by OpenClaw. */

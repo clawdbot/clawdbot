@@ -1,8 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type {
-  SessionParticipant,
-  SessionParticipantIdentity,
-} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
@@ -35,13 +32,14 @@ function renderPersistentSessionIcon(icon: string) {
 }
 
 export function describeSessionTrailingState(session: SidebarRecentSession) {
-  const runningLabel =
+  const activityLabel = t(
     session.hasActiveRun && session.status === "queued"
-      ? t("sessionsView.statusQueued")
-      : t("sessionsView.activeRun");
+      ? "sessionsView.statusQueued"
+      : "sessionsView.activeRun",
+  );
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
-    sessionHasRunningWork(session) ? runningLabel : "",
+    sessionHasRunningWork(session) ? activityLabel : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -53,16 +51,16 @@ export function renderSessionLeadingState(
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
-  participants?: readonly SessionParticipant[],
-  participantCount?: number,
   avatarAuth?: SessionAvatarAuth,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
   trailingIndicator: TemplateResult | typeof nothing;
-  renderedOwnerIdentity?: SessionParticipantIdentity;
+  renderedIdentities?: readonly SessionParticipantIdentity[];
 } {
+  const { participants, participantCount } = session;
   const running = sessionHasRunningWork(session);
+  const queued = session.hasActiveRun && session.status === "queued";
   const trailingIndicator = session.isChild ? nothing : renderSessionState(session, false);
   // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
@@ -72,6 +70,7 @@ export function renderSessionLeadingState(
         leadingIndicator: renderSessionGlyph({
           content: renderSessionAttentionIcon(session.attention),
           running,
+          queued,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
         trailingIndicator,
@@ -83,6 +82,7 @@ export function renderSessionLeadingState(
         leadingIndicator: renderSessionGlyph({
           content: renderPersistentSessionIcon(session.icon),
           running,
+          queued,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
         trailingIndicator,
@@ -99,6 +99,7 @@ export function renderSessionLeadingState(
             .authReady=${avatarAuth?.authReady ?? false}
           ></openclaw-channel-avatar>`,
           running,
+          queued,
           circular: true,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
@@ -132,17 +133,16 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
-  const ownerChip =
-    !session.isChild && ownerActor?.id?.trim()
-      ? renderSessionOwnerChip(
-          ownerActor,
-          "row",
-          attribution,
-          ownerViewing,
-          participants,
-          participantCount,
-        )
-      : undefined;
+  const ownerChip = ownerActor?.id?.trim()
+    ? renderSessionOwnerChip(
+        ownerActor,
+        "row",
+        attribution,
+        ownerViewing,
+        participants,
+        participantCount,
+      )
+    : undefined;
   if (session.channelAvatarUrl) {
     ensureChannelAvatarElement();
     return {
@@ -171,9 +171,13 @@ export function renderSessionLeadingState(
         circular: true,
       }),
       trailingIndicator,
-      // Single source for facepile dedup: only the identity actually shown in
-      // the lead may be excluded, else attention/archived rows hide a viewer.
-      renderedOwnerIdentity: ownerActor?.identity,
+      // Exclude only visible avatars; a +N stack still needs individual live viewers.
+      renderedIdentities: [
+        ...(ownerActor?.identity ? [ownerActor.identity] : []),
+        ...((participantCount ?? participants?.length) === 1
+          ? (participants ?? []).slice(0, 1).map((participant) => participant.identity)
+          : []),
+      ],
     };
   }
   return {

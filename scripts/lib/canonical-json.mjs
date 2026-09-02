@@ -9,6 +9,21 @@ function canonicalPath(parent, key) {
   return `${parent}[${JSON.stringify(key)}]`;
 }
 
+// This intentionally sorts JSON-like values without validating JSON.
+export function sortJsonValueKeys(value) {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValueKeys);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, sortJsonValueKeys(entry)]),
+    );
+  }
+  return value;
+}
+
 export function canonicalizeJsonValue(value, path = "$", ancestors = new Set()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;

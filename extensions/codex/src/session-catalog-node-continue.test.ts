@@ -12,6 +12,7 @@ import {
   readCodexSessionTranscript,
   registerCodexSessionCatalog,
   config,
+  idleThread,
   compatibilityOwnerConfig,
   createControl,
   createEligibleControl,
@@ -225,9 +226,10 @@ describe("Codex supervision actions", () => {
       conversationBinding: { data: { agentId: "alpha" } },
     });
     expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Remote task",
+        displayName: "Remote task",
         spawnedCwd: "/remote/repo",
         initialEntry: expect.objectContaining({
           agentHarnessId: "codex",
@@ -486,6 +488,14 @@ describe("Codex supervision actions", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
     const control = createEligibleControl({
+      requireEligibleThread: vi.fn(async () =>
+        idleThread({
+          id: threadId,
+          status: { type: "active" },
+          source: "cli",
+          cwd: "/workspace/local",
+        }),
+      ),
       listPage: vi.fn(async () => ({
         sessions: [
           { threadId, status: "active", source: "cli", cwd: "/workspace/local", archived: false },

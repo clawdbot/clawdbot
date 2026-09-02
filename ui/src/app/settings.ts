@@ -188,6 +188,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
+  chatCollapseTaskProgress: false,
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
@@ -211,6 +212,8 @@ export type UiSettings = {
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
+  // Browser-local presentation preference; false preserves active-card auto-expand.
+  chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
@@ -243,19 +246,6 @@ export type UiSettings = {
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
 };
-
-type LastActiveSessionHost = {
-  settings: Pick<UiSettings, "lastActiveSessionKey">;
-  applySettings(patch: Partial<UiSettings>): void;
-};
-
-export function setLastActiveSessionKey(host: LastActiveSessionHost, next: string) {
-  const trimmed = next.trim();
-  if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
-    return;
-  }
-  host.applySettings({ lastActiveSessionKey: trimmed });
-}
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -468,6 +458,7 @@ export function loadSettings(): UiSettings {
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
+    chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
@@ -541,6 +532,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatPersistCommentary === "boolean"
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
+      chatCollapseTaskProgress:
+        typeof parsed.chatCollapseTaskProgress === "boolean"
+          ? parsed.chatCollapseTaskProgress
+          : defaults.chatCollapseTaskProgress,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
@@ -689,6 +684,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
+    ...(next.chatCollapseTaskProgress === true ? { chatCollapseTaskProgress: true } : {}),
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),

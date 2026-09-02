@@ -141,42 +141,70 @@ describe("createSessionCapability message subscriptions", () => {
     sessions.dispose();
   });
 
-  it("isolates targeted global observers by the selected canonical agent", async () => {
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: params?.key };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+  it.each(["global", "qualified main alias"])(
+    "retains each global observer owner through %s acknowledgment and release",
+    async (keyForm) => {
+      const observers = new Map<string, boolean>();
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        const key = params?.key;
+        const agentId =
+          params?.agentId ??
+          (key === "agent:main:main" ? "main" : key === "agent:work:main" ? "work" : null);
+        if (agentId !== "main" && agentId !== "work") {
+          throw new Error("Canonical global observer requires its owner");
+        }
+        if (method === "sessions.messages.subscribe") {
+          observers.set(agentId, params?.includeApprovals === true);
+          return { key: "global" };
+        }
+        if (method === "sessions.messages.unsubscribe") {
+          observers.delete(agentId);
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const sessions = createSessionCapability(createGateway(client));
 
-    const [main, research] = await Promise.all([
-      sessions.subscribeMessages("global", { agentId: "main" }),
-      sessions.subscribeMessages("global", { agentId: "research" }),
-    ]);
+      const keyFor = (agentId: string) =>
+        keyForm === "global" ? "global" : `agent:${agentId}:main`;
+      const [main, work] = await Promise.all([
+        sessions.subscribeMessages(keyFor("main"), { agentId: " Main " }),
+        sessions.subscribeMessages(keyFor("work"), { agentId: " Work " }),
+      ]);
 
-    expect(main).toEqual({ key: "global", agentId: "main" });
-    expect(research).toEqual({ key: "global", agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "sessions.messages.subscribe",
-      { key: "global", agentId: "main" },
-      subscriptionRequestOptions,
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.subscribe",
-      { key: "global", agentId: "research" },
-      subscriptionRequestOptions,
-    );
-    await sessions.unsubscribeMessages(main);
-    await sessions.unsubscribeMessages(research);
-    sessions.dispose();
-  });
+      await sessions.unsubscribeMessages(main);
+      expect([...observers]).toEqual([["work", false]]);
+      const approval = await sessions.subscribeMessages(keyFor("work"), {
+        agentId: "work",
+        includeApprovals: true,
+      });
+      await sessions.unsubscribeMessages(work);
+      expect([...observers]).toEqual([["work", true]]);
+      await sessions.unsubscribeMessages(approval);
+      expect(observers.size).toBe(0);
+      expect(main).toEqual({ key: "global", agentId: "main" });
+      expect(work).toEqual({ key: "global", agentId: "work" });
+      expect(request).toHaveBeenNthCalledWith(
+        1,
+        "sessions.messages.subscribe",
+        { key: keyFor("main"), agentId: "main" },
+        subscriptionRequestOptions,
+      );
+      expect(request).toHaveBeenNthCalledWith(
+        2,
+        "sessions.messages.subscribe",
+        { key: keyFor("work"), agentId: "work" },
+        subscriptionRequestOptions,
+      );
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.messages.unsubscribe",
+        { key: "global", agentId: "work" },
+        subscriptionRequestOptions,
+      );
+      sessions.dispose();
+    },
+  );
 
   it("retires the current Gateway generation when a sent subscription cannot be recovered", async () => {
     const timeout = new GatewayProtocolRequestTimeoutError({

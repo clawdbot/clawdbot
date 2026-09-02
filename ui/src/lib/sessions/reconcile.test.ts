@@ -101,6 +101,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   const payload = {
     sessionKey: "agent:main:main",
     reason: "patch",
+    ts: 2,
     updatedAt: 2,
     label: "Renamed",
   };
@@ -109,6 +110,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   expect(first.applied).toBe(true);
   expect(first.result).not.toBe(result);
   expect(first.result?.sessions[0]?.label).toBe("Renamed");
+  expect(first.result?.ts).toBe(2);
 
   // The capability handler and the chat page both drive the same event; the
   // second reconcile must return the identical result object so downstream

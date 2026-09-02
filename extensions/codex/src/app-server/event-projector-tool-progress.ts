@@ -327,10 +327,9 @@ export class CodexToolProgressProjection {
       return;
     }
     this.resultSummaryItemIds.add(item.id);
-    const meta =
-      this.shouldEmitToolOutput() || !isCommandBearingToolItem(item, args)
-        ? itemMeta(item, this.toolProgressDetailMode())
-        : undefined;
+    const meta = this.shouldIncludeFormattedMeta(isCommandBearingToolItem(item, args))
+      ? itemMeta(item, this.toolProgressDetailMode())
+      : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
       text: formatToolSummary(toolName, meta),
@@ -349,9 +348,12 @@ export class CodexToolProgressProjection {
     if (!toolName || !output || !shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
       return;
     }
+    const meta = this.shouldIncludeFormattedMeta(isCommandBearingToolItem(item, itemToolArgs(item)))
+      ? itemMeta(item, this.toolProgressDetailMode())
+      : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
+      text: formatToolOutput(toolName, meta, output),
       finalOutput: true,
       isError: isNonSuccessItemStatus(itemStatus(item)),
     });
@@ -453,14 +455,13 @@ export class CodexToolProgressProjection {
     if (params.finalOutput) {
       this.resultOutputItemIds.add(params.itemId);
     }
-    // Channel drafts consume structured events; this legacy formatted callback must stay private.
-    if (this.params.messageChannel || this.params.messageProvider) {
-      return;
-    }
     try {
       void Promise.resolve(
         this.params.onToolResult?.({
           text,
+          ...((this.params.messageChannel || this.params.messageProvider) && {
+            channelData: { openclawToolProgressId: params.itemId },
+          }),
           ...(params.isError === true ? { isError: true } : {}),
         }),
       ).catch(() => {});
@@ -481,18 +482,23 @@ export class CodexToolProgressProjection {
       : this.params.verboseLevel === "full";
   }
 
+  private shouldIncludeFormattedMeta(commandBearing: boolean): boolean {
+    // Channel command detail comes from structured events, where commandText policy applies.
+    const channel = this.params.messageChannel ?? this.params.messageProvider;
+    return !commandBearing || (!channel && this.shouldEmitToolOutput());
+  }
+
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
     if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
-    const meta =
-      this.shouldEmitToolOutput() || !isCodexCommandBearingToolCall(params.name, args)
-        ? inferToolMetaFromArgs(params.name, args, {
-            detailMode: this.toolProgressDetailMode(),
-          })
-        : undefined;
+    const meta = this.shouldIncludeFormattedMeta(isCodexCommandBearingToolCall(params.name, args))
+      ? inferToolMetaFromArgs(params.name, args, {
+          detailMode: this.toolProgressDetailMode(),
+        })
+      : undefined;
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||

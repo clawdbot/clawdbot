@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 
 const BROKEN_NPM_SHIM_MARKER = "Error: claude native binary not installed.";
 const BROKEN_NPM_INSTALL_HINT = "node_modules/@anthropic-ai/claude-code/install.cjs";
@@ -10,10 +10,6 @@ const CLAUDE_PACKAGE_SHIM_TARGET =
 const MAX_SHIM_PROBE_BYTES = 4096;
 
 let cachedNativeReplacement: { key: string; executable: string | null } | undefined;
-
-function currentHomeDir(env: NodeJS.ProcessEnv): string {
-  return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
-}
 
 function readSmallExecutableSource(executable: string):
   | {
@@ -116,7 +112,7 @@ function resolveClaudeDesktopExecutable(
 }
 
 function resolveNativeReplacement(env: NodeJS.ProcessEnv): string | undefined {
-  const homeDir = currentHomeDir(env);
+  const homeDir = resolveClaudeCatalogHomeDir(env);
   const cacheKey = `${process.platform}\0${homeDir}`;
   if (cachedNativeReplacement?.key === cacheKey) {
     return cachedNativeReplacement.executable ?? undefined;

@@ -20,6 +20,7 @@ type Catalog = {
 };
 
 type Options = {
+  mode: "move" | "restart";
   sessionLabel: string;
   activeRun: boolean;
   deviceDisabledReason?: string;
@@ -29,7 +30,10 @@ type Options = {
 
 let active = false;
 
-function targetKey(target: SessionMoveTarget): string {
+function targetKey(target: SessionMoveTarget | null): string {
+  if (!target) {
+    return "";
+  }
   switch (target.kind) {
     case "gateway":
       return "gateway";
@@ -41,7 +45,7 @@ function targetKey(target: SessionMoveTarget): string {
   throw new Error("Unknown session placement move target");
 }
 
-export function showSessionPlacementMoveDialog(
+export function showSessionPlacementTargetDialog(
   options: Options,
 ): Promise<SessionMoveTarget | null> {
   if (active) {
@@ -54,7 +58,7 @@ export function showSessionPlacementMoveDialog(
     let loading = true;
     let loadError: string | null = null;
     let catalog: Catalog = { profiles: [], devices: [] };
-    let selected: SessionMoveTarget = { kind: "gateway" };
+    let selected: SessionMoveTarget | null = options.mode === "move" ? { kind: "gateway" } : null;
     const cloudMachines = new DraftCloudMachineState();
 
     const finish = (result: SessionMoveTarget | null) => {
@@ -71,6 +75,9 @@ export function showSessionPlacementMoveDialog(
 
     const submit = (event: Event) => {
       event.preventDefault();
+      if (!selected) {
+        return;
+      }
       if (selected.kind !== "profile") {
         finish(selected);
         return;
@@ -84,40 +91,60 @@ export function showSessionPlacementMoveDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
+      const restart = options.mode === "restart";
       render(
         html`
           <openclaw-modal-dialog
-            label=${t("sessionsView.moveSessionTitle")}
+            label=${t(
+              restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
+            )}
             @modal-cancel=${() => finish(null)}
           >
             <form class="exec-approval-card" @submit=${submit}>
               <div class="exec-approval-header">
-                <div class="exec-approval-title">${t("sessionsView.moveSessionTitle")}</div>
+                <div class="exec-approval-title">
+                  ${t(
+                    restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
+                  )}
+                </div>
                 <div class="muted">
-                  ${t("sessionsView.moveSessionDescription", { session: options.sessionLabel })}
+                  ${t(
+                    restart
+                      ? "sessionsView.restartSessionDescription"
+                      : "sessionsView.moveSessionDescription",
+                    { session: options.sessionLabel },
+                  )}
                 </div>
               </div>
-              ${options.activeRun
+              ${restart
                 ? html`<div class="exec-approval-error" role="alert">
-                    ${t("sessionsView.moveSessionActiveRunWarning")}
+                    ${t("sessionsView.restartSessionWarning")}
                   </div>`
-                : html`<div class="callout">${t("sessionsView.moveSessionNoReplayWarning")}</div>`}
+                : options.activeRun
+                  ? html`<div class="exec-approval-error" role="alert">
+                      ${t("sessionsView.moveSessionActiveRunWarning")}
+                    </div>`
+                  : html`<div class="callout">
+                      ${t("sessionsView.moveSessionNoReplayWarning")}
+                    </div>`}
               ${loading
                 ? html`<div class="muted">${t("common.loading")}</div>`
                 : loadError
                   ? html`<div class="exec-approval-error" role="alert">${loadError}</div>`
                   : html`
                       <div class="new-session-page__picker-root">
-                        ${renderSessionMenuItem(
-                          {
-                            value: "gateway",
-                            label: t("newSession.gateway"),
-                            icon: icons.monitor,
-                            checked: selectedKey === "gateway",
-                            onSelect: () => select({ kind: "gateway" }),
-                          },
-                          false,
-                        )}
+                        ${restart
+                          ? nothing
+                          : renderSessionMenuItem(
+                              {
+                                value: "gateway",
+                                label: t("newSession.gateway"),
+                                icon: icons.monitor,
+                                checked: selectedKey === "gateway",
+                                onSelect: () => select({ kind: "gateway" }),
+                              },
+                              false,
+                            )}
                         ${catalog.devices.length > 0
                           ? html`
                               <div class="new-session-page__menu-title">
@@ -154,7 +181,7 @@ export function showSessionPlacementMoveDialog(
                               </div>
                               ${catalog.profiles.map((profile) => {
                                 const profileSelected =
-                                  selected.kind === "profile" && selected.profileId === profile.id;
+                                  selected?.kind === "profile" && selected.profileId === profile.id;
                                 const machines = profile.machines ?? [];
                                 const selectedMachineId =
                                   cloudMachines.resolve(profile.id) ||
@@ -199,9 +226,13 @@ export function showSessionPlacementMoveDialog(
                 <button
                   type="submit"
                   class="btn primary"
-                  ?disabled=${loading || Boolean(loadError)}
+                  ?disabled=${loading || Boolean(loadError) || !selected}
                 >
-                  ${t("sessionsView.moveSessionAction")}
+                  ${t(
+                    restart
+                      ? "sessionsView.restartSessionAction"
+                      : "sessionsView.moveSessionAction",
+                  )}
                 </button>
                 <button type="button" class="btn" @click=${() => finish(null)}>
                   ${t("common.cancel")}

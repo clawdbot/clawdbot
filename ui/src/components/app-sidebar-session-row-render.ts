@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
@@ -71,6 +72,7 @@ export interface SessionListHost {
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
+    | "visibleSessionLimits"
   >;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
@@ -110,6 +112,7 @@ export interface SessionListHost {
   isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
+  sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
@@ -168,7 +171,7 @@ export function renderRecentSession(params: {
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
   });
-  const label = display?.label ?? session.label;
+  const label = session.label;
   const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
@@ -222,14 +225,12 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedOwnerIdentity } =
+  const { running, leadingIndicator, trailingIndicator, renderedIdentities } =
     renderSessionLeadingState(
       session,
       leadingOwner,
       ownerAttribution,
       ownerViewing,
-      session.participants,
-      session.participantCount,
       channelAvatarAuth,
     );
   const trailingDescription = session.isChild
@@ -246,14 +247,16 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
-  const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
+  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const menuTooltip = t("chat.sidebar.openSessionMenu");
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =
     host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
+  const color = normalizeSessionColorValue(session.color ?? "");
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
+    color ? "sidebar-recent-session--colored" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
     !subtitle ? "sidebar-recent-session--single-line" : "",
     session.archived ? "sidebar-session--archived" : "",
@@ -319,6 +322,7 @@ export function renderRecentSession(params: {
     <div
       ${display?.rowRef ? ref(display.rowRef) : nothing}
       class=${rowClass}
+      style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${session.key}
       data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}
@@ -342,7 +346,7 @@ export function renderRecentSession(params: {
       @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(session.href)}
+        href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}
@@ -367,7 +371,7 @@ export function renderRecentSession(params: {
                 .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
                 .selfInstanceId=${host.sessionData.presenceInstanceId}
                 .sessionKey=${session.key}
-                .excludeIdentity=${renderedOwnerIdentity}
+                .excludeIdentities=${renderedIdentities ?? []}
                 .maxVisible=${3}
                 variant="session"
               ></openclaw-viewer-facepile>
@@ -375,6 +379,8 @@ export function renderRecentSession(params: {
                 isChild: session.isChild,
                 incognito: session.incognito,
                 placementState: session.placementState,
+                placementProviderId: session.placementProviderId,
+                placementProfileId: session.placementProfileId,
                 diskSpaceStatus: session.diskSpaceStatus,
                 workspaceConflictCount: session.workspaceConflictCount,
                 outboxAttentionCount: session.outboxAttentionCount,

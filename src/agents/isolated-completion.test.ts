@@ -27,11 +27,13 @@ const mocks = vi.hoisted(() => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   getRegisteredAgentHarness: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
-  isCliRuntimeAliasForProvider: vi.fn(() => false),
+  isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
+    () => false,
+  ),
   prepareSimpleCompletionModel: vi.fn(),
   prepareAgentRuntimeAuth: vi.fn(),
   resolveModelWithRegistry: vi.fn(),
-  resolveCliRuntimeCanonicalProvider: vi.fn(() => undefined),
+  resolveCliRuntimeCanonicalProvider: vi.fn<() => string | undefined>(() => undefined),
   resolveCliBackendConfig: vi.fn<
     () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
   >(() => ({ config: { command: "test-cli" } })),
@@ -167,6 +169,8 @@ beforeEach(() => {
     release: releaseRuntimeLease,
   });
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
+  mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(undefined);
+  mocks.resolveEffectiveAgentRuntime.mockReturnValue("codex");
   mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
   mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
   mocks.prepareSimpleCompletionModel.mockResolvedValue({
@@ -200,6 +204,48 @@ function registerHarness(overrides: Partial<AgentHarness>): void {
 }
 
 describe("runIsolatedCompletion", () => {
+  it.each(["claude-cli", "anthropic"])(
+    "keeps the CLI execution owner for a %s utility model without resolving HTTP credentials",
+    async (provider) => {
+      mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(
+        provider === "claude-cli" ? "anthropic" : undefined,
+      );
+      mocks.resolveEffectiveAgentRuntime.mockReturnValue(
+        provider === "anthropic" ? "claude-cli" : "codex",
+      );
+      mocks.isCliRuntimeAliasForProvider.mockImplementation(
+        ({ runtime, provider: modelProvider }) =>
+          runtime === "claude-cli" && modelProvider === "anthropic",
+      );
+      mocks.prepareSimpleCompletionModel.mockRejectedValue(
+        new Error("native-auth markers must never become HTTP credentials"),
+      );
+      mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+
+      await expect(
+        runIsolatedCompletion({
+          ...request(),
+          provider,
+          model: "claude-test",
+          agentHarnessRuntimeOverride: undefined,
+        }),
+      ).resolves.toMatchObject({
+        text: "Utility result",
+        provider: "anthropic",
+        owner: { kind: "cli", id: "claude-cli" },
+      });
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.runCliAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "claude-cli",
+          modelProvider: "anthropic",
+          isolatedCompletion: true,
+          cliToolAvailability: { native: [], openClaw: [] },
+        }),
+      );
+    },
+  );
+
   it("hands harness-owned authorization to the V2 owner without resolving a host key", async () => {
     const runIsolatedCompletionV2 = vi.fn(async () => ({
       assistant: assistant([{ type: "text", text: "native result" }]),

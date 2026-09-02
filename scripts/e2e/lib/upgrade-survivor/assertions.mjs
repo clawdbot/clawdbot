@@ -1,10 +1,17 @@
+import assertStrict from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import {
+  assertExecApprovalPolicySurvived,
+  seedLegacyExecApprovalPolicy,
+} from "./exec-approval-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -24,6 +31,7 @@ const SCENARIOS = new Set([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
 ]);
 
@@ -62,18 +70,46 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function readUpdateJson(file) {
+function readUpdateJson(file, observationRoot) {
   const raw = fs.readFileSync(file, "utf8");
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    // Published baselines may emit legacy service-control logs before the JSON payload.
-    const jsonStart = raw.indexOf("{");
-    if (jsonStart === -1) {
-      throw error;
-    }
-    return JSON.parse(raw.slice(jsonStart));
+  // April baselines print a pretty-printed core result before their fresh child
+  // inherits stdout and prints finalization. Never discard a failed/truncated child.
+  const jsonStart = raw.indexOf("{");
+  assert(jsonStart !== -1, "update reported no JSON result");
+  const reports = raw
+    .slice(jsonStart)
+    .trim()
+    .split(/\n(?=\{)/u)
+    .map((text) => JSON.parse(text));
+  assert(reports.length <= 2, "update reported unexpected extra results");
+  const [core, continuation] = reports;
+  let result = core;
+  if (continuation) {
+    assert(core.status === "ok", "historical core update did not succeed");
+    assert(continuation.mode === "unknown", "unexpected historical continuation mode");
+    assert(
+      Array.isArray(continuation.steps) && continuation.steps.length === 0,
+      "unexpected historical continuation steps",
+    );
+    assert(continuation.after === undefined, "historical continuation replaced the core result");
+    result = {
+      ...core,
+      status: continuation.status,
+      reason: continuation.reason,
+      postUpdate: continuation.postUpdate,
+    };
   }
+  if (result.postUpdate !== undefined || !observationRoot) {
+    return result;
+  }
+  // April 23 omits the child result from stdout. Consume only this invocation's
+  // complete exit snapshot; explicit CLI results and nonzero child exits win.
+  const snapshot = readPostCoreSnapshot(observationRoot);
+  if (snapshot === null) {
+    return result;
+  }
+  assert(snapshot.childExitCode === 0, "historical post-core child did not exit successfully");
+  return { ...result, postUpdate: { plugins: snapshot.result } };
 }
 
 function isCapabilityConsentReason(value) {
@@ -128,11 +164,13 @@ function assert(condition, message) {
   }
 }
 
-function seedLegacySessionMetadata(stateDir) {
-  const legacySessionsDir = path.join(stateDir, "sessions");
+function seedLegacySessionMetadata(stateDir, perAgent) {
+  const legacySessionsDir = perAgent
+    ? path.join(stateDir, "agents", "main", "sessions")
+    : path.join(stateDir, "sessions");
   const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
   writeJson(path.join(legacySessionsDir, "sessions.json"), {
-    main: {
+    [perAgent ? "agent:main:main" : "main"]: {
       sessionId: LEGACY_SESSION_MAIN_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
       provider: "openai",
@@ -148,14 +186,14 @@ function seedLegacySessionMetadata(stateDir) {
         ],
       },
     },
-    "+15551234567": {
+    [perAgent ? "agent:main:+15551234567" : "+15551234567"]: {
       sessionId: LEGACY_SESSION_DIRECT_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + 100,
     },
-    "slack:channel:CUPGRADE": {
+    [perAgent ? "agent:main:slack:channel:cupgrade" : "slack:channel:CUPGRADE"]: {
       sessionId: LEGACY_SESSION_GROUP_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
       provider: "openai",
@@ -338,7 +376,9 @@ function seedState() {
     agentId: "main",
     title: "Existing user session",
   });
-  seedLegacySessionMetadata(stateDir);
+  // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
+  seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -431,7 +471,13 @@ function assertConfigSurvived() {
   }
 
   if (acceptsIntent(coverage, "update")) {
-    const expectedChannel = scenario === "prerelease-plugin-registry" ? "beta" : "stable";
+    const expectedChannel =
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL ||
+      (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
+    assert(
+      expectedChannel === "stable" || expectedChannel === "beta",
+      "upgrade survivor update channel was invalid",
+    );
     assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
@@ -657,54 +703,74 @@ function assertStateSurvived() {
 
 function assertAuthProfileMigrationSurvived(stateDir, stage) {
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const sources = [
-    path.join(agentDir, "auth-profiles.json"),
-    path.join(agentDir, "auth-state.json"),
-    path.join(agentDir, "auth.json"),
-    path.join(stateDir, "credentials", "oauth.json"),
-  ];
+  const fixture = readJson(
+    "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+  );
+  const sources = new Map([
+    [path.join(agentDir, "auth-profiles.json"), fixture.authProfiles],
+    [path.join(agentDir, "auth-state.json"), fixture.authState],
+    [path.join(agentDir, "auth.json"), fixture.legacyAuth],
+    [path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth],
+  ]);
   if (stage === "baseline") {
     assert(
-      sources.every((source) => fs.existsSync(source)),
+      [...sources.keys()].every((source) => fs.existsSync(source)),
       "auth profile fixture source missing",
     );
     return;
   }
-  for (const source of sources) {
+  for (const [source, contents] of sources) {
     assert(!fs.existsSync(source), `legacy auth source remained active: ${source}`);
     const prefix = `${path.basename(source)}.migrated-`;
     const archives = fs
       .readdirSync(path.dirname(source))
       .filter((entry) => entry.startsWith(prefix));
     assert(archives.length === 1, `expected one legacy auth archive for ${source}`);
-  }
-  const agentDatabase = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    const row = agentDatabase
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
-      .get();
-    const store = JSON.parse(row?.store_json ?? "null");
-    assert(
-      store?.profiles?.["openai:default"]?.key === "fake-upgrade-openai-key",
-      "openai credential did not migrate",
+    assertStrict.equal(
+      fs.readFileSync(path.join(path.dirname(source), archives[0]), "utf8"),
+      `${JSON.stringify(contents, null, 2)}\n`,
+      `auth archive changed for ${source}`,
     );
-    assert(
-      store?.profiles?.["xai:default"]?.key === "fake-upgrade-xai-key",
-      "legacy xai credential did not migrate",
-    );
-    assert(
-      store?.profiles?.["anthropic:default"]?.refresh === "fake-upgrade-refresh-token",
-      "shared OAuth credential did not migrate",
-    );
-  } finally {
-    agentDatabase.close();
   }
   const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
+    // Main's legacy files feed the shared owner; current runtime reads these
+    // canonical state cells after Doctor retires the old agent-local rows.
+    const read = stateDatabase.prepare(
+      "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+    );
+    const store = JSON.parse(read.get("authProfiles.store")?.value_json ?? "null");
+    const expectedProfiles = {
+      ...fixture.authProfiles.profiles,
+      ...Object.fromEntries(
+        Object.entries(fixture.legacyAuth).map(([provider, credential]) => [
+          `${provider}:default`,
+          credential,
+        ]),
+      ),
+      ...Object.fromEntries(
+        Object.entries(fixture.legacyOAuth).map(([provider, credential]) => [
+          `${provider}:default`,
+          { type: "oauth", provider, ...credential },
+        ]),
+      ),
+    };
+    for (const [profileId, credential] of Object.entries(expectedProfiles)) {
+      assertStrict.deepEqual(
+        store?.profiles?.[profileId],
+        credential,
+        `auth profile changed: ${profileId}`,
+      );
+    }
+    const state = JSON.parse(read.get("authProfiles.state")?.value_json ?? "null");
+    assertStrict.deepEqual(state?.order, fixture.authState.order, "auth state order changed");
+    assertStrict.deepEqual(
+      state?.lastGood,
+      fixture.authState.lastGood,
+      "auth state lastGood changed",
+    );
     const receipt = stateDatabase
       .prepare(
         "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = 'completed' AND removed_source = 1",
@@ -837,7 +903,10 @@ function assertMeetingTranscriptsMigrated(stateDir, stage) {
   } finally {
     db.close();
   }
+}
 
+function assertMeetingTranscriptExport(stateDir) {
+  const legacySessionDir = path.join(stateDir, "transcripts", "2026-07-01", "design-review");
   const exportedDir = execFileSync(
     "openclaw",
     ["transcripts", "path", "2026-07-01/design-review", "--dir"],
@@ -1062,6 +1131,15 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1088,6 +1166,61 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
   );
 }
 
+function assertNpmPluginInstall([
+  pluginId,
+  packageName,
+  expectedVersion,
+  capabilityConsentSupported,
+  pendingUpdateFile,
+  observationRoot,
+  baselineVersion,
+]) {
+  assert(
+    pluginId && packageName && expectedVersion,
+    "npm plugin assertion requires identity and version",
+  );
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "npm plugin assertion requires candidate capability-consent support",
+  );
+  if (
+    pendingUpdateFile &&
+    assertRecoverableUpdateJson([
+      pendingUpdateFile,
+      expectedVersion,
+      observationRoot,
+      baselineVersion,
+    ]).has(pluginId)
+  ) {
+    // Only this plugin's recorded denial defers its artifact check until repair.
+    process.stdout.write(`Plugin "${pluginId}" is awaiting fixture capability consent.\n`);
+    return;
+  }
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+  const record = records[pluginId];
+  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
+  assertPluginArtifactConsent(
+    record,
+    pluginId,
+    packageJson,
+    expectedVersion,
+    capabilityConsentSupported,
+  );
+  const artifactDir = requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+  const { manifest } = validatePrepublishPluginRegistryArtifact({
+    artifactDir,
+    expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
+    expectedCandidateVersion: expectedVersion,
+    expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
+    requiredPackages: [packageName],
+  });
+  const artifact = manifest.packages.find((entry) => entry.name === packageName);
+  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+}
+
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
   assert(expectedVersion, "assert-companion-installs requires <expected-version>");
   assert(
@@ -1103,23 +1236,87 @@ function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSuppor
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
     assert(record.source === source, `${pluginId} plugin source changed: ${record.source}`);
-    const installedVersion = source === "clawhub" ? record.version : record.resolvedVersion;
+    assertPluginArtifactConsent(
+      record,
+      pluginId,
+      packageJson,
+      expectedVersion,
+      capabilityConsentSupported,
+    );
+  }
+}
+
+function assertPluginArtifactConsent(
+  record,
+  pluginId,
+  packageJson,
+  expectedVersion,
+  capabilityConsentSupported,
+) {
+  const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
+  assert(
+    installedVersion === expectedVersion,
+    `${pluginId} plugin version changed: ${String(installedVersion)}`,
+  );
+  assert(
+    packageJson.version === expectedVersion,
+    `${pluginId} installed package version changed: ${String(packageJson.version)}`,
+  );
+  const integrity = pluginInstallIntegrity(record);
+  assert(
+    typeof integrity === "string" && integrity.length > 0,
+    `${pluginId} plugin integrity missing`,
+  );
+  if (capabilityConsentSupported === "1") {
+    const inspection = JSON.parse(
+      execFileSync("openclaw", ["plugins", "inspect", pluginId, "--json"], {
+        encoding: "utf8",
+        timeout: 120_000,
+      }),
+    );
+    assert(inspection.plugin?.id === pluginId, `${pluginId} inspected plugin id changed`);
     assert(
-      installedVersion === expectedVersion,
-      `${pluginId} plugin version changed: ${String(installedVersion)}`,
+      inspection.plugin.packageName === packageJson.name,
+      `${pluginId} inspected package name changed`,
     );
     assert(
-      packageJson.version === expectedVersion,
-      `${pluginId} installed package version changed: ${String(packageJson.version)}`,
+      typeof inspection.plugin.rootDir === "string" &&
+        fs.realpathSync(inspection.plugin.rootDir) ===
+          fs.realpathSync(resolveHomePath(record.installPath)),
+      `${pluginId} inspected install path changed`,
     );
-    const integrity = pluginInstallIntegrity(record);
-    assert(
-      typeof integrity === "string" && integrity.length > 0,
-      `${pluginId} plugin integrity missing`,
+    assertStrict.deepEqual(
+      inspection.install,
+      record,
+      `${pluginId} inspected install record changed`,
     );
-    if (capabilityConsentSupported === "1") {
-      assertCompanionPluginConsent(record, pluginId, integrity);
+    // Official provenance is not operator acceptance. Use the metadata owner's
+    // decision for this exact record, but validate any recorded acceptance so a
+    // partial or stale artifact claim cannot pass the upgrade proof.
+    if (inspection.plugin.trustedOfficialInstall === true && !hasCompanionPluginConsent(record)) {
+      process.stdout.write(
+        `Plugin "${pluginId}" has verified official capability-consent exemption.\n`,
+      );
+      return;
     }
+    assertCompanionPluginConsent(record, pluginId, integrity);
+  }
+}
+
+function assertRecoveredPluginInstalls(args) {
+  const [, expectedVersion] = args;
+  const ids = assertRecoverableUpdateJson(args);
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  for (const pluginId of ids) {
+    const record = records[pluginId];
+    assert(record, `${pluginId} recovered plugin install record missing`);
+    const packageName = record.source === "npm" ? record.resolvedName : record.clawhubPackage;
+    assert(
+      typeof packageName === "string" && packageName.length > 0,
+      `${pluginId} recovered package name missing`,
+    );
+    const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+    assertPluginArtifactConsent(record, pluginId, packageJson, expectedVersion, "1");
   }
 }
 
@@ -1171,70 +1368,98 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-function assertRecoverableUpdateJson([file, expectedVersion]) {
-  assert(file && expectedVersion, "assert-recoverable-update-json requires a path and version");
-  const result = readUpdateJson(file);
-  const steps = result?.steps;
-  const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "error", "recoverable update did not report error status");
-  assert(result?.mode === "npm", `recoverable update mode changed: ${String(result?.mode)}`);
-  assert(
-    result?.reason === "post-update-plugins",
-    `update failed before plugin convergence: ${String(result?.reason)}`,
-  );
-  assert(
-    result?.after?.version === expectedVersion,
-    `candidate version was not installed: ${String(result?.after?.version)}`,
-  );
-  assert(Array.isArray(steps) && steps.length > 0, "recoverable update reported no steps");
-  for (const stepName of ["global update", "global install swap"]) {
-    const step = steps.find((entry) => entry?.name === stepName);
-    assert(step?.exitCode === 0, `${stepName} did not complete successfully`);
+function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, baselineVersion]) {
+  const result = readUpdateJson(file, observationRoot);
+  assertStrict.ok(baselineVersion, "Expected baseline version is required.");
+  assertStrict.ok(result.status === "error" || result.status === "ok");
+  assertStrict.equal(result.mode, "npm");
+  assertStrict.equal(result.reason, result.status === "error" ? "post-update-plugins" : undefined);
+  assertStrict.equal(result.before?.version, baselineVersion);
+  assertStrict.equal(result.after?.version, expectedVersion);
+  assertStrict.ok(result.steps?.length > 0);
+  assertStrict.ok(result.steps.every((step) => step.exitCode === 0));
+  // April warning-only updaters predate the separately reported install swap.
+  for (const name of result.status === "ok"
+    ? ["global update"]
+    : ["global update", "global install swap"]) {
+    assertStrict.ok(result.steps.some((step) => step.name === name));
   }
-  assert(
-    steps.every((step) => step?.exitCode === 0),
-    "recoverable update contained a failed core step",
+  const plugins = result.postUpdate?.plugins;
+  assertStrict.equal(plugins?.status, result.status === "error" ? "error" : "warning");
+  assertStrict.deepEqual(plugins.integrityDrifts, []);
+  // These are the reviewed packages in the base and scenario recipes.
+  // Any other plugin or failure needs investigation before accepting it.
+  const reviewed = new Set(["acpx", "brave", "codex", "discord", "feishu", "matrix", "whatsapp"]);
+  const denied = new Set();
+  assertStrict.ok(Array.isArray(plugins.npm?.outcomes));
+  for (const outcome of plugins.npm.outcomes) {
+    assertStrict.ok(reviewed.has(outcome.pluginId), "Unexpected plugin update outcome.");
+    if (outcome.status === "error") {
+      assertStrict.equal(outcome.code, "PLUGIN_CAPABILITY_CONSENT_REQUIRED");
+      denied.add(outcome.pluginId);
+    } else {
+      assertStrict.ok(outcome.status === "updated" || outcome.status === "unchanged");
+      assertStrict.equal(outcome.nextVersion, expectedVersion);
+    }
+  }
+  // Typed consent errors survive post-plugin validation without a Doctor reason.
+  // Check before warnings contribute IDs; prose alone cannot admit this shape.
+  const typedConsentOnly = plugins.reason === undefined && denied.size > 0;
+  assertStrict.equal(
+    plugins.reason,
+    result.status === "error" && !typedConsentOnly
+      ? "post-plugin-doctor-invalid-config"
+      : undefined,
   );
-  assert(plugins?.status === "error", "recoverable update did not fail plugin convergence");
-  assert(
-    plugins?.reason === "post-plugin-doctor-invalid-config",
-    `unexpected plugin convergence failure: ${String(plugins?.reason)}`,
-  );
-  const syncErrors = plugins?.sync?.errors;
-  const npmOutcomes = plugins?.npm?.outcomes;
-  const integrityDrifts = plugins?.integrityDrifts;
-  assert(
-    Array.isArray(syncErrors) && syncErrors.every(isCapabilityConsentReason),
-    "recoverable update contained a non-consent plugin synchronization error",
-  );
-  assert(
-    Array.isArray(npmOutcomes) &&
-      npmOutcomes.every(
-        (outcome) =>
-          outcome?.status !== "error" || outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-      ),
-    "recoverable update contained a non-consent failed plugin update",
-  );
-  assert(
-    Array.isArray(integrityDrifts) && integrityDrifts.length === 0,
-    "recoverable update contained a plugin integrity drift",
-  );
-  assert(
-    (Array.isArray(plugins?.warnings) &&
-      plugins.warnings.some((warning) => isCapabilityConsentReason(warning?.reason))) ||
-      syncErrors.some(isCapabilityConsentReason) ||
-      npmOutcomes.some(
-        (outcome) =>
-          outcome?.status === "error" && outcome?.code === "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-      ),
-    "plugin convergence failure did not require capability consent",
-  );
+  assertStrict.ok(Array.isArray(plugins.sync?.errors));
+  assertStrict.ok(Array.isArray(plugins.warnings));
+  for (const warning of [
+    ...plugins.warnings,
+    ...plugins.sync.errors.map((reason) => ({ reason, message: reason })),
+  ]) {
+    if (warning.reason === "Config remained invalid after updated plugin migrations.") {
+      assertStrict.equal(result.status, "error");
+      assertStrict.equal(
+        warning.message,
+        "Post-update plugin migration did not produce a valid config; refusing to restart.",
+      );
+      continue;
+    }
+    const reason = warning.reason.replace(
+      /^Kept installed plugin "([^"]+)"; replacement deferred\. (?=Plugin "\1")/,
+      "",
+    );
+    const match =
+      /^Plugin "([^"]+)" requires capability consent(?:\. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry\.|; rerun with --accept-capabilities\.)$/.exec(
+        reason,
+      );
+    assertStrict.ok(match && reviewed.has(match[1]), "Unexpected plugin convergence failure.");
+    assertStrict.ok(
+      warning.message.includes(warning.reason),
+      "Unexpected plugin convergence message.",
+    );
+    denied.add(match[1]);
+  }
+  assertStrict.ok(denied.size > 0, "No reviewed plugin requested capability consent.");
+  return denied;
 }
 
-function assertSuccessfulUpdateJson([file, expectedVersion]) {
+function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-  const result = readUpdateJson(file);
+  const result = readUpdateJson(file, observationRoot);
+  const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  assert(
+    plugins?.status !== "error" &&
+      !plugins?.sync?.errors?.length &&
+      !plugins?.npm?.outcomes?.some((outcome) => outcome?.status === "error") &&
+      !plugins?.integrityDrifts?.length,
+    "successful update failed plugin convergence",
+  );
+  assert(
+    !plugins?.warnings?.some((warning) => isCapabilityConsentReason(warning?.reason)),
+    "successful update still requires capability consent",
+  );
   assert(
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
@@ -1414,6 +1639,11 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "assert-exec-approvals") {
+  assertExecApprovalPolicySurvived(
+    requireEnv("OPENCLAW_STATE_DIR"),
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+  );
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
@@ -1423,8 +1653,18 @@ if (command === "list-scenarios") {
 } else if (command === "assert-state") {
   assertStateSurvived();
   assertConfiguredPluginInstalls();
+} else if (command === "assert-meeting-transcript-export") {
+  assert(
+    getScenario() === "meeting-transcripts-sqlite",
+    "transcript export requires the meeting scenario",
+  );
+  assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
+} else if (command === "assert-npm-plugin-install") {
+  assertNpmPluginInstall(process.argv.slice(3));
 } else if (command === "assert-companion-installs") {
   assertCompanionPluginInstalls(process.argv.slice(3));
+} else if (command === "assert-recovered-plugin-installs") {
+  assertRecoveredPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
 } else if (command === "assert-recoverable-update-json") {

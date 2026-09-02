@@ -87,9 +87,13 @@ export function resolveCliExecutionAuthProfileId(params: {
     cfg: params.config,
     store,
     provider: params.cliExecutionProvider,
-  })[0];
+  }).find(
+    (profileId) =>
+      store.profiles[profileId]?.provider === params.cliExecutionProvider &&
+      !nativeAuthProfileIds?.includes(profileId),
+  );
   if (cliProfileId) {
-    return nativeAuthProfileIds?.includes(cliProfileId) ? undefined : cliProfileId;
+    return cliProfileId;
   }
 
   if (

@@ -1,14 +1,26 @@
 import { fileURLToPath } from "node:url";
+import { Command } from "commander";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenClawPluginApi,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { createNodeBootstrapFixture } from "./src/crabbox-worker-node-enrollment.test-support.js";
+import type { WarmProfileRecord } from "./src/crabbox-worker-warm-image-store.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const PROFILE = {
   binary: "/mock/crabbox",
@@ -68,6 +80,35 @@ describe("Crabbox plugin generation lifecycle", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    resetPluginStateStoreForTests();
+  });
+
+  it("lazily exposes warm-image inspection and acknowledged recovery through the plugin CLI", async () => {
+    const registrars: Parameters<OpenClawPluginApi["registerCli"]>[0][] = [];
+    const api = createTestPluginApi({
+      id: "crabbox",
+      rootDir: fileURLToPath(new URL(".", import.meta.url)),
+      registerCli: (registrar) => registrars.push(registrar),
+    });
+    plugin.register(api);
+    const program = new Command().exitOverride();
+    let help = "";
+    program.configureOutput({
+      writeOut: (text) => {
+        help += text;
+      },
+    });
+    expect(registrars).toHaveLength(1);
+    await registrars[0]!({ program, parentPath: [], config: {}, logger: api.logger });
+
+    await expect(
+      program.parseAsync(["crabbox", "warm-images", "--help"], { from: "user" }),
+    ).rejects.toMatchObject({ code: "commander.helpDisplayed" });
+
+    expect(help).toContain("--json");
+    expect(help).toContain("--recover <selector>");
+    expect(help).toContain("--acknowledge-provider-cleanup");
   });
 
   it.each([
@@ -101,7 +142,12 @@ describe("Crabbox plugin generation lifecycle", () => {
         provider: backend,
       };
       try {
-        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(67 * 60_000);
+        // Classless profiles reserve placement-enabled preparation/capture and the
+        // complete diagnostics, Stop and child-settlement cleanup envelope.
+        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
+          158 * 60_000 + 30_000,
+        );
+        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(16 * 60_000 + 20_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
@@ -115,7 +161,7 @@ describe("Crabbox plugin generation lifecycle", () => {
                 }
               : { mode: "resume" as const, deviceId: "device-classless" }),
             openclawVersion: "2026.8.1",
-            packageSpecs: ["openclaw@2026.8.1"],
+            nodeBootstrap: createNodeBootstrapFixture(),
             displayName: "Classless worker",
             waitForDeviceId,
           }),
@@ -136,7 +182,6 @@ describe("Crabbox plugin generation lifecycle", () => {
           "inspect",
           "run",
           "inspect",
-          "inspect",
           "stop",
         ]);
         expect(calls.flat()).not.toContain("--class");
@@ -148,6 +193,10 @@ describe("Crabbox plugin generation lifecycle", () => {
           "--id",
           lease.leaseId,
         ]);
+        expect(runCommand.mock.lastCall?.[1]).toMatchObject({
+          timeoutMs: 310_000,
+          killProcessTree: true,
+        });
       } finally {
         await stopGeneration(generation.services);
       }
@@ -229,5 +278,62 @@ describe("Crabbox plugin generation lifecycle", () => {
     expect(heartbeatLeaseIds).toEqual(["cbx_replacement", "cbx_replacement"]);
 
     await stopGeneration(replacement.services);
+  });
+
+  it("holds plugin service stop until an aborted image deletion settles", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
+    const store = createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
+      namespace: "warm-images",
+      maxEntries: 128,
+      overflowPolicy: "reject-new",
+    });
+    const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
+    store.register("expired", {
+      version: 2,
+      allocations: {},
+      image: {
+        checkpointId: "chk_expired",
+        kind: "aws-ebs-snapshot",
+        state: "available",
+        createdAtMs: old,
+        lastUsedAtMs: old,
+      },
+    });
+    const started = createDeferred<AbortSignal>();
+    const finish = createDeferred<SpawnResult>();
+    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+      if (typeof options === "number" || !options.signal) {
+        throw new Error("maintenance command needs a signal");
+      }
+      started.resolve(options.signal);
+      return await finish.promise;
+    });
+    const generation = registerCrabboxGeneration();
+    const maintenance = generation.provider.maintain!({
+      profiles: [PROFILE],
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    });
+    const rejected = expect(maintenance).rejects.toThrow();
+    let stopping: Promise<void> | undefined;
+    let stopped = false;
+    try {
+      const signal = await started.promise;
+      stopping = Promise.resolve(stopGeneration(generation.services)).then(() => {
+        stopped = true;
+      });
+      expect(signal.aborted).toBe(true);
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+    } finally {
+      finish.resolve(commandResult());
+      await rejected;
+      await stopping;
+    }
+    expect(stopped).toBe(true);
+    expect(store.lookup("expired")?.operation).toEqual({
+      type: "retire",
+      checkpointId: "chk_expired",
+    });
   });
 });

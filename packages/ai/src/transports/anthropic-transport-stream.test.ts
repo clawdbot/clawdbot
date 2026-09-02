@@ -112,7 +112,9 @@ function anthropicMessageStart(message: Record<string, unknown>) {
   return { type: "message_start", message };
 }
 
-function anthropicMessageDelta(delta: Record<string, unknown>, usage: Record<string, unknown>) {
+function anthropicMessageDelta(delta: Record<string, unknown>, usage?: Record<string, unknown>) {
+  // An absent usage object serializes the event without the key, matching proxies that
+  // close a turn with stop_reason alone.
   return { type: "message_delta", delta, usage };
 }
 
@@ -499,6 +501,20 @@ describe("anthropic transport stream", () => {
         cache_creation_input_tokens: null,
       },
       context: { state: "available", promptTokens: 149_374, totalTokens: 164_478 },
+    },
+    {
+      name: "keeps message-start context usage when the final delta omits usage",
+      id: "msg_absent_final_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+      },
+      final: undefined,
+      expected: { input: 12, output: 0, cacheRead: 3, cacheWrite: 4, totalTokens: 19 },
+      context: { state: "available", promptTokens: 19, totalTokens: 19 },
     },
     {
       name: "preserves valid message-start billing buckets when a sibling is malformed",
@@ -4268,45 +4284,6 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
-  });
-
-  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } }),
-        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-      ]),
-    );
-    const streamFn = createAnthropicMessagesTransportStreamFn();
-    const acceptanceObserver = vi.fn();
-    const onResponse = vi.fn();
-    const options = withProviderAcceptanceObserver(
-      { apiKey: "sk-ant-api", onResponse } as AnthropicStreamOptions,
-      acceptanceObserver,
-    );
-    const stream = streamFn(
-      makeAnthropicTransportModel(),
-      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
-      options,
-    );
-
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    const startIndex = eventTypes.indexOf("start");
-    expect(startIndex).toBeGreaterThanOrEqual(0);
-    expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
-    expect(acceptanceObserver).toHaveBeenCalledWith({
-      kind: "http_response",
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    });
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "content-type": "text/event-stream" } },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

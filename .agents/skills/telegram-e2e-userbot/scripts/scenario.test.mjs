@@ -20,7 +20,7 @@ test("normalizes Telegram and gateway actions", () => {
         },
         { type: "patchConfig", atMs: 750, patch: { channels: { telegram: { historyLimit: 9 } } } },
         { type: "systemEvent", atMs: 900, text: "heartbeat proof" },
-        { type: "cron", atMs: 950, message: "deliver the schedule" },
+        { type: "cron", atMs: 950, message: "deliver the schedule", bestEffort: true },
         { type: "command", atMs: 975, argv: ["node", "--version"], cwd: "repo" },
         { type: "telegramApiHold", atMs: 980, method: "sendMessage", skip: 1 },
         { type: "telegramApiWaitHeld", atMs: 990, method: "sendMessage" },
@@ -48,7 +48,7 @@ test("normalizes Telegram and gateway actions", () => {
           patch: { channels: { telegram: { historyLimit: 9 } } },
         },
         { type: "systemEvent", atMs: 900, text: "heartbeat proof" },
-        { type: "cron", atMs: 950, message: "deliver the schedule" },
+        { type: "cron", atMs: 950, message: "deliver the schedule", bestEffort: true },
         {
           type: "command",
           atMs: 975,
@@ -112,6 +112,10 @@ test("rejects fields and action types outside the closed schema", () => {
   assert.throws(
     () => parseScenario({ actions: [{ type: "restartGateway", atMs: -1 }] }),
     /atMs must be a non-negative integer/u,
+  );
+  assert.throws(
+    () => parseScenario({ actions: [{ type: "cron", message: "deliver", bestEffort: "yes" }] }),
+    /bestEffort must be a boolean/u,
   );
 });
 

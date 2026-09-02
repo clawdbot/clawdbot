@@ -16,8 +16,11 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { installTestEnv } from "../../test/test-env.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { buildPortableAuthProfileStoreForAgentCopy } from "../agents/auth-profiles/portability.js";
+import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -38,7 +41,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
-  requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
@@ -50,6 +52,7 @@ import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/mode
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   appendPrioritizedDynamicLiveModels,
@@ -120,9 +123,10 @@ import { redactSecrets } from "../logging/redact.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { extractErrorHttpStatus } from "../shared/assistant-error-format.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -1032,7 +1036,114 @@ describe("isGatewayLiveModelTimeout", () => {
   });
 });
 
+describe("formatGatewayLiveFailureDiagnostic", () => {
+  it.each([
+    ["google", "gemini-3.1-pro-preview", "503 Service unavailable", "provider-unavailable", 503],
+    ["anthropic", "claude-sonnet-4-6", "429 rate limit", "rate-limit", 429],
+    ["google", "gemini-3.1-pro-preview", "request timed out", "timeout", undefined],
+    [
+      "google",
+      "gemini-3.1-pro-preview",
+      "upstream error from google",
+      "provider-unavailable",
+      undefined,
+    ],
+    ["google", "gemini-3.1-pro-preview", "unexpected reply", "unclassified", undefined],
+  ])(
+    "preserves %s failure facts through the agent.wait envelope: %s / %s",
+    (provider, model, message, classification, explicitHttpStatus) => {
+      const error = formatGatewayLiveAgentWaitFailure({
+        context: "probe",
+        runId: "private-run-id",
+        result: { status: "error", error: message, providerStarted: true },
+      });
+      expect(
+        JSON.parse(
+          formatGatewayLiveFailureDiagnostic({ provider, model, phase: "tool-read", error }),
+        ),
+      ).toEqual({
+        provider,
+        model,
+        phase: "tool-read",
+        classification,
+        ...(explicitHttpStatus ? { explicitHttpStatus } : {}),
+        providerStarted: true,
+      });
+    },
+  );
+
+  it("omits bodies, URLs, credentials and arbitrary exception metadata without losing explicit status", () => {
+    const body =
+      "private-customer-body https://private.invalid/customer?note=private-value Bearer synthetic-private-token";
+    const error = Object.assign(new Error(`503 Service unavailable ${body}`), {
+      code: "OPAQUE_PRIVATE_CREDENTIAL",
+      provider: body,
+      model: body,
+      cause: { classification: body, providerStarted: body },
+    });
+    for (const failure of [
+      error,
+      formatGatewayLiveAgentWaitFailure({
+        context: body,
+        runId: body,
+        result: { status: body, error: error.message, providerStarted: body, stopReason: body },
+      }),
+    ]) {
+      const diagnostic = formatGatewayLiveFailureDiagnostic({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        phase: "tool-read",
+        error: failure,
+      });
+      expect(JSON.parse(diagnostic)).toEqual({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        phase: "tool-read",
+        classification: "provider-unavailable",
+        explicitHttpStatus: 503,
+      });
+      expect(diagnostic).not.toMatch(/private|https|Bearer|OPAQUE/);
+    }
+  });
+
+  it.each([
+    ["p".repeat(128), "m".repeat(256)],
+    ["p".repeat(129), "m".repeat(257)],
+    ["https://private.invalid", "model\nprivate"],
+  ])("keeps identifiers bounded and emits valid JSON", (provider, model) => {
+    const diagnostic = formatGatewayLiveFailureDiagnostic({
+      provider,
+      model,
+      phase: "tool-only-followup",
+      error: new Error("x".repeat(10_000)),
+    });
+    expect(`[live] failure ${diagnostic}\n`.length).toBeLessThanOrEqual(1024);
+    expect(JSON.parse(diagnostic)).toMatchObject({
+      phase: "tool-only-followup",
+      classification: "unclassified",
+    });
+    expect(diagnostic).not.toMatch(/private|https|xxxxx/);
+  });
+});
+
 describe("formatGatewayLiveAgentWaitFailure", () => {
+  it("retains body-free failure evidence before agent.wait flattens the provider error", () => {
+    const failure = formatGatewayLiveAgentWaitFailure({
+      context: "google tool-read",
+      runId: "private-run-id",
+      result: {
+        status: "error",
+        error: "503 Service unavailable: private response body https://private.invalid/customer",
+        providerStarted: true,
+      },
+    });
+    expect(failure.cause).toEqual({
+      classification: "provider-unavailable",
+      explicitHttpStatus: 503,
+      providerStarted: true,
+    });
+  });
+
   it("includes terminal attribution fields without requiring transcript text", () => {
     expect(
       formatGatewayLiveAgentWaitFailure({
@@ -2830,13 +2941,14 @@ type PreparedGatewayLiveModelCandidate = {
 function buildLiveGatewayAuthProfileStore(params: {
   store: AuthProfileStore;
   candidates: readonly PreparedGatewayLiveModelCandidate[];
+  requireProfileKeys?: boolean;
 }): AuthProfileStore {
   const directCredentialProviders = new Set<string>();
   const selectedProfileIds = new Map<string, string[]>();
   const materializedProfiles: AuthProfileStore["profiles"] = {};
 
   for (const { model, auth } of params.candidates) {
-    const provider = normalizeProviderId(model.provider);
+    const provider = resolveProviderIdForAuth(model.provider);
     const modelRef = `${model.provider}/${model.id}`;
     if (auth.source.startsWith("profile:") && !auth.profileId) {
       throw new Error(`Prepared live auth for ${modelRef} is missing its selected profile id.`);
@@ -2853,12 +2965,17 @@ function buildLiveGatewayAuthProfileStore(params: {
           `Prepared live auth profile "${selectedProfileId}" for ${modelRef} is missing from its source store.`,
         );
       }
-      if (normalizeProviderId(selectedProfile.provider) !== provider) {
+      if (resolveProviderIdForAuth(selectedProfile.provider) !== provider) {
         throw new Error(
           `Prepared live auth profile "${selectedProfileId}" does not belong to ${modelRef}.`,
         );
       }
-    } else if (!requiresLiveProfileCredential(provider, REQUIRE_PROFILE_KEYS)) {
+    } else if (
+      resolveLiveCredentialPrecedence(
+        provider,
+        params.requireProfileKeys ?? REQUIRE_PROFILE_KEYS,
+      ) === "env-first"
+    ) {
       if (auth.mode !== "aws-sdk") {
         if (!auth.apiKey) {
           throw new Error(`Prepared live auth for ${modelRef} is missing its direct credential.`);
@@ -2907,7 +3024,7 @@ function buildLiveGatewayAuthProfileStore(params: {
   const profiles = {
     ...Object.fromEntries(
       Object.entries(params.store.profiles).filter(([, profile]) => {
-        return !directCredentialProviders.has(normalizeProviderId(profile.provider));
+        return !directCredentialProviders.has(resolveProviderIdForAuth(profile.provider));
       }),
     ),
     ...materializedProfiles,
@@ -2916,7 +3033,7 @@ function buildLiveGatewayAuthProfileStore(params: {
 
   const order: NonNullable<AuthProfileStore["order"]> = Object.fromEntries(
     Object.entries(params.store.order ?? {})
-      .filter(([provider]) => !directCredentialProviders.has(normalizeProviderId(provider)))
+      .filter(([provider]) => !directCredentialProviders.has(resolveProviderIdForAuth(provider)))
       .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
       .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
   );
@@ -2928,7 +3045,8 @@ function buildLiveGatewayAuthProfileStore(params: {
     ? Object.fromEntries(
         Object.entries(params.store.lastGood).filter(([provider, id]) => {
           return (
-            !directCredentialProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id)
+            !directCredentialProviders.has(resolveProviderIdForAuth(provider)) &&
+            keepProfileIds.has(id)
           );
         }),
       )
@@ -2981,11 +3099,38 @@ function resolveGatewayLivePreparedProfileId(
     : undefined;
 }
 
-async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<void>> {
+async function enterIsolatedGatewayLiveDiscoveryState(params: {
+  config: OpenClawConfig;
+  providers?: Iterable<string>;
+}): Promise<() => Promise<void>> {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const source = ensureAuthProfileStoreWithoutExternalProfiles(
+    resolveDefaultAgentDir(params.config),
+    {
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+    },
+  );
+  const selected = params.providers
+    ? new Set(
+        [...params.providers].flatMap((provider) => listProfilesForProvider(source, provider)),
+      )
+    : undefined;
+  const portable = buildPortableAuthProfileStoreForAgentCopy({
+    ...source,
+    profiles: Object.fromEntries(
+      Object.entries(source.profiles).filter(([id]) => !selected || selected.has(id)),
+    ),
+  });
+  if (portable.skippedProfileIds.length > 0) {
+    logProgress(
+      `[all-models] isolated discovery omitted ${portable.skippedProfileIds.length} non-portable auth profile(s)`,
+    );
+  }
   const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-  return async () => {
+  const cleanup = async () => {
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -2993,6 +3138,15 @@ async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<v
     }
     await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   };
+  try {
+    // Discovery may materialize env credentials; copy selected portable profiles
+    // first so it never writes the ambient store or duplicates native OAuth owners.
+    saveAuthProfileStore(portable.store, resolveDefaultAgentDir({}), { syncExternalCli: false });
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+  return cleanup;
 }
 
 function createGatewayLiveModelSession(params: {
@@ -3199,7 +3353,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     expect(resolveGatewayLivePreparedProfileId(store, "anthropic")).toBeUndefined();
   });
 
-  it("keeps prepared discovery credentials out of the ambient auth store", async () => {
+  it("copies selected portable discovery credentials without mutating the ambient auth store", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const ambientStateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-live-ambient-state-"),
@@ -3210,25 +3364,58 @@ describe("buildLiveGatewayAuthProfileStore", () => {
       version: 1,
       profiles: {
         "openai:ambient": { type: "api_key", provider: "openai", key: "ambient-test-key" },
+        "openai:token": { type: "token", provider: "openai", token: "ambient-test-token" },
+        "openai:refresh": {
+          type: "oauth",
+          provider: "openai",
+          access: "fixture-access",
+          refresh: "fixture-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "unselected:ambient": {
+          type: "token",
+          provider: "unselected",
+          token: "unselected-test-token",
+        },
       },
+      order: { openai: ["openai:ambient", "openai:token", "openai:refresh"] },
     };
-    saveAuthProfileStore(ambientStore, ambientAgentDir);
+    saveAuthProfileStore(ambientStore, undefined, { syncExternalCli: false });
 
     try {
-      const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
-      try {
-        const discoveryAgentDir = resolveDefaultAgentDir({});
-        expect(discoveryAgentDir).not.toBe(ambientAgentDir);
-        const prepared = materializeGatewayLiveDiscoveryAuth({
-          env: { OPENAI_API_KEY: "prepared-openai-test-key" },
-          providerList: ["openai"],
-          store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
-        });
-        saveAuthProfileStore(prepared, discoveryAgentDir);
-      } finally {
-        await leaveDiscoveryState();
-      }
-
+      expect(existsSync(path.join(ambientStateDir, "agents"))).toBe(false);
+      await withEnvAsync(
+        { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_USE_REAL_HOME: undefined },
+        async () => {
+          const testEnv = installTestEnv({ loadProfileEnv: false });
+          try {
+            const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
+              config: {},
+              providers: ["openai"],
+            });
+            try {
+              const discoveryAgentDir = resolveDefaultAgentDir({});
+              expect(discoveryAgentDir).not.toBe(ambientAgentDir);
+              const copied = ensureAuthProfileStoreWithoutExternalProfiles(discoveryAgentDir);
+              expect(copied.profiles).toEqual({
+                "openai:ambient": ambientStore.profiles["openai:ambient"],
+                "openai:token": ambientStore.profiles["openai:token"],
+              });
+              expect(copied.order).toEqual({ openai: ["openai:ambient", "openai:token"] });
+              const prepared = materializeGatewayLiveDiscoveryAuth({
+                env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+                providerList: ["openai"],
+                store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
+              });
+              saveAuthProfileStore(prepared, discoveryAgentDir);
+            } finally {
+              await leaveDiscoveryState();
+            }
+          } finally {
+            testEnv.cleanup();
+          }
+        },
+      );
       expect(
         ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
       ).toEqual(ambientStore.profiles);
@@ -3242,90 +3429,108 @@ describe("buildLiveGatewayAuthProfileStore", () => {
     }
   });
 
-  it("keeps an env-first provider on its prepared direct credential", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        anthropicProfile: {
-          type: "api_key",
-          provider: "anthropic",
-          key: "stored-anthropic-test-key",
-        },
-      },
-      order: {
-        anthropic: ["anthropicProfile"],
-      },
-      lastGood: {
-        anthropic: "anthropicProfile",
-      },
-      usageStats: {
-        anthropicProfile: { lastUsed: 1 },
-      },
-    };
-
-    const isolated = buildLiveGatewayAuthProfileStore({
-      store,
-      candidates: [
-        {
-          model: createGatewayLiveTestModel("anthropic", "claude-sonnet-4-6"),
-          auth: {
-            apiKey: "prepared-anthropic-test-key",
-            mode: "api-key",
-            source: "env: ANTHROPIC_API_KEY",
+  it.each(["anthropic", "claude-cli"])(
+    "keeps env-first %s on its prepared direct credential",
+    (modelProvider) => {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          anthropicProfile: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "stored-anthropic-test-key",
           },
         },
-      ],
-    });
-
-    expect(isolated.profiles.anthropicProfile).toBeUndefined();
-    expect(isolated.order).toBeUndefined();
-    expect(isolated.lastGood).toBeUndefined();
-    expect(isolated.usageStats).toBeUndefined();
-  });
-
-  it("preserves the exact selected source profile and prioritizes it in isolated order", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:other": {
-          type: "api_key",
-          provider: "openai",
-          key: "other-openai-test-key",
+        order: {
+          anthropic: ["anthropicProfile"],
         },
-        "openai:selected": {
-          type: "api_key",
-          provider: "openai",
-          key: "selected-openai-test-key",
+        lastGood: {
+          anthropic: "anthropicProfile",
         },
-      },
-      order: { openai: ["openai:other", "openai:selected"] },
-      usageStats: { "openai:selected": { lastUsed: 3 } },
-    };
+        usageStats: {
+          anthropicProfile: { lastUsed: 1 },
+        },
+      };
 
-    const isolated = buildLiveGatewayAuthProfileStore({
-      store,
-      candidates: [
-        {
-          model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
-          auth: {
-            apiKey: "selected-openai-test-key",
-            profileId: "openai:selected",
-            mode: "api-key",
-            source: "profile:openai:selected",
+      const isolated = buildLiveGatewayAuthProfileStore({
+        store,
+        requireProfileKeys: false,
+        candidates: [
+          {
+            model: createGatewayLiveTestModel(modelProvider, "claude-sonnet-4-6"),
+            auth: {
+              apiKey: "prepared-anthropic-test-key",
+              mode: "api-key",
+              source: "env: ANTHROPIC_API_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(isolated.profiles.anthropicProfile).toBeUndefined();
+      expect(isolated.order).toBeUndefined();
+      expect(isolated.lastGood).toBeUndefined();
+      expect(isolated.usageStats).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { modelProvider: "openai", provider: "openai", modelId: "gpt-5.6-luna" },
+    { modelProvider: "claude-cli", provider: "anthropic", modelId: "claude-sonnet-4-6" },
+  ])(
+    "preserves the selected profile for $modelProvider in canonical auth order",
+    ({ modelProvider, provider, modelId }) => {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          other: {
+            type: "api_key",
+            provider,
+            key: "other-test-key",
+          },
+          selected: {
+            type: "api_key",
+            provider,
+            key: "selected-test-key",
           },
         },
-      ],
-    });
+        order: { [provider]: ["other", "selected"] },
+        usageStats: { selected: { lastUsed: 3 } },
+      };
 
-    expect(isolated.profiles["openai:selected"]).toEqual(store.profiles["openai:selected"]);
-    expect(isolated.order?.openai).toEqual(["openai:selected", "openai:other"]);
-    expect(isolated.usageStats?.["openai:selected"]).toEqual({ lastUsed: 3 });
-  });
+      const isolated = buildLiveGatewayAuthProfileStore({
+        store,
+        candidates: [
+          {
+            model: createGatewayLiveTestModel(modelProvider, modelId),
+            auth: {
+              apiKey: "selected-test-key",
+              profileId: "selected",
+              mode: "api-key",
+              source: "profile:selected",
+            },
+          },
+        ],
+      });
 
-  it("rejects selected profiles absent from the authoritative source store", () => {
+      expect(isolated.profiles["selected"]).toEqual(store.profiles["selected"]);
+      expect(isolated.order?.[provider]).toEqual(["selected", "other"]);
+      expect(isolated.usageStats?.["selected"]).toEqual({ lastUsed: 3 });
+    },
+  );
+
+  it.each([
+    { provider: undefined, error: /openai:missing.*missing from its source store/ },
+    { provider: "unrelated", error: /openai:missing.*does not belong to openai/ },
+  ])("rejects missing or unrelated selected profiles ($provider)", ({ provider, error }) => {
     expect(() =>
       buildLiveGatewayAuthProfileStore({
-        store: { version: 1, profiles: {} },
+        store: {
+          version: 1,
+          profiles: provider
+            ? { "openai:missing": { type: "api_key", provider, key: "unrelated-test-key" } }
+            : {},
+        },
         candidates: [
           {
             model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
@@ -3338,7 +3543,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
           },
         ],
       }),
-    ).toThrow(/openai:missing.*missing from its source store/);
+    ).toThrow(error);
   });
 });
 function extractTranscriptMessageText(message: unknown): string {
@@ -3791,7 +3996,7 @@ describe("latestAssistantTextAfterBaseline", () => {
   it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
     const nonce = "0123456789abcdef0123456789abcdef";
     const expected = `Reply with the single word ok. Test trigger: ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
-    const scrubbed = `Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+    const scrubbed = `Reply with the single word ok. Test trigger: [redacted]_${nonce}`;
     const redacted = redactSecrets(expected);
 
     expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
@@ -3811,7 +4016,7 @@ describe("latestAssistantTextAfterBaseline", () => {
     ).toEqual([{ role: "assistant", content: "ok", stopReason: "stop" }]);
     expect(
       matchesLiveProbeUserText(
-        "Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        "Reply with the single word ok. Test trigger: [redacted]_ffffffffffffffffffffffffffffffff",
         expected,
       ),
     ).toBe(false);
@@ -3863,6 +4068,72 @@ async function waitForSessionAssistantText(params: {
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
 }
 
+type GatewayLiveProbePhase =
+  | "session"
+  | "prompt"
+  | "ultra-handoff"
+  | "tool-read"
+  | "tool-exec"
+  | "image"
+  | "tool-only"
+  | "tool-only-followup"
+  | "refusal";
+
+function summarizeGatewayLiveFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return {
+    classification:
+      shouldSkipLiveProviderDrift({
+        error: message,
+        allowAuth: true,
+        allowBilling: true,
+        allowModelNotFound: true,
+        allowProviderUnavailable: true,
+        allowRateLimit: true,
+        allowTimeout: true,
+      })?.reason ?? "unclassified",
+    // An explicit status in the received text is evidence, not an inferred HTTP outcome.
+    explicitHttpStatus: extractErrorHttpStatus(message)?.code,
+  };
+}
+
+class GatewayLiveAgentWaitError extends Error {
+  constructor(
+    message: string,
+    override readonly cause: ReturnType<typeof summarizeGatewayLiveFailure> & {
+      providerStarted?: boolean;
+    },
+  ) {
+    super(message, { cause });
+  }
+}
+
+function formatGatewayLiveFailureDiagnostic(params: {
+  provider: string;
+  model: string;
+  phase: GatewayLiveProbePhase;
+  error: unknown;
+}): string {
+  const identifier = (value: string, limit: number) => {
+    const redacted = redactSecrets(value);
+    return redacted.length <= limit &&
+      /^[a-z0-9][a-z0-9._/-]*$/i.test(redacted) &&
+      !redacted.includes("//")
+      ? redacted
+      : "omitted";
+  };
+  // Secret redaction alone retains arbitrary response bodies and private URLs.
+  // Serialize only closed diagnostic facts; never add error prose or stack traces.
+  return JSON.stringify({
+    provider: identifier(params.provider, 128),
+    model: identifier(params.model, 256),
+    phase: params.phase,
+    ...(params.error instanceof GatewayLiveAgentWaitError
+      ? params.error.cause
+      : summarizeGatewayLiveFailure(params.error)),
+  });
+}
+
 function formatGatewayLiveAgentWaitFailure(params: {
   context: string;
   runId: string;
@@ -3887,10 +4158,16 @@ function formatGatewayLiveAgentWaitFailure(params: {
     typeof result?.stopReason === "string" ? `stopReason=${result.stopReason}` : undefined,
     typeof result?.error === "string" ? `error=${result.error}` : undefined,
   ].filter((value): value is string => Boolean(value));
-  return new Error(
+  return new GatewayLiveAgentWaitError(
     `${params.context}: agent.wait ${status} for runId=${params.runId}${
       details.length > 0 ? ` (${details.join(", ")})` : ""
     }`,
+    {
+      ...summarizeGatewayLiveFailure(result?.error),
+      ...(typeof result?.providerStarted === "boolean"
+        ? { providerStarted: result.providerStarted }
+        : {}),
+    },
   );
 }
 
@@ -5566,6 +5843,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         if (model.provider === "anthropic" && anthropicKeys.length > 0) {
           process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
         }
+        let phase: GatewayLiveProbePhase = "session";
         try {
           const modelResult = await withGatewayLiveModelTimeout<"done" | "skip">(
             (async () => {
@@ -5583,6 +5861,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 });
               }
 
+              phase = "prompt";
               logProgress(`${progressLabel}: prompt`);
               let text = await requestGatewayAgentText({
                 client,
@@ -5689,6 +5968,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   expectedProvider: normalizeProviderId(model.provider),
                   expectedModelId: model.id,
                 });
+                phase = "ultra-handoff";
                 logProgress(`${progressLabel}: ultra sessions_spawn handoff`);
                 await verifyGatewayUltraSubagentHandoff({
                   client,
@@ -5701,6 +5981,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               // Real tool invocation: force the agent to Read a local file and echo a nonce.
+              phase = "tool-read";
               logProgress(`${progressLabel}: tool-read`);
               const runIdTool = randomUUID();
               const maxToolReadAttempts = 3;
@@ -5792,6 +6073,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               if (params.extraToolProbes) {
+                phase = "tool-exec";
                 logProgress(`${progressLabel}: tool-exec`);
                 const nonceC = randomUUID();
                 // Timeout wrappers do not cancel late tool runs, so keep provider-key attempts
@@ -5873,6 +6155,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               if (params.extraImageProbes && model.input?.includes("image")) {
+                phase = "image";
                 logProgress(`${progressLabel}: image`);
                 // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
                 const imageCode = randomImageProbeCode();
@@ -5934,6 +6217,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 (model.provider === "openai" && model.api === "openai-responses") ||
                 (model.provider === "openai" && model.api === "openai-chatgpt-responses")
               ) {
+                phase = "tool-only";
                 logProgress(`${progressLabel}: tool-only regression`);
                 const runId2 = randomUUID();
                 const firstText = await requestGatewayAgentText({
@@ -5953,6 +6237,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   label: params.label,
                 });
 
+                phase = "tool-only-followup";
                 const reply = await requestGatewayAgentText({
                   client,
                   sessionKey,
@@ -5974,6 +6259,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               if (model.provider === "anthropic") {
+                phase = "refusal";
                 await runAnthropicRefusalProbe({
                   client,
                   sessionKey,
@@ -5994,6 +6280,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           logProgress(`${progressLabel}: done`);
           break;
         } catch (err) {
+          logProgress(
+            `failure ${formatGatewayLiveFailureDiagnostic({ provider: model.provider, model: model.id, phase, error: err })}`,
+          );
           const message = String(err);
           if (
             model.provider === "anthropic" &&
@@ -6284,7 +6573,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
   let leaveDiscoveryState: (() => Promise<void>) | undefined;
 
   beforeEach(async () => {
-    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
+      config: await readLiveTestConfig(),
+      providers: PROVIDERS ?? undefined,
+    });
   });
 
   afterEach(async () => {
@@ -6334,7 +6626,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           env: process.env,
         });
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
-        const discoveryAgentDir = resolveDefaultAgentDir(cfg);
+        const discoveryAgentDir = resolveDefaultAgentDir({});
         const discoveryAuthProfileStore = ensureAuthProfileStore(discoveryAgentDir, {
           allowKeychainPrompt: false,
         });
@@ -6348,7 +6640,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         }
         logProgress("[all-models] preparing models.json");
         const modelsJsonResult = await withGatewayLiveSetupTimeout(
-          ensureOpenClawModelsJson(cfg, undefined, {
+          ensureOpenClawModelsJson(cfg, discoveryAgentDir, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
           }),
@@ -6455,7 +6747,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                       providerFilter: PROVIDERS,
                       config: cfg,
                       env: process.env,
-                    }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+                    }) &&
+                    isHighSignalLiveModelRef({
+                      provider: m.provider,
+                      id: m.id,
+                      config: cfg,
+                      workspaceDir,
+                    }),
                 );
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);

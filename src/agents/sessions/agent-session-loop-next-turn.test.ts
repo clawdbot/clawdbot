@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import type { AgentTool } from "../runtime/index.js";
 import {
@@ -20,6 +21,7 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import { agentSessionSetPromptPreparation } from "./agent-session-prompting.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -72,6 +74,85 @@ function mockAbortableQueuedRun() {
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
+  it.each(["apply", "dispose", "replace"] as const)(
+    "guards first-model preparation after a delayed SDK prompt override: %s",
+    async (closure) => {
+      const hookEntered = createDeferredCore();
+      const hookRelease = createDeferredCore();
+      const preparationEntered = createDeferredCore();
+      const preparationRelease = createDeferredCore();
+      const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+        [
+          "before_agent_start",
+          [
+            async () => {
+              hookEntered.resolve();
+              await hookRelease.promise;
+              return { systemPrompt: "late SDK override" };
+            },
+          ],
+        ],
+      ]);
+      const tools: ToolDefinition[] = ["read_policy", "write_policy"].map((name) => ({
+        name,
+        label: name,
+        description: name,
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [], details: {} }),
+      }));
+      const requests: Array<{ prompt: string; tools: string[] }> = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        requests.push({
+          prompt: context.systemPrompt ?? "",
+          tools: context.tools?.map((tool) => tool.name) ?? [],
+        });
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "done" }]),
+        );
+      });
+      const { session } = await createTestSession({
+        resourceLoader: createResourceLoader(handlers),
+        customTools: tools,
+      });
+      const prompt = session.prompt("apply permissions before the first request");
+      const settled = Promise.allSettled([prompt]);
+      await hookEntered.promise;
+      session[agentSessionSetPromptPreparation](async () => {
+        preparationEntered.resolve();
+        await preparationRelease.promise;
+        session.setActiveToolsByName(["read_policy"]);
+        session.agent.state.systemPrompt += "\nPermission change: read-only";
+      });
+      hookRelease.resolve();
+      // A missing preparation boundary completes the request instead of entering the barrier.
+      await Promise.race([settled, preparationEntered.promise]);
+      try {
+        expect(requests).toEqual([]);
+        if (closure === "dispose") {
+          session.dispose();
+        } else if (closure === "replace") {
+          session[agentSessionSetPromptPreparation](async () => {});
+        }
+      } finally {
+        preparationRelease.resolve();
+        await settled;
+      }
+      const [result] = await settled;
+      if (closure === "apply") {
+        expect(result?.status).toBe("fulfilled");
+        expect(requests).toEqual([
+          { prompt: "late SDK override\nPermission change: read-only", tools: ["read_policy"] },
+        ]);
+      } else {
+        expect(result).toMatchObject({
+          status: "rejected",
+          reason: { message: "Session prompt preparation is stale after replacement or disposal." },
+        });
+        expect(requests).toEqual([]);
+      }
+    },
+  );
+
   it("drains a follow-up queued by an agent-end handler", async () => {
     const sessionRef: { current?: AgentSession } = {};
     let queued = false;
@@ -216,6 +297,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         retry: { enabled: true, baseDelayMs: 10_000, maxRetries: 1 },
       });
       const { session } = await createTestSession({ settingsManager });
+      let permissionPrompt = "initial permission prompt";
+      session[agentSessionSetPromptPreparation](async () => {
+        session.agent.state.systemPrompt = permissionPrompt;
+      });
       const lifecycleEvents: string[] = [];
       session.subscribe((event) => lifecycleEvents.push(event.type));
 
@@ -224,6 +309,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       expect(requests).toHaveLength(1);
       expect(lifecycleEvents).toContain("auto_retry_start");
 
+      permissionPrompt = "updated permission prompt";
       await session.prompt("steer during retry", { streamingBehavior: "steer" });
       expect(requests).toHaveLength(1);
 
@@ -231,6 +317,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       await prompt;
 
       expect(requests).toHaveLength(2);
+      expect(requests.map((request) => request.systemPrompt)).toEqual([
+        "initial permission prompt",
+        "updated permission prompt",
+      ]);
       expect(JSON.stringify(requests[1]?.messages)).toContain("steer during retry");
       expect(lifecycleEvents.filter((type) => type === "agent_settled")).toHaveLength(1);
     } finally {
@@ -586,6 +676,57 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       { model: testModel.id, prompt: "prompt override", tools: ["switch_state"] },
       { model: nextModel.id, prompt: "prompt override", tools: ["second_tool"] },
     ]);
+  });
+
+  it("replaces permission-bound tools during a run without retaining removed tools", async () => {
+    const executions: string[] = [];
+    const sessionRef: { current?: AgentSession } = {};
+    const readTool: ToolDefinition = {
+      name: "read_policy",
+      label: "Read policy",
+      description: "Read with the current permission boundary",
+      parameters: Type.Object({}),
+      execute: async () => {
+        executions.push("restricted");
+        return { content: [{ type: "text", text: "restricted" }], details: {} };
+      },
+    };
+    const changeTool: ToolDefinition = {
+      ...readTool,
+      name: "change_permission",
+      execute: async () => {
+        sessionRef.current!.replaceCustomTools([readTool], [readTool.name]);
+        return { content: [{ type: "text", text: "Permission change" }], details: {} };
+      },
+    };
+    const previousReadTool: ToolDefinition = {
+      ...readTool,
+      execute: async () => {
+        executions.push("unrestricted");
+        return { content: [{ type: "text", text: "unrestricted" }], details: {} };
+      },
+    };
+    const requests: string[][] = [];
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context.tools?.map((tool) => tool.name) ?? []);
+      const name = requests.length === 1 ? changeTool.name : readTool.name;
+      const content: AssistantMessage["content"] =
+        requests.length < 3
+          ? [{ type: "toolCall", id: `call-${requests.length}`, name, arguments: {} }]
+          : [{ type: "text", text: "done" }];
+      return createAssistantResultStream(
+        createAssistant(model, content, requests.length < 3 ? "toolUse" : "stop"),
+      );
+    });
+    const { session } = await createTestSession({ customTools: [changeTool, previousReadTool] });
+    sessionRef.current = session;
+    session.setActiveToolsByName([changeTool.name, readTool.name]);
+
+    await session.prompt("tighten permissions");
+
+    expect(requests).toEqual([[changeTool.name, readTool.name], [readTool.name], [readTool.name]]);
+    expect(executions).toEqual(["restricted"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual([readTool.name]);
   });
 
   it("preserves explicit updates from an existing next-turn hook", async () => {

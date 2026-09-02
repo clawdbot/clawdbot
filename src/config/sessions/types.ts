@@ -31,6 +31,7 @@ import type {
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
+  SessionActor,
   SessionCreatedVia,
   SessionEntryProvenance,
   SessionOwnerAssignment,
@@ -328,7 +329,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
     /** Actor that archived the session; cleared when the session is restored. */
-    archivedBy?: SessionCreatedActor;
+    archivedBy?: SessionActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */
@@ -489,8 +490,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
     lastTtsReadLatestAt?: number;
     execHost?: string;
-    execSecurity?: string;
-    execAsk?: string;
     execNode?: string;
     /** Working directory interpreted only by the bound exec node. */
     execCwd?: string;
@@ -582,6 +581,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     label?: string;
     /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
     icon?: string;
+    /** Named sidebar tint (SESSION_COLOR_IDS); palette mirrors Claude Code /color for import. */
+    color?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */
@@ -596,6 +597,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Explicit authorized immutable library pins; current speakers never replace this selection. */
+    skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
     /**
      * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
@@ -623,6 +626,12 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     name?: string;
     baseRef?: string;
     titleSource: string;
+  };
+  /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
+  transcriptByteCompactionLatch?: {
+    activeBytes: number;
+    sessionId: string;
+    maxBytes: number;
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;

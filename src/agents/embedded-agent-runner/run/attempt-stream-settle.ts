@@ -9,6 +9,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
+import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -16,7 +17,6 @@ import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
-import { projectToolSearchTargetTranscriptMessages } from "../../tool-search.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -38,10 +38,9 @@ import {
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
 import {
-  describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStream,
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -79,9 +78,6 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
  */
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
-type ToolSearchTargetTranscriptProjections = Parameters<
-  typeof projectToolSearchTargetTranscriptMessages
->[1];
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type StreamSettleResult = {
@@ -119,7 +115,7 @@ export async function settleEmbeddedAttemptStream(input: {
     timedOutDuringCompaction: boolean;
   };
   markTimedOutDuringCompaction: () => void;
-  runAbortDeadlineAtMs: number;
+  getRunAbortDeadlineAtMs: () => number | undefined;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -128,7 +124,7 @@ export async function settleEmbeddedAttemptStream(input: {
   }) => Promise<void> | void;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   prePromptMessageCount: number;
-  toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjections;
+  nestedToolActivities: readonly NestedToolActivity[];
   cache: {
     observabilityEnabled: boolean;
     changesForTurn: PromptCacheChange[] | null;
@@ -164,16 +160,16 @@ export async function settleEmbeddedAttemptStream(input: {
           asyncTaskRunId: entry.asyncTaskRunId,
           asyncTaskId: entry.asyncTaskId,
         }));
-    const completionRequiredAsyncDeadlineAtMs = Math.max(
-      Date.now(),
-      input.runAbortDeadlineAtMs - 500,
-    );
+    const getAsyncTaskDeadlineAtMs = () => {
+      const deadlineAtMs = input.getRunAbortDeadlineAtMs();
+      return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
+    };
     let asyncTaskWait: CompletionRequiredAsyncTaskWaitResult;
     try {
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: completionRequiredAsyncDeadlineAtMs,
+        getDeadlineAtMs: getAsyncTaskDeadlineAtMs,
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
@@ -188,7 +184,7 @@ export async function settleEmbeddedAttemptStream(input: {
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: Date.now(),
+        getDeadlineAtMs: Date.now,
       });
     }
     // An aborted run legitimately leaves async tasks unfinished; stamping a
@@ -325,20 +321,13 @@ export async function settleEmbeddedAttemptStream(input: {
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
     }
-    const modelMessagesSnapshot = snapshotSelection.messagesSnapshot;
-    messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-      modelMessagesSnapshot,
-      input.toolSearchTargetTranscriptProjections,
-    );
+    messagesSnapshot = snapshotSelection.messagesSnapshot;
     sessionIdUsed = snapshotSelection.sessionIdUsed;
-    // Projected target-tool assistants are transcript evidence, not model
-    // turns. Letting one own terminal state hides its parent tool's outcome.
-    lastAssistant = modelMessagesSnapshot
-      .slice()
+    lastAssistant = messagesSnapshot
       .toReversed()
       .find((message): message is AssistantMessage => message.role === "assistant");
     currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-      messagesSnapshot: modelMessagesSnapshot,
+      messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
     currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
@@ -431,11 +420,9 @@ export async function settleEmbeddedAttemptStream(input: {
     currentAttemptCompletedAssistant,
     successfulNestedToolNames: [
       ...new Set(
-        input.toolSearchTargetTranscriptProjections
-          // Receipt evidence admits only projections explicitly recorded as successful.
-          .filter((projection) => Object.is(projection.isError, false))
-          .map((projection) => projection.toolName.trim())
-          .filter(Boolean),
+        input.nestedToolActivities.flatMap(({ details }) =>
+          details.isError ? [] : [details.toolName],
+        ),
       ),
     ],
     attemptUsage,
@@ -538,13 +525,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedApiKey: attempt.resolvedApiKey,
     authStorage: attempt.authStorage,
   });
-  const streamStrategy = describeEmbeddedAgentStreamStrategy({
-    currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: directProviderStreamFn,
-    model: attempt.model,
-    resolvedApiKey: transportApiKey,
-  });
-  session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+  const { streamFn, strategy: streamStrategy } = resolveEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
@@ -556,6 +537,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });
+  session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({

@@ -2,7 +2,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let edgeTTS: typeof import("./tts.js").edgeTTS;
 
@@ -19,9 +19,15 @@ const baseEdgeConfig = {
 
 describe("edgeTTS empty audio validation", () => {
   let tempDir: string | undefined;
+  let outputPath: string;
 
   beforeAll(async () => {
     ({ edgeTTS } = await import("./tts.js"));
+  });
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
+    outputPath = path.join(tempDir, "voice.mp3");
   });
 
   afterEach(() => {
@@ -31,30 +37,30 @@ describe("edgeTTS empty audio validation", () => {
     }
   });
 
+  function synthesize(tts: ReturnType<typeof createEdgeTTSClient>, text = "Hello") {
+    return edgeTTS(
+      {
+        text,
+        outputPath,
+        config: baseEdgeConfig,
+        timeoutMs: 10000,
+      },
+      tts,
+    );
+  }
+
   it("rejects blank text before calling Edge TTS", async () => {
-    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
-    const outputPath = path.join(tempDir, "voice.mp3");
     const ttsPromise = vi.fn(async (_text: string, filePath: string) => {
       writeFileSync(filePath, Buffer.from([0xff]));
     });
 
-    await expect(
-      edgeTTS(
-        {
-          text: " \n\t ",
-          outputPath,
-          config: baseEdgeConfig,
-          timeoutMs: 10000,
-        },
-        createEdgeTTSClient(ttsPromise),
-      ),
-    ).rejects.toThrow("Microsoft TTS text cannot be empty");
+    await expect(synthesize(createEdgeTTSClient(ttsPromise), " \n\t ")).rejects.toThrow(
+      "Microsoft TTS text cannot be empty",
+    );
     expect(ttsPromise).not.toHaveBeenCalled();
   });
 
   it("throws after one retry when the output file stays empty", async () => {
-    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
-    const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
     const tts = createEdgeTTSClient(async (text: string, filePath: string) => {
@@ -62,23 +68,11 @@ describe("edgeTTS empty audio validation", () => {
       writeFileSync(filePath, "");
     });
 
-    await expect(
-      edgeTTS(
-        {
-          text: "Hello",
-          outputPath,
-          config: baseEdgeConfig,
-          timeoutMs: 10000,
-        },
-        tts,
-      ),
-    ).rejects.toThrow("Edge TTS produced empty audio file after retry");
+    await expect(synthesize(tts)).rejects.toThrow("Edge TTS produced empty audio file after retry");
     expect(calls).toEqual(["Hello", "Hello"]);
   });
 
   it("succeeds when the output file has content", async () => {
-    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
-    const outputPath = path.join(tempDir, "voice.mp3");
     let stagedPath = "";
 
     const tts = createEdgeTTSClient(async (_text: string, filePath: string) => {
@@ -86,17 +80,7 @@ describe("edgeTTS empty audio validation", () => {
       writeFileSync(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
 
-    await expect(
-      edgeTTS(
-        {
-          text: "Hello",
-          outputPath,
-          config: baseEdgeConfig,
-          timeoutMs: 10000,
-        },
-        tts,
-      ),
-    ).resolves.toBeUndefined();
+    await expect(synthesize(tts)).resolves.toBeUndefined();
     expect(stagedPath).not.toBe(outputPath);
     expect(path.basename(stagedPath)).toContain(path.basename(outputPath));
     expect(path.basename(stagedPath)).toMatch(/\.part$/);
@@ -105,8 +89,6 @@ describe("edgeTTS empty audio validation", () => {
   });
 
   it("retries once when the first output file is empty", async () => {
-    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
-    const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
     const tts = createEdgeTTSClient(async (text: string, filePath: string) => {
@@ -114,23 +96,11 @@ describe("edgeTTS empty audio validation", () => {
       writeFileSync(filePath, calls.length === 1 ? "" : Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
 
-    await expect(
-      edgeTTS(
-        {
-          text: "Hello",
-          outputPath,
-          config: baseEdgeConfig,
-          timeoutMs: 10000,
-        },
-        tts,
-      ),
-    ).resolves.toBeUndefined();
+    await expect(synthesize(tts)).resolves.toBeUndefined();
     expect(calls).toEqual(["Hello", "Hello"]);
   });
 
   it("retries once when Edge TTS resolves without creating an output file", async () => {
-    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
-    const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
     const tts = createEdgeTTSClient(async (text: string, filePath: string) => {
@@ -140,23 +110,11 @@ describe("edgeTTS empty audio validation", () => {
       }
     });
 
-    await expect(
-      edgeTTS(
-        {
-          text: "Hello",
-          outputPath,
-          config: baseEdgeConfig,
-          timeoutMs: 10000,
-        },
-        tts,
-      ),
-    ).resolves.toBeUndefined();
+    await expect(synthesize(tts)).resolves.toBeUndefined();
     expect(calls).toEqual(["Hello", "Hello"]);
   });
 
   it("does not retry provider errors", async () => {
-    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
-    const outputPath = path.join(tempDir, "voice.mp3");
     const calls: string[] = [];
 
     const tts = createEdgeTTSClient(async (text: string) => {
@@ -164,17 +122,7 @@ describe("edgeTTS empty audio validation", () => {
       throw new Error("upstream timeout");
     });
 
-    await expect(
-      edgeTTS(
-        {
-          text: "Hello",
-          outputPath,
-          config: baseEdgeConfig,
-          timeoutMs: 10000,
-        },
-        tts,
-      ),
-    ).rejects.toThrow("upstream timeout");
+    await expect(synthesize(tts)).rejects.toThrow("upstream timeout");
     expect(calls).toEqual(["Hello"]);
   });
 });

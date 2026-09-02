@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   createWorkspaceGitTransferList,
   runWorkspaceInventoryCommandToFile,
+  settleWorkspaceInventoryCommands,
   workspaceInventoryError,
 } from "./workspace-sync-inventory.js";
 
@@ -37,14 +38,13 @@ export async function preflightWorkerWorkspace(params: {
         signal,
         timeoutMs,
       });
-    const metadataResults = await Promise.allSettled([
-      runGit(["rev-parse", "--show-toplevel"], gitRootPath),
-      runGit(["rev-parse", "--verify", "HEAD"], baseCommitPath),
-    ]);
-    const failure = metadataResults.find((result) => result.status === "rejected");
-    if (failure?.status === "rejected") {
-      throw failure.reason;
-    }
+    await settleWorkspaceInventoryCommands(
+      [
+        runGit(["rev-parse", "--show-toplevel"], gitRootPath),
+        runGit(["rev-parse", "--verify", "HEAD"], baseCommitPath),
+      ],
+      signal,
+    );
     const [reportedRoot, baseCommit] = await Promise.all([
       readBoundedGitValue(gitRootPath),
       readBoundedGitValue(baseCommitPath),

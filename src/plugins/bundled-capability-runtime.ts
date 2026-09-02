@@ -52,6 +52,7 @@ export function loadBundledCapabilityRuntimeRegistry(
       : (withBundledPluginEnablementCompat({
           config: params.config,
           pluginIds: params.pluginIds,
+          env,
         }) ?? {});
   const snapshot =
     !params.discovery && !params.installRecords ? getGatewayPluginMetadataSnapshot() : undefined;

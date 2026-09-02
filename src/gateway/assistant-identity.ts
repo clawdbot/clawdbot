@@ -101,16 +101,20 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
   return value;
 }
 
+// Presentation may choose the first roster entry even when ambient work needs an explicit owner.
+export function resolveAssistantAgentId(cfg: OpenClawConfig, agentId?: string | null): string {
+  return normalizeAgentId(
+    agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? listAgentEntries(cfg)[0]?.id ?? "main",
+  );
+}
+
 /** Resolve the display name/avatar/emoji for an agent-facing assistant identity. */
 export function resolveAssistantIdentity(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
   workspaceDir?: string | null;
 }): ResolvedAssistantIdentity {
-  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
-  const presentationAgentId =
-    params.agentId ?? compatibilityAgentId ?? listAgentEntries(params.cfg)[0]?.id ?? "main";
-  const agentId = normalizeAgentId(presentationAgentId);
+  const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
   const fileIdentity = workspaceDir ? loadAgentIdentity(workspaceDir) : null;

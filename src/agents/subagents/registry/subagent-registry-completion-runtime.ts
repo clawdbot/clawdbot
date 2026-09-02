@@ -24,34 +24,25 @@ export function createSubagentRegistryCompletionRuntime(config: {
     params: SubagentCompletionRequest,
     source: string,
   ) {
-    try {
-      await completeSubagentRun(params);
-      return;
-    } catch (error) {
-      const current = runs.get(params.runId);
-      warn("failed to complete subagent run; retrying completion", {
-        source,
-        runId: params.runId,
-        childSessionKey: current?.childSessionKey,
-        error,
-      });
-    }
-
-    const current = runs.get(params.runId);
-    if (!current) {
-      return;
-    }
-
-    try {
-      await completeSubagentRun(params);
-      return;
-    } catch (retryError) {
-      warn("failed to complete subagent run after retry; retrying ended cleanup", {
-        source,
-        runId: params.runId,
-        childSessionKey: current.childSessionKey,
-        error: retryError,
-      });
+    for (const message of [
+      "failed to complete subagent run; retrying completion",
+      "failed to complete subagent run after retry; retrying ended cleanup",
+    ]) {
+      try {
+        await completeSubagentRun(params);
+        return;
+      } catch (error) {
+        const current = runs.get(params.runId);
+        warn(message, {
+          source,
+          runId: params.runId,
+          childSessionKey: current?.childSessionKey,
+          error,
+        });
+        if (!current) {
+          return;
+        }
+      }
     }
 
     const latest = runs.get(params.runId);
@@ -86,7 +77,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
       if (current !== expectedEntry || current.generation !== expectedGeneration) {
         return;
       }
-      completeSubagentRunInBackground(params, source, "restart-retry");
+      completeSubagentRunInBackground(
+        params,
+        source,
+        "failed to retry subagent completion after gateway restart",
+      );
     }, GATEWAY_ADMISSION_RETRY_DELAY_MS);
     timer.unref?.();
     retryTimers.add(timer);
@@ -101,7 +96,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     try {
       await runWithGatewayIndependentRootWorkContinuation(async () => {
         await completeSubagentRunWithRecoveryAttempt(params, source);
-      });
+      }, "subagents:completion");
     } catch (error) {
       if (!isGatewayRestartDraining()) {
         throw error;
@@ -117,28 +112,14 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
   }
 
-  // The recovery wrapper rethrows non-draining errors by design, so this detached
-  // boundary must land them in the log; an uncaught rejection here hits the
-  // process-level unhandled-rejection fatal path and exits the gateway.
+  // Awaited callers own rejection; detached timers must log it instead of exiting the Gateway.
   function completeSubagentRunInBackground(
     params: SubagentCompletionRequest,
     source: string,
-    origin: "background" | "restart-retry" = "background",
+    warning = "failed to complete subagent run in background",
   ) {
     void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
-      // A delayed post-restart retry that still fails is a distinct recovery
-      // failure: operators must be able to tell it apart from an initial
-      // background completion loss in the shared detached boundary.
-      warn(
-        origin === "restart-retry"
-          ? "failed to retry subagent completion after gateway restart"
-          : "failed to complete subagent run in background",
-        {
-          source,
-          runId: params.runId,
-          error,
-        },
-      );
+      warn(warning, { source, runId: params.runId, error });
     });
   }
 
