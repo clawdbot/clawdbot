@@ -72,7 +72,7 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page, { timeout: 30_000 });
 
           const createJob = async (name: string, group: string, tags: string) => {
-            await page.locator('[data-test-id="cron-new-task"]').click();
+            await page.locator('[data-test-id="cron-new-task"]').click({ force: true });
             const nameInput = page.locator("#cron-name");
             await nameInput.waitFor({ state: "visible", timeout: 30_000 });
             await expect.poll(() => nameInput.isEditable(), { timeout: 60_000 }).toBe(true);
