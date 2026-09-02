@@ -15,7 +15,15 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "./plugin-model-catalog.js";
+import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
+import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -348,4 +356,103 @@ export async function expectNativeHarnessModelsPublished(params: {
   } finally {
     restoreActivePluginRegistrySnapshot(previousRegistry);
   }
+}
+
+export async function expectNativeHarnessModelsPublishedFromWorker(params: {
+  makeTempDir: (prefix: string) => string;
+  retireAfterTest: (retire: () => void) => void;
+}): Promise<void> {
+  const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
+  const stateDir = path.join(root, "state");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const workspaceDir = path.join(root, "workspace");
+  const marker = path.join(root, "worker-marker.txt");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const pluginFile = writeFixturePlugin({ root, spinMs: 0, nativeCatalog: true });
+  const config = {
+    agents: {
+      defaults: {
+        model: `${PROVIDER_ID}/sqlite-model`,
+        models: {
+          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+          [`${PROVIDER_ID}/account-scoped-model`]: { agentRuntime: { id: HARNESS_ID } },
+        },
+      },
+    },
+    plugins: {
+      allow: [PLUGIN_ID],
+      load: { paths: [pluginFile] },
+      entries: { [PLUGIN_ID]: { enabled: true } },
+    },
+  } satisfies OpenClawConfig;
+  const env = {
+    ...process.env,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_WORKER_CATALOG_MARKER: marker,
+    [EXTERNAL_AUTH_PATH_ENV]: "",
+    [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
+    [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
+  };
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir,
+      store: {
+        version: 1,
+        profiles: {
+          [PROFILE_ID]: {
+            type: "token",
+            provider: SHARED_AUTH_PROVIDER_ID,
+            token: MATERIALIZED_SECRET,
+            tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
+          },
+        },
+        order: { [SHARED_AUTH_PROVIDER_ID]: [PROFILE_ID] },
+      },
+    },
+  ]);
+  replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: {
+      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [PROVIDER_ID]: {
+            baseUrl: "https://worker-catalog.invalid/v1",
+            api: "openai-completions",
+            apiKey: "WORKER_CATALOG_API_KEY",
+            models: [{ id: "sqlite-model", name: "SQLite model" }],
+          },
+        },
+      }),
+    },
+  });
+  const input = {
+    agentId: "main",
+    agentDir,
+    inheritedAuthDir: agentDir,
+    workspaceDir,
+    config,
+    env,
+  };
+  let current = true;
+  params.retireAfterTest(() => {
+    current = false;
+  });
+  const build = await startSerializedSnapshotBuild(
+    {
+      input,
+      catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+      isGenerationCurrent: () => current,
+    },
+    new Map(),
+    30_000,
+    "static",
+  ).pending;
+  await expectNativeHarnessModelsPublished({
+    config,
+    metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
+    snapshot: build.snapshot,
+  });
 }

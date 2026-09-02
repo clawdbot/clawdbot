@@ -46,7 +46,6 @@ import {
   EXTERNAL_AUTH_PATH_ENV,
   createJwtWithExp,
   writeCodexAuth,
-  expectNativeHarnessModelsPublished,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import {
@@ -76,7 +75,6 @@ function createCatalogFixture(
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
     builtPluginVersion?: string;
-    nativeCatalog?: boolean;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -105,13 +103,6 @@ function createCatalogFixture(
         model: `${PROVIDER_ID}/sqlite-model`,
         models: {
           [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
-          ...(options?.nativeCatalog
-            ? {
-                [`${PROVIDER_ID}/account-scoped-model`]: {
-                  agentRuntime: { id: HARNESS_ID },
-                },
-              }
-            : {}),
         },
       },
     },
@@ -182,7 +173,6 @@ async function createStaticSnapshot(
     readOnly?: boolean;
     metadataWorkspace?: "gateway" | "none" | "activation";
     provideMetadataToWorker?: boolean;
-    nativeCatalog?: boolean;
   },
 ) {
   const fixture = createCatalogFixture(spinMs, envOverride, options);
@@ -522,19 +512,6 @@ describe("prepared model catalog worker boundary", () => {
         id: "account-scoped-model",
       }),
     );
-  });
-
-  it("publishes native harness models through prepared list and chat metadata", async () => {
-    const fixture = await createStaticSnapshot(
-      0,
-      { [EXTERNAL_AUTH_PATH_ENV]: "" },
-      { nativeCatalog: true },
-    );
-    await expectNativeHarnessModelsPublished({
-      config: fixture.config,
-      metadataSnapshot: fixture.pluginMetadataSnapshot,
-      snapshot: fixture.snapshot,
-    });
   });
 
   it("pairs full catalog native routes with exact-generation auth", async () => {
