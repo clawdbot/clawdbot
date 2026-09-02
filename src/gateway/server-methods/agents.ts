@@ -820,8 +820,33 @@ async function restoreWorkspaceFile(params: {
   workspaceDir: string;
   name: string;
   previousContent: string | undefined;
+  expectedCurrentContent: string;
 }): Promise<void> {
   const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+  const readCurrentIdentityContent = async (): Promise<string | undefined> => {
+    try {
+      const safeRead = await workspaceRoot.read(params.name, {
+        hardlinks: "reject",
+        nonBlockingRead: true,
+      });
+      return safeRead.buffer.toString("utf-8");
+    } catch {
+      // Unreadable current bytes cannot prove this mutation still owns the
+      // file; skip restore rather than overwrite an unknown concurrent edit.
+      return undefined;
+    }
+  };
+  // Two observations are required. The first is the rollback snapshot; the
+  // second is the condition for the mutating syscall. A concurrent IDENTITY.md
+  // write can complete in the await between them; restoring from the first
+  // snapshot would clobber it. Same-process agents.files.set shares the config
+  // lock; this write-time re-read still covers writers outside that lock.
+  if ((await readCurrentIdentityContent()) !== params.expectedCurrentContent) {
+    return;
+  }
+  if ((await readCurrentIdentityContent()) !== params.expectedCurrentContent) {
+    return;
+  }
   if (params.previousContent === undefined) {
     try {
       await workspaceRoot.remove(params.name);
@@ -1102,20 +1127,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
             try {
               await updateAgentConfigEntry(agentConfigUpdate);
             } catch (error) {
-              // Restore only when IDENTITY.md still contains this mutation's
-              // write. agents.files.set can edit the same file without the
-              // config lock; a stale snapshot restore would overwrite that edit.
-              const currentIdentityContent = await readWorkspaceFileContent(
-                identityWorkspaceDir,
-                DEFAULT_IDENTITY_FILENAME,
-              ).catch(() => undefined);
-              if (currentIdentityContent === builtIdentity.content) {
-                await restoreWorkspaceFile({
-                  workspaceDir: identityWorkspaceDir,
-                  name: DEFAULT_IDENTITY_FILENAME,
-                  previousContent: previousIdentityContent,
-                });
-              }
+              await restoreWorkspaceFile({
+                workspaceDir: identityWorkspaceDir,
+                name: DEFAULT_IDENTITY_FILENAME,
+                previousContent: previousIdentityContent,
+                expectedCurrentContent: builtIdentity.content,
+              });
               throw error;
             }
             return true;
@@ -1725,7 +1742,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
     let workspaceRoot: WorkspaceRoot;
     try {
       workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
-      await workspaceRoot.write(name, content, { encoding: "utf8" });
+      const writeWorkspaceFile = async () => {
+        await workspaceRoot.write(name, content, { encoding: "utf8" });
+      };
+      // IDENTITY.md rollback restore runs under the config lock. Taking the
+      // same lock serializes raw files.set with that restore so a concurrent
+      // authorized edit cannot land between the restore snapshot and write.
+      if (name === DEFAULT_IDENTITY_FILENAME) {
+        await withConfigMutationExclusive(writeWorkspaceFile);
+      } else {
+        await writeWorkspaceFile();
+      }
     } catch (err) {
       if (!(err instanceof FsSafeError)) {
         throw err;

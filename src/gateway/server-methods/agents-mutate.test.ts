@@ -1505,11 +1505,15 @@ describe("agents.update", () => {
   it.each([
     {
       name: "restores IDENTITY.md when it still contains this mutation's write after config commit failure",
-      concurrentEdit: false,
+      concurrentEdit: "none",
     },
     {
       name: "does not restore IDENTITY.md over a concurrent agents.files.set edit after config commit failure",
-      concurrentEdit: true,
+      concurrentEdit: "before-compare",
+    },
+    {
+      name: "does not restore IDENTITY.md over a concurrent agents.files.set edit that lands after the rollback comparison",
+      concurrentEdit: "after-compare",
     },
   ] as const)("$name", async ({ concurrentEdit }) => {
     const identityMarkdown = [
@@ -1529,13 +1533,20 @@ describe("agents.update", () => {
       "",
     ].join("\n");
     let lastWritten: string | undefined;
+    let readsAfterClearedWrite = 0;
     mocks.rootRead.mockImplementation(async () => {
-      const content =
-        lastWritten === undefined
-          ? identityMarkdown
-          : concurrentEdit
-            ? concurrentMarkdown
-            : lastWritten;
+      let content = lastWritten === undefined ? identityMarkdown : lastWritten;
+      if (lastWritten !== undefined && concurrentEdit === "before-compare") {
+        content = concurrentMarkdown;
+      } else if (lastWritten !== undefined && concurrentEdit === "after-compare") {
+        readsAfterClearedWrite += 1;
+        if (readsAfterClearedWrite === 1) {
+          content = lastWritten;
+          lastWritten = concurrentMarkdown;
+        } else {
+          content = lastWritten;
+        }
+      }
       return {
         buffer: Buffer.from(content),
         realPath: "/workspace/test-agent/IDENTITY.md",
@@ -1562,9 +1573,14 @@ describe("agents.update", () => {
     });
     expect(String(clearedWrite.data)).not.toMatch(/Emoji\s*:/);
     expect(String(clearedWrite.data)).not.toMatch(/Avatar\s*:/);
-    if (concurrentEdit) {
+    if (concurrentEdit === "before-compare") {
       expect(mocks.rootWrite).toHaveBeenCalledOnce();
       expect(lastWritten).toBe(String(clearedWrite.data));
+      return;
+    }
+    if (concurrentEdit === "after-compare") {
+      expect(mocks.rootWrite).toHaveBeenCalledOnce();
+      expect(lastWritten).toBe(concurrentMarkdown);
       return;
     }
     const restoredWrite = expectRecordFields(mockCallArg(mocks.rootWrite, 1), {
