@@ -421,6 +421,7 @@ export async function applyInlineDirectiveOverrides(params: {
           rawRuntime: directives.rawModelRuntime,
           provider: modelSelection.provider,
           cfg,
+          agentId,
           sessionEntry,
         });
         if (runtime.kind === "invalid") {

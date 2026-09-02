@@ -69,6 +69,11 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   const provider = params.provider?.trim().toLowerCase() ?? "";
   // App-server harnesses are bound to their providers in ONE place
   // (app-server-runtime-bindings.ts), shared with the /models runtime chooser.
+  // This answers compatibility only: the binding table is static, so an owner
+  // plugin can still be disabled. Callers that ACCEPT a new selection also gate
+  // on owner availability (directive-handling.model-runtime.ts); recovery of an
+  // already-persisted override deliberately does not, so a temporarily
+  // unavailable plugin cannot silently reroute a locked transcript.
   // This used to hardcode Codex alone, which silently rejected every other
   // bridge harness: `/model zai/glm-5.3 --runtime glm-bridge` returned
   // 'Runtime "glm-bridge" is not supported for zai' and the model never changed,

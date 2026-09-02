@@ -30,6 +30,22 @@
  *      instead of leaving a chooser entry that can only fail.
  *   5. Binding coverage — every agent harness declared by a real bundled
  *      manifest on disk has a binding row.
+ *   6. `/model <provider>/<model> --runtime <runtime>` directive acceptance —
+ *      the real `resolveModelRuntimeDirective()` accepts the same Copilot and
+ *      Codex pairings the chooser offers.
+ *   7. Directive gating — when the owning plugin is disabled, the directive is
+ *      rejected with an actionable message instead of persisting an override
+ *      that dead-ends the next turn in `ensureSelectedAgentHarnessPlugin()`.
+ *      Proven for both bridge harnesses, and `applyModelRuntimeDirective()` is
+ *      run to show nothing is written to the session entry.
+ *   8. Gate exemptions — the built-in `openclaw` runtime and an incompatible
+ *      runtime keep their existing outcomes.
+ *   9. Next-turn consequence — the real `ensureSelectedAgentHarnessPlugin()`
+ *      is run against the real (empty) registry a disabled owner produces. It
+ *      throws for the override the pre-fix directive persisted, and the
+ *      post-fix directive never persists that override, so the throw is
+ *      unreachable. This closes the causal chain the review described without
+ *      needing GitHub Copilot credentials.
  *
  * Run: pnpm tsx scripts/proof-app-server-runtime-chooser-bindings.ts
  */
@@ -42,6 +58,9 @@ type BindingsModule = typeof import("../src/agents/app-server-runtime-bindings.j
 type BundledMetadataModule = typeof import("../src/plugins/bundled-plugin-metadata.js");
 type PluginRuntimeModule = typeof import("../src/plugins/runtime.js");
 type RegistryEmptyModule = typeof import("../src/plugins/registry-empty.js");
+type DirectiveRuntimeModule =
+  typeof import("../src/auto-reply/reply/directive-handling.model-runtime.js");
+type HarnessRuntimePluginModule = typeof import("../src/agents/harness/runtime-plugin.js");
 type OpenClawConfig = import("../src/config/types.openclaw.js").OpenClawConfig;
 
 const repoRoot = process.env.PROOF_REPO_ROOT ?? process.cwd();
@@ -63,6 +82,12 @@ const { setActivePluginRegistry } = (await importSource(
 const { createEmptyPluginRegistry } = (await importSource(
   "src/plugins/registry-empty.ts",
 )) as RegistryEmptyModule;
+const { applyModelRuntimeDirective, resolveModelRuntimeDirective } = (await importSource(
+  "src/auto-reply/reply/directive-handling.model-runtime.ts",
+)) as DirectiveRuntimeModule;
+const { ensureSelectedAgentHarnessPlugin } = (await importSource(
+  "src/agents/harness/runtime-plugin.ts",
+)) as HarnessRuntimePluginModule;
 
 // A real, empty registry: no CLI backends registered, so nothing below can be
 // attributed to listCliRuntimeModelBackendBindings().
@@ -183,5 +208,134 @@ assert.deepEqual(
 console.log(
   `[5] bundled app-server harnesses ${JSON.stringify([...bundledHarnessIds].toSorted())} all bound`,
 );
+
+// --- Scenario 6: the /model directive accepts what the chooser offers. ------
+for (const [provider, runtime] of [
+  ["github-copilot", "copilot"],
+  ["openai", "codex"],
+] as const) {
+  const resolution = resolveModelRuntimeDirective({ rawRuntime: runtime, provider, cfg: config });
+  assert.deepEqual(
+    resolution,
+    { kind: "set", runtime },
+    `/model ${provider}/... --runtime ${runtime} was not accepted: ${JSON.stringify(resolution)}`,
+  );
+}
+console.log("[6] directive accepts github-copilot/copilot and openai/codex");
+
+// --- Scenario 7: a disabled harness owner is rejected, not persisted. -------
+for (const [provider, runtime, pluginId] of [
+  ["github-copilot", "copilot", "copilot"],
+  ["openai", "codex", "codex"],
+] as const) {
+  const disabledConfig = {
+    ...config,
+    plugins: { entries: { [pluginId]: { enabled: false } } },
+  } as unknown as OpenClawConfig;
+  const resolution = resolveModelRuntimeDirective({
+    rawRuntime: runtime,
+    provider,
+    cfg: disabledConfig,
+  });
+  assert.equal(
+    resolution.kind,
+    "invalid",
+    `--runtime ${runtime} was accepted while plugin "${pluginId}" is disabled: ${JSON.stringify(resolution)}`,
+  );
+  assert.ok(
+    resolution.kind === "invalid" && resolution.errorText.includes(runtime),
+    `rejection text does not name the runtime: ${JSON.stringify(resolution)}`,
+  );
+  const entry: { agentRuntimeOverride?: string } = {};
+  assert.deepEqual(
+    applyModelRuntimeDirective(entry, resolution),
+    { updated: false },
+    "a rejected runtime directive reported a session mutation",
+  );
+  assert.equal(
+    entry.agentRuntimeOverride,
+    undefined,
+    `a rejected runtime directive persisted an unusable override: ${JSON.stringify(entry)}`,
+  );
+  console.log(
+    `[7] ${provider}/--runtime ${runtime} with "${pluginId}" disabled: ${resolution.kind}`,
+  );
+}
+
+// --- Scenario 8: exemptions and incompatible runtimes are unchanged. --------
+assert.deepEqual(
+  resolveModelRuntimeDirective({
+    rawRuntime: "openclaw",
+    provider: "github-copilot",
+    cfg: { ...config, plugins: { entries: { copilot: { enabled: false } } } } as OpenClawConfig,
+  }),
+  { kind: "set", runtime: "openclaw" },
+  "the built-in openclaw runtime must not be gated on a harness owner plugin",
+);
+const incompatible = resolveModelRuntimeDirective({
+  rawRuntime: "copilot",
+  provider: "proof-standalone",
+  cfg: config,
+});
+assert.ok(
+  incompatible.kind === "invalid" &&
+    incompatible.errorText.includes("is not supported for proof-standalone"),
+  `an incompatible runtime must keep its unsupported message: ${JSON.stringify(incompatible)}`,
+);
+console.log("[8] openclaw runtime ungated; incompatible runtime keeps its unsupported message");
+
+// --- Scenario 9: the next turn the gate protects. ---------------------------
+const disabledCopilotConfig = {
+  ...config,
+  plugins: { entries: { copilot: { enabled: false } } },
+} as unknown as OpenClawConfig;
+// The registry a disabled owner plugin produces: real, and without the harness.
+const registryWithoutCopilot = createEmptyPluginRegistry();
+let nextTurnError: unknown;
+try {
+  await ensureSelectedAgentHarnessPlugin({
+    provider: "github-copilot",
+    modelId: "claude-opus-4-6",
+    config: disabledCopilotConfig,
+    // The override the PRE-FIX directive persisted for this exact selection.
+    agentHarnessRuntimeOverride: "copilot",
+    workspaceDir: repoRoot,
+    pluginRegistry: registryWithoutCopilot,
+  });
+} catch (error) {
+  nextTurnError = error;
+}
+assert.ok(
+  nextTurnError instanceof Error &&
+    nextTurnError.message.includes('Agent harness runtime "copilot" is unavailable'),
+  `expected the next turn to fail for a persisted-but-unavailable runtime, got ${String(nextTurnError)}`,
+);
+console.log(
+  `[9] pre-fix persisted override fails the next turn: ${(nextTurnError as Error).message.split(".")[0]}.`,
+);
+
+// With the gate, the same selection persists nothing, so the next turn runs the
+// default policy instead of the unavailable harness.
+const gatedEntry: { agentRuntimeOverride?: string } = {};
+applyModelRuntimeDirective(
+  gatedEntry,
+  resolveModelRuntimeDirective({
+    rawRuntime: "copilot",
+    provider: "github-copilot",
+    cfg: disabledCopilotConfig,
+  }),
+);
+assert.equal(gatedEntry.agentRuntimeOverride, undefined, "gate leaked an override");
+await ensureSelectedAgentHarnessPlugin({
+  provider: "github-copilot",
+  modelId: "claude-opus-4-6",
+  config: disabledCopilotConfig,
+  ...(gatedEntry.agentRuntimeOverride
+    ? { agentHarnessRuntimeOverride: gatedEntry.agentRuntimeOverride }
+    : {}),
+  workspaceDir: repoRoot,
+  pluginRegistry: registryWithoutCopilot,
+});
+console.log("[9] post-fix: nothing persisted, so the next turn starts without throwing");
 
 console.log("All runtime assertions passed.");
