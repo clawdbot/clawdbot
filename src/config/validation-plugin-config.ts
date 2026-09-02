@@ -358,6 +358,7 @@ export function validateExplicitPluginConfig(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),

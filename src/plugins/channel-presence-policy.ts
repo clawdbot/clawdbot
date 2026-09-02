@@ -325,6 +325,7 @@ function evaluateEffectiveChannelPlugin(params: {
   const activationState = resolveEffectivePluginActivationState({
     id: params.plugin.id,
     origin: params.plugin.origin,
+    channelIds: params.plugin.channels,
     config: params.normalizedConfig,
     rootConfig: params.config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
