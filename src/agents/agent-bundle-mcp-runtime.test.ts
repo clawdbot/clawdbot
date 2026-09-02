@@ -3515,29 +3515,17 @@ process.on("SIGINT", shutdown);`,
       const manager = getSessionMcpRuntimeManagerForTesting();
       const idleTtlMs = 10 * 60 * 1000;
       nowMs += idleTtlMs;
-      const evictedWhileResolving = await manager.sweepIdleRuntimes();
-      expect(evictedWhileResolving).toBe(0);
+      expect(await manager.sweepIdleRuntimes()).toBe(0);
       expect(manager.listRuntimeKeys()).toHaveLength(1);
 
       releaseResolution.resolve();
       secondTools = expectDefined(await secondRequest, "second requester tools");
       expect((await getOrCreateRequesterScopedMcpRuntime(params))?.runtime).toBe(firstRuntime);
       const secondTool = expectDefined(secondTools.tools[0], "second requester tool");
-      const secondSessionId = readMcpText(
-        await secondTool.execute("second-requester-call", {}),
-        "second MCP result",
-      );
-      expect(secondSessionId).toBe(firstSessionId);
+      expect(
+        readMcpText(await secondTool.execute("second-requester-call", {}), "second MCP result"),
+      ).toBe(firstSessionId);
       expect(proof.session.current).toBe(firstSessionId);
-      console.log(
-        JSON.stringify({
-          claim: "real requester-scoped MCP transport survives idle sweep during resolution",
-          evictedWhileResolving,
-          runtimeReused:
-            (await getOrCreateRequesterScopedMcpRuntime(params))?.runtime === firstRuntime,
-          mcpSessionReused: secondSessionId === firstSessionId,
-        }),
-      );
       await secondTools.dispose();
       secondTools = undefined;
 
