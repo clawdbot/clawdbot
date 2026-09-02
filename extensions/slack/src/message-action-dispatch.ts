@@ -313,6 +313,54 @@ export async function handleSlackMessageAction(params: {
     );
   }
 
+  if (action === "bookmark") {
+    const op = readStringParam(actionParams, "op");
+    const channelId = resolveChannelId();
+    const base = { action: "", channelId, accountId };
+    if (!op || op === "list") {
+      return await invoke({ ...base, action: "listChannelBookmarks" }, cfg, ctx.toolContext);
+    }
+    if (op === "add") {
+      return await invoke(
+        {
+          ...base,
+          action: "addChannelBookmark",
+          title: readStringParam(actionParams, "title", { required: true }),
+          link: readStringParam(actionParams, "link", { required: true }),
+          emoji: readStringParam(actionParams, "emoji"),
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    if (op === "edit") {
+      return await invoke(
+        {
+          ...base,
+          action: "editChannelBookmark",
+          bookmarkId: readStringParam(actionParams, "bookmarkId", { required: true }),
+          title: readStringParam(actionParams, "title"),
+          link: readStringParam(actionParams, "link"),
+          emoji: readStringParam(actionParams, "emoji"),
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    if (op === "remove") {
+      return await invoke(
+        {
+          ...base,
+          action: "removeChannelBookmark",
+          bookmarkId: readStringParam(actionParams, "bookmarkId", { required: true }),
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    throw new Error(`Unknown Slack bookmark op: ${op}`);
+  }
+
   if (action === "member-info") {
     const requesterAccountId = ctx.requesterAccountId
       ? normalizeAccountId(ctx.requesterAccountId)

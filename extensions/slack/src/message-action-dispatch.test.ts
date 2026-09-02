@@ -1209,6 +1209,94 @@ describe("handleSlackMessageAction", () => {
   });
 
   it.each([
+    [
+      "add",
+      {
+        action: "addChannelBookmark",
+        title: "Runbook",
+        link: "https://example.com",
+        emoji: "bookmark",
+      },
+    ],
+    [
+      "edit",
+      {
+        action: "editChannelBookmark",
+        bookmarkId: "B1",
+        title: "Runbook",
+        link: "https://example.com",
+        emoji: "bookmark",
+      },
+    ],
+    ["remove", { action: "removeChannelBookmark", bookmarkId: "B1" }],
+  ])("maps bookmark op=%s to the Slack action", async (op, expected) => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "bookmark",
+        cfg: {},
+        params: {
+          op,
+          channelId: "C123",
+          title: "Runbook",
+          link: "https://example.com",
+          bookmarkId: "B1",
+          emoji: "bookmark",
+        },
+        accountId: "default",
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ ...expected, channelId: "C123", accountId: "default" }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("defaults bookmark op to list", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "bookmark",
+        cfg: {},
+        params: { channelId: "C123" },
+        accountId: "default",
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "listChannelBookmarks", channelId: "C123" }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("rejects an unknown bookmark op", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "bookmark",
+          cfg: {},
+          params: { op: "reorder", channelId: "C123" },
+          accountId: "default",
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("Unknown Slack bookmark op: reorder");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["has no inbound sender", { toolContext: { currentChannelProvider: "slack" } }],
     ["has no source provider", { requesterSenderId: "U123" }],
     [

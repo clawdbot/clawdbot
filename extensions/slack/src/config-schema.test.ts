@@ -255,6 +255,35 @@ describe("slack config schema", () => {
     }
   });
 
+  it("accepts the bookmarks action gate at root and account level", () => {
+    const res = SlackConfigSchema.safeParse({
+      botToken: "xoxb-test",
+      actions: { bookmarks: false },
+      accounts: {
+        ops: {
+          botToken: "xoxb-ops",
+          actions: { bookmarks: true },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.actions?.bookmarks).toBe(false);
+      expect(res.data.accounts?.ops?.actions?.bookmarks).toBe(true);
+    }
+  });
+
+  it("rejects unknown Slack action gate keys under the strict actions schema", () => {
+    expectSlackConfigKeyRejected(
+      {
+        botToken: "xoxb-test",
+        actions: { bookmarks: false, notARealAction: true },
+      },
+      "notARealAction",
+    );
+  });
+
   it("accepts unfurl controls at root and account level", () => {
     const res = SlackConfigSchema.safeParse({
       unfurlLinks: false,

@@ -53,6 +53,12 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const bookmarkActions = new Set([
+  "addChannelBookmark",
+  "listChannelBookmarks",
+  "editChannelBookmark",
+  "removeChannelBookmark",
+]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.js");
@@ -73,11 +79,14 @@ function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
 }
 
 export const slackActionRuntime = {
+  addSlackChannelBookmark: createLazySlackAction("addSlackChannelBookmark"),
   deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
   downloadSlackFile: createLazySlackAction("downloadSlackFile"),
   editSlackMessage: createLazySlackAction("editSlackMessage"),
+  editSlackChannelBookmark: createLazySlackAction("editSlackChannelBookmark"),
   getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
   listSlackEmojis: createLazySlackAction("listSlackEmojis"),
+  listSlackChannelBookmarks: createLazySlackAction("listSlackChannelBookmarks"),
   listSlackPins: createLazySlackAction("listSlackPins"),
   listSlackReactions: createLazySlackAction("listSlackReactions"),
   openSlackConversation: createLazySlackAction("openSlackConversation"),
@@ -87,6 +96,7 @@ export const slackActionRuntime = {
   readSlackMessages: createLazySlackAction("readSlackMessages"),
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
+  removeSlackChannelBookmark: createLazySlackAction("removeSlackChannelBookmark"),
   resolveSlackConversationName: createLazySlackAction("resolveSlackConversationName"),
   resolveSlackConversationInfo: async (params: {
     cfg: OpenClawConfig;
@@ -999,6 +1009,59 @@ export async function handleSlackAction(
       return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
+  }
+
+  if (bookmarkActions.has(action)) {
+    // Default-off: existing installs lack the `bookmarks:read`/`bookmarks:write`
+    // scopes until reinstalled, so a model-callable bookmark action would fail
+    // at the Slack API. Operators opt in with `actions.bookmarks: true` after
+    // reinstalling. See message-actions.ts for the matching advertisement gate.
+    if (!isActionEnabled("bookmarks", false)) {
+      throw new Error("Slack bookmarks are disabled.");
+    }
+    const target = resolveChannelTarget();
+    const { channelId } = target;
+    const readOpts = buildActionOpts("read", target.teamId);
+    const writeOpts = buildActionOpts("write", target.teamId);
+    if (action === "addChannelBookmark") {
+      const title = readStringParam(params, "title", { required: true });
+      const link = readStringParam(params, "link", { required: true });
+      const emoji = readStringParam(params, "emoji");
+      await assertReadTargetAllowed(target);
+      const bookmark = await slackActionRuntime.addSlackChannelBookmark(channelId, title, link, {
+        ...writeOpts,
+        ...(emoji ? { emoji } : {}),
+      });
+      return jsonResult({ ok: true, bookmark });
+    }
+    if (action === "editChannelBookmark") {
+      const bookmarkId = readStringParam(params, "bookmarkId", { required: true });
+      const title = readStringParam(params, "title");
+      const link = readStringParam(params, "link");
+      const emoji = readStringParam(params, "emoji");
+      if (!title && !link && !emoji) {
+        throw new Error(
+          "Slack editChannelBookmark requires at least one of title, link, or emoji.",
+        );
+      }
+      await assertReadTargetAllowed(target);
+      const bookmark = await slackActionRuntime.editSlackChannelBookmark(channelId, bookmarkId, {
+        ...writeOpts,
+        ...(title ? { title } : {}),
+        ...(link ? { link } : {}),
+        ...(emoji ? { emoji } : {}),
+      });
+      return jsonResult({ ok: true, bookmark });
+    }
+    if (action === "removeChannelBookmark") {
+      const bookmarkId = readStringParam(params, "bookmarkId", { required: true });
+      await assertReadTargetAllowed(target);
+      await slackActionRuntime.removeSlackChannelBookmark(channelId, bookmarkId, writeOpts);
+      return jsonResult({ ok: true });
+    }
+    await assertReadTargetAllowed(target);
+    const bookmarks = await slackActionRuntime.listSlackChannelBookmarks(channelId, readOpts);
+    return jsonResult({ ok: true, bookmarks });
   }
 
   if (action === "memberInfo") {

@@ -56,6 +56,38 @@ function createSlackMessageIdActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackBookmarkActionSchema(): Record<string, TSchema> {
+  return {
+    op: Type.Optional(
+      Type.String({
+        description:
+          'Slack channel bookmark operation. "add" creates a titled link bookmark (requires title and link). "list" (default) returns channel bookmarks. "edit" updates title, link, or emoji of an existing bookmark (requires bookmarkId and at least one of title/link/emoji). "remove" deletes a bookmark (requires bookmarkId).',
+      }),
+    ),
+    title: Type.Optional(
+      Type.String({
+        description: 'Slack bookmark title. Required for op="add". Optional for op="edit".',
+      }),
+    ),
+    link: Type.Optional(
+      Type.String({
+        description: 'Slack bookmark URL. Required for op="add". Optional for op="edit".',
+      }),
+    ),
+    emoji: Type.Optional(
+      Type.String({
+        description:
+          'Slack emoji shortcode shown on the bookmark, colon-wrapped (for example ":pushpin:"). A bare shortcode (for example "pushpin") is also accepted and normalized. Optional for op="add" and op="edit".',
+      }),
+    ),
+    bookmarkId: Type.Optional(
+      Type.String({
+        description: 'Slack bookmark id. Required for op="edit" and op="remove".',
+      }),
+    ),
+  };
+}
+
 function createSlackSendActionSchema(): Record<string, TSchema> {
   return {
     ...createSlackForcedMediaSchema(),
@@ -156,6 +188,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackMessageIdActionSchema(),
       actions: messageIdActions,
+    });
+  }
+  if (actions.includes("bookmark")) {
+    schema.push({
+      actions: ["bookmark"],
+      properties: createSlackBookmarkActionSchema(),
     });
   }
   return {

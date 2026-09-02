@@ -73,7 +73,7 @@ One Slack account can receive messages and interactions from every workspace
 covered by an Enterprise Grid org-wide installation. Choose direct Socket Mode
 or HTTP Request URLs; relay mode is not supported for enterprise accounts. Both
 least-privilege manifests below enable the Enterprise message, mention,
-reaction, pin, channel-created, and channel-renamed event paths, immediate
+reaction, pin, bookmark, channel-created, and channel-renamed event paths, immediate
 replies, listener-owned status reactions, Slack interactivity for Block Kit
 actions and modal submissions, and the single `/openclaw` slash command.
 
@@ -112,6 +112,8 @@ actions and modal submissions, and the single `/openclaw` slash command.
         "mpim:history",
         "mpim:read",
         "pins:read",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "users:read"
@@ -210,6 +212,8 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "mpim:history",
         "mpim:read",
         "pins:read",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "users:read"
@@ -440,6 +444,8 @@ Enterprise Grid organization installation, use the dedicated
         "mpim:write",
         "pins:read",
         "pins:write",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "usergroups:read",
@@ -540,7 +546,7 @@ Enterprise Grid organization installation, use the dedicated
         </CodeGroup>
 
         <Note>
-          **Recommended** matches the Slack plugin's full feature set: App Home, slash commands, files, reactions, pins, group DMs, and emoji/usergroup reads. Pick **Minimal** when workspace policy restricts scopes — it covers DMs, channel/group history, mentions, and slash commands but drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read`. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale and additive options like extra slash commands.
+          **Recommended** matches the Slack plugin's full feature set: App Home, slash commands, files, reactions, pins, bookmarks, group DMs, and emoji/usergroup reads. Pick **Minimal** when workspace policy restricts scopes — it covers DMs, channel/group history, mentions, and slash commands but drops files, reactions, pins, bookmarks, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read`. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale and additive options like extra slash commands.
         </Note>
 
         After Slack creates the app:
@@ -655,6 +661,8 @@ openclaw gateway
         "mpim:write",
         "pins:read",
         "pins:write",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "usergroups:read",
@@ -766,7 +774,7 @@ openclaw gateway
         </CodeGroup>
 
         <Note>
-          **Recommended** matches the Slack plugin's full feature set; **Minimal** drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read` for restrictive workspaces. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale.
+          **Recommended** matches the Slack plugin's full feature set; **Minimal** drops files, reactions, pins, bookmarks, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read` for restrictive workspaces. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale.
         </Note>
 
         <Info>
@@ -958,6 +966,8 @@ Base manifest (Socket Mode default):
         "mpim:write",
         "pins:read",
         "pins:write",
+        "bookmarks:read",
+        "bookmarks:write",
         "reactions:read",
         "reactions:write",
         "usergroups:read",
@@ -1222,8 +1232,11 @@ Existing apps that already use `features.assistant_view` can keep their current 
     - `users:read`
     - `reactions:read`
     - `pins:read`
+    - `bookmarks:read`
     - `emoji:read`
     - `search:read` (if you depend on Slack search reads)
+
+    For user identity (`postAs: "user"`), the user token authorizes both reads and writes, so add `bookmarks:write` (and `pins:write`, `reactions:write`, `chat:write` as needed) for the corresponding write operations.
 
   </Accordion>
 </AccordionGroup>
@@ -1261,15 +1274,18 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group      | Default           |
+| ---------- | ----------------- |
+| messages   | enabled           |
+| reactions  | enabled           |
+| pins       | enabled           |
+| bookmarks  | disabled (opt-in) |
+| memberInfo | enabled           |
+| emojiList  | enabled           |
 
-Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+`bookmarks` ships default-off because the `bookmarks:read`/`bookmarks:write` scopes are new: an app installed before they existed still has a valid token but cannot call `bookmarks.*`, so advertising the action by default would expose a model-callable surface that fails at the Slack API. Add the scopes, reinstall the app, then opt in with `channels.slack.actions.bookmarks: true`. The other groups default to enabled.
+
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `bookmark`, `member-info`, and `emoji-list`. `bookmark` appears in the discovered action list only when the `bookmarks` gate is enabled. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
@@ -1290,6 +1306,24 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+Use `bookmark` to manage links on a channel's bookmark bar (the channel header surface, distinct from pinned messages). The `op` selects the operation (`add`, `list`, `edit`, `remove`; defaults to `list`):
+
+```json
+{
+  "action": "bookmark",
+  "channel": "slack",
+  "target": "C12345678",
+  "op": "add",
+  "title": "Runbook",
+  "link": "https://runbook.example",
+  "emoji": ":pushpin:"
+}
+```
+
+`bookmark` targets the channel given by `target` (a Slack channel id). When the action runs inside a channel conversation the `target` is inferred from the tool context (the current channel), so an explicit `target` is only required for delegated or cross-channel calls; a delegated `bookmark` on a channel other than the current conversation is rejected unless the operator context authorizes it.
+
+`add` requires `title` and `link`; `edit` requires `bookmarkId` plus at least one of `title`, `link`, or `emoji`; `remove` requires `bookmarkId`. `channels.slack.actions.bookmarks` gates the surface and defaults to disabled: set it to `true` to advertise the `bookmark` action. The app needs the `bookmarks:read` scope for `list` and the `bookmarks:write` scope for `add`, `edit`, and `remove`. The Recommended bot manifests, the Enterprise Grid org-wide manifests, and the optional user-token scope list above all declare these scopes; existing installations must add them and reinstall the app, then set `actions.bookmarks: true`, before using the `bookmark` action.
 
 ## Access control and routing
 

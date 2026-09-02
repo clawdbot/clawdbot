@@ -337,6 +337,20 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
+      name: "blocks cross-provider bookmark mutations by default",
+      action: "bookmark" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        channelId: "C-forum-1",
+        op: "add",
+        title: "Runbook",
+        link: "https://runbook.example",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
       name: "blocks same-provider cross-context when disabled",
       action: "send" as const,
       cfg: {
@@ -377,6 +391,29 @@ describe("runMessageAction context isolation", () => {
       },
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
       message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks same-provider bookmark mutations on a non-current channel when disabled",
+      action: "bookmark" as const,
+      cfg: {
+        ...workspaceConfig,
+        tools: {
+          message: {
+            crossContext: {
+              allowWithinProvider: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "workspace",
+        channelId: "C99999999",
+        op: "add",
+        title: "Runbook",
+        link: "https://runbook.example",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /requires the exact current conversation/,
     },
     {
       name: "blocks delegated channel reads without current context before target resolution",

@@ -16,8 +16,11 @@ const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const addSlackChannelBookmark = vi.fn(async (..._args: unknown[]) => ({}));
+const editSlackChannelBookmark = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
+const listSlackChannelBookmarks = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackPins = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackReactions = vi.fn(async (..._args: unknown[]) => ({}));
 const pinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -25,6 +28,7 @@ const reactSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
+const removeSlackChannelBookmark = vi.fn(async (..._args: unknown[]) => ({}));
 const resolveSlackConversationName = vi.fn(
   async (..._args: unknown[]): Promise<string | undefined> => undefined,
 );
@@ -425,11 +429,14 @@ describe("handleSlackAction", () => {
     resolveSlackConversationName.mockReset().mockResolvedValue(undefined);
     resolveSlackConversationInfo.mockClear();
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
+      addSlackChannelBookmark,
       deleteSlackMessage,
       downloadSlackFile,
       editSlackMessage,
+      editSlackChannelBookmark,
       getSlackMemberInfo,
       listSlackEmojis,
+      listSlackChannelBookmarks,
       listSlackPins,
       listSlackReactions,
       parseSlackBlocksInput,
@@ -438,6 +445,7 @@ describe("handleSlackAction", () => {
       readSlackMessages,
       removeOwnSlackReactions,
       removeSlackReaction,
+      removeSlackChannelBookmark,
       resolveSlackConversationName,
       resolveSlackConversationInfo,
       sendSlackMessage,
@@ -2204,6 +2212,157 @@ describe("handleSlackAction", () => {
       ts: "1712345678.123456",
       timestampMs: 1712345678123,
     });
+  });
+
+  it("adds a Slack channel bookmark with title, link, and emoji", async () => {
+    addSlackChannelBookmark.mockResolvedValueOnce({
+      id: "B1",
+      title: "Runbook",
+      link: "https://example.com/runbook",
+    });
+    const cfg = slackConfig({ actions: { bookmarks: true } });
+
+    const result = await handleSlackAction(
+      {
+        action: "addChannelBookmark",
+        channelId: "C123",
+        title: "Runbook",
+        link: "https://example.com/runbook",
+        emoji: "bookmark",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(addSlackChannelBookmark).toHaveBeenCalledWith(
+      "C123",
+      "Runbook",
+      "https://example.com/runbook",
+      { cfg, teamId: "T123", emoji: "bookmark" },
+    );
+    const details = requireDetails(result);
+    expect(details.ok).toBe(true);
+    expectRecordFields(requireRecord(details.bookmark, "bookmark"), { id: "B1", title: "Runbook" });
+  });
+
+  it("lists Slack channel bookmarks", async () => {
+    listSlackChannelBookmarks.mockResolvedValueOnce([{ id: "B1", title: "Runbook" }]);
+    const cfg = slackConfig({ actions: { bookmarks: true } });
+
+    const result = await handleSlackAction(
+      { action: "listChannelBookmarks", channelId: "C123" },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(listSlackChannelBookmarks).toHaveBeenCalledWith("C123", { cfg, teamId: "T123" });
+    const details = requireDetails(result);
+    expect(details.ok).toBe(true);
+    const bookmarks = requireArray(details.bookmarks, "bookmarks");
+    expectRecordFields(requireRecord(bookmarks[0], "first bookmark"), {
+      id: "B1",
+      title: "Runbook",
+    });
+  });
+
+  it("edits a Slack channel bookmark by id", async () => {
+    editSlackChannelBookmark.mockResolvedValueOnce({ id: "B1", title: "Updated" });
+    const cfg = slackConfig({ actions: { bookmarks: true } });
+
+    const result = await handleSlackAction(
+      {
+        action: "editChannelBookmark",
+        channelId: "C123",
+        bookmarkId: "B1",
+        title: "Updated",
+        emoji: "rotating_light",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(editSlackChannelBookmark).toHaveBeenCalledWith("C123", "B1", {
+      cfg,
+      teamId: "T123",
+      title: "Updated",
+      emoji: "rotating_light",
+    });
+    expectRecordFields(requireRecord(requireDetails(result).bookmark, "bookmark"), {
+      id: "B1",
+      title: "Updated",
+    });
+  });
+
+  it("removes a Slack channel bookmark by id", async () => {
+    const cfg = slackConfig({ actions: { bookmarks: true } });
+
+    const result = await handleSlackAction(
+      { action: "removeChannelBookmark", channelId: "C123", bookmarkId: "B1" },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(removeSlackChannelBookmark).toHaveBeenCalledWith("C123", "B1", { cfg, teamId: "T123" });
+    expect(requireDetails(result).ok).toBe(true);
+  });
+
+  it("requires a field to edit a Slack channel bookmark", async () => {
+    const cfg = slackConfig({ actions: { bookmarks: true } });
+
+    await expect(
+      handleSlackAction(
+        { action: "editChannelBookmark", channelId: "C123", bookmarkId: "B1" },
+        cfg,
+        {
+          currentChannelProvider: "slack",
+          currentChannelId: "team:T123:channel:C123",
+          requesterAccountId: "default",
+        },
+      ),
+    ).rejects.toThrow("Slack editChannelBookmark requires at least one of title, link, or emoji.");
+    expect(editSlackChannelBookmark).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack bookmark reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      actions: { bookmarks: true },
+      groupPolicy: "allowlist",
+      channels: { C_ALLOWED: { enabled: true } },
+    });
+
+    await expect(
+      handleSlackAction({ action: "listChannelBookmarks", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackChannelBookmarks).not.toHaveBeenCalled();
+  });
+
+  it("disables Slack bookmarks through the action gate", async () => {
+    const cfg = slackConfig({ actions: { bookmarks: false } });
+
+    await expect(
+      handleSlackAction({ action: "listChannelBookmarks", channelId: "C123" }, cfg, {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      }),
+    ).rejects.toThrow("Slack bookmarks are disabled.");
+    expect(listSlackChannelBookmarks).not.toHaveBeenCalled();
   });
 
   it.each<{

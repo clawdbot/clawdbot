@@ -197,6 +197,7 @@ describe("Slack message tools", () => {
         channels: {
           slack: {
             botToken: "xoxb-test",
+            actions: { bookmarks: true },
           },
         },
       },
@@ -216,6 +217,7 @@ describe("Slack message tools", () => {
       "pin",
       "unpin",
       "list-pins",
+      "bookmark",
       "member-info",
       "emoji-list",
     ]);
@@ -269,6 +271,7 @@ describe("Slack message tools", () => {
           botToken: "xoxb-test",
           actions: {
             messages: true,
+            bookmarks: true,
           },
         },
       },
@@ -287,6 +290,7 @@ describe("Slack message tools", () => {
       "pin",
       "unpin",
       "list-pins",
+      "bookmark",
       "member-info",
       "emoji-list",
     ]);
@@ -299,6 +303,7 @@ describe("Slack message tools", () => {
           postAs: "user",
           userToken: "test-user-token",
           appToken: "test-app-token",
+          actions: { bookmarks: true },
         },
       },
     } as OpenClawConfig;
@@ -316,9 +321,26 @@ describe("Slack message tools", () => {
       "pin",
       "unpin",
       "list-pins",
+      "bookmark",
       "member-info",
       "emoji-list",
     ]);
+  });
+
+  it("does not advertise bookmark by default (existing installs lack the scope)", () => {
+    // `bookmarks` is a new surface: tokens minted before the scope existed are
+    // still valid but cannot call bookmarks.*, so the action must be opt-in via
+    // `actions.bookmarks: true` rather than advertised by default.
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).not.toContain("bookmark");
+    expect(listSlackMessageActions(cfg)).toContain("list-pins");
   });
 
   it("honors the selected Slack account during discovery", () => {
@@ -330,6 +352,7 @@ describe("Slack message tools", () => {
             reactions: false,
             messages: false,
             pins: false,
+            bookmarks: false,
             memberInfo: false,
             emojiList: false,
           },
@@ -340,6 +363,7 @@ describe("Slack message tools", () => {
                 reactions: false,
                 messages: false,
                 pins: false,
+                bookmarks: false,
                 memberInfo: false,
                 emojiList: false,
               },
@@ -350,6 +374,7 @@ describe("Slack message tools", () => {
                 reactions: true,
                 messages: true,
                 pins: false,
+                bookmarks: false,
                 memberInfo: false,
                 emojiList: false,
               },
@@ -459,8 +484,10 @@ describe("Slack message tools", () => {
       : discovery.schema
         ? [discovery.schema]
         : [];
-    const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
-    expect(propertyNames).not.toContain("emoji");
+    const reactionSchema = schemas.find((entry) =>
+      entry.actions?.some((action) => action === "react" || action === "reactions"),
+    );
+    expect(reactionSchema).toBeUndefined();
   });
 
   it("describes Slack reply broadcasts as send-only thread hints", () => {
@@ -511,6 +538,7 @@ describe("Slack message tools", () => {
               reactions: false,
               messages: false,
               pins: false,
+              bookmarks: false,
               memberInfo: false,
               emojiList: false,
             },

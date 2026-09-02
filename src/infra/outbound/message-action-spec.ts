@@ -43,6 +43,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     pin: "to",
     unpin: "to",
     "list-pins": "to",
+    bookmark: "channelId",
     permissions: "to",
     "thread-create": "to",
     "thread-list": "none",

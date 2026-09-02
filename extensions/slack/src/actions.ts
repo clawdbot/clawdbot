@@ -1,23 +1,20 @@
 // Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
+import { getClient, resolveToken, type SlackActionClientOpts } from "./actions-client.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
 } from "./conversation-open.js";
-import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
@@ -33,17 +30,8 @@ import {
 } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
-import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
-
-export type SlackActionClientOpts = {
-  cfg?: OpenClawConfig;
-  accountId?: string;
-  token?: string;
-  teamId?: string;
-  client?: WebClient;
-};
 
 export type SlackMessageSummary = {
   ts?: string;
@@ -80,32 +68,8 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
-function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfig): string {
-  if (explicit?.trim()) {
-    const token = resolveSlackBotToken(explicit);
-    if (token) {
-      return token;
-    }
-  }
-  if (!cfg) {
-    throw new Error(
-      "Slack actions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
-  const resolvedCfg = requireRuntimeConfig(cfg, "Slack actions");
-  const account = resolveSlackAccount({ cfg: resolvedCfg, accountId });
-  const token = resolveSlackBotToken(account.botToken ?? undefined);
-  if (!token) {
-    logVerbose(
-      `slack actions: missing bot token for account=${account.accountId} explicit=${Boolean(
-        explicit,
-      )} source=${account.botTokenSource ?? "unknown"}`,
-    );
-    throw new Error("SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions");
-  }
-  return token;
-}
-
+export { getClient, resolveToken };
+export type { SlackActionClientOpts };
 const SLACK_EMOJI_SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
 const SLACK_EMOJI_VARIATION_SELECTOR_RE = /[\uFE0E\uFE0F]/g;
 const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
@@ -217,24 +181,6 @@ function hasSlackPlatformError(err: unknown, code: string): boolean {
     return false;
   }
   return (data as { error?: unknown }).error === code;
-}
-
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client) {
-    return opts.client;
-  }
-  const accountId = opts.cfg
-    ? resolveSlackAccount({
-        cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
-        accountId: opts.accountId,
-      }).accountId
-    : normalizeAccountId(opts.accountId);
-  assertSlackDetachedTargetAllowed(accountId, opts.teamId);
-  const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  if (mode === "write") {
-    return getSlackWriteClient(token, { teamId: opts.teamId });
-  }
-  return createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -612,6 +558,8 @@ export async function listSlackPins(
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
 }
+
+export * from "./actions-bookmarks.js";
 
 type SlackFileInfoSummary = {
   id?: string;

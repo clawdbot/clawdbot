@@ -58,6 +58,14 @@ export function listSlackMessageActions(
     actions.add("unpin");
     actions.add("list-pins");
   }
+  // `bookmarks` is a new Slack surface: existing installs gained a valid token
+  // before `bookmarks:read`/`bookmarks:write` existed, so default-off avoids
+  // advertising a model-callable action that cannot succeed until the app is
+  // reinstalled with the scopes. Operators opt in with `actions.bookmarks: true`
+  // after reinstalling — mirroring the docs reinstall guidance.
+  if (isActionEnabled("bookmarks", false)) {
+    actions.add("bookmark");
+  }
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");
   }

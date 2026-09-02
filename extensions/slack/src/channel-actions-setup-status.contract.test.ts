@@ -63,6 +63,23 @@ describe("slack actions contract", () => {
         expectedActions: [],
         expectedCapabilities: [],
       },
+      {
+        // `bookmarks` is default-off because existing installs lack the scope;
+        // opting in via `actions.bookmarks: true` (after reinstalling with the
+        // scope) advertises the bookmark action alongside the default surface.
+        name: "opting into bookmarks advertises the bookmark action",
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+              appToken: "xapp-test",
+              actions: { bookmarks: true },
+            },
+          },
+        } as OpenClawConfig,
+        expectedActions: [...slackDefaultActions, "bookmark"],
+        expectedCapabilities: ["presentation"],
+      },
     ],
   });
 });
