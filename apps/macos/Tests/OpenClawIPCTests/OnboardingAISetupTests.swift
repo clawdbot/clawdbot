@@ -804,7 +804,7 @@ private let aiSetupAccessibilityApplication: Void = {
 
 @MainActor
 private func inspectAISetupAccessibility(_ root: NSView) async throws
--> (labels: [String], buttons: [String: Bool]) {
+-> (labels: [String], actions: [String: Bool]) {
     // A real client request materializes SwiftUI's lazy AX tree. Keep MainActor free
     // for AppKit's reply; window metadata is not used to select the retained root.
     let result = await Task.detached {
@@ -820,9 +820,9 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
         return getter
     }
     var labels: [String] = []
-    var buttons: [String: Bool] = [:]
+    var actions: [String: Bool] = [:]
     var visited = Set<ObjectIdentifier>()
-    func visit(_ element: AnyObject, buttonEnabled: Bool? = nil) throws {
+    func visit(_ element: AnyObject) throws {
         guard visited.insert(ObjectIdentifier(element)).inserted else { return }
         // SwiftUI virtual nodes implement public ObjC getters without the full
         // NSAccessibilityProtocol; text getters such as accessibilityTitle can be absent.
@@ -834,30 +834,25 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
             value as? String,
         ].compactMap(\.self)
         labels.append(contentsOf: text)
-        let enabled: Bool? = if role == .button {
-            try required(element.isAccessibilityEnabled, "isAccessibilityEnabled")()
-        } else {
-            buttonEnabled
-        }
-        // Composed Label buttons can expose their text on descendant nodes.
-        // Keep that text bound to the nearest button's enabled state.
-        if let enabled {
+        // Error details use link-styled actions rather than standard buttons.
+        if role == .button || role == .link, !text.isEmpty {
+            let enabled = try required(element.isAccessibilityEnabled, "isAccessibilityEnabled")()
             for label in text {
-                buttons[label] = enabled
+                actions[label] = enabled
             }
         }
         for child in try required(element.accessibilityChildren, "accessibilityChildren")() ?? [] {
-            try visit(child as AnyObject, buttonEnabled: enabled)
+            try visit(child as AnyObject)
         }
     }
     try visit(root)
-    return (labels, buttons)
+    return (labels, actions)
 }
 
 @MainActor
 private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
-    colorScheme: ColorScheme = .light) async -> (labels: [String], buttons: [String: Bool], size: NSSize)
+    colorScheme: ColorScheme = .light) async -> (labels: [String], actions: [String: Bool], size: NSSize)
 {
     _ = aiSetupAccessibilityApplication
     var appeared = false
@@ -879,7 +874,7 @@ private func inspectAISetupSheet(
     window.displayIfNeeded()
     hosting.layoutSubtreeIfNeeded()
     #expect(appeared)
-    let snapshot: (labels: [String], buttons: [String: Bool])
+    let snapshot: (labels: [String], actions: [String: Bool])
     do {
         snapshot = try await inspectAISetupAccessibility(hosting)
     } catch {
@@ -887,8 +882,8 @@ private func inspectAISetupSheet(
         Issue.record(error)
         snapshot = ([], [:])
     }
-    #expect(snapshot.buttons["Cancel"] != nil)
-    return (snapshot.labels, snapshot.buttons, hosting.fittingSize)
+    #expect(snapshot.actions["Cancel"] != nil)
+    return (snapshot.labels, snapshot.actions, hosting.fittingSize)
 }
 
 @Suite(.serialized)
@@ -1159,7 +1154,7 @@ struct OnboardingAISetupTests {
         #expect(reviewSheet.labels.contains(reviewMessage))
         #expect(reviewSheet.size.height <= 500)
         if manual { #expect(reviewSheet.size.height > 260) }
-        #expect(reviewSheet.buttons["Continue"] == true)
+        #expect(reviewSheet.actions["Continue"] == true)
         #expect(!model.connected)
         model.continueProviderAuth()
         for _ in 0..<400 where model.authStep?.id != "consent" {
@@ -1176,7 +1171,7 @@ struct OnboardingAISetupTests {
         }
         let consentSheet = await inspectAISetupSheet(model)
         #expect(consentSheet.labels.contains("Confirm"))
-        #expect(consentSheet.buttons["Submit"] == true)
+        #expect(consentSheet.actions["Submit"] == true)
         if decision == "retry-cancel" {
             model.cancelProviderAuth()
             for _ in 0..<400 where model.authError == nil {
@@ -1185,7 +1180,7 @@ struct OnboardingAISetupTests {
             #expect(model.authError != nil)
             #expect(model.authBusy)
             let retrySheet = await inspectAISetupSheet(model)
-            #expect(retrySheet.buttons["Cancel"] == true)
+            #expect(retrySheet.actions["Cancel"] == true)
             #expect(!retrySheet.labels.contains("Requesting cancellation…"))
             #expect(retrySheet.labels.contains("Cancellation not confirmed"))
             cancellationFails.setValue(false)
@@ -1343,8 +1338,8 @@ struct OnboardingAISetupTests {
             await cancellation.waitUntilStarted()
             let pendingSheet = await inspectAISetupSheet(model)
             #expect(pendingSheet.labels.contains("Requesting cancellation…"))
-            #expect(pendingSheet.buttons["Cancel"] == false)
-            #expect(pendingSheet.buttons["Submit"] == nil)
+            #expect(pendingSheet.actions["Cancel"] == false)
+            #expect(pendingSheet.actions["Submit"] == nil)
             #expect(model.activeAuthOption != nil)
         }
         _ = await waitForAISetupRequests(recorder, count: 5)
@@ -1535,7 +1530,7 @@ struct OnboardingAISetupTests {
         #expect(model.activeAuthOption?.label == "Codex CLI")
         let startingSheet = await inspectAISetupSheet(model)
         #expect(startingSheet.labels.contains("Preparing your AI connection…"))
-        #expect(startingSheet.buttons["Submit"] == nil)
+        #expect(startingSheet.actions["Submit"] == nil)
         #expect(startingSheet.size.width == 500)
         #expect((220...260).contains(startingSheet.size.height))
         await startGate.release()
@@ -1636,9 +1631,9 @@ struct OnboardingAISetupTests {
         let progressSheet = await inspectAISetupSheet(model, colorScheme: colorScheme)
         #expect(progressSheet.labels.contains("Downloading model: 80%"))
         #expect(progressSheet.labels.contains(option.label))
-        #expect(progressSheet.buttons["Submit"] == nil)
-        #expect(progressSheet.buttons["Continue"] == nil)
-        #expect(progressSheet.buttons["Cancel"] == true)
+        #expect(progressSheet.actions["Submit"] == nil)
+        #expect(progressSheet.actions["Continue"] == nil)
+        #expect(progressSheet.actions["Cancel"] == true)
         model.continueProviderAuth()
         await settleQueuedAISetupTasks()
         #expect(await recorder.snapshot().methods.count == requests.methods.count)
@@ -1936,8 +1931,8 @@ struct OnboardingAISetupTests {
         #expect(model.authError == OnboardingAISetupModel.providerAuthCancellationUnconfirmed())
         let sheet = await inspectAISetupSheet(model)
         #expect(sheet.labels.contains("Cancellation not confirmed"))
-        #expect(sheet.buttons["Cancel"] == true)
-        #expect(sheet.buttons["Submit"] == nil)
+        #expect(sheet.actions["Cancel"] == true)
+        #expect(sheet.actions["Submit"] == nil)
         cancellationFails.setValue(false)
         model.cancelProviderAuth()
         await waitForAISetupState { model.activeAuthOption == nil }
@@ -2098,11 +2093,11 @@ struct OnboardingAISetupTests {
                 if let terminalError {
                     #expect(sheet.labels.contains(terminalError.summary))
                     #expect(
-                        sheet.buttons[terminalError.detail == nil ? "Copy error" : "Show details"] == true,
-                        "Named buttons: \(sheet.buttons)")
+                        sheet.actions[terminalError.detail == nil ? "Copy error" : "Show details"] == true,
+                        "Named actions: \(sheet.actions)")
                 }
-                #expect(sheet.buttons["Submit"] == nil)
-                #expect(sheet.buttons["Cancel"] == true)
+                #expect(sheet.actions["Submit"] == nil)
+                #expect(sheet.actions["Cancel"] == true)
                 model.cancelProviderAuth()
                 #expect(model.activeAuthOption == nil)
             } else {
