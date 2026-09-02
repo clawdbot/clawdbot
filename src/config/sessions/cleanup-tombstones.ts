@@ -34,6 +34,7 @@ import {
 import { isCanonicalSqliteRetainedHistoryPlaceholder } from "./session-canonical-key.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import type { SessionStoreTarget } from "./targets-collision.js";
 
 export type SessionTombstoneSweepResult = {
   /** Canonical expired cron-run placeholders at scan time. */
@@ -62,9 +63,8 @@ type TombstoneCandidate = {
 function listCanonicalCronRunTombstones(
   database: Pick<OpenClawAgentDatabase, "db">,
   cutoffMs: number,
-  agentId: string,
+  requestedOwners: ReadonlySet<string>,
 ): TombstoneCandidate[] {
-  const requestedOwner = normalizeAgentId(agentId);
   const db = getSessionKysely(database.db);
   const nodes = executeSqliteQuerySync(
     database.db,
@@ -101,7 +101,7 @@ function listCanonicalCronRunTombstones(
       return [];
     }
     const scopedOwner = parseAgentSessionKey(node.session_key)?.agentId;
-    if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
+    if (!scopedOwner || !requestedOwners.has(normalizeAgentId(scopedOwner))) {
       return [];
     }
     if (!isCanonicalSqliteRetainedHistoryPlaceholder(node)) {
@@ -153,7 +153,7 @@ function readProtectedSessionIds(params: {
  *
  */
 async function sweepTombstonedCronRunRemnants(params: {
-  agentId: string;
+  requestedOwners: ReadonlySet<string>;
   databaseAgentId: string;
   storePath: string;
   sqlitePath: string;
@@ -172,7 +172,7 @@ async function sweepTombstonedCronRunRemnants(params: {
     olderThanMs,
   };
   const scanned = withOpenClawAgentDatabaseReadOnly(
-    (database) => listCanonicalCronRunTombstones(database, cutoffMs, params.agentId),
+    (database) => listCanonicalCronRunTombstones(database, cutoffMs, params.requestedOwners),
     scope,
   );
   const candidates = scanned.found ? scanned.value : [];
@@ -195,7 +195,7 @@ async function sweepTombstonedCronRunRemnants(params: {
           const authoritative = listCanonicalCronRunTombstones(
             database,
             cutoffMs,
-            params.agentId,
+            params.requestedOwners,
           ).find((current) => current.sessionKey === candidate.sessionKey);
           if (!sameCandidate(candidate, authoritative)) {
             return null;
@@ -231,7 +231,7 @@ async function sweepTombstonedCronRunRemnants(params: {
               const current = listCanonicalCronRunTombstones(
                 transactionDb,
                 cutoffMs,
-                params.agentId,
+                params.requestedOwners,
               ).find((entry) => entry.sessionKey === candidate.sessionKey);
               if (!sameCandidate(candidate, current)) {
                 return;
@@ -310,28 +310,32 @@ async function sweepTombstonedCronRunRemnants(params: {
 }
 
 /**
- * Resolves the cron-run tombstone sweep for one store, or null when retention
- * is disabled or the store has no SQLite file yet. Lives here rather than in
- * cleanup-service so the preview and apply paths share one definition.
+ * Resolves the cron-run tombstone sweep for one selected store target, or null
+ * when retention is disabled or the store has no SQLite file yet. Lives here
+ * rather than in cleanup-service so the preview and apply paths share one
+ * definition, and so the target-to-owner-set mapping has a single owner.
  */
 export async function sweepTombstonedCronRunRemnantsForStore(params: {
-  agentId: string;
-  storePath: string;
-  sqlitePath: string;
+  target: SessionStoreTarget;
   retentionMs: number | null;
   dryRun: boolean;
   nowMs?: number;
 }): Promise<SessionTombstoneSweepResult | null> {
-  if (params.retentionMs == null || !fs.existsSync(params.sqlitePath)) {
+  const { agentId, sharedOwnerAgentIds, storePath } = params.target;
+  const databaseTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+  if (params.retentionMs == null || !fs.existsSync(databaseTarget.path)) {
     return null;
   }
-  const databaseTarget = resolveSqliteTargetFromSessionStorePath(params.sqlitePath, {
-    agentId: params.agentId,
-  });
   return await sweepTombstonedCronRunRemnants({
-    agentId: params.agentId,
-    databaseAgentId: databaseTarget.agentId ?? params.agentId,
-    storePath: params.storePath,
+    // A shared store collapses every selected agent onto one target, so the
+    // sweep must cover the whole collapsed set; only their union covers what
+    // --all-agents selected. Single-agent selections never dedupe, so the field
+    // is absent there and scanning stays scoped to the one requested owner.
+    requestedOwners: new Set(
+      [agentId, ...(sharedOwnerAgentIds ?? [])].map((owner) => normalizeAgentId(owner)),
+    ),
+    databaseAgentId: databaseTarget.agentId ?? agentId,
+    storePath,
     sqlitePath: databaseTarget.path,
     olderThanMs: params.retentionMs,
     dryRun: params.dryRun,

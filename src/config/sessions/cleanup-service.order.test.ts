@@ -58,8 +58,7 @@ describe("sessions cleanup ordering", () => {
     expect(calls.indexOf("tombstones:apply")).toBeLessThan(calls.indexOf("budget:apply"));
     expect(sweepTombstones).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "main",
-        storePath,
+        target: { agentId: "main", storePath },
         retentionMs: 60 * 60 * 1000,
         dryRun: false,
       }),

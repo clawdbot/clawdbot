@@ -441,9 +441,7 @@ async function previewStoreCleanup(params: {
     keys: dmScopeRetiredKeys,
   });
   const tombstoneRemnants = await sweepTombstonedCronRunRemnantsForStore({
-    agentId: params.target.agentId,
-    storePath: params.target.storePath,
-    sqlitePath: resolveCleanupSqlitePath(params.target),
+    target: params.target,
     retentionMs: resolveCronSessionRetentionMs(params.cfg.cron),
     dryRun: true,
   });
@@ -627,9 +625,7 @@ export async function runSessionsCleanup(params: {
           mode === "warn"
             ? null
             : await sweepTombstonedCronRunRemnantsForStore({
-                agentId: target.agentId,
-                storePath: target.storePath,
-                sqlitePath: resolveCleanupSqlitePath(target),
+                target,
                 retentionMs: resolveCronSessionRetentionMs(cfg.cron),
                 dryRun: false,
               });

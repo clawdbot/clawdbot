@@ -15,6 +15,14 @@ import {
 export type SessionStoreTarget = {
   agentId: string;
   storePath: string;
+  /**
+   * Every selected logical agent that this dedupe collapsed onto the target's
+   * physical database, recorded here because only the dedupe knows the grouping.
+   * Absent for single-owner targets, so agent-scoped selections keep their
+   * isolation; a multi-agent sweep that re-derived the grouping downstream would
+   * drift from the identity matching used above.
+   */
+  sharedOwnerAgentIds?: readonly string[];
 };
 
 type SessionStoreTargetCollisionDiagnostic = {
@@ -180,7 +188,9 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         ? (byAgentId.get(normalizeAgentId(options.defaultAgentId)) ?? group[0]?.target)
         : undefined);
     if (selected) {
-      deduped.push(selected);
+      deduped.push(
+        collision ? { ...selected, sharedOwnerAgentIds: [...byAgentId.keys()] } : selected,
+      );
     }
     const selectedAgentId = selected ? normalizeAgentId(selected.agentId) : ownerAgentId;
     const ignoredAgentIds = [...byAgentId.keys()].filter((agentId) => agentId !== selectedAgentId);
