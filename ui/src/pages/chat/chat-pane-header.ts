@@ -30,8 +30,13 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
+import {
+  canCopySessionMarkdown,
+  canSplitSessionView,
+} from "../../lib/sessions/session-menu-navigation.ts";
+import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
-import { displayedChatSessionBranches } from "./chat-history.ts";
+import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -49,7 +54,6 @@ import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneParentSession,
-  resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
 import {
   canManageChatSessionSharing,
@@ -115,7 +119,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   ) {
     const board = this.resolveBoardView();
     const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
-    const workspace = resolveChatPaneWorkspace({
+    const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
       worktreePath: row?.worktree ? this.headerWorktreePaths.get(row.worktree.id)?.path : undefined,
@@ -392,6 +396,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       gatewaySnapshot: this.context.gateway.snapshot,
       movingKey: this.headerPlacementMovingKey,
       reclaimingKey: this.headerPlacementReclaimingKey,
+      restartingKey: this.headerPlacementRestartingKey,
       row,
     });
     const key = this.state?.sessionKey ?? "";
@@ -410,7 +415,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           sharingSnapshot.selfUser,
           sharingSnapshot.client?.instanceId,
           key,
-          renderedOwnerIdentity,
+          [
+            ...(renderedOwnerIdentity ? [renderedOwnerIdentity] : []),
+            ...(showOwnerChip ? (row?.participants ?? []).map(({ identity }) => identity) : []),
+          ],
         );
     const ownerViewing = projectPresencePayload(this.presencePayload).users.some(
       (user) =>
@@ -431,8 +439,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      title: this.paneTitle,
+      title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
+      placementStartupStatus: this.context.placementStartup.get(key),
       showOwnerChip,
       ownerViewing,
       personActivity,
@@ -527,6 +536,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
               this.context.runtimeConfig.canPatch === false}
               .compact=${this.narrow}
+              .navigationAllowed=${true}
+              .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
+              .splitAllowed=${canSplitSessionView()}
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
@@ -551,8 +563,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             ></openclaw-chat-header-session-menu>`
           : nothing,
       placementMoving: placement.moving,
+      placementRestarting: placement.restarting,
       placementMoveDisabledReason: placement.moveDisabledReason,
       placementReclaimDisabledReason: placement.reclaimDisabledReason,
+      placementRestartDisabledReason: placement.restartDisabledReason,
       nativeGateways: this.nativeGateways,
       gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
@@ -577,6 +591,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       },
       onPlacementMove: () => row && void this.moveHeaderPlacement(row),
       onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
+      onPlacementRestart: () => row && void this.restartHeaderPlacement(row),
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,

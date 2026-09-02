@@ -1,6 +1,12 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Room
+import androidx.room3.Room
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -9,13 +15,27 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.util.concurrent.Executor
 
 @RunWith(RobolectricTestRunner::class)
+@OptIn(ExperimentalCoroutinesApi::class)
 class RoomChatTranscriptCacheTest {
+  private var deferNextDatabaseOperation = false
+  private var deferredDatabaseOperation: Runnable? = null
   private val database: GatewayCacheDatabase =
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
-      .build()
+      .allowMainThreadQueries()
+      .setQueryCoroutineContext(
+        Executor { operation ->
+          if (deferNextDatabaseOperation) {
+            deferNextDatabaseOperation = false
+            deferredDatabaseOperation = operation
+          } else {
+            operation.run()
+          }
+        }.asCoroutineDispatcher(),
+      ).build()
   private val store = RoomChatTranscriptCache(database = database)
 
   @After
@@ -62,6 +82,95 @@ class RoomChatTranscriptCacheTest {
     gatewayId: String = "gateway-a",
     agentId: String = "main",
   ): List<ChatSessionEntry> = store.loadSessions(gatewayId, agentId)
+
+  private fun CoroutineScope.cachedController(
+    healthStarted: CompletableDeferred<Unit>? = null,
+    releaseHealth: CompletableDeferred<Unit>? = null,
+  ): ChatController {
+    var historyRequests = 0
+    var healthRequests = 0
+    return createChatController(
+      transcriptCache = store,
+      cacheScope = { ChatCacheScope("gateway-a", 1) },
+    ) { method, _ ->
+      when (method) {
+        "chat.history" -> {
+          val text = if (++historyRequests == 1) "history A" else "history B"
+          historyResponse("session-1", listOf(ReplayHistoryMessage("assistant", text, historyRequests.toLong())))
+        }
+
+        "health" -> {
+          if (++healthRequests == 1) {
+            healthStarted?.complete(Unit)
+            releaseHealth?.await()
+          }
+          "{}"
+        }
+
+        "sessions.list" -> {
+          """{"sessions":[{"key":"main"},{"key":"other"}]}"""
+        }
+
+        else -> {
+          "{}"
+        }
+      }
+    }
+  }
+
+  @Test
+  fun oldHistoryPostPublicationHealthWaitCannotOverwriteNewerCachedTranscript() =
+    runTest {
+      val healthStarted = CompletableDeferred<Unit>()
+      val releaseHealth = CompletableDeferred<Unit>()
+      val controller = cachedController(healthStarted, releaseHealth)
+      controller.onDisconnected("Reconnecting")
+      controller.onGatewayConnected()
+      runCurrent()
+      assertTrue(healthStarted.isCompleted)
+      assertEquals(listOf("history A"), controller.messages.value.map { it.content.single().text })
+
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", "newer-run", seq = 1))
+      runCurrent()
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("history B"), loadTranscript().map { it.content.single().text })
+
+      releaseHealth.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("history B"), loadTranscript().map { it.content.single().text })
+    }
+
+  @Test
+  fun queuedTranscriptWriteSurvivesSwitchToADifferentSession() =
+    runTest {
+      val controller = cachedController()
+      // Hold the session-list Room operation while it owns the cache mutation queue.
+      // Later reads can proceed, but transcript writes must wait across the session switch.
+      deferNextDatabaseOperation = true
+      controller.refreshSessions()
+      runCurrent()
+      val releaseSessionWrite = requireNotNull(deferredDatabaseOperation)
+
+      controller.load("main")
+      runCurrent()
+      assertEquals(listOf("history A"), controller.messages.value.map { it.content.single().text })
+      assertTrue(loadTranscript().isEmpty())
+
+      controller.switchSession("other")
+      runCurrent()
+      assertEquals("other", controller.sessionKey.value)
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertTrue(loadTranscript(sessionKey = "other").isEmpty())
+
+      releaseSessionWrite.run()
+      advanceUntilIdle()
+
+      assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("history A"), loadTranscript().map { it.content.single().text })
+      assertEquals(listOf("history B"), loadTranscript(sessionKey = "other").map { it.content.single().text })
+    }
 
   @Test
   fun transcriptRoundTripKeepsTextAndManagedReferencesWithoutBinaryParts() =

@@ -1,5 +1,6 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mts";
@@ -158,12 +159,13 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let timedOut = false;
 
   const spawnParams = buildTestLiveSpawnParams(env);
-  const { child, completion } = spawnOwnedVitestProcess(
-    createPnpmRunnerSpawnSpec({
+  const { child, completion } = spawnOwnedVitestProcess({
+    ...createPnpmRunnerSpawnSpec({
       pnpmArgs: buildTestLivePnpmArgs(args),
       ...spawnParams,
     }),
-  );
+    homeMode: resolveVitestHomeSelection(buildTestLivePnpmArgs(args), { env }),
+  });
   let forwardedSignal: NodeJS.Signals | null = null;
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,

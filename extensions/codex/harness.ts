@@ -12,7 +12,6 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
-import type { CodexTurnLocalBeforeAgentFinalize } from "./src/app-server/turn-local-finalization-types.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
@@ -62,10 +61,6 @@ type CodexAppServerAgentHarnessOptions = {
   sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 };
 
-type CodexPrivateRunAttempt = (
-  params: Parameters<AgentHarnessV2["runAttempt"]>[0],
-  onBeforeAgentFinalize?: CodexTurnLocalBeforeAgentFinalize,
-) => ReturnType<AgentHarnessV2["runAttempt"]>;
 async function disposeSharedCodexAppServerClients(): Promise<void> {
   const dispose = (
     globalThis as typeof globalThis & {
@@ -101,19 +96,6 @@ export function createCodexAppServerAgentHarness(
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
     options.pluginConfig;
-  const runAttempt: CodexPrivateRunAttempt = async (params, onBeforeAgentFinalize) => {
-    // The optional second argument is an unexported host-to-attested-Codex
-    // handoff. It never appears on the public harness attempt object.
-    const codexParams = onBeforeAgentFinalize ? { ...params, onBeforeAgentFinalize } : params;
-    const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
-    return runCodexAppServerAttempt(codexParams, {
-      bindingStore: options.bindingStore,
-      pluginConfig: resolveAttemptPluginConfig(params.config),
-      runtime: sessionRuntime,
-      runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
-      nativeHookRelay: { enabled: true },
-    });
-  };
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -257,7 +239,18 @@ export function createCodexAppServerAgentHarness(
       }
       return { supported: true, priority: 100 };
     },
-    runAttempt,
+    runAttempt: async (params) => {
+      // Keep app-server runtime code behind lazy imports so plugin discovery and
+      // cold provider catalog reads do not pull in the whole Codex runtime.
+      const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
+      return runCodexAppServerAttempt(params, {
+        bindingStore: options.bindingStore,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
+        runtime: sessionRuntime,
+        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
+        nativeHookRelay: { enabled: true },
+      });
+    },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {
         return runHostPreparedIsolatedCompletion(params);

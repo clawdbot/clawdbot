@@ -1023,6 +1023,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
 function applyAssistantVisibleTextStagePipeline(
   text: string,
   options: AssistantVisibleTextPipelineOptions,
+  streaming = false,
 ): string {
   if (!text) {
     return text;
@@ -1033,6 +1034,8 @@ function applyAssistantVisibleTextStagePipeline(
       mode: options.reasoningMode,
       scope: options.reasoningScope,
       trim: options.reasoningTrim,
+      // An unfinished stream cannot use terminal malformed-output recovery.
+      recoverUnclosed: !streaming,
     });
   const applyFinalTrim = (value: string) => {
     if (options.finalTrim === "none") {
@@ -1075,10 +1078,12 @@ function applyAssistantVisibleTextStagePipeline(
 export function sanitizeAssistantVisibleTextWithProfile(
   text: string,
   profile: AssistantVisibleTextSanitizerProfile = "delivery",
+  streaming = false,
 ): string {
   return applyAssistantVisibleTextStagePipeline(
     text,
     ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS[profile],
+    streaming,
   );
 }
 

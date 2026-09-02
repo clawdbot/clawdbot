@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
 import type {
@@ -21,6 +22,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
@@ -68,8 +70,6 @@ export type SubscribeEmbeddedAgentSessionParams = {
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
-  /** Source-owned preview only; committed events and blocks still await terminal acceptance. */
-  partialReplyIsProvisional?: boolean;
   onAssistantMessageStart?: () => void | Promise<void>;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
@@ -93,8 +93,6 @@ export type SubscribeEmbeddedAgentSessionParams = {
     assistantEntryId?: string;
     lastAssistant?: AgentMessage;
     assistantTexts: readonly string[];
-    /** Actual unsent host-owned reply, projected for freshness/next-step decisions. */
-    hostFinalDeferredCandidate?: string;
     hasAssistantVisibleText: boolean;
     isError: boolean;
     incompleteTerminalAssistant: boolean;
@@ -112,6 +110,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
+  /** Prepared endpoint ownership can differ from the assistant's provider route ID. */
+  providerOwner?: PreparedProviderFailoverOwner;
+  compactionCountOwner?: EmbeddedRunAttemptInternalParams["compactionCountOwner"];
+  onContextAccountingEvent?: EmbeddedRunAttemptInternalParams["onContextAccountingEvent"];
+  sessionPersistence?: EmbeddedRunAttemptParams["sessionPersistence"];
   sessionKey?: string;
   /** Current transport channel resolved for this run. */
   currentChannelId?: string;

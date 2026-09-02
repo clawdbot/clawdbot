@@ -7,12 +7,13 @@ import {
   GitHubPublicationTitleSchema,
 } from "./session-github-publication.js";
 import { withSince } from "./since.js";
+import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
   LiveIntegerSchema,
   LiveSequenceSchema,
   LiveTextSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
   WorkerErrorResponseFrameSchema,
   WorkerErrorShapeSchema,
@@ -44,6 +45,8 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.sessions.send",
   "worker.github.publish",
   "worker.portal",
+  "worker.computer",
+  "worker.skill-workshop",
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
@@ -53,6 +56,8 @@ export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE = "worker-github-publication-v1";
 export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  "skill-resources-v1",
+  "worker-skill-workshop-v1",
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -62,6 +67,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_COMPUTER_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
@@ -248,7 +254,7 @@ export const WorkerSessionToolResultSchema = closedObject({
   resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
 });
 
-const WorkerSessionToolResponseFrameSchema = Type.Union([
+export const WorkerSessionToolResponseFrameSchema = Type.Union([
   closedObject({
     type: Type.Literal("res"),
     id: WorkerFrameIdSchema,
@@ -282,7 +288,7 @@ const WorkerTranscriptThinkingContentSchema = closedObject({
 
 const WorkerTranscriptImageContentSchema = closedObject({
   type: Type.Literal("image"),
-  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES }),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES }),
   mimeType: Type.String({ minLength: 1, maxLength: 256 }),
 });
 

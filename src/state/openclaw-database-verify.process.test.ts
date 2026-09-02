@@ -4,15 +4,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { runDatabaseVerifyWorker } from "./openclaw-database-verify.impl.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function importVerifierInUnrelatedFork(): Promise<unknown[]> {
   const fixtureDir = tempDirs.make("openclaw-database-verify-process-");
   const fixturePath = path.join(fixtureDir, "unrelated-child.mjs");
-  const verifierUrl = pathToFileURL(
-    path.resolve("src/state/openclaw-database-verify.worker.ts"),
-  ).href;
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
+  const verifierUrl = workerUrl.href;
   fs.writeFileSync(
     fixturePath,
     `
@@ -24,7 +26,7 @@ async function importVerifierInUnrelatedFork(): Promise<unknown[]> {
   );
 
   const child = fork(fixturePath, [], {
-    execArgv: ["--import", "tsx"],
+    execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
   return await new Promise((resolve, reject) => {
@@ -51,6 +53,26 @@ async function importVerifierInUnrelatedFork(): Promise<unknown[]> {
 }
 
 describe("database verifier child process entrypoint", () => {
+  it("preserves inherited Node flags for a JavaScript fork", async () => {
+    const fixtureDir = tempDirs.make("openclaw-database-verify-flags-");
+    const fixturePath = path.join(fixtureDir, "flags.mjs");
+    fs.writeFileSync(
+      fixturePath,
+      `process.once('message', () => {
+      process.send([{path:'inherited-node-flag',ok:process.execArgv.includes('--no-warnings')}], () => process.disconnect());
+    });`,
+    );
+    const original = process.execArgv;
+    process.execArgv = [...original, "--no-warnings"];
+    try {
+      await expect(
+        runDatabaseVerifyWorker([], { workerUrl: pathToFileURL(fixturePath) }),
+      ).resolves.toEqual([{ path: "inherited-node-flag", ok: true }]);
+    } finally {
+      process.execArgv = original;
+    }
+  });
+
   it("does not consume an unrelated fork's IPC messages", async () => {
     await expect(importVerifierInUnrelatedFork()).resolves.toEqual([
       { echo: { type: "unrelated" } },

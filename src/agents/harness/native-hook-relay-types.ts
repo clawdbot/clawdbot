@@ -6,6 +6,7 @@ import type {
   DeferredPluginToolApproval,
   HookContext,
 } from "../agent-tools.before-tool-call.js";
+import type { CodexMcpServersConfig } from "../codex-mcp-config.types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 type NativeHookRelayApprovalContext = Pick<
@@ -67,21 +68,6 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
-type NativeHookRelayTurnLocalFinalizeOutcome =
-  | { action: "continue" }
-  | { action: "revise"; instruction: string }
-  | { action: "discard" };
-
-/** Private bundled-runtime controller for an admitted turn's source-local final gate. */
-export type NativeHookRelayTurnLocalFinalizer = Readonly<{
-  /** Keeps an explicitly disabled global relay disabled while forcing this local safety gate. */
-  skipGlobalBeforeAgentFinalize?: boolean;
-  evaluate: (event: {
-    turnId: string;
-    lastAssistantMessage: string;
-  }) => Promise<NativeHookRelayTurnLocalFinalizeOutcome>;
-}>;
-
 export type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
@@ -91,6 +77,7 @@ export type NativeHookRelayRegistration = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  deferMcpToolApprovals?: boolean;
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
@@ -131,6 +118,8 @@ export type RegisterNativeHookRelayParams = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: CodexMcpServersConfig;
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
@@ -155,12 +144,6 @@ type NativeHookRelayCommandOptions = {
 
 type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
-};
-
-/** Private retained-relay command controls used only by bundled runtimes. */
-type RetainedNativeHookRelayCommandForEventOptions = NativeHookRelayCommandForEventOptions & {
-  /** Authoritative event work may not be undercut by a shorter generic relay timeout. */
-  minimumTimeoutMs?: number;
 };
 
 export type InvokeNativeHookRelayParams = {
@@ -223,23 +206,10 @@ export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
-  /** Bundled-runtime-only final gate retained outside the public registration shape. */
-  turnLocalBeforeAgentFinalize?: NativeHookRelayTurnLocalFinalizer;
 };
 
 export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
   generation: string;
-};
-
-/** Private retained handle with bundled-only authoritative timeout control. */
-export type RetainedNativeHookRelayRegistrationHandle = Omit<
-  ActiveNativeHookRelayRegistrationHandle,
-  "commandForEvent"
-> & {
-  commandForEvent: (
-    event: NativeHookRelayEvent,
-    options?: RetainedNativeHookRelayCommandForEventOptions,
-  ) => string;
 };
 
 export type NativeHookRelayPermissionApprovalRequest = {
@@ -292,5 +262,5 @@ export type NativeHookRelaySharedState = {
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
-  permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
+  permissionAllowAlwaysApprovals: Map<string, { relayId: string; expiresAtMs?: number }>;
 };

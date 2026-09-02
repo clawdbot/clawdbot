@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FailoverError } from "./failover-error.js";
+import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -196,6 +196,14 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
 });
 
 describe("resolveAgentRunErrorLifecycleFields", () => {
+  it.each([false, true])("preserves direct cancellation with caller signal=%s", (hasSignal) => {
+    const signal = hasSignal ? new AbortController().signal : undefined;
+    expect(resolveAgentRunErrorLifecycleFields(createAgentRunDirectAbortError(), signal)).toEqual({
+      aborted: true,
+      stopReason: "aborted",
+    });
+  });
+
   it("attributes structured provider watchdog timeouts", () => {
     const error = new FailoverError("CLI timed out", { reason: "timeout" });
 
@@ -205,9 +213,16 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
     });
   });
 
-  it("does not reclassify ordinary provider failures", () => {
-    const error = new FailoverError("CLI failed", { reason: "server_error" });
-
+  it.each([
+    {
+      name: "provider failure",
+      error: new FailoverError("CLI failed", { reason: "server_error" }),
+    },
+    {
+      name: "unmarked transport abort",
+      error: Object.assign(new Error("request aborted"), { name: "AbortError" }),
+    },
+  ])("does not reclassify $name as caller cancellation", ({ error }) => {
     expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
   });
 
@@ -221,10 +236,10 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
     });
   });
 
-  it("contains throwing cause accessors", () => {
-    const error = Object.defineProperty(new Error("provider failed"), "cause", {
+  it.each(["cause", "code"])("contains throwing %s accessors", (property) => {
+    const error = Object.defineProperty(new Error("provider failed"), property, {
       get() {
-        throw new Error("hostile cause");
+        throw new Error("hostile accessor");
       },
     });
 

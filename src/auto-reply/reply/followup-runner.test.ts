@@ -290,60 +290,6 @@ describe("createFollowupRunner", () => {
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
 
-  it("uses the queued turn's exact presentation owner instead of the latest runner callbacks", async () => {
-    const typing = createTypingController();
-    const exactAdmitted = vi.fn(async () => {});
-    const exactModelSelected = vi.fn(() => {});
-    const latestAdmitted = vi.fn(async () => {});
-    const latestModelSelected = vi.fn(() => {});
-    const latestToolStart = vi.fn(async () => true);
-    const latestReasoningStream = vi.fn(async () => true);
-    const latestSettled = vi.fn(async () => {});
-    const turn = createTurn();
-    turn.queued.queuedSourceReplyDelivery = {
-      deliver: vi.fn(async () => "delivered" as const),
-      presentationOptions: {
-        onQueuedFollowupAdmitted: exactAdmitted,
-        onModelSelected: exactModelSelected,
-        // Absent source callbacks must also clear every newer execution phase.
-        onToolStart: undefined,
-        onReasoningStream: undefined,
-        onQueuedFollowupSettled: undefined,
-      },
-    };
-    const execution = createRejectedExecution();
-    state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(execution);
-    state.account.mockResolvedValue(undefined);
-    state.deliver.mockResolvedValue(undefined);
-
-    await createFollowupRunner({
-      typing,
-      typingMode: "instant",
-      defaultModel: "claude",
-      opts: {
-        onQueuedFollowupAdmitted: latestAdmitted,
-        onModelSelected: latestModelSelected,
-        onToolStart: latestToolStart,
-        onReasoningStream: latestReasoningStream,
-        onQueuedFollowupSettled: latestSettled,
-      },
-    })(turn.queued);
-
-    const admissionDefaults = state.admit.mock.calls[0]?.[0]?.defaults;
-    const executionDefaults = state.execute.mock.calls[0]?.[0]?.defaults;
-    expect(admissionDefaults.opts.onQueuedFollowupAdmitted).toBe(exactAdmitted);
-    expect(executionDefaults.opts.onToolStart).toBeUndefined();
-    expect(executionDefaults.opts.onReasoningStream).toBeUndefined();
-    expect(executionDefaults.opts.onQueuedFollowupSettled).toBeUndefined();
-    expect(executionDefaults.opts.onModelSelected).toBe(exactModelSelected);
-    expect(latestAdmitted).not.toHaveBeenCalled();
-    expect(latestModelSelected).not.toHaveBeenCalled();
-    expect(latestToolStart).not.toHaveBeenCalled();
-    expect(latestReasoningStream).not.toHaveBeenCalled();
-    expect(latestSettled).not.toHaveBeenCalled();
-  });
-
   it.each([true, false])(
     "projects queued commentary with the refreshed durable owner when enabled is %s",
     async (commentaryPayloadsEnabled) => {

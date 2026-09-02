@@ -44,6 +44,7 @@ ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
 DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$HARNESS_ROOT_DIR/scripts/lib/upgrade-survivor-diagnostics.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
@@ -94,8 +95,12 @@ case "$LIVE_OPENAI" in
     ;;
 esac
 
-if [ "$SCENARIO" = "sqlite-volume" ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
-  echo "sqlite-volume requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+  echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+  exit 1
+fi
+if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+  echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
 
@@ -126,30 +131,7 @@ resolve_lane_artifact_suffix() {
 LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
-prepare_diagnostics_capture() {
-  # A previous attempt must never be published as this container's failure.
-  if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] ||
-    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json"; then
-    echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
-    return 0
-  fi
-  diagnostics_ready=1
-}
-publish_diagnostics() {
-  # This directory is host-owned and is never mounted into the candidate.
-  local log_root="${OPENCLAW_DOCKER_ALL_LOG_DIR:-$ROOT_DIR/.artifacts/docker-tests}"
-  local diagnostic_dir
-  local private_root
-  private_root="$(cd "$ARTIFACT_DIR" && pwd)" || return
-  mkdir -p "$log_root" || return
-  log_root="$(cd "$log_root" && pwd)" || return
-  diagnostic_dir="$(mktemp -d "$log_root/upgrade-survivor-$LANE_ARTIFACT_SUFFIX.XXXXXX")" || return
-  (cd "$HARNESS_ROOT_DIR" && node --import "$HARNESS_ROOT_DIR/scripts/tsx.mjs" \
-    "$HARNESS_ROOT_DIR/scripts/upgrade-survivor-diagnostics.mjs" \
-    publish "$private_root" "$diagnostic_dir")
-}
 DOCKER_RUN_USER_ARGS=()
-OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -164,10 +146,6 @@ if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED:-}" ]; then
   PROBE_ENV_ARGS+=(
     -e OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED="$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED"
   )
-fi
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
 fi
 if [ "$ROOT_MANAGED_VPS" = "1" ]; then
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
@@ -214,13 +192,11 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 
   if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "$OPENCLAW_CURRENT_PACKAGE_TGZ")"
-    docker_e2e_package_mount_args "$PACKAGE_TGZ"
     CANDIDATE_KIND="tarball"
     CANDIDATE_IS_CURRENT=1
     CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
   elif [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
-    docker_e2e_package_mount_args "$PACKAGE_TGZ"
     CANDIDATE_KIND="tarball"
     CANDIDATE_IS_CURRENT=1
     CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
@@ -230,7 +206,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
       exit 1
     fi
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "$CANDIDATE_RAW")"
-    docker_e2e_package_mount_args "$PACKAGE_TGZ"
     CANDIDATE_KIND="tarball"
     CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
   else
@@ -248,8 +223,14 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS="$BASELINE_SPEC" \
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="$SCENARIO" \
       node "$HARNESS_ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry
-    openclaw_prepublish_plugin_registry_configure_docker_args \
-      "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+    export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+  fi
+
+  if [ -n "$PACKAGE_TGZ" ]; then
+    docker_e2e_package_mount_args "$PACKAGE_TGZ"
+  elif [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    openclaw_prepublish_plugin_registry_configure_docker_args "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+    DOCKER_E2E_PACKAGE_ARGS=("${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}")
   fi
 
   OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
@@ -276,7 +257,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS:-}" \
-    -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_MIGRATION_BUDGET_SECONDS:-120}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS:-60}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK="${OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS="$ROOT_MANAGED_VPS" \
@@ -293,7 +273,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
-    ${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]+"${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"} \
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
     "$IMAGE_NAME" \
@@ -303,7 +282,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
-docker_e2e_package_mount_args "$PACKAGE_TGZ"
 if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
     mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"
@@ -317,9 +295,9 @@ if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
     OPENCLAW_DOCKER_ALL_TIMINGS=0 \
     OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="$SCENARIO" \
     node "$HARNESS_ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+  export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
 fi
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
@@ -344,7 +322,6 @@ docker_e2e_run_with_harness \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
-  ${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]+"${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"} \
   ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
   ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
   "$IMAGE_NAME" \

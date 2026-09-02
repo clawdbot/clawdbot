@@ -326,11 +326,11 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(
       hidden({
         ...workSession(),
-        attention: { kind: "error", reason: "Deployment failed" },
+        attention: { kind: "error", reason: "⚠️ ✉️ Message failed: deployment unavailable" },
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),
-    ).toBe("Run failed: Deployment failed");
+    ).toBe("Run failed:   Message failed: deployment unavailable");
 
     expect([
       hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),

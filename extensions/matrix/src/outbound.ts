@@ -1,6 +1,5 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements outbound behavior.
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   createReplyToFanout,
@@ -8,9 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  legacyInteractiveReplyToPresentation,
-  normalizeLegacyInteractiveReply,
-  normalizeMessagePresentation,
+  renderPresentationForDelivery,
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -27,6 +24,20 @@ import type { MatrixExtraContentFields } from "./matrix/send/types.js";
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
 const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
+
+const MATRIX_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: true,
+  context: true,
+  divider: true,
+  limits: {
+    text: {
+      markdownDialect: "markdown",
+      supportsEdit: true,
+    },
+  },
+} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
@@ -90,6 +101,17 @@ function renderMatrixPresentationPayload(params: {
   };
 }
 
+export function prepareMatrixReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
+  return renderPresentationForDelivery(
+    {
+      presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+      renderPresentation: (prepared) =>
+        renderMatrixPresentationPayload({ payload: prepared, presentation: prepared.presentation }),
+    },
+    payload,
+  );
+}
+
 function resolveMatrixPayloadText(payload: ReplyPayload): string {
   const text = payload.text ?? "";
   if (text.trim() || !resolveMatrixPresentationContent(payload)) {
@@ -98,39 +120,12 @@ function resolveMatrixPayloadText(payload: ReplyPayload): string {
   return MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT;
 }
 
-function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
-  const presentation = resolveMatrixPresentationContent(payload);
-  return presentation ? { [MATRIX_OPENCLAW_PRESENTATION_KEY]: presentation } : undefined;
-}
-
-/**
- * The inbound reply dispatcher predates portable rich ReplyPayloads and calls
- * sendMessageMatrix directly. Materialize the same Matrix-native presentation
- * envelope and a visible location fallback that the core outbound path would
- * otherwise own, so host-final message-tool payloads cannot disappear at this
- * older seam.
- */
-export function materializeMatrixDirectReplyPayload(payload: ReplyPayload): ReplyPayload {
-  const legacyInteractive = normalizeLegacyInteractiveReply(payload.interactive);
-  const presentation =
-    normalizeMessagePresentation(payload.presentation) ??
-    (legacyInteractive ? legacyInteractiveReplyToPresentation(legacyInteractive) : undefined);
-  let materialized = presentation
-    ? renderMatrixPresentationPayload({ payload, presentation })
-    : payload;
-  if (!materialized.text?.trim() && materialized.location) {
-    materialized = {
-      ...materialized,
-      text: formatLocationText(materialized.location),
-    };
-  }
-  return materialized;
-}
-
-export function resolveMatrixDirectReplyExtraContent(
+/** Matrix event fields a reply carries beyond its body, currently its presentation. */
+export function resolveMatrixExtraContent(
   payload: ReplyPayload,
 ): MatrixExtraContentFields | undefined {
-  return resolveMatrixExtraContent(payload);
+  const presentation = resolveMatrixPresentationContent(payload);
+  return presentation ? { [MATRIX_OPENCLAW_PRESENTATION_KEY]: presentation } : undefined;
 }
 
 function resolveMatrixDeliveryProgress(
@@ -150,19 +145,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      text: {
-        markdownDialect: "markdown",
-        supportsEdit: true,
-      },
-    },
-  },
+  presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation }) =>
     renderMatrixPresentationPayload({ payload, presentation }),
   sendPayload: async ({

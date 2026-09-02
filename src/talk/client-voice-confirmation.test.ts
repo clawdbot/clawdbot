@@ -125,6 +125,31 @@ describe("client voice confirmation", () => {
     ).toBe(false);
   });
 
+  it("allows computer observation without consuming the next input confirmation", () => {
+    const confirmationId = block({
+      voiceSessionId: "voice-computer",
+      runId: "voice-run",
+      toolName: "computer",
+      toolParams: { action: "left_click", coordinate: [10, 20] },
+    });
+    expect(
+      checkClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-computer",
+        runId: "voice-run",
+        toolName: "computer",
+        toolParams: { action: "list_windows" },
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      block({
+        voiceSessionId: "voice-computer",
+        runId: "voice-run",
+        toolName: "computer",
+        toolParams: { action: "left_click", coordinate: [10, 20] },
+      }),
+    ).toBe(confirmationId);
+  });
+
   it("keeps pre-gate behavior for sessions that cannot report spoken approvals", () => {
     expect(
       checkClientVoiceToolConfirmationPolicy({

@@ -16,10 +16,10 @@ import {
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
-import type { SystemAgentOverview } from "./overview.js";
+import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
-type SystemAgentOverviewLoader = () => Promise<SystemAgentOverview>;
+type SystemAgentOverviewLoader = typeof loadSystemAgentOverview;
 type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
 
 export type { SystemAgentOperation };
@@ -52,12 +52,17 @@ export type SystemAgentCommandDeps = {
     path?: string;
     value?: string;
     cliOptions: ConfigSetOptions;
+    beforePersistentApply?: () => void;
   }) => Promise<void>;
   runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
-  runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
+  runPluginUninstall?: (
+    pluginId: string,
+    runtime: RuntimeEnv,
+    options?: { beforePersistentApply?: () => void },
+  ) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
   runTui?: (opts: {

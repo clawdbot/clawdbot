@@ -16,7 +16,7 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
-import { getActivePluginRegistry, requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -27,6 +27,10 @@ import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
@@ -51,10 +55,6 @@ import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
-import {
-  PluginHarnessSourceFinalizationUnsupportedError,
-  resolveAgentHarnessPreflightOwner,
-} from "./errors.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -99,6 +99,15 @@ const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
   drainPendingContextEngineTurnsBeforeRun: vi.fn(async (_params: unknown) => {}),
 }));
 const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
+const privateHarnessParamCases = [
+  { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
+  {
+    field: "codeModeRecovery",
+    value: { kind: "resume", blockedActionKeys: new Set<string>(), mutationAttempt: "available" },
+  },
+  { field: "compactionCountOwner", value: "caller" },
+  { field: "onContextAccountingEvent", value: () => undefined },
+] as const;
 
 function createTranscriptRecorder(
   admission: ReturnType<typeof createTranscriptAnchor> & {
@@ -181,10 +190,15 @@ const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 const trajectoryTempDirs = createTempDirTracker();
+let generationState: OpenClawTestState;
 let selectionAdmission: PreparedAgentRunAdmission;
 let selectionAdmittedRunContext: AdmittedRunContext;
 
 beforeEach(async () => {
+  generationState = await createOpenClawTestState({
+    label: "harness-model-generation",
+    applyEnv: false,
+  });
   resetAgentRunRegistryForTest();
   resetModelGenerationFixtureState();
   selectionAdmission = prepareAgentRunAdmission({
@@ -241,7 +255,7 @@ beforeEach(async () => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
   closeOpenClawAgentDatabasesForTest();
@@ -265,6 +279,7 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_AGENT_RUNTIME = originalRuntime;
   }
+  await generationState.cleanup();
 });
 
 function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
@@ -479,6 +494,8 @@ function maybeCompactAgentHarnessSession(
   const preparedModelRuntime =
     options.preparedModelRuntime ??
     createModelGenerationFixture({
+      agentDir: generationState.agentDir(),
+      workspaceDir: generationState.workspaceDir,
       config: params.config ?? {},
       createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
       label: "harness-test",
@@ -689,216 +706,54 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("strips source-finalization authority from an arbitrary plugin harness", async () => {
-    const runAttempt = vi.fn(async (...args: unknown[]) => {
-      const attempt = args[0] as Record<string, unknown>;
-      expect(Reflect.ownKeys(attempt)).not.toEqual(
-        expect.arrayContaining(["onBeforeAgentFinalize", "deferSourceMessageToolDelivery"]),
-      );
-      return createAttemptResult("foreign");
-    });
-    registerAgentHarness(
-      {
-        id: "foreign",
-        label: "Foreign",
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt: runAttempt as AgentHarness["runAttempt"],
-      },
-      { ownerPluginId: "foreign" },
-    );
-    const params = createAttemptParams(providerRuntimeConfig("codex", "foreign"));
-    params.onBeforeAgentFinalize = undefined;
-    params.deferSourceMessageToolDelivery = true;
-    expect(Object.hasOwn(params, "onBeforeAgentFinalize")).toBe(true);
-
-    await runAgentHarnessAttempt(params);
-
-    expect(runAttempt).toHaveBeenCalledOnce();
-    expect(runAttempt.mock.calls[0]).toHaveLength(1);
-  });
-
-  it.each([
-    { id: "copilot", ownerPluginId: "copilot" },
-    { id: "codex", ownerPluginId: "codex" },
-  ])(
-    "fails closed when a non-finalizing $id harness receives a freshness gate",
-    async (fixture) => {
-      const runAttempt = vi.fn(async (...args: unknown[]) => {
-        const attempt = args[0] as Record<string, unknown>;
-        expect(Reflect.ownKeys(attempt)).not.toEqual(
-          expect.arrayContaining(["onBeforeAgentFinalize", "deferSourceMessageToolDelivery"]),
-        );
-        return createAttemptResult("ordinary");
-      });
-      registerAgentHarness(
-        {
-          id: fixture.id,
-          label: `Unmarked ${fixture.id}`,
-          supports: () => ({ supported: true, priority: 100 }),
-          runAttempt: runAttempt as AgentHarness["runAttempt"],
+  it.each(privateHarnessParamCases)(
+    "routes settled turns through an explicit finalizer without $field",
+    async ({ field, value }) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
+      let hostAuthorityActive = true;
+      const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
+        async ({ attempt, settledAttempt: _settledAttempt }) => {
+          hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
+          expect(attempt.operation).toBe("settled-tool-finalization");
+          expect(attempt).not.toHaveProperty("hostCapabilities");
+          expect(attempt).not.toHaveProperty(field);
+          return {
+            assistant: createFinalAssistant(),
+          };
         },
-        { ownerPluginId: fixture.ownerPluginId },
       );
-      const params = createAttemptParams(providerRuntimeConfig("codex", fixture.id));
-      params.onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
-      params.deferSourceMessageToolDelivery = true;
+      const harness: AgentHarness = {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt,
+        finalizeSettledTurn,
+      };
+      registerAgentHarness(harness, { ownerPluginId: "codex" });
+      const params = Object.assign(createAttemptParams(providerRuntimeConfig("codex", "codex")), {
+        [field]: value,
+      });
+      const settledAttempt = createAttemptResult("settled");
 
-      const error = await runAgentHarnessAttempt(params).catch((caught: unknown) => caught);
-
-      expect(error).toBeInstanceOf(PluginHarnessSourceFinalizationUnsupportedError);
-      expect(error).toMatchObject({ harnessId: fixture.id, scope: "harness" });
-      expect(resolveAgentHarnessPreflightOwner(error)).toBe(fixture.id);
+      await expect(
+        runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
+      ).resolves.toMatchObject({
+        outcome: "answered",
+        result: {
+          assistant: { content: [{ type: "text", text: "final answer" }] },
+        },
+      });
       expect(runAttempt).not.toHaveBeenCalled();
-      expect(params.onBeforeAgentFinalize).not.toHaveBeenCalled();
+      expect(hostAuthorityActive).toBe(false);
+      expect(params).toHaveProperty(field, value);
+      expect(finalizeSettledTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settledAttempt,
+          attempt: expect.objectContaining({ provider: "codex" }),
+        }),
+      );
     },
   );
-
-  it("preserves the internal freshness callback for the built-in OpenClaw harness", async () => {
-    const onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
-    agentRunAttempt.mockImplementationOnce(async (attempt) => {
-      const internalAttempt = attempt as typeof attempt &
-        Pick<EmbeddedRunAttemptParams, "deferSourceMessageToolDelivery" | "onBeforeAgentFinalize">;
-      expect(internalAttempt.deferSourceMessageToolDelivery).toBe(true);
-      expect(internalAttempt.onBeforeAgentFinalize).toBe(onBeforeAgentFinalize);
-      await internalAttempt.onBeforeAgentFinalize?.({
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        lastAssistantMessage: "candidate",
-        revisionAttempt: 0,
-      });
-      return createAttemptResult("openclaw-freshness");
-    });
-    const params = createAttemptParams(providerRuntimeConfig("openai", "openclaw"));
-    params.onBeforeAgentFinalize = onBeforeAgentFinalize;
-    params.deferSourceMessageToolDelivery = true;
-
-    await expect(runAgentHarnessAttempt(params)).resolves.toMatchObject({
-      sessionIdUsed: "openclaw-freshness",
-    });
-    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
-  });
-
-  it("hands the callback privately to the exact registry-attested Codex harness", async () => {
-    type PrivateFinalizer = NonNullable<EmbeddedRunAttemptParams["onBeforeAgentFinalize"]>;
-    let retainedFinalizer: PrivateFinalizer | undefined;
-    let retainedOnAccepted: (() => Promise<void> | void) | undefined;
-    const runAttempt = vi.fn(async (...args: unknown[]) => {
-      const attempt = args[0] as Record<string, unknown>;
-      const onBeforeAgentFinalize = args[1] as PrivateFinalizer | undefined;
-      expect(attempt).not.toHaveProperty("onBeforeAgentFinalize");
-      expect(attempt).not.toHaveProperty("deferSourceMessageToolDelivery");
-      expect(onBeforeAgentFinalize).toBeTypeOf("function");
-      retainedFinalizer = onBeforeAgentFinalize;
-      const decision = await onBeforeAgentFinalize!({
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        lastAssistantMessage: "candidate",
-        revisionAttempt: 0,
-      });
-      if (decision.action !== "continue") {
-        retainedOnAccepted = decision.onAccepted;
-        await decision.onAccepted?.();
-      }
-      return createAttemptResult("codex-private");
-    });
-    const registeredHarness: AgentHarness = {
-      id: "codex",
-      pluginId: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: runAttempt as AgentHarness["runAttempt"],
-    };
-    requireActivePluginRegistry().agentHarnesses.push({
-      pluginId: "codex",
-      source: "test:bundled-codex-loader",
-      harness: registeredHarness,
-      bundledCodexSourceFinalization: true,
-      nativeCompaction: vi.fn(async () => ({ ok: true, compacted: false })),
-    });
-    const onAccepted = vi.fn();
-    const onBeforeAgentFinalize = vi.fn(async () => ({
-      action: "discard" as const,
-      onAccepted,
-    }));
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    params.onBeforeAgentFinalize = onBeforeAgentFinalize;
-    params.deferSourceMessageToolDelivery = true;
-
-    await runAgentHarnessAttempt(params);
-
-    expect(runAttempt.mock.calls[0]).toHaveLength(2);
-    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
-    expect(onAccepted).toHaveBeenCalledOnce();
-    await expect(
-      retainedFinalizer!({
-        runId: "late-run",
-        sessionId: "late-session",
-        provider: "openai",
-        model: "gpt-5.4",
-        lastAssistantMessage: "late candidate",
-        revisionAttempt: 0,
-      }),
-    ).rejects.toThrow("agent harness host capability is no longer active");
-    await expect(retainedOnAccepted!()).rejects.toThrow(
-      "agent harness host capability is no longer active",
-    );
-    expect(onBeforeAgentFinalize).toHaveBeenCalledOnce();
-    expect(onAccepted).toHaveBeenCalledOnce();
-  });
-
-  it("routes settled turns only through an explicit harness finalizer", async () => {
-    const internalKey = "__openclawSourceReplyDeliveryRuntime";
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
-    let hostAuthorityActive = true;
-    const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
-      async ({ attempt, settledAttempt: _settledAttempt }) => {
-        hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
-        expect(attempt.operation).toBe("settled-tool-finalization");
-        expect(attempt).not.toHaveProperty("hostCapabilities");
-        expect(attempt).not.toHaveProperty(internalKey);
-        expect(attempt).not.toHaveProperty("onBeforeAgentFinalize");
-        expect(attempt).not.toHaveProperty("deferSourceMessageToolDelivery");
-        return {
-          assistant: createFinalAssistant(),
-        };
-      },
-    );
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt,
-      finalizeSettledTurn,
-    };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
-    params.onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
-    params.deferSourceMessageToolDelivery = true;
-    const settledAttempt = createAttemptResult("settled");
-
-    await expect(
-      runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
-    ).resolves.toMatchObject({
-      outcome: "answered",
-      result: {
-        assistant: { content: [{ type: "text", text: "final answer" }] },
-      },
-    });
-    expect(runAttempt).not.toHaveBeenCalled();
-    expect(hostAuthorityActive).toBe(false);
-    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
-    expect(finalizeSettledTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        settledAttempt,
-        attempt: expect.objectContaining({ provider: "codex" }),
-      }),
-    );
-  });
 
   it("fails closed when the selected harness has no settled-turn finalizer", async () => {
     const harness: AgentHarness = {
@@ -966,29 +821,32 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("strips the internal source delivery controller at the plugin harness handoff", async () => {
-    const internalKey = "__openclawSourceReplyDeliveryRuntime";
-    let handedOffRuntime: unknown;
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt: async (attemptParams) => {
-          handedOffRuntime = (attemptParams as unknown as Record<string, unknown>)[internalKey];
-          return createAttemptResult("codex");
+  it.each(privateHarnessParamCases)(
+    "strips $field at the plugin harness handoff without mutating its owner",
+    async ({ field, value }) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        createAttemptResult("codex"),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt,
         },
-      },
-      { ownerPluginId: "codex" },
-    );
-    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+        { ownerPluginId: "codex" },
+      );
+      const params = Object.assign(createAttemptParams(providerRuntimeConfig("codex", "codex")), {
+        [field]: value,
+      });
 
-    await runAgentHarnessAttempt(params);
+      await runAgentHarnessAttempt(params);
 
-    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
-    expect(handedOffRuntime).toBeUndefined();
-  });
+      expect(params).toHaveProperty(field, value);
+      expect(runAttempt).toHaveBeenCalledOnce();
+      expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty(field);
+    },
+  );
 
   it("persists plugin trajectory events through the selected harness host capability", async () => {
     const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
@@ -1031,9 +889,9 @@ describe("runAgentHarnessAttempt", () => {
     ]);
   });
 
-  it.each(["heartbeat"] as const)(
-    "records %s classification on the host-owned turn candidate",
-    async (bootstrapContextRunKind) => {
+  it.each(["complete", "missing admission", "missing terminal"] as const)(
+    "records native terminal facts only with complete anchors: %s",
+    async (boundary) => {
       const admission = {
         ...createTranscriptAnchor("user-1", 1, 0),
         logicalTurnId: "heartbeat-turn",
@@ -1048,7 +906,7 @@ describe("runAgentHarnessAttempt", () => {
           supports: () => ({ supported: true, priority: 100 }),
           runAttempt: async () => ({
             ...createAttemptResult("session-1"),
-            contextEngineTerminalAnchor: terminal,
+            contextEngineTerminalAnchor: boundary === "missing terminal" ? undefined : terminal,
           }),
         },
         { ownerPluginId: "codex" },
@@ -1062,22 +920,26 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: admission.sessionKey,
         storePath: admission.storePath,
       };
-      params.bootstrapContextRunKind = bootstrapContextRunKind;
-      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      params.bootstrapContextRunKind = "heartbeat";
+      params.userTurnTranscriptRecorder =
+        boundary === "missing admission" ? undefined : createTranscriptRecorder(admission);
       params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
 
       await runAgentHarnessAttempt(params);
 
-      expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          boundary: { admission, terminal },
-          harnessId: "codex",
-          isHeartbeat: true,
-          promptError: false,
-          aborted: false,
-          yieldAborted: false,
-        }),
-      );
+      if (boundary === "complete") {
+        expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            boundary: { admission, terminal },
+            isHeartbeat: true,
+            promptError: false,
+            aborted: false,
+            yieldAborted: false,
+          }),
+        );
+      } else {
+        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -1290,10 +1152,15 @@ describe("runAgentHarnessAttempt", () => {
     ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
     params.toolsAllow = ["openclaw"];
     params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
+    const onContextAccountingEvent = vi.fn();
+    Object.assign(params, { compactionCountOwner: "caller", onContextAccountingEvent });
 
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ compactionCountOwner: "caller", onContextAccountingEvent }),
+    );
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
@@ -1542,22 +1409,29 @@ describe("runAgentHarnessAttempt", () => {
 
   it("annotates non-ok harness result classifications for outer model fallback", async () => {
     const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "empty" as const);
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
     registerAgentHarness(
       {
         id: "codex",
         label: "Classifying Codex",
         supports: (ctx) =>
           ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        runAttempt,
         classify,
       },
       { ownerPluginId: "codex" },
     );
 
     const params = createAttemptParams();
+    params.codeModeRecovery = {
+      kind: "resume",
+      blockedActionKeys: new Set(),
+      mutationAttempt: "available",
+    };
     const result = await runAgentHarnessAttempt(params);
 
     const classifyCall = classify.mock.calls.at(0);
+    expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
     expect(classifyCall?.[1]).toEqual(
       expect.objectContaining({
@@ -1568,6 +1442,7 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
+    expect(classifyCall?.[1]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
@@ -3913,6 +3788,8 @@ describe("selectAgentHarness", () => {
     const cfg = {} as OpenClawConfig;
     const createStores = () => ({ authStorage: {} as never, modelRegistry: {} as never });
     const generationA = createModelGenerationFixture({
+      agentDir: generationState.agentDir(),
+      workspaceDir: generationState.workspaceDir,
       config: cfg,
       createStores,
       label: "compact-a",
@@ -3922,6 +3799,8 @@ describe("selectAgentHarness", () => {
       runtimeApi: "openai-responses",
     });
     const generationB = createModelGenerationFixture({
+      agentDir: generationState.agentDir(),
+      workspaceDir: generationState.workspaceDir,
       config: cfg,
       createStores,
       label: "compact-b",
@@ -4067,39 +3946,42 @@ describe("selectAgentHarness", () => {
     expect(compact).toHaveBeenCalledTimes(1);
   });
 
-  it("uses sandbox session key for compaction preflight runtime policy", async () => {
-    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
-      ok: true,
-      compacted: false,
-    }));
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: (ctx) =>
-          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt: vi.fn(async () => createAttemptResult("codex")),
-        compact,
-      },
-      { ownerPluginId: "codex" },
-    );
+  it.each(["agent:main:main", undefined])(
+    "keeps compaction policy separate from execution key %s",
+    async (sessionKey) => {
+      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+        ok: true,
+        compacted: false,
+      }));
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: (ctx) =>
+            ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+          runAttempt: vi.fn(async () => createAttemptResult("codex")),
+          compact,
+        },
+        { ownerPluginId: "codex" },
+      );
 
-    await expect(
-      maybeCompactAgentHarnessSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        sandboxSessionKey: "agent:strict:main",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        model: "gpt-5.5",
-        agentId: "main",
-        config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
-      }),
-    ).resolves.toEqual({ ok: true, compacted: false });
-    expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
-  });
+      await expect(
+        maybeCompactAgentHarnessSession({
+          sessionId: "session-1",
+          sessionKey,
+          sandboxSessionKey: "agent:strict:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentId: "main",
+          config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
+        }),
+      ).resolves.toEqual({ ok: true, compacted: false });
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(compact.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
+    },
+  );
 
   it("keeps explicit agent id for non-agent sandbox policy keys during compaction preflight", async () => {
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({

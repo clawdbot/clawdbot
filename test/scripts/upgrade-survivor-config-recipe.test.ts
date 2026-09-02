@@ -9,8 +9,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
@@ -22,6 +23,7 @@ import {
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -64,15 +66,21 @@ describe("upgrade survivor config recipe command resolution", () => {
     try {
       const mountedNodeModules = join(root, mountTarget.slice(1));
       mkdirSync(mountedNodeModules, { recursive: true });
-      for (const packageName of ["tsx", "esbuild", "@esbuild"]) {
-        cpSync(
-          join(process.cwd(), "node_modules", packageName),
-          join(mountedNodeModules, packageName),
-          {
-            dereference: true,
-            recursive: true,
-          },
-        );
+      const tsxManifest = createRequire(import.meta.url).resolve("tsx/package.json");
+      const esbuildManifest = createRequire(tsxManifest).resolve("esbuild/package.json");
+      const nativePackage = `@esbuild/${process.platform}-${process.arch}`;
+      const nativeManifest = createRequire(esbuildManifest).resolve(
+        `${nativePackage}/package.json`,
+      );
+      for (const [packageName, manifest] of [
+        ["tsx", tsxManifest],
+        ["esbuild", esbuildManifest],
+        [nativePackage, nativeManifest],
+      ] as const) {
+        cpSync(dirname(manifest), join(mountedNodeModules, packageName), {
+          dereference: true,
+          recursive: true,
+        });
       }
 
       const loaderPath = join(root, loaderTarget.slice(1));
@@ -165,6 +173,8 @@ describe("upgrade survivor config recipe command resolution", () => {
 
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
+    expect(gateway.reload).toEqual({ mode: "off" });
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
     expect(steps.at(-1)?.id).toBe("validate");
@@ -176,12 +186,91 @@ describe("upgrade survivor config recipe command resolution", () => {
     );
   });
 
+  it.each([
+    { version: "2026.3.13", legacy: true },
+    { version: "2026.7.1-2", legacy: true },
+    { version: "2026.8.1-beta.1", legacy: true },
+    { version: "2026.8.1-beta.2", legacy: false },
+    { version: "2026.8.1", legacy: false },
+    { version: null, legacy: false },
+  ])("authors one version-correct recovery roster for $version", ({ version, legacy }) => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("recovery-cleanup", version);
+    const agentSteps = steps.filter(
+      (step) =>
+        step.argv[0] === "config" && step.argv[1] === "set" && step.argv[2]?.startsWith("agents"),
+    );
+    expect(agentSteps).toHaveLength(1);
+    expect(agentSteps[0]?.argv.slice(0, 3)).toEqual(["config", "set", "agents"]);
+    const agents = JSON.parse(agentSteps[0]?.argv[3] ?? "{}");
+    const ids = legacy
+      ? agents.list.map((agent: { id: string }) => agent.id)
+      : Object.keys(agents.entries);
+    expect(ids).toEqual(["main", "ops", "recovery-clean", "recovery-protected"]);
+    const ops = legacy
+      ? agents.list.find((agent: { id: string }) => agent.id === "ops")
+      : agents.entries.ops;
+    expect(ops.fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+    expect(agents.defaults.heartbeat.every).toBe("0m");
+    if (legacy) {
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
+        expect.objectContaining({ id: "main" }),
+      ]);
+    } else {
+      expect(agents.ownership).toBe("explicit");
+      expect(AgentsSchema.safeParse(agents).success).toBe(true);
+    }
+    const baseStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (step) => step.id === "agents",
+    );
+    const baseAgents = JSON.parse(baseStep?.argv[3] ?? "{}");
+    expect(
+      legacy
+        ? baseAgents.list.map((agent: { id: string }) => agent.id)
+        : Object.keys(baseAgents.entries),
+    ).toEqual(["main", "ops"]);
+    expect(steps.find((step) => step.id === "channels-whatsapp")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
   it("removes unsupported scenario config for older baselines", () => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
     expect(steps.at(-1)?.id).toBe("validate");
   });
+
+  it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
+    "authors a schema-valid explicit agent roster for baseline %s",
+    (version) => {
+      const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+        (step) => step.id === "agents",
+      );
+      const agents = JSON.parse(step?.argv[3] ?? "{}");
+      expect(AgentsSchema.safeParse(agents).success).toBe(true);
+      expect(agents.ownership).toBe("explicit");
+      expect(agents.defaults.heartbeat.every).toBe("0m");
+      expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
+      expect(agents.entries.ops.fastModeDefault).toBe(true);
+    },
+  );
+
+  it.each(["2026.3.13", "2026.4.1", "2026.8.1-beta.1"])(
+    "preserves the legacy agent contract for baseline %s",
+    (version) => {
+      const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+        (step) => step.id === "agents",
+      );
+      const agents = JSON.parse(step?.argv[3] ?? "{}");
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.entries).toBeUndefined();
+      expect(agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main", "ops"]);
+      expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
+        expect.objectContaining({ id: "main" }),
+      ]);
+      expect(agents.list[1].fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+    },
+  );
 
   it("bounds baseline config commands and reports spawn errors", () => {
     const calls: unknown[] = [];

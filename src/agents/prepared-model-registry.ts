@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { normalizeDiscoveredAgentModel } from "./agent-model-discovery.js";
 import {
   resolveAgentDir,
@@ -137,7 +138,12 @@ function resolveInput(
 export async function loadPreparedAgentModelRegistry(
   config: OpenClawConfig,
   options: LoadPreparedAgentModelRegistryOptions = {},
-): Promise<{ agentDir: string; config: OpenClawConfig; registry: ModelRegistry }> {
+): Promise<{
+  agentDir: string;
+  authModes: PreparedAgentCredentialModes;
+  config: OpenClawConfig;
+  registry: ModelRegistry;
+}> {
   const input = resolveInput(config, options);
   const lease = await loadReadSnapshot(input, options.workspaceDir === undefined);
   try {
@@ -151,6 +157,7 @@ export async function loadPreparedAgentModelRegistry(
       : stores.modelRegistry;
     return {
       agentDir: snapshot.agentDir,
+      authModes: snapshot.authModes,
       config: snapshot.config,
       registry: createRegistryView({
         registry: modelRegistry,

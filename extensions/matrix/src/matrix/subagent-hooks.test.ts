@@ -220,6 +220,7 @@ describe("handleMatrixSubagentEnded", () => {
     expect(unbindMock).toHaveBeenCalledWith({
       bindingId: "ops:!room:example:$thread",
       reason: "subagent-complete",
+      scope: { channel: "matrix", accountId: "ops" },
     });
     expect(removeBindingRecordMock).not.toHaveBeenCalled();
   });

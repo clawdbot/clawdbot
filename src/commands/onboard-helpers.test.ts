@@ -571,6 +571,23 @@ describe("formatControlUiSshHint", () => {
       "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     );
   });
+
+  it("leaves remote login coordinates explicit instead of guessing from the server process", async () => {
+    await withEnvAsync(
+      {
+        USER: "gateway-service",
+        LOGNAME: "gateway-service",
+        SSH_CONNECTION: "192.0.2.10 54321 127.0.0.1 22",
+      },
+      async () => {
+        const hint = formatControlUiSshHint({ port: 18789, tlsEnabled: false });
+
+        expect(hint).toContain("ssh -N -L 18789:127.0.0.1:18789 <user>@<host>");
+        expect(hint).not.toContain("gateway-service");
+        expect(hint).not.toContain("192.0.2.10");
+      },
+    );
+  });
 });
 
 describe("waitForGatewayReachable", () => {

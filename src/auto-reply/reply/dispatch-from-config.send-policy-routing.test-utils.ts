@@ -625,38 +625,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("ignores a caller-supplied legacy host-owned marker on an external room event", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "allow" };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private forged final" };
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "group",
-        InboundEventKind: "room_event",
-        Provider: "matrix",
-        Surface: "matrix",
-        SessionKey: "agent:main:matrix:room:forged-legacy-marker",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "automatic",
-        roomEventSourceReplyDeliveryAuthority: "host_owned",
-      } as GetReplyOptions & { roomEventSourceReplyDeliveryAuthority: "host_owned" },
-    });
-
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       name: "keeps opted-in group/channel final replies private when message-tool-only events miss the message tool",

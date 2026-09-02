@@ -1,9 +1,15 @@
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import { toolResultFitsBudget, type ToolResultBudget } from "./tool-result-limits.js";
+import { renderToolSearchControlText } from "./tool-search-control-result.js";
 
 export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
     return null;
+  }
+  // Strings, booleans and null need no detachment or JSON normalization.
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
   }
   try {
     const serialized = JSON.stringify(value);
@@ -12,13 +18,8 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
     }
-    if (value === null) {
-      return null;
-    }
     switch (typeof value) {
-      case "string":
       case "number":
-      case "boolean":
         return value;
       case "bigint":
       case "symbol":
@@ -70,23 +71,30 @@ export function captureCodeModeOutput(output: unknown[], maxBytes: number): Code
 
 const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 
+function fitJsonPrefix<T>(text: string, maxBytes: number, project: (prefix: string) => T): T {
+  let low = 0;
+  let high = Math.min(Buffer.byteLength(text, "utf8"), maxBytes);
+  // JSON escaping makes serialized bytes cost more than raw prefix bytes.
+  // Measure the complete projection so fitting cannot erase a useful prefix.
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (jsonUtf8Bytes(project(truncateUtf8Prefix(text, middle))) <= maxBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return project(truncateUtf8Prefix(text, low));
+}
+
 function truncationMarker(source: CodeModeJsonSource, maxBytes: number) {
   const originalBytes = sourceBytes(source);
-  let prefix = truncateUtf8Prefix(source.json, maxBytes);
-  while (true) {
-    const prefixBytes = Buffer.byteLength(prefix, "utf8");
-    const candidate = {
-      truncated: true,
-      omittedBytes: originalBytes - prefixBytes,
-      guidance: TRUNCATION_GUIDANCE,
-      prefix,
-    };
-    const overflow = jsonUtf8Bytes(candidate) - maxBytes;
-    if (overflow <= 0 || prefixBytes === 0) {
-      return candidate;
-    }
-    prefix = truncateUtf8Prefix(prefix, Math.max(0, prefixBytes - overflow));
-  }
+  return fitJsonPrefix(source.json, maxBytes, (prefix) => ({
+    truncated: true,
+    omittedBytes: originalBytes - Buffer.byteLength(prefix, "utf8"),
+    guidance: TRUNCATION_GUIDANCE,
+    prefix,
+  }));
 }
 
 function projectValue(source: CodeModeJsonSource, maxBytes: number): unknown {
@@ -101,23 +109,9 @@ export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
 }
 
 export function boundCodeModeError(error: string, maxBytes: number): string {
-  if (jsonUtf8Bytes(error) <= maxBytes) {
-    return error;
-  }
-  let low = 0;
-  let high = Math.min(Buffer.byteLength(error, "utf8"), maxBytes);
-  // Escaped characters cost more in JSON than in UTF-8; removing the serialized
-  // overflow from the raw prefix can erase the entire diagnostic.
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const candidate = `${truncateUtf8Prefix(error, middle)} [error truncated]`;
-    if (jsonUtf8Bytes(candidate) <= maxBytes) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return `${truncateUtf8Prefix(error, low)} [error truncated]`;
+  return jsonUtf8Bytes(error) <= maxBytes
+    ? error
+    : fitJsonPrefix(error, maxBytes, (prefix) => `${prefix} [error truncated]`);
 }
 
 type DeliveryReceipt =
@@ -131,7 +125,10 @@ export class CodeModeOutputState {
   source: CodeModeOutputSource = EMPTY_CODE_MODE_OUTPUT;
   private delivered: DeliveryReceipt = { kind: "entries", count: 0 };
 
-  constructor(private readonly maxBytes: number) {}
+  constructor(
+    private readonly maxBytes: number,
+    private readonly modelBudget?: ToolResultBudget,
+  ) {}
 
   append(leg: CodeModeOutputSource): void {
     if (leg.count === 0) {
@@ -158,6 +155,73 @@ export class CodeModeOutputState {
   take(params: TerminalChannels & { error: string }): DeliveredChannels & { error: string };
   take(params?: TerminalChannels): DeliveredChannels;
   take(params: TerminalChannels = {}): DeliveredChannels {
+    return this.takeResult({}, params);
+  }
+
+  takeResult<T extends object>(
+    metadata: T,
+    params: TerminalChannels & { error: string },
+    networkContent?: boolean,
+  ): T & DeliveredChannels & { error: string };
+  takeResult<T extends object>(
+    metadata: T,
+    params?: TerminalChannels,
+    networkContent?: boolean,
+  ): T & DeliveredChannels;
+  takeResult<T extends object>(
+    metadata: T,
+    params: TerminalChannels = {},
+    networkContent = false,
+  ): T & DeliveredChannels {
+    const fits = (candidate: ReturnType<CodeModeOutputState["project"]>) => {
+      const rendered = renderToolSearchControlText(
+        JSON.stringify({ ...metadata, ...candidate.channels }, null, 2),
+        networkContent,
+      );
+      return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);
+    };
+    let projection = this.project(params, this.maxBytes);
+    if ((this.modelBudget || networkContent) && !fits(projection)) {
+      let low = 0;
+      let high = this.maxBytes - 1;
+      let best: typeof projection | undefined;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const candidate = this.project(params, middle);
+        if (fits(candidate)) {
+          best = candidate;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      if (!best) {
+        throw new Error(
+          "Model tool-result budget cannot fit Code Mode status; use a larger model context.",
+        );
+      }
+      projection = best;
+    }
+    const prior = this.delivered;
+    const { channels, receipt } = projection;
+    // Trial projections never acknowledge delivery. Charge the cumulative output
+    // before suppressing earlier entries or an unchanged replacement summary.
+    this.delivered = receipt;
+    const output =
+      receipt.kind === "entries"
+        ? channels.output.slice(prior.kind === "entries" ? prior.count : 0)
+        : prior.kind === "summary" &&
+            prior.originalBytes === receipt.originalBytes &&
+            prior.prefixBytes === receipt.prefixBytes
+          ? []
+          : channels.output;
+    return { ...metadata, ...channels, output };
+  }
+
+  private project(
+    params: TerminalChannels,
+    maxBytes: number,
+  ): { channels: DeliveredChannels; receipt: DeliveryReceipt } {
     const { count, source } = this.source;
     const outputBytes = count === 0 ? 0 : sourceBytes(source);
     const valueBytes = params.value === undefined ? 0 : sourceBytes(params.value);
@@ -167,39 +231,36 @@ export class CodeModeOutputState {
         ? undefined
         : boundCodeModeError(
             params.error,
-            this.maxBytes - Math.min(outputBytes + valueBytes, Math.floor(this.maxBytes / 2)),
+            maxBytes - Math.min(outputBytes + valueBytes, Math.floor(maxBytes / 2)),
           );
-    const remaining = this.maxBytes - (error === undefined ? 0 : jsonUtf8Bytes(error));
+    const remaining = maxBytes - (error === undefined ? 0 : jsonUtf8Bytes(error));
     const outputAllowance = remaining - Math.min(valueBytes, Math.floor(remaining / 2));
     let output: unknown[];
     let chargedOutputBytes: number;
+    let receipt: DeliveryReceipt;
     if (outputBytes <= outputAllowance) {
       // A retained prefix has originalBytes > maxBytes and cannot fit this allowance.
       // SAFETY: Complete output sources encode normalized arrays, never guest metadata.
       const entries = JSON.parse(source.json) as unknown[];
-      output = entries.slice(this.delivered.kind === "entries" ? this.delivered.count : count);
+      output = entries;
       chargedOutputBytes = outputBytes;
-      this.delivered = { kind: "entries", count };
+      receipt = { kind: "entries", count };
     } else {
       const marker = truncationMarker(source, outputAllowance - 2);
       const prefixBytes = Buffer.byteLength(marker.prefix, "utf8");
-      const prior = this.delivered;
-      output =
-        prior.kind === "summary" &&
-        prior.originalBytes === outputBytes &&
-        prior.prefixBytes === prefixBytes
-          ? []
-          : [marker];
+      output = [marker];
       chargedOutputBytes = jsonUtf8Bytes([marker]);
-      this.delivered = { kind: "summary", originalBytes: outputBytes, prefixBytes };
+      receipt = { kind: "summary", originalBytes: outputBytes, prefixBytes };
     }
-    // Allocate from the full cumulative projection before suppressing prior delivery.
     return {
-      output,
-      ...(params.value === undefined
-        ? {}
-        : { value: projectValue(params.value, remaining - chargedOutputBytes) }),
-      ...(error === undefined ? {} : { error }),
+      receipt,
+      channels: {
+        output,
+        ...(params.value === undefined
+          ? {}
+          : { value: projectValue(params.value, remaining - chargedOutputBytes) }),
+        ...(error === undefined ? {} : { error }),
+      },
     };
   }
 }

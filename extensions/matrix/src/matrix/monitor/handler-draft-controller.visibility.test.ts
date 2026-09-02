@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const draftStream = vi.hoisted(() => ({
-  setKind: vi.fn(),
   update: vi.fn(),
   flush: vi.fn(async () => {}),
   stop: vi.fn(async () => undefined),

@@ -89,7 +89,7 @@ describe("telegram actions contract", () => {
       expect(hints?.text_markup).toBe(expectedMarkup);
       if (expectedOn) {
         expect(hints?.rules.join(" ")).toContain("Telegram rich ON");
-        expect(hints?.rules.join(" ")).toContain("Bot API 10.2 blocks");
+        expect(hints?.rules.join(" ")).toContain("Bot API 10.3 blocks");
         expect(hints?.rules.join(" ")).toContain("<details><summary>");
         expect(hints?.rules.join(" ")).toContain("Not MarkdownV2/parse_mode");
         expect(hints?.rules.join(" ")).toContain("Media https URLs only, block-level only");

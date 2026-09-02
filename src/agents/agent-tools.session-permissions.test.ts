@@ -292,9 +292,7 @@ describe("session permission filesystem tools", () => {
             input:
               "*** Begin Patch\n*** Update File: ../../shared.txt\n@@\n-shared\n+patched\n*** End Patch",
           });
-          await expect(fs.readFile(path.join(root, "shared.txt"), "utf8")).resolves.toBe(
-            "patched\n",
-          );
+          await expect(fs.readFile(path.join(root, "shared.txt"), "utf8")).resolves.toBe("patched");
           await expect(readTool.execute("outside-read", { path: outside })).rejects.toThrow(
             /sandbox root/i,
           );

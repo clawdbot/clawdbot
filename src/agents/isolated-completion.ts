@@ -158,21 +158,13 @@ function hasCliSideEffectEvidence(result: {
   acceptedSessionSpawns?: unknown[];
   successfulCronAdds?: number;
 }): boolean {
-  const deliveredSourceReplyPayload = result.messagingToolSourceReplyPayloads?.some(
-    (payload) =>
-      !payload ||
-      typeof payload !== "object" ||
-      Array.isArray(payload) ||
-      // SAFETY: The preceding short-circuit guards narrow payload to a non-array object before this optional field read.
-      (payload as { hostFinalDeferred?: unknown }).hostFinalDeferred !== true,
-  );
   return Boolean(
     result.didSendViaMessagingTool ||
     result.didDeliverSourceReplyViaMessageTool ||
     result.messagingToolSentTexts?.length ||
     result.messagingToolSentMediaUrls?.length ||
     result.messagingToolSentTargets?.length ||
-    deliveredSourceReplyPayload ||
+    result.messagingToolSourceReplyPayloads?.length ||
     result.acceptedSessionSpawns?.length ||
     result.successfulCronAdds,
   );
@@ -431,12 +423,15 @@ export async function runIsolatedCompletion(
   const agentId = request.agentId ?? resolveDefaultAgentId(config);
   const agentDir = request.agentDir ?? resolveAgentDir(config, agentId);
   const workspaceDir = request.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
-  const provider =
-    resolveCliRuntimeCanonicalProvider({
-      runtime: request.provider,
-      config,
-      includeSetupRegistry: true,
-    }) ?? request.provider;
+  const canonicalProvider = resolveCliRuntimeCanonicalProvider({
+    runtime: request.provider,
+    config,
+    includeSetupRegistry: true,
+  });
+  const provider = canonicalProvider ?? request.provider;
+  // Canonicalizing a CLI model ref must not discard its explicit execution owner.
+  const runtimeOverride =
+    request.agentHarnessRuntimeOverride ?? (canonicalProvider ? request.provider : undefined);
   const lease = await acquireAgentRunPreparedModelRuntime(
     {
       config,
@@ -447,9 +442,7 @@ export async function runIsolatedCompletion(
         {
           provider,
           modelId: request.model,
-          ...(request.agentHarnessRuntimeOverride
-            ? { runtime: request.agentHarnessRuntimeOverride }
-            : {}),
+          ...(runtimeOverride ? { runtime: runtimeOverride } : {}),
           agentId,
         },
       ],
@@ -464,13 +457,13 @@ export async function runIsolatedCompletion(
         modelId: request.model,
         config,
         agentId,
-        agentHarnessId: request.agentHarnessRuntimeOverride,
-        agentHarnessRuntimeOverride: request.agentHarnessRuntimeOverride,
+        agentHarnessId: runtimeOverride,
+        agentHarnessRuntimeOverride: runtimeOverride,
         workspaceDir,
         pluginRegistry,
       });
       const runtime =
-        request.agentHarnessRuntimeOverride ??
+        runtimeOverride ??
         resolveEffectiveAgentRuntime({ cfg: config, provider, modelId: request.model, agentId });
       const cliOwner = resolveCliOwner({
         request,

@@ -197,7 +197,7 @@ export async function createCopilotToolBridge(
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: input.abortSignal,
-    agentId: input.agentId,
+    agentId: attemptParams.sandboxAgentId ?? input.agentId,
     config: attemptParams.config,
     codeModeOverride: attemptParams.codeModeOverride,
     disableTools: attemptParams.disableTools,
@@ -206,6 +206,7 @@ export async function createCopilotToolBridge(
     isRawModelRun: isRawCopilotModelRun(attemptParams),
     // Carries catalog compat so `tools.codeMode.enabled: "auto"` can resolve per model.
     model: attemptParams.model,
+    contextTokenBudget: attemptParams.contextTokenBudget,
     modelId: input.modelId,
     modelProvider: input.modelProvider,
     modelToolsEnabled: true,
@@ -386,6 +387,7 @@ function buildOpenClawCodingToolsOptions(
 
   return {
     agentId: input.agentId,
+    policyAgentId: a.sandboxAgentId ?? input.agentId,
     ...buildEmbeddedAttemptToolRunContext(a),
     exec: {
       ...a.execOverrides,
@@ -420,10 +422,6 @@ function buildOpenClawCodingToolsOptions(
     preparedModelRuntime: a.preparedModelRuntime,
     workspaceDir,
     cwd,
-    // Sandbox parity with PI
-    // (`src/agents/pi-embedded-runner/run/attempt.ts:1238-1262`):
-    // forwarded from the caller (attempt.ts derives it via
-    // `resolveSandboxContext`).
     sandbox,
     spawnWorkspaceDir,
     config: toolSurfaceRuntime?.config ?? a.config,
@@ -438,7 +436,7 @@ function buildOpenClawCodingToolsOptions(
     toolConstructionPlan: toolPlan.codingToolConstructionPlan,
     modelCompat,
     modelApi: model?.api,
-    modelContextWindowTokens: model?.contextWindow,
+    modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
     modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
       workspaceDir,

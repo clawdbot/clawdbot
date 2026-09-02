@@ -19,6 +19,7 @@ import {
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -37,27 +38,20 @@ import {
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./availability.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
-import {
-  AgentHarnessPreflightError,
-  MissingAgentHarnessError,
-  PluginHarnessSourceFinalizationUnsupportedError,
-} from "./errors.js";
+import { AgentHarnessPreflightError, MissingAgentHarnessError } from "./errors.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
 import type { AgentHarnessPolicy } from "./policy.js";
-import {
-  hasBundledCodexAgentHarnessSourceFinalization,
-  listRegisteredAgentHarnesses,
-  resolveAgentHarnessOwnerPluginId,
-} from "./registry.js";
+import { listRegisteredAgentHarnesses, resolveAgentHarnessOwnerPluginId } from "./registry.js";
 import {
   buildAgentHarnessSupportContext,
   compareHarnessSupport,
@@ -136,6 +130,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "sessionId"
   | "sessionKey"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "agentId"
   | "provider"
   | "modelId"
@@ -482,22 +477,7 @@ async function runSelectedAgentHarnessAttempt(
           effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
         );
         return pluginAttempt.runWithHostScope(() =>
-          selection.builtIn
-            ? runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams)
-            : runAgentHarnessLifecycleAttempt(
-                harness,
-                effectiveAttemptParams,
-                (lifecycleParams) => {
-                  const privateCodexExecutor = createPrivateCodexSourceFinalizationExecutor({
-                    harness,
-                    params: lifecycleParams,
-                    onBeforeAgentFinalize: attemptParams.onBeforeAgentFinalize,
-                  });
-                  return privateCodexExecutor
-                    ? privateCodexExecutor(lifecycleParams)
-                    : harness.runAttempt(lifecycleParams);
-                },
-              ),
+          runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams),
         );
       }),
     );
@@ -518,7 +498,6 @@ async function runSelectedAgentHarnessAttempt(
       sessionIdUsed: result.sessionIdUsed,
       sessionKey: internalParams.sessionKey,
       sessionTarget: internalParams.sessionTarget,
-      sessionFile: result.sessionFileUsed ?? internalParams.sessionFile,
       promptError: result.terminal.kind === "failed",
       aborted:
         result.terminal.kind === "aborted" ||
@@ -528,23 +507,10 @@ async function runSelectedAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      tokenBudget: internalParams.contextTokenBudget,
-      contextEngineHostSupport: {
-        id: `agent-harness:${harness.id}`,
-        label: `agent harness "${harness.id}"`,
-        capabilities: harness.contextEngineHostCapabilities ?? [],
-      },
-      harnessId: harness.id,
-      providerId: internalParams.provider,
-      requestedModelId: internalParams.requestedModelId,
-      modelId: internalParams.modelId,
-      fallbackReason: internalParams.fallbackReason,
-      degradedReason: internalParams.degradedReason,
-      config: internalParams.config,
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
-  return publicResult;
+  return copyCoreTtsAttemptResultProvenance(result, publicResult);
 }
 
 function selectPreparedAgentHarness(
@@ -674,84 +640,25 @@ function prepareHarnessFinalizationParams(
 }
 
 function withoutPluginHarnessPrivateState(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
 ): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
   // Keep mutable host-owned state behind one projection for every plugin handoff;
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
+    codeModeRecovery: _codeModeRecovery,
+    compactionCountOwner: _compactionCountOwner,
+    onContextAccountingEvent: _onContextAccountingEvent,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    deferSourceMessageToolDelivery: _deferSourceMessageToolDelivery,
     hostCapabilities: _hostCapabilities,
-    onBeforeAgentFinalize: _onBeforeAgentFinalize,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
-  } = params as EmbeddedRunAttemptParams & {
+  } = params as EmbeddedRunAttemptInternalParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
   return pluginParams;
-}
-
-type PrivateCodexBeforeAgentFinalize = NonNullable<
-  EmbeddedRunAttemptParams["onBeforeAgentFinalize"]
->;
-
-type PrivateCodexRunAttempt = (
-  this: AgentHarness,
-  params: import("./types.js").AgentHarnessAttemptParamsV2,
-  onBeforeAgentFinalize: PrivateCodexBeforeAgentFinalize,
-) => ReturnType<AgentHarness["runAttempt"]>;
-
-/**
- * Hands source-finalization authority to the exact registry-owned Codex
- * runtime without placing it on the public plugin attempt object.
- */
-function createPrivateCodexSourceFinalizationExecutor(params: {
-  harness: AgentHarness;
-  params: import("./types.js").AgentHarnessAttemptParamsV2;
-  onBeforeAgentFinalize?: EmbeddedRunAttemptParams["onBeforeAgentFinalize"];
-}):
-  | ((
-      attemptParams: import("./types.js").AgentHarnessAttemptParamsV2,
-    ) => ReturnType<AgentHarness["runAttempt"]>)
-  | undefined {
-  if (!params.onBeforeAgentFinalize) {
-    return undefined;
-  }
-  if (!hasBundledCodexAgentHarnessSourceFinalization(params.harness)) {
-    // Participation-only Matrix turns do not provide this callback. When the
-    // freshness gate is requested, reject unsupported runtimes before provider
-    // work instead of silently delivering without the configured gate.
-    throw new PluginHarnessSourceFinalizationUnsupportedError(params.harness.id);
-  }
-  const sourceFinalizer = params.onBeforeAgentFinalize;
-  const assertActive = params.params.hostCapabilities.assertActive;
-  const guardedFinalizer: PrivateCodexBeforeAgentFinalize = async (event) => {
-    assertActive();
-    const result = await sourceFinalizer(event);
-    assertActive();
-    if (result.action === "continue" || !result.onAccepted) {
-      return result;
-    }
-    const onAccepted = result.onAccepted;
-    return {
-      ...result,
-      onAccepted: async () => {
-        assertActive();
-        await onAccepted();
-        assertActive();
-      },
-    };
-  };
-  return async (attemptParams) =>
-    // SAFETY: The registry attestation above proves this exact bundled Codex harness implements the private second-argument ABI.
-    await (params.harness.runAttempt as PrivateCodexRunAttempt).call(
-      params.harness,
-      attemptParams,
-      guardedFinalizer,
-    );
 }
 
 function preparePluginHarnessParams(
@@ -863,7 +770,7 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
     : undefined;
 }
 
-function resolvePluginHarnessToolPolicies(
+export function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
 ): ResolvedPluginHarnessToolPolicies {
@@ -871,7 +778,11 @@ function resolvePluginHarnessToolPolicies(
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.config,
-    sessionKey: sandboxSessionKey,
+    agentId: params.agentId,
+    // Compaction can supply an execution owner without its own session key.
+    sessionKey: params.sessionKey ?? (params.agentId ? undefined : sandboxSessionKey),
+    classificationSessionKey: sandboxSessionKey,
+    classificationAgentId: params.sandboxAgentId,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({

@@ -44,9 +44,6 @@ type FixtureOverrides = {
   flushPartialAssistantText?: () => void;
   getBeforeAgentFinalizeRevisionEntryId?: () => string | undefined;
   getBeforeAgentFinalizeRevisionReason?: () => string | undefined;
-  getBeforeAgentFinalizeRevisionDisableTools?: () => boolean;
-  getBeforeAgentFinalizeRevisionAccepted?: () => (() => Promise<void> | void) | undefined;
-  getBeforeAgentFinalizeDiscarded?: () => boolean;
   repairedRejectedProviderReplay?: boolean;
   runAbortController?: AbortController;
   sessionManager?: SettledInput["prepared"]["sessionRuntime"]["sessionManager"];
@@ -81,12 +78,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
     overrides.getBeforeAgentFinalizeRevisionReason ?? (() => "revision changed");
   const getBeforeAgentFinalizeRevisionEntryId =
     overrides.getBeforeAgentFinalizeRevisionEntryId ?? (() => undefined);
-  const getBeforeAgentFinalizeRevisionDisableTools =
-    overrides.getBeforeAgentFinalizeRevisionDisableTools ?? (() => false);
-  const getBeforeAgentFinalizeRevisionAccepted =
-    overrides.getBeforeAgentFinalizeRevisionAccepted ?? (() => undefined);
-  const getBeforeAgentFinalizeDiscarded =
-    overrides.getBeforeAgentFinalizeDiscarded ?? (() => false);
   const flushPartialAssistantText = overrides.flushPartialAssistantText ?? vi.fn();
   const unsubscribe = vi.fn();
   const subscription = {
@@ -132,7 +123,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
           activeSession,
           clientToolCallSlots: [],
           coreReadAuthorized: true,
-          getCodeModeReconciliationCandidate: vi.fn(() => false),
+          getCodeModeRecoveryCandidate: vi.fn(() => undefined),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
           setCodeModeReconciliationReadAuthorized: vi.fn(),
@@ -210,9 +201,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
         stopAcceptingSteerMessages: vi.fn(),
         getBeforeAgentFinalizeRevisionReason,
         getBeforeAgentFinalizeRevisionEntryId,
-        getBeforeAgentFinalizeRevisionDisableTools,
-        getBeforeAgentFinalizeRevisionAccepted,
-        getBeforeAgentFinalizeDiscarded,
       },
       timeout: {
         getRunAbortDeadlineAtMs: () => 123,
@@ -327,6 +315,86 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     expect(mocks.settleStream).toHaveBeenCalledOnce();
   });
 
+  it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const promptId = sessionManager.appendMessage({
+      role: "user",
+      content: "Original request",
+      timestamp: 1,
+    });
+    const rejectedId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Rejected first answer" }],
+      stopReason: "stop",
+      timestamp: 2,
+    } as never);
+    sessionManager.appendCustomEntry("trailing-metadata", { source: "hook" });
+    sessionManager.appendCompaction("Summary including rejected answer", promptId, 100);
+    const originalMessages = sessionManager.buildSessionContext().messages;
+    const activeSession = {
+      agent: { state: { messages: originalMessages } },
+      getActiveToolNames: vi.fn(() => ["read"]),
+      sessionId: "active-session",
+    };
+    const fixture = createFixture({
+      activeSession: activeSession as never,
+      sessionManager: sessionManager as never,
+      repairedRejectedProviderReplay: false,
+      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
+    });
+    const settledStream = {
+      promptError: null,
+      promptErrorSource: null,
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: originalMessages,
+      sessionIdUsed: "session-1",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    };
+    mocks.settleStream.mockImplementation(async () => {
+      expect(activeSession.agent.state.messages).toBe(originalMessages);
+      expect(sessionManager.getLeafId()).toBe(promptId);
+      return settledStream;
+    });
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    const retryMessages = sessionManager.buildSessionContext().messages;
+    const retryTranscript = JSON.stringify(retryMessages);
+    expect(retryTranscript).not.toContain("Rejected first answer");
+    expect(retryTranscript).not.toContain("Summary including rejected answer");
+    const revisedText = retryTranscript.includes("Rejected first answer")
+      ? "NO_REPLY"
+      : "Authoritative revised answer";
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: revisedText }],
+      stopReason: "stop",
+      timestamp: 3,
+    } as never);
+    expect(revisedText).toBe("Authoritative revised answer");
+    expect(JSON.stringify(sessionManager.buildSessionContext().messages)).toContain(
+      "Authoritative revised answer",
+    );
+    expect(sessionManager.getEntries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: rejectedId }),
+        expect.objectContaining({ type: "custom", customType: "trailing-metadata" }),
+        expect.objectContaining({ type: "compaction" }),
+      ]),
+    );
+  });
+
   it("settles the stream before publishing state and running after-turn work", async () => {
     const pendingError = new Error("pending event failed");
     const reason = vi
@@ -377,7 +445,8 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
     expect(mocks.settleStream).toHaveBeenCalledWith(
       expect.objectContaining({
-        runAbortDeadlineAtMs: 123,
+        getRunAbortDeadlineAtMs:
+          fixture.input.preparedStreamRuntime.timeout.getRunAbortDeadlineAtMs,
         shouldFlushForContextEngine: true,
       }),
     );

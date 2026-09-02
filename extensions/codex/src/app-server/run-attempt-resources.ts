@@ -6,6 +6,7 @@ import {
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
@@ -33,20 +34,18 @@ import {
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
-import { shouldEnableCodexTurnLocalFinalization } from "./turn-local-finalization.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
   const { runtime, attemptTools } = context;
-  const { effectiveRuntimeProviderId, effectiveRuntimeModelId } = runtime;
   const { connection, hookChannelId } = runtime;
   const {
     appServer,
     params,
     effectiveCwd,
     sessionAgentId,
-    sandboxSessionKey,
+    contextSessionKey,
     runAbortController,
     sandbox,
     options,
@@ -103,7 +102,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     emitCodexNativePreToolUseFailureDiagnostic({
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       signal: runAbortController.signal,
       failure,
@@ -231,31 +230,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   });
   const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
-  const turnLocalBeforeAgentFinalize =
-    params.operation !== "settled-tool-finalization" &&
-    shouldEnableCodexTurnLocalFinalization({
-      callback: params.onBeforeAgentFinalize,
-      revisionAttempt: params.beforeAgentFinalizeRevisionAttempts ?? 0,
-      ...(params.maxBeforeAgentFinalizeRevisions !== undefined
-        ? { maxRevisionAttempts: params.maxBeforeAgentFinalizeRevisions }
-        : {}),
-    })
-      ? params.onBeforeAgentFinalize
-      : undefined;
-  const nativeHookRelayEventsForAttempt =
-    options.nativeHookRelay?.enabled === false && turnLocalBeforeAgentFinalize
-      ? (["before_agent_finalize"] as const)
-      : nativeHookRelayEvents;
   const buildNativeHookRelayFinalConfigPatch = (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
     if (params.pluginHarnessToolPolicyRestricted === true) {
-      if (turnLocalBeforeAgentFinalize) {
-        throw new Error(
-          "Codex native Stop hooks are required for the turn-local finalization gate",
-        );
-      }
       state.nativeHookRelay = undefined;
       return {
         configPatch: buildCodexNativeHookRelayDisabledConfig(),
@@ -270,11 +249,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
           ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
           : undefined,
-      events: nativeHookRelayEventsForAttempt,
+      events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       config: params.config,
+      autoApproveMcpTools: shouldAutoApproveCodexAppServerApprovals(appServer),
+      projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
       runId: params.runId,
       channelId: hookChannelId,
       ...(requester ? { requester } : {}),
@@ -292,13 +273,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
-      ...(turnLocalBeforeAgentFinalize ? { turnLocalBeforeAgentFinalize } : {}),
-      turnLocalProvider: effectiveRuntimeProviderId,
-      turnLocalModel: effectiveRuntimeModelId,
-      turnLocalRevisionAttempt: params.beforeAgentFinalizeRevisionAttempts ?? 0,
-      ...(params.maxBeforeAgentFinalizeRevisions !== undefined
-        ? { turnLocalMaxRevisionAttempts: params.maxBeforeAgentFinalizeRevisions }
-        : {}),
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {
@@ -314,10 +288,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
-            events: nativeHookRelayEventsForAttempt,
+            events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-            clearOmittedEvents: options.nativeHookRelay?.enabled === false,
-            authoritativeBeforeAgentFinalize: turnLocalBeforeAgentFinalize !== undefined,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()

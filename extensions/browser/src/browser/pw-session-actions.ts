@@ -96,7 +96,7 @@ export function refLocator(page: Page, ref: string) {
       );
     }
     const scope = state?.roleRefsFrame ?? page;
-    if (!isRoleRef && info.domMarker) {
+    if (info.domMarker) {
       return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
     }
     // Playwright omits empty names and names over 900 UTF-16 units from ARIA text.

@@ -19,6 +19,7 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
@@ -117,6 +118,7 @@ export function createApplicationGateway(
     sessionKey: settings.sessionKey,
     lastError: null,
     lastErrorCode: null,
+    lastErrorAuthReason: null,
     selfUser: null,
   };
   let client: GatewayBrowserClient | null = null;
@@ -457,6 +459,7 @@ export function createApplicationGateway(
             selfUser: null,
             lastError: null,
             lastErrorCode: null,
+            lastErrorAuthReason: null,
           });
           const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
           if (targetBuildId) {
@@ -507,6 +510,7 @@ export function createApplicationGateway(
           sessionKey,
           lastError: null,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
           selfUser: resolveSelfPresenceUser(
             readPresenceEntries(hello.snapshot) ?? [],
             nextClient.instanceId,
@@ -573,6 +577,7 @@ export function createApplicationGateway(
               ? formatUiError(error.message)
               : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
           lastErrorCode: startupPending ? null : lastErrorCode,
+          lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });
       },
       onGap: ({ expected, received }) => {
@@ -583,6 +588,7 @@ export function createApplicationGateway(
           ...snapshot,
           lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
           lastErrorCode: null,
+          lastErrorAuthReason: null,
         });
         if (isCurrentClient(nextClient)) {
           connect();
@@ -619,6 +625,7 @@ export function createApplicationGateway(
       sessionKey: nextSessionKey,
       lastError: null,
       lastErrorCode: null,
+      lastErrorAuthReason: null,
     });
     if (isCurrentClient(nextClient)) {
       nextClient.start();
@@ -671,6 +678,7 @@ export function createApplicationGateway(
         selfUser: null,
         lastError: null,
         lastErrorCode: null,
+        lastErrorAuthReason: null,
       });
     },
     subscribe: (listener) => {

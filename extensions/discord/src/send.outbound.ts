@@ -71,6 +71,8 @@ type DiscordSendOpts = {
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
   /** @internal Refresh durable custody immediately before Discord REST I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before Discord REST I/O. */
+  assertPlatformSendAuthorized?: () => void;
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -94,6 +96,7 @@ async function sendDiscordThreadTextChunks(params: {
   allowedMentions?: DiscordAllowedMentions;
   onResult?: DiscordSendProgress;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }): Promise<void> {
   for (const chunk of params.chunks) {
     await sendDiscordText({
@@ -109,6 +112,7 @@ async function sendDiscordThreadTextChunks(params: {
       maxChars: params.maxChars,
       onResult: params.onResult,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
     });
   }
 }
@@ -256,6 +260,7 @@ export async function sendMessageDiscord(
       threadRes = (await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
+          opts.assertPlatformSendAuthorized?.();
           return createThread<{ id: string; message?: { id: string; channel_id: string } }>(
             rest,
             channelId,
@@ -323,6 +328,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           onResult: reportResult,
           onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
         await sendDiscordThreadTextChunks({
           rest,
@@ -337,6 +343,7 @@ export async function sendMessageDiscord(
           allowedMentions: opts.allowedMentions,
           onResult: reportResult,
           onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
       } else {
         await sendDiscordThreadTextChunks({
@@ -352,6 +359,7 @@ export async function sendMessageDiscord(
           allowedMentions: opts.allowedMentions,
           onResult: reportResult,
           onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
       }
     } catch (err) {
@@ -400,6 +408,7 @@ export async function sendMessageDiscord(
         maxChars: textLimit,
         onResult: reportResult,
         onPlatformSendDispatch: opts.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       });
     } else {
       result = await sendDiscordText({
@@ -418,6 +427,7 @@ export async function sendMessageDiscord(
         maxChars: textLimit,
         onResult: reportResult,
         onPlatformSendDispatch: opts.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       });
     }
   } catch (err) {
@@ -510,6 +520,7 @@ async function resolveDiscordStructuredSendContext(
       const result = (await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
+          opts.assertPlatformSendAuthorized?.();
           return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
             body,
           });

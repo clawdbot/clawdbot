@@ -17,6 +17,7 @@ import {
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -96,11 +97,13 @@ describe("runtime postbuild static assets", () => {
     const payload = expectNoNodeFsScans<{
       outputs: string[];
       sources: string[];
+      packageOutputs: string[];
     }>(`
       const assets = await import("./scripts/lib/static-extension-assets.mts");
       return {
         outputs: assets.listStaticExtensionAssetOutputs(),
         sources: assets.listStaticExtensionAssetSources(),
+        packageOutputs: assets.listStaticExtensionAssetOutputs({ includeExternalPlugins: true }),
       };
     `);
 
@@ -108,7 +111,6 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
-      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
@@ -119,7 +121,8 @@ describe("runtime postbuild static assets", () => {
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
     );
     expect(payload.sources).not.toContain("extensions/diffs/assets/viewer-runtime.js");
-    expect(payload.sources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
+    expect(payload.sources).not.toContain("extensions/discord/assets/embedded-app-sdk.mjs");
+    expect(payload.packageOutputs).toContain("dist/extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
   });
 
@@ -304,11 +307,19 @@ describe("runtime postbuild static assets", () => {
       const params = {
         chunks: [{ dest: sentinelDest, contents: "selected root only\n" }],
         cwd: rootDir,
-        env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+        env: {
+          OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+          OPENCLAW_CONTROL_UI_BUILD_ID: "source-runtime-build",
+        },
         timings: false,
       };
       runRuntimePostBuild(params);
 
+      expect(
+        readBuildIdFromBuildInfoForModuleUrl(
+          pathToFileURL(path.join(rootDir, "dist/entry.js")).href,
+        ),
+      ).toBe("source-runtime-build");
       await expect(
         fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
       ).resolves.toBe("<html></html>\n");

@@ -234,31 +234,6 @@ describe("follow-up delivery channel boundary", () => {
     ).toEqual([{ text: "first answer", replyToId: "111.000" }]);
   });
 
-  it("prefers the queued turn's retained source dispatcher over generic routing or a later callback", async () => {
-    const turn = createTurn({ messageProvider: "matrix", originatingChannel: "matrix" });
-    const retainedDeliver = vi.fn(async () => "delivered" as const);
-    turn.queued.queuedSourceReplyDelivery = {
-      deliver: retainedDeliver,
-      presentationOptions: {},
-    };
-    const latestOnBlockReply = vi.fn(async () => {});
-
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads: [{ text: "queued matrix final" }] },
-      turn,
-      defaults: createDefaults(latestOnBlockReply),
-      runId: "queued-run",
-      runFollowup: vi.fn(async () => {}),
-    });
-
-    expect(retainedDeliver).toHaveBeenCalledWith(
-      { text: "queued matrix final" },
-      { kind: "final", runId: "queued-run" },
-    );
-    expect(channelState.deliver).not.toHaveBeenCalled();
-    expect(latestOnBlockReply).not.toHaveBeenCalled();
-  });
-
   it("emits one safe cross-channel error when a terminal payload fails after status delivery", async () => {
     const onBlockReply = await deliverBatch({
       messageProvider: "discord",

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
+import { isRuntimeCompactionDelegate } from "./delegate.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   listContextEngineQuarantines,
@@ -152,6 +153,13 @@ describe("context-engine host parameter projection", () => {
       runtimeContext: { tokenBudget: 1000 },
       abortSignal,
     });
+  });
+
+  it("preserves native compaction watchdog ownership in logical-turn resolution", async () => {
+    const resolution = await resolveLogicalTurnContextEngines();
+
+    // oxlint-disable-next-line typescript/unbound-method -- the identity predicate never invokes compact.
+    expect(isRuntimeCompactionDelegate(resolution.fallback.engine.compact)).toBe(true);
   });
 
   it("projects host parameters on fresh logical-turn engines", async () => {

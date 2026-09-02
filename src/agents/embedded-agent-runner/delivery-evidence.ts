@@ -60,16 +60,7 @@ function collectSourceReplyFinalMarkers(value: unknown): boolean[] {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return [];
     }
-    const payload = entry as {
-      hostFinalDeferred?: unknown;
-      sourceReplyFinal?: unknown;
-    };
-    // A host-final payload is output awaiting channel delivery, not evidence
-    // that the message tool already completed the source reply.
-    if (payload.hostFinalDeferred === true) {
-      return [];
-    }
-    const marker = payload.sourceReplyFinal;
+    const marker = (entry as { sourceReplyFinal?: unknown }).sourceReplyFinal;
     return typeof marker === "boolean" ? [marker] : [];
   });
 }
@@ -524,19 +515,9 @@ function hasGranularMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence)
 export function hasCommittedSourceReplyDeliveryEvidence(
   result: SourceReplyDeliveryEvidence,
 ): boolean {
-  const deliveredPayloads = Array.isArray(result.messagingToolSourceReplyPayloads)
-    ? result.messagingToolSourceReplyPayloads.filter(
-        (payload) =>
-          !payload ||
-          typeof payload !== "object" ||
-          Array.isArray(payload) ||
-          // SAFETY: The preceding short-circuit guards narrow payload to a non-array object before this optional field read.
-          (payload as { hostFinalDeferred?: unknown }).hostFinalDeferred !== true,
-      )
-    : result.messagingToolSourceReplyPayloads;
   return (
     result.didDeliverSourceReplyViaMessageTool === true ||
-    hasVisibleAgentPayload({ payloads: deliveredPayloads })
+    hasVisibleAgentPayload({ payloads: result.messagingToolSourceReplyPayloads })
   );
 }
 

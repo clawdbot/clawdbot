@@ -13,7 +13,7 @@ Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
-the OpenClaw command handler, and `/status` plus `/unfocus` stay local whenever
+the OpenClaw command handler, and `/status` plus `/session` stay local whenever
 command handling is enabled for the surface.
 
 ## Three command types
@@ -26,8 +26,8 @@ command handling is enabled for the surface.
   <Card title="Directives" icon="sliders">
     `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`,
     `/exec`, `/model`, `/queue` — stripped from the message before the model
-    sees it. Persist session settings when sent alone; act as inline hints
-    when sent with other text.
+    sees it. Most persist session settings when sent alone; `/exec` security
+    and approval options apply only to their message.
   </Card>
   <Card title="Inline shortcuts" icon="bolt">
     `/help`, `/commands`, `/status`, `/whoami` — run immediately and are
@@ -44,6 +44,10 @@ command handling is enabled for the surface.
       are removed. Text with no recognized directive is unchanged.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement.
+      `/exec security=... ask=...` is the exception: these options apply only
+      to the current message and never change later turns. Include them with
+      the task; use [session permission modes](/gateway/permission-modes) for
+      session-wide policy. `/exec host=... node=...` still persists placement.
     - In **normal chat** messages with other text, they act as inline hints and
       do **not** persist session settings.
       Model selection is the exception: an authorized inline `/model` or
@@ -156,13 +160,17 @@ An applicable `commands.allowFrom` policy remains authoritative: a denied
 sender or an explicitly empty list cannot fall back to channel admission.
 Reset access does not grant other command or owner-only authority. Internal
 Gateway callers with explicit scopes still need `operator.admin` to reset.
+When both the request and reply stay in WebChat, rejected `/new` and `/reset`
+commands show a permission denial. A denied command does not perform the
+requested reset or run its follow-up text; normal idle/daily rollover still
+applies. Ask your Gateway administrator to reset the session, or send your
+message without the command.
 
 ## Command list
 
 Commands come from three sources:
 
 - **Core built-ins:** `src/auto-reply/commands-registry.shared.ts`
-- **Generated dock commands:** `src/auto-reply/commands-registry.data.ts`
 - **Plugin commands:** plugin `registerCommand()` calls
 
 Availability depends on config flags, channel surface, and installed/enabled
@@ -187,6 +195,11 @@ plugins.
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 
+    HTML conversation cards omit messages marked hidden. The sidebar's **All**
+    filter includes these records with a **[hidden]** label for debugging.
+    Message counts describe the raw archive. The HTML file and its JSONL download
+    still contain hidden records; hiding a message does not redact the export.
+
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
       dashboard session, except when `session.dmScope: "main"` is configured
@@ -207,8 +220,8 @@ plugins.
     | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
-    | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
-    | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
+    | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
+    | `/login [codex\|openai]` | Pair a Codex or OpenAI login from a private chat or Web UI session. Owner/admin only |
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
@@ -282,8 +295,7 @@ plugins.
     | --- | --- |
     | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
     | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
-    | `/focus <target>` | Bind the current Discord thread or Telegram topic to a session target |
-    | `/unfocus` | Remove the current thread binding |
+    | `/session unbind` | Detach the current conversation without closing its agent session |
     | `/agents` | List thread-bound agents for the current session |
   </Accordion>
 
@@ -309,21 +321,6 @@ plugins.
   </Accordion>
 </AccordionGroup>
 
-### Dock commands
-
-Dock commands switch the active session's reply route to another linked channel.
-See [Channel docking](/concepts/channel-docking) for setup and troubleshooting.
-
-Generated from channel plugins with native-command support:
-
-- `/dock-discord` (alias: `/dock_discord`)
-- `/dock-mattermost` (alias: `/dock_mattermost`)
-- `/dock-slack` (alias: `/dock_slack`)
-- `/dock-telegram` (alias: `/dock_telegram`)
-
-Dock commands require `session.identityLinks`. The source sender and target peer
-must be in the same identity group.
-
 ### Bundled plugin commands
 
 | Command                                                                             | Description                                                                                                                                                                                    |
@@ -331,8 +328,9 @@ must be in the same identity group.
 | `/dreaming [on\|off\|status\|help]`                                                 | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
 | `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                             | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
 | [`/voice`](/nodes/talk#choose-a-talk-voice-from-chat) `status\|list\|set <voiceId>` | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
-| `/card ...`                                                                         | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
 | `/codex <action> ...`                                                               | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
+
+LINE-only: `/card ...` (rich card presets; see [LINE](/channels/line))
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 
@@ -510,6 +508,8 @@ the source and permits replacement of an existing install; it does not bypass
 are printed informationally; blocked releases remain non-installable.
 Marketplace, linked, and pinned installs remain shell-only.
 
+`/plugins inspect <child>` (also `show` or `get`) and `/plugins inspect all` include the shared package install metadata for multi-entry plugins. Inspection returns `install: null` when package ownership is missing or ambiguous, and preserves its runtime capability report.
+
 When `/plugins install` or `/plugins enable` requires capability consent, it
 returns the plugin's declared capabilities and an exact retry command. Review
 that reply, then rerun with `--accept-capabilities`:
@@ -550,8 +550,8 @@ Unlike a normal message:
 - Does **not** change future session context.
 - Is not written to transcript history.
 
-In the Control UI, `/btw` and `/side` open the session rail and ask its
-read-only companion instead of starting the detached BTW path. The TUI and
+In the Control UI, `/btw` and `/side` open Side chat instead of starting the
+detached BTW path. The TUI and
 external-channel behavior above is unchanged.
 
 See [BTW side questions](/tools/btw) for the full behavior.
@@ -580,7 +580,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
-    - Unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text.
+    - On external channels, unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text. Reset denials show a permission reply only when the request and reply stay in WebChat.
 
   </Accordion>
   <Accordion title="Argument notes">

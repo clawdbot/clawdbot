@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   DESKTOP_OBSERVE_PATH,
   handleDesktopObserveUpgrade,
@@ -16,6 +17,7 @@ const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(cleanup.splice(0).map((run) => run()));
+  vi.useRealTimers();
 });
 
 describe("worker desktop observer tokens", () => {
@@ -43,13 +45,10 @@ async function createProxyHarness(
   const root = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-desktop-observe-"));
   const localSocketPath = path.join(root, "desktop.sock");
   let desktopPeer: net.Socket | undefined;
-  let resolvePeer: (socket: net.Socket) => void = () => {};
-  const peerConnected = new Promise<net.Socket>((resolve) => {
-    resolvePeer = resolve;
-  });
+  const peerConnected = createDeferred<net.Socket>();
   const server = net.createServer((socket) => {
     desktopPeer = socket;
-    resolvePeer(socket);
+    peerConnected.resolve(socket);
   });
   cleanup.push(async () => {
     desktopPeer?.destroy();
@@ -108,7 +107,13 @@ async function createProxyHarness(
     ws.once("open", resolve);
     ws.once("error", reject);
   });
-  return { closeObserver, desktopPeer: await peerConnected, observerUrl: ws.url, release, ws };
+  return {
+    closeObserver,
+    desktopPeer: await peerConnected.promise,
+    observerUrl: ws.url,
+    release,
+    ws,
+  };
 }
 
 function readSocketBytes(socket: net.Socket, byteLength: number): Promise<Buffer> {
@@ -141,7 +146,32 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
   });
 }
 
-describe("worker desktop observer proxy", () => {
+describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
+  it("keeps an idle observer alive without adding bytes to RFB and retires on owner close", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const harness = await createProxyHarness({ control: true });
+    const pings: Buffer[] = [];
+    const onDesktopData = vi.fn();
+    harness.ws.on("ping", (data) => pings.push(data));
+    harness.desktopPeer.on("data", onDesktopData);
+
+    vi.advanceTimersByTime(25_000);
+    await expect.poll(() => pings.length).toBe(1);
+    vi.advanceTimersByTime(25_000);
+    await expect.poll(() => pings.length).toBe(2);
+    expect(onDesktopData).not.toHaveBeenCalled();
+
+    const closed = new Promise<number>((resolve) => {
+      harness.ws.once("close", resolve);
+    });
+    harness.closeObserver(1012, "desktop tunnel closed");
+    await expect(closed).resolves.toBe(1012);
+    expect(harness.release).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(25_000);
+    expect(pings).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("clears the credential-bearing token timer when the token is consumed", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");

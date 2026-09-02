@@ -239,7 +239,7 @@ describe("Codex agent harness supports()", () => {
     expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });
 
-  it.each(["gpt-future", "umbreon-latest"])(
+  it.each(["gpt-future", "test-next-model"])(
     "lets explicitly selected Codex discover %s with its own account",
     (modelId) => {
       expect(
@@ -256,7 +256,7 @@ describe("Codex agent harness supports()", () => {
     },
   );
 
-  it.each(["gpt-future", "umbreon-latest"])(
+  it.each(["gpt-future", "test-next-model"])(
     "lets explicit Codex discovery of %s run before auth has been prepared",
     (modelId) => {
       expect(

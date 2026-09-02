@@ -34,8 +34,9 @@ import {
 import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
-  isExplicitlyNonVisibleDelivery,
-  isReplyDispatchProvenInvisible,
+  REPLY_DISPATCH_OUTCOME_COUNTS,
+  resolveReplyDispatchDeliveryOutcome,
+  shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
 import {
@@ -115,28 +116,6 @@ const replyDispatcherPreparers = new WeakMap<
     normalize: (kind: ReplyDispatchKind, payload: ReplyPayload) => NormalizeReplyOutcome;
   }
 >();
-type DeferredReplyDispatcherFactory = (retainedSourceCanDeliver: () => boolean) => ReplyDispatcher;
-
-const deferredReplyDispatcherFactories = new WeakMap<
-  ReplyDispatcher,
-  DeferredReplyDispatcherFactory
->();
-const retainedSourceCanDeliverByDispatcher = new WeakMap<ReplyDispatcher, () => boolean>();
-
-/**
- * Capture a source dispatcher's delivery pipeline for later queue-owned work.
- *
- * Each factory invocation creates a newly tracked dispatcher. It retains the
- * source transport, normalization, and current before-delivery stages without
- * reusing the foreground dispatcher's completed pending lifecycle. Foreground
- * idle/settled callbacks are deliberately excluded; queued presentation owns
- * its own explicit admission/settlement lifecycle.
- */
-export function captureDeferredReplyDispatcherFactory(
-  dispatcher: ReplyDispatcher,
-): DeferredReplyDispatcherFactory | undefined {
-  return deferredReplyDispatcherFactories.get(dispatcher);
-}
 
 /** Associate this turn's finalized prompt with its exact dispatcher without changing the SDK. */
 export function bindReplyDispatcherConversationContext(
@@ -452,17 +431,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
         }
       }
-      // Deferred source delivery can outlive every hook above. Revalidate its
-      // exact owner after all awaited work, at the final provider-I/O boundary.
-      if (retainedSourceCanDeliverByDispatcher.get(dispatcher)?.() === false) {
-        if (custody) {
-          await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "suppressed", [
-            "queued",
-          ]);
-        }
-        await notifyBeforeDeliverCancelled(payload, info);
-        return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
-      }
       deliveryStarted = true;
       const result = await options.deliver(deliverPayload, info);
       const finalization =
@@ -479,7 +447,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            return isExplicitlyNonVisibleDelivery(outcome) ? "delivered-not-visible" : "delivered";
+            return resolveReplyDispatchDeliveryOutcome(outcome);
           } catch {
             await settleCustody("unknown");
             return "failed-deliver";
@@ -580,7 +548,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       try {
         const attempt = await delivery;
         deliveryOutcome = await attempt.settlement;
-        if (deliveryFallback && isReplyDispatchProvenInvisible(deliveryOutcome)) {
+        if (deliveryFallback && shouldRetryReplyDispatch(deliveryOutcome)) {
           const fallbackAttempt = await startSerializedDelivery(
             deliveryFallback,
             dispatchInfo,
@@ -588,18 +556,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           );
           deliveryOutcome = await fallbackAttempt.settlement;
         }
-        const counts = settledCounts[kind];
-        if (deliveryOutcome === "delivered") {
-          counts.delivered += 1;
-        } else if (deliveryOutcome === "delivered-not-visible") {
-          counts.deliveredNotVisible += 1;
-        } else if (deliveryOutcome === "cancelled") {
-          counts.cancelled += 1;
-        } else if (deliveryOutcome === "failed-before-deliver") {
-          counts.failedBeforeSend += 1;
-        } else {
-          counts.failedAfterSend += 1;
-        }
+        settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
       } catch (err: unknown) {
         settledCounts[kind].failedBeforeSend += 1;
         try {
@@ -691,17 +648,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   replyDispatcherPreparers.set(dispatcher, {
     owner: dispatcher,
     normalize: (kind, payload) => normalizeForDispatch(kind, payload, true),
-  });
-  deferredReplyDispatcherFactories.set(dispatcher, (retainedSourceCanDeliver) => {
-    const deferredDispatcher = createReplyDispatcher({
-      ...options,
-      beforeDeliver,
-      // A deferred queued delivery is not another foreground run settlement.
-      // Source-owned queued cleanup is carried explicitly in reply options.
-      onIdle: undefined,
-    });
-    retainedSourceCanDeliverByDispatcher.set(deferredDispatcher, retainedSourceCanDeliver);
-    return deferredDispatcher;
   });
   return dispatcher;
 }

@@ -111,7 +111,8 @@ the shell does not grant microphone capture to the WebKitGTK WebView, so
 `getUserMedia` is expected to fail there. Until that lands, open the Gateway's
 Control UI in a regular browser for [Talk mode](/nodes/talk).
 
-Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
+Stable releases built from `main` or their matching `release/YYYY.M.PATCH` branch
+ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
 with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
@@ -244,6 +245,14 @@ Camera devices must be readable by the service user, commonly through the `video
 
 `camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
+## Retired Linux Canvas
+
+The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
+For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
+The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
+Mac and is render-only. These widget surfaces do not restore the former Linux
+Canvas bridge or its A2UI push commands.
+
 ## Install
 
 - [Getting Started](/start/getting-started)
@@ -354,6 +363,6 @@ resource controls (systemd `MemoryMax=`, container memory limits).
 - [Install overview](/install)
 - [Linux server](/vps)
 - [ChromeOS (Crostini)](/platforms/chromeos)
-- [Raspberry Pi](/platforms/raspberry-pi)
+- [Raspberry Pi](/install/raspberry-pi)
 - [Gateway runbook](/gateway)
 - [Gateway configuration](/gateway/configuration)

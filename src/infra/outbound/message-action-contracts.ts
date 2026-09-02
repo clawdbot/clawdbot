@@ -117,10 +117,6 @@ export type MessageActionInput = {
   sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  /** Prepare an exact current-source send for automatic host delivery instead of platform I/O. */
-  deferSourceMessageToolDelivery?: boolean;
-  /** @internal Preserves the app-server final/progress intent across canonical target resolution. */
-  deferredSourceReplyFinalIntent?: boolean;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
   inboundEventKind?: InboundEventKind;
@@ -139,7 +135,7 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
-      handledBy: "plugin" | "core" | "internal-source" | "host-final";
+      handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
       normalization?: MessageActionNormalization;
       /** Exact text handed to the direct transport after core normalization and hooks. */
@@ -237,6 +233,24 @@ export function resolveMessageActionOutcome(
       .map(normalizeOptionalString)
       .find(Boolean) ?? `Message ${result.action} failed.`;
   return { ok: false, error };
+}
+
+export function resolveMessageActionMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object check intentionally keeps array and prototype-backed payloads readable.
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  // SAFETY: The nested object check preserves the same permissive payload contract.
+  return normalizeOptionalString((result as Record<string, unknown>).messageId);
 }
 
 export type ResolvedActionContext = {

@@ -1,8 +1,9 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -21,7 +22,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/activity-run-inspector-r6");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("activity-run-inspector-r6");
+  }
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -91,7 +97,6 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

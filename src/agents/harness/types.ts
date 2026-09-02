@@ -97,9 +97,8 @@ type AgentHarnessLegacyAttemptResult = Omit<
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
-  | "deferSourceMessageToolDelivery"
-  | "onBeforeAgentFinalize"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
 >;
@@ -431,6 +430,8 @@ type AgentHarnessCompactionCapability = {
 };
 
 export type AgentHarnessSessionDeletionParams = {
+  /** Present only during the exact host initializer's guarded rollback. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
   agentId: string;
   sessionKey: string;
   sessionId: string;

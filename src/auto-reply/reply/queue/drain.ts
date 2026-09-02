@@ -22,7 +22,9 @@ import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
@@ -40,7 +42,6 @@ import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
-  hasAuthorizedQueuedRoomEventSourceDelivery,
   isFollowupRunAborted,
   isFollowupRunDeferredError,
   retireFollowupRunCancellation,
@@ -326,6 +327,8 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       threadId: run.originatingThreadId,
     }),
     hasPreparedCurrentTurnImages(run),
+    // Approved sources skip the write hook; never carry unstaged input past it.
+    Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
     run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
@@ -364,7 +367,6 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
-    hasAuthorizedQueuedRoomEventSourceDelivery(run),
     execution.taskSuggestionDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
@@ -428,7 +430,26 @@ function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[]
 }
 
 function renderCollectItem(item: FollowupRun, idx: number): string {
-  return renderCollectItemPrompt(item, idx, item.prompt);
+  return renderCollectItemPrompt(
+    item,
+    idx,
+    resolveCollectedSourceText(
+      item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+      item.prompt,
+    ),
+  );
+}
+
+function resolveCollectedSourceText(
+  message: PersistedUserTurnMessage | undefined,
+  fallback: string,
+): string {
+  return message
+    ? (extractTextFromChatContent(message.content, {
+        normalizeText: (text) => text,
+        joinWith: "\n",
+      }) ?? "")
+    : fallback;
 }
 
 function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
@@ -499,8 +520,6 @@ type FollowupRuntimeMetadata = Pick<
   | "channelAdmissionEvidence"
   | "toolsAllow"
   | "disableTools"
-  | "onBeforeAgentFinalize"
-  | "queuedSourceReplyDelivery"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -517,20 +536,23 @@ function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
 }
 
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
-  return (
-    item.currentInboundEventKind === "room_event" ||
-    item.currentInboundAudio === true ||
-    item.onBeforeAgentFinalize !== undefined ||
-    item.queuedSourceReplyDelivery !== undefined
-  );
+  return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
 }
 
-function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
+function buildCollectTranscriptPrompt(
+  items: FollowupRun[],
+  messages?: (PersistedUserTurnMessage | undefined)[],
+): string {
   return buildCollectPrompt({
     title: "[Queued messages while agent was busy]",
     items,
-    renderItem: (item, index) =>
-      renderCollectItemPrompt(item, index, item.transcriptPrompt ?? item.prompt),
+    renderItem: (item, index) => {
+      const message = messages?.[index] ?? item.userTurnTranscriptRecorder?.message;
+      // Staging may redact or rewrite a source. Collection must never restore
+      // its pre-approval text from the queue's display/runtime projection.
+      const text = resolveCollectedSourceText(message, item.transcriptPrompt ?? item.prompt);
+      return renderCollectItemPrompt(item, index, text);
+    },
   });
 }
 
@@ -576,7 +598,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
         ? candidate
         : latest;
     }, undefined);
-    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources);
+    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources, messages);
     const identityHash = createHash("sha256")
       .update(
         JSON.stringify(
@@ -605,6 +627,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
     },
     resolveInput: buildInput,
+    pendingInputSources: transcriptSources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
     target: () => resolveFollowupTranscriptTarget(source),
     errorContext: "collected followup user turn transcript",
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -625,6 +648,7 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
+    item.run.skillLibraryAuthoring !== undefined ||
     hasRuntimeOnlyFollowupMetadata(item)
   );
 }
@@ -743,7 +767,6 @@ function collectRuntimeMetadata(
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
-  const queuedSourceReplyDelivery = authoritySource?.queuedSourceReplyDelivery;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -763,12 +786,6 @@ function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
-    onBeforeAgentFinalize: queuedSourceReplyDelivery
-      ? authoritySource.onBeforeAgentFinalize
-      : items.length === 1
-        ? items[0]?.onBeforeAgentFinalize
-        : undefined,
-    queuedSourceReplyDelivery,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -1131,6 +1148,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
@@ -1150,8 +1168,6 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
-    queuedSourceReplyDelivery: source.queuedSourceReplyDelivery,
-    onBeforeAgentFinalize: source.onBeforeAgentFinalize,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
     ...(source.currentInboundEventKind === "room_event"
@@ -1200,6 +1216,9 @@ async function runSyntheticOverflowSummary(params: {
       provenance: params.source.run.inputProvenance,
     },
     target: () => resolveFollowupTranscriptTarget(params.source),
+    pendingInputSources: params.sources.flatMap(
+      (source) => source.userTurnTranscriptRecorder ?? [],
+    ),
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
@@ -1220,8 +1239,6 @@ async function runSyntheticOverflowSummary(params: {
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
-    onBeforeAgentFinalize: runtimeMetadata.onBeforeAgentFinalize,
-    queuedSourceReplyDelivery: runtimeMetadata.queuedSourceReplyDelivery,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
@@ -1678,8 +1695,9 @@ export function scheduleFollowupDrain(
   // Queued turns re-admit on the generation current at drain time: the detached
   // drain runs outside any ambient prepared-generation scope, so a parked turn
   // never inherits the predecessor run's replaced generation.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+  void runWithGatewayIndependentRootWorkContinuation(
+    () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+    "session:followup-drain",
   ).catch((err: unknown) => {
     if (FOLLOWUP_QUEUES.get(key) === queue && queue.drainOwner === drainOwner) {
       queue.draining = false;

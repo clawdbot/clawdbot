@@ -7,42 +7,30 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
   requireRecord,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const terminalMetadataProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "remote-session-sidebar-metadata",
-);
-const sessionSecondRowProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-status-second-row-implementation",
-);
-const subtitleStabilityProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "sidebar-subtitle-stability",
-);
 
 suite.define(() => {
   it("keeps a running subtitle and row height stable when its session is opened", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(subtitleStabilityProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "sidebar-subtitle-stability"), { recursive: true });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: subtitleStabilityProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -79,7 +67,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
       await expect
         .poll(async () =>
@@ -99,7 +87,10 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
         await secondRow.screenshot({
-          path: path.join(subtitleStabilityProofDir, "01-running-before-open.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+            "01-running-before-open.png",
+          ),
         });
       }
 
@@ -115,14 +106,20 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
         await secondRow.screenshot({
-          path: path.join(subtitleStabilityProofDir, "02-running-after-open.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+            "02-running-after-open.png",
+          ),
         });
       }
     } finally {
       await suite.closeBrowserContext(context);
       if (proofVideo) {
         await proofVideo.saveAs(
-          path.join(subtitleStabilityProofDir, "sidebar-subtitle-stability.webm"),
+          path.join(
+            path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+            "sidebar-subtitle-stability.webm",
+          ),
         );
       }
     }
@@ -130,14 +127,21 @@ suite.define(() => {
 
   it("replaces an intermediate running subtitle with the unread final digest", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(terminalMetadataProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "remote-session-sidebar-metadata"), {
+        recursive: true,
+      });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: terminalMetadataProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -191,13 +195,16 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
       if (captureUiProofEnabled) {
         await page.screenshot({
           fullPage: true,
-          path: path.join(terminalMetadataProofDir, "01-running-subtitle.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
+            "01-running-subtitle.png",
+          ),
         });
       }
       await gateway.setMethodResponse("sessions.list", completed);
@@ -222,7 +229,10 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await page.screenshot({
           fullPage: true,
-          path: path.join(terminalMetadataProofDir, "02-final-reply-subtitle.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
+            "02-final-reply-subtitle.png",
+          ),
         });
       }
       const listRequests = await gateway.getRequests("sessions.list");
@@ -254,7 +264,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const recentRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
@@ -327,14 +337,21 @@ suite.define(() => {
 
   it("keeps session titles on the first line and collapses rows that have no second line", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(sessionSecondRowProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "session-status-second-row-implementation"), {
+        recursive: true,
+      });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: sessionSecondRowProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -398,7 +415,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, plainKey));
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
@@ -406,7 +423,10 @@ suite.define(() => {
       expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
       if (captureUiProofEnabled) {
         await page.locator(".shell-nav").screenshot({
-          path: path.join(sessionSecondRowProofDir, "00-default-hidden-preview.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "session-status-second-row-implementation"),
+            "00-default-hidden-preview.png",
+          ),
         });
       }
       await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
@@ -441,7 +461,10 @@ suite.define(() => {
         if (captureUiProofEnabled) {
           await page.locator(".shell-nav").screenshot({
             animations: "disabled",
-            path: path.join(sessionSecondRowProofDir, `indicators-${colorScheme}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              `indicators-${colorScheme}.png`,
+            ),
           });
         }
       }
@@ -461,11 +484,17 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(sessionSecondRowProofDir, `01-second-row-endcap-${sidebarWidth}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              `01-second-row-endcap-${sidebarWidth}.png`,
+            ),
           });
           await shellNav.screenshot({
             animations: "disabled",
-            path: path.join(sessionSecondRowProofDir, `01-sidebar-${sidebarWidth}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              `01-sidebar-${sidebarWidth}.png`,
+            ),
           });
         }
         badgeSizes.push(
@@ -585,7 +614,10 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await shellNav.screenshot({
           animations: "disabled",
-          path: path.join(sessionSecondRowProofDir, "03-unread-hover.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "session-status-second-row-implementation"),
+            "03-unread-hover.png",
+          ),
         });
       }
       await unreadDot.waitFor({ state: "hidden" });
@@ -623,7 +655,10 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await page.screenshot({
           fullPage: true,
-          path: path.join(sessionSecondRowProofDir, "02-hover-actions.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "session-status-second-row-implementation"),
+            "02-hover-actions.png",
+          ),
         });
       }
       await plainRow.waitFor();
@@ -661,7 +696,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const documentMarker = await page.evaluate(() => {
         const marker = crypto.randomUUID();
         (window as Window & { __openclawAvatarTestDocument?: string })[

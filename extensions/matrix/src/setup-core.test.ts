@@ -226,69 +226,6 @@ describe("matrixSetupAdapter", () => {
     expect(next.channels?.matrix?.accounts?.ops?.dangerouslyAllowNameMatching).toBeUndefined();
   });
 
-  it.each(["groups", "rooms"] as const)(
-    "preserves a pure channel-wide %s turn-taking opt-out during account promotion",
-    (scope) => {
-      const cfg = {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@default:example.org",
-            accessToken: "tok-default",
-            [scope]: {
-              "!quiet:example.org": { turnTaking: false },
-            },
-          },
-        },
-      } as CoreConfig;
-
-      const next = applyOpsAccountConfig(cfg);
-
-      expect(next.channels?.matrix?.[scope]).toEqual({
-        "!quiet:example.org": { turnTaking: false },
-      });
-      expect(next.channels?.matrix?.accounts?.default?.[scope]).toBeUndefined();
-      expectOpsAccount(next);
-    },
-  );
-
-  it.each(["groups", "rooms"] as const)(
-    "splits a mixed channel-wide %s turn-taking opt-out during account promotion",
-    (scope) => {
-      const cfg = {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@default:example.org",
-            accessToken: "tok-default",
-            [scope]: {
-              "!quiet:example.org": {
-                turnTaking: false,
-                requireMention: false,
-                allowBots: true,
-              },
-              "!ordinary:example.org": { requireMention: true },
-            },
-          },
-        },
-      } as CoreConfig;
-
-      const next = applyOpsAccountConfig(cfg);
-
-      expect(next.channels?.matrix?.[scope]).toEqual({
-        "!quiet:example.org": { turnTaking: false },
-      });
-      expect(next.channels?.matrix?.accounts?.default?.[scope]).toEqual({
-        "!quiet:example.org": {
-          requireMention: false,
-          allowBots: true,
-        },
-        "!ordinary:example.org": { requireMention: true },
-      });
-      expectOpsAccount(next);
-    },
-  );
-
   it("reuses an existing raw default-account key during promotion", () => {
     const cfg = {
       channels: {

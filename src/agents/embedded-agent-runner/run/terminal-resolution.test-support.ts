@@ -1,15 +1,16 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { resolveCurrentAttemptAssistant } from "./attempt-terminal-evidence.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 export type TerminalInput = Parameters<typeof resolveEmbeddedRunTerminal>[0];
-export type TerminalInputOverrides = Omit<Partial<TerminalInput>, "runParams"> & {
+type TerminalInputOverrides = Omit<Partial<TerminalInput>, "runParams"> & {
   runParams?: Partial<TerminalInput["runParams"]>;
 };
 
@@ -30,32 +31,38 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-  const profileStore = { version: 1, profiles: {} } as never;
+  const profileStore = { version: 1, profiles: {} };
   const runParams = {
     sessionId: "session:terminal-resolution",
     sessionKey: "agent:main:terminal-resolution",
     runId: "run:terminal-resolution",
     agentDir: "/tmp/openclaw-terminal-resolution",
     workspaceDir: "/tmp/openclaw-terminal-resolution",
+    prompt: "Finish the current turn.",
+    timeoutMs: 1_000,
     ...overrides.runParams,
-  } as TerminalInput["runParams"];
+  } satisfies TerminalInput["runParams"];
   const base = {
     runParams,
     retryState: createEmbeddedRunTerminalRetryState(),
     attempt,
-    attemptAssistant: attempt.currentAttemptAssistant ?? attempt.lastAssistant,
+    attemptAssistant: resolveCurrentAttemptAssistant(attempt),
     activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
     modelApi: "openai-responses",
     executionContract: undefined,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,
-      assistant: attempt.currentAttemptAssistant ?? attempt.lastAssistant,
+      assistant: resolveCurrentAttemptAssistant(attempt),
     }),
     payloadsWithToolMedia: [],
     recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
     finalAssistantVisibleText: undefined,
     finalAssistantRawText: undefined,
-    agentMeta: {} as never,
+    agentMeta: {
+      sessionId: runParams.sessionId,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    },
     attemptToolSummary: undefined,
     failureSignal: undefined,
     maxReasoningOnlyRetryAttempts: 2,
@@ -64,7 +71,6 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
     activePromptPersisted: true,
     activateInternalPrompt: vi.fn(),
-    markOwnedTranscriptRetry: vi.fn(),
     setSuppressNextUserMessagePersistence: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     readTerminalToolPresentation: () => undefined,
@@ -93,4 +99,15 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
   } satisfies TerminalInput;
   return { ...base, ...overrides, runParams };
+}
+
+export async function resolveTerminalText(
+  overrides: TerminalInputOverrides,
+): Promise<string | undefined> {
+  const resolved = await resolveEmbeddedRunTerminal(makeTerminalInput(overrides));
+  expect(resolved.action).toBe("complete");
+  if (resolved.action !== "complete") {
+    throw new Error("expected terminal resolution to complete");
+  }
+  return resolved.result.payloads?.[0]?.text;
 }

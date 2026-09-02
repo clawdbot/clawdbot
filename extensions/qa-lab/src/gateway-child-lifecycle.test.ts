@@ -496,6 +496,59 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("removes isolated runtime state through its boundary after shutdown and artifact preservation", async () => {
+    const { params, pids } = await fixture();
+    const preserveToDir = await makeArtifactDir();
+    const originalRm = fs.rm;
+    const cleanup = vi.fn(async (tempRoot: string) => {
+      expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+      expect((await readArtifacts(preserveToDir))[0]).toContain("QA_GATEWAY_ATTEMPT_1");
+      await originalRm(tempRoot, { recursive: true, force: true });
+    });
+    boundary.create.mockImplementation(async ({ tempRoot }: { tempRoot: string }) => ({
+      prepare: async ({ env }: { env: NodeJS.ProcessEnv }) => ({ env }),
+      accept: async () => ({}),
+      signal: async () => {},
+      markReady: async () => {},
+      markExited: async () => {},
+      cleanupTempRoot: () => cleanup(tempRoot),
+    }));
+    const owner = own({
+      ...params,
+      command: {
+        ...params.command,
+        processBoundary: {
+          kind: "linux-proc-v1",
+          evidenceDir: params.command.tempParentDir,
+          expectedGid: 1,
+          expectedUid: 1,
+          forwardedEnvKeys: [],
+          runtimeArgsPrefix: [],
+          runtimeExecutablePath: process.execPath,
+          terminationRetryTimeoutMs: 45_000,
+        },
+      },
+    });
+    const gateway = await owner.start();
+    pids();
+    const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === gateway.tempRoot) {
+        throw Object.assign(new Error("isolated state belongs to another UID"), { code: "EACCES" });
+      }
+      return originalRm(target, options);
+    });
+    try {
+      await expect(owner.stop({ preserveToDir })).resolves.toEqual({
+        process: "confirmed-stopped",
+        errors: [],
+      });
+      expect(cleanup).toHaveBeenCalledOnce();
+      await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      denied.mockRestore();
+    }
+  });
+
   it("retries failed preservation after confirming process shutdown", async () => {
     const { params, pids } = await fixture();
     const owner = own(params);

@@ -51,13 +51,13 @@ function makeConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
 }
 
 describe("resolveSessionToolsVisibility", () => {
-  it("defaults to tree when unset or invalid", () => {
-    expect(resolveSessionToolsVisibility(makeConfig())).toBe("tree");
+  it("defaults to agent when unset or invalid", () => {
+    expect(resolveSessionToolsVisibility(makeConfig())).toBe("agent");
     expect(
       resolveSessionToolsVisibility({
         tools: { sessions: { visibility: "invalid" } },
       } as unknown as OpenClawConfig),
-    ).toBe("tree");
+    ).toBe("agent");
   });
 
   it("accepts known visibility values case-insensitively", () => {
@@ -70,13 +70,16 @@ describe("resolveSessionToolsVisibility", () => {
 });
 
 describe("resolveEffectiveSessionToolsVisibility", () => {
-  it("clamps to tree in sandbox when sandbox visibility is spawned", () => {
-    const cfg = makeConfig({
-      tools: { sessions: { visibility: "all" } },
-      agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    });
-    expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("tree");
-  });
+  it.each([undefined, "all"] as const)(
+    "clamps %s visibility to tree in sandbox when sandbox visibility is spawned",
+    (visibility) => {
+      const cfg = makeConfig({
+        tools: { sessions: { visibility } },
+        agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+      });
+      expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("tree");
+    },
+  );
 
   it("preserves visibility when sandbox clamp is all", () => {
     const cfg = makeConfig({

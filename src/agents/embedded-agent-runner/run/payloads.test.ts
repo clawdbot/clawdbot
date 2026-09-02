@@ -503,39 +503,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("uses retained host-final payloads as the exact output and suppresses assistant artifacts", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["NO_REPLY"],
-      messagingToolSourceReplyPayloads: [
-        {
-          text: "Prepared answer",
-          mediaUrls: ["https://example.org/proof.png"],
-          hostFinalDeferred: true,
-        },
-        {
-          location: { latitude: 31.778, longitude: 35.235, name: "Jerusalem" },
-          hostFinalDeferred: true,
-        },
-      ],
-      sourceReplyDeliveryMode: "automatic",
-      sessionKey: "agent:main",
-      agentId: "main",
-      runId: "run-host-final",
-    });
-
-    expect(payloads).toEqual([
-      { text: "Prepared answer", mediaUrls: ["https://example.org/proof.png"] },
-      { location: { latitude: 31.778, longitude: 35.235, name: "Jerusalem" } },
-    ]);
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-    expect(JSON.stringify(payloads)).not.toContain("NO_REPLY");
-  });
-
   it("ignores accumulated internal/status text after the final answer", () => {
     const payloads = buildPayloads({
       assistantTexts: [
@@ -595,6 +562,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
       runAborted: true,
+      runStopReason: "aborted",
     });
 
     expectSingleToolErrorPayload(payloads, {
@@ -602,6 +570,25 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       absentDetail: "codex native tool blocked",
     });
   });
+
+  it.each([undefined, true])(
+    "renders an intentional Gateway restart as status with suppressToolErrors=$s",
+    (suppressToolErrors) => {
+      const payloads = buildPayloads({
+        config: { messages: { suppressToolErrors } },
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+          executionStarted: true,
+        },
+        runAborted: true,
+        runStopReason: "restart",
+        toolResultFormat: "markdown",
+      });
+
+      expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
+    },
+  );
 
   it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({

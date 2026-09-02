@@ -8,6 +8,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -167,36 +169,151 @@ class ChatControllerStreamReplayTest {
     }
 
   @Test
+  fun failedTerminalKeepsAcceptedUserUntilHistoryConfirmsIt() = assertFailedTerminalRemainsVisible()
+
+  @Test
+  fun lifecycleErrorBeforeChatTerminalKeepsFailureVisible() = assertFailedTerminalRemainsVisible(priorTerminalEvent = "agent")
+
+  @Test
+  fun sessionTerminalBeforeChatTerminalKeepsFailureVisible() = assertFailedTerminalRemainsVisible(priorTerminalEvent = "sessions.changed")
+
+  @Test
+  fun rekeyedRunFailureRemainsVisibleAfterLifecycleRetirement() = assertFailedTerminalRemainsVisible(priorTerminalEvent = "agent", rekey = true)
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun failedTerminalKeepsAcceptedUserUntilHistoryConfirmsIt() =
+  fun adoptedRunFailureRemainsVisibleAfterLifecycleRetirement() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondChatSend(status = "started")
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList(), inFlightRun = "restored-run" to ""))
       val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
+      assertEquals(1, controller.pendingRunCount.value)
 
-      assertTrue(controller.sendMessageAwaitAcceptance("failed send", "off", emptyList()))
-      val runId = requireNotNull(gateway.lastRunId)
-      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 1, state = "error"))
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"restored-run","seq":1,"stream":"lifecycle","data":{"phase":"error","error":"Preparation failed"}}""",
+      )
+      controller.handleGatewayEvent(
+        "chat",
+        """{"sessionKey":"main","runId":"restored-run","seq":2,"state":"error","errorMessage":"Preparation failed"}""",
+      )
       runCurrent()
 
       assertEquals(0, controller.pendingRunCount.value)
-      assertTrue(transcript(controller).contains("user" to "failed send"))
-      assertEquals("Chat failed", controller.errorText.value)
+      assertEquals("Preparation failed", controller.errorText.value)
+    }
 
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun retiredRunFailureDoesNotOverrideNewerCompletedRun() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondChatSend(status = "started")
+      val controller = newController(gateway)
+      controller.handleGatewayEvent("health", null)
+
+      assertTrue(controller.sendMessageAwaitAcceptance("first", "off", emptyList()))
+      val firstRunId = requireNotNull(gateway.lastRunId)
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$firstRunId","seq":1,"stream":"lifecycle","data":{"phase":"error","error":"Preparation failed"}}""",
+      )
+      assertTrue(controller.sendMessageAwaitAcceptance("second", "off", emptyList()))
+      val secondRunId = requireNotNull(gateway.lastRunId)
       gateway.respondWith(
         "chat.history",
         historyResponse(
           "session-1",
-          listOf(ReplayHistoryMessage("user", "failed send", 1_000, idempotencyKey = "$runId:user")),
+          listOf(
+            ReplayHistoryMessage("user", "first", 1_000, idempotencyKey = "$firstRunId:user"),
+            ReplayHistoryMessage("user", "second", 2_000, idempotencyKey = "$secondRunId:user"),
+            ReplayHistoryMessage("assistant", "second done", 3_000),
+          ),
         ),
       )
-      advanceTimeBy(750)
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", secondRunId, seq = 1, assistantText = "second done"))
       runCurrent()
-      assertEquals(listOf("user" to "failed send"), transcript(controller))
-      assertEquals("Chat failed", controller.errorText.value)
+
+      controller.handleGatewayEvent(
+        "chat",
+        """{"sessionKey":"main","runId":"$firstRunId","seq":2,"state":"error","errorMessage":"Preparation failed"}""",
+      )
+      runCurrent()
+
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.errorText.value)
+      assertEquals(listOf("user" to "first", "user" to "second", "assistant" to "second done"), transcript(controller))
     }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun assertFailedTerminalRemainsVisible(
+    priorTerminalEvent: String? = null,
+    rekey: Boolean = false,
+  ) = runTest {
+    val gateway = ScriptedGateway(json)
+    gateway.respondChatSend(status = "started")
+    var clientRunId: String? = null
+    if (rekey) {
+      gateway.respond("chat.send") { paramsJson ->
+        clientRunId =
+          json
+            .parseToJsonElement(requireNotNull(paramsJson))
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive.content
+        """{"runId":"canonical-run","status":"started"}"""
+      }
+    }
+    gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+    val controller = newController(gateway)
+    controller.handleGatewayEvent("health", null)
+
+    assertTrue(controller.sendMessageAwaitAcceptance("failed send", "off", emptyList()))
+    val runId = if (rekey) "canonical-run" else requireNotNull(gateway.lastRunId)
+    when (priorTerminalEvent) {
+      "agent" -> {
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"main","runId":"$runId","seq":1,"stream":"lifecycle","data":{"phase":"error","error":"Preparation failed"}}""",
+        )
+      }
+
+      "sessions.changed" -> {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"main","agentId":"main","phase":"error","runId":"$runId","session":{"key":"main","agentId":"main","status":"failed","lastRunId":"$runId","lastRunError":"Preparation failed","hasActiveRun":false,"activeRunIds":[]}}""",
+        )
+      }
+    }
+    val terminal =
+      if (priorTerminalEvent == null) {
+        chatTerminalPayload("main", runId, seq = 2, state = "error")
+      } else {
+        """{"sessionKey":"main","runId":"$runId","seq":2,"state":"error","errorMessage":"Preparation failed"}"""
+      }
+    val expectedError = if (priorTerminalEvent == null) "Chat failed" else "Preparation failed"
+    controller.handleGatewayEvent("chat", terminal)
+    runCurrent()
+
+    assertEquals(0, controller.pendingRunCount.value)
+    assertTrue(transcript(controller).contains("user" to "failed send"))
+    assertEquals(expectedError, controller.errorText.value)
+
+    gateway.respondWith(
+      "chat.history",
+      historyResponse(
+        "session-1",
+        listOf(ReplayHistoryMessage("user", "failed send", 1_000, idempotencyKey = "${clientRunId ?: runId}:user")),
+      ),
+    )
+    advanceTimeBy(750)
+    runCurrent()
+    assertEquals(listOf("user" to "failed send"), transcript(controller))
+    assertEquals(expectedError, controller.errorText.value)
+  }
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
@@ -364,11 +481,13 @@ class ChatControllerStreamReplayTest {
       val staleMainGate = CompletableDeferred<Unit>()
       gateway.respond("chat.history") { paramsJson ->
         when (gateway.sessionKeyOf(paramsJson)) {
-          "other" ->
+          "other" -> {
             historyResponse(
               sessionId = "session-other",
               messages = listOf(ReplayHistoryMessage("assistant", "other transcript", 3_000)),
             )
+          }
+
           else -> {
             staleMainGate.await()
             historyResponse(

@@ -1,7 +1,7 @@
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
@@ -9,12 +9,10 @@ import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/works
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import type { AutomaticRoomEventFinalCapability } from "./automatic-room-event-final-capability.js";
 import type { FollowupQueueDisposition, QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import type { QueuedSourceReplyDelivery } from "./source-finalization.types.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -22,17 +20,23 @@ export type ReplySessionBinding = {
   storePath?: string;
 };
 
+export type PendingContinuationSettlement = {
+  statusPayload: ReplyPayload;
+  settle: (statusDelivered: boolean) => Promise<void>;
+};
+
 type InternalReplySessionOptions = {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  /** Host-minted authority for this exact admitted external room-event context. */
-  automaticRoomEventFinalCapability?: AutomaticRoomEventFinalCapability;
+  /** Exact authority-bearing settings captured by Gateway chat admission. */
+  admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   expectedExistingSessionId?: string;
   /** First dispatch only: admission created this exact pinned session before reply initialization. */
   newlyCreatedSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
-  onPendingContinuation?: () => void;
+  /** Defers the child-completion wake until the visible waiting status is delivered. */
+  onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */
   pinExpectedExistingSession?: boolean;
@@ -43,8 +47,6 @@ type InternalReplySessionOptions = {
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Delivers queued replies only through their originating Gateway admission. */
   onQueuedFollowupReplyBatch?: (batch: QueuedFollowupReplyBatch) => Promise<void> | void;
-  /** Exact source owner captured by dispatch for an opted-in queued turn. */
-  queuedSourceReplyDelivery?: QueuedSourceReplyDelivery;
   /** Overrides persisted queue mode for this reply only. */
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
@@ -52,6 +54,7 @@ type InternalReplySessionOptions = {
   skillOverrides?: SessionToolOverrides["skills"];
   /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

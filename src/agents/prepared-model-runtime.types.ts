@@ -49,7 +49,7 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
-  /** Registry value owned by this generation; omitted from read-only/static-catalog builds. */
+  /** Registry value owned by this generation; omitted from read-only builds. */
   pluginRegistry?: PluginRegistry;
   allowGatewaySubagentBinding: boolean;
   /**
@@ -156,6 +156,9 @@ export type PreparedModelRuntimeOwner = {
   provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";
   generation: number;
   needsRefresh: boolean;
+  catalogStale: boolean;
+  /** Completed discovery facts; runtime capability projection belongs to each generation. */
+  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

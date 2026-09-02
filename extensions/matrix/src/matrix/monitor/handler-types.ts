@@ -6,7 +6,6 @@ import type {
   MatrixConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
-  MatrixTurnTakingConfig,
   ReplyToMode,
 } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
@@ -14,10 +13,8 @@ import type {
   resolveMatrixMonitorLiveUserAllowlist,
   MatrixResolvedAllowlistEntry,
 } from "./config.js";
-import type { MatrixHostInboundRuntime } from "./host-inbound-runtime.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "./runtime-api.js";
-import type { MatrixTurnTakingCoordinator } from "./turn-taking-coordinator.js";
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -66,18 +63,9 @@ export type MatrixMonitorHandlerParams = {
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
-  /** Raw channel-level policy; never account-merged. */
-  turnTaking?: MatrixTurnTakingConfig;
-  /** Raw top-level room entries used only for channel-wide turn-taking opt-out. */
-  turnTakingRoomsConfig?: Record<string, MatrixRoomConfig>;
-  needsRoomAliasesForTurnTakingConfig?: boolean;
-  turnTakingCoordinator?: MatrixTurnTakingCoordinator;
-  /** Per-monitor proof cache; encrypted is monotonic and state events update it eagerly. */
-  turnTakingWireEventTypeCache?: Map<string, "m.room.message" | "m.room.encrypted">;
   resolveLiveUserAllowlist?: typeof resolveMatrixMonitorLiveUserAllowlist;
   resolveStorePath?: typeof resolveStorePath;
   createChannelInboundEnvelopeBuilder?: typeof createChannelInboundEnvelopeBuilder;
-  channelInbound?: MatrixHostInboundRuntime;
   finalizeInboundContext?: (ctx: Record<string, unknown>) => unknown;
   resolveHumanDelayConfig?: typeof resolveHumanDelayConfig;
 };

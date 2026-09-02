@@ -43,6 +43,101 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
+  it("omits API-key-only auth rows without model-provider evidence", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "web-search",
+          displayName: "Web Search",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+        },
+        {
+          provider: "web-extract",
+          displayName: "Web Extract",
+          status: "static",
+          profiles: [{ profileId: "extract", type: "api_key", status: "static" }],
+        },
+      ]),
+    });
+    expect(cards).toEqual([]);
+  });
+
+  it.each([true, false])(
+    "keeps environment-only model auth independently of API-key setup support (%s)",
+    (apiKeySupported) => {
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus(
+          [
+            {
+              provider: "model-service",
+              displayName: "Model Service",
+              status: "static",
+              profiles: [],
+              apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+            },
+            {
+              provider: "web-search",
+              displayName: "Web Search",
+              status: "static",
+              profiles: [],
+              apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+            },
+          ],
+          [
+            { provider: "model-service", apiKeySupported, quickApiKeySetup: false },
+            { provider: "unconfigured-model", apiKeySupported: true, quickApiKeySetup: true },
+          ],
+        ),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "model-service",
+        modelCount: 0,
+        apiKeySupported,
+        apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+        credentialProviderIds: ["model-service"],
+      });
+    },
+  );
+
+  it.each(["oauth", "token"] as const)(
+    "keeps auth-only %s profiles, including non-expiring tokens",
+    (type) => {
+      const status = type === "token" ? "static" : "ok";
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            status,
+            profiles: [{ profileId: "primary", type, status, logoutSupported: true }],
+          },
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "static",
+            profiles: [{ profileId: "secondary", type: "api_key", status: "static" }],
+          },
+        ]),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "anthropic",
+        modelCount: 0,
+        profiles: [
+          { profileId: "primary", type, status, logoutSupported: true },
+          { profileId: "secondary", type: "api_key", status: "static" },
+        ],
+        logoutTargets: [{ provider: "anthropic", profileIds: ["primary"] }],
+      });
+    },
+  );
+
   it("keeps catalog providers, including ones whose models are all unavailable", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,

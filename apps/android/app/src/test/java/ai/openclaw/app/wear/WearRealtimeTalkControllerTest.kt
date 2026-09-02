@@ -349,11 +349,15 @@ class WearRealtimeTalkControllerTest {
                 createCount += 1
                 """{"relaySessionId":"relay-$createCount"}"""
               }
+
               "talk.client.toolCall" -> {
                 oldToolStarted.complete(Unit)
                 oldToolResponse.await()
               }
-              else -> """{"ok":true}"""
+
+              else -> {
+                """{"ok":true}"""
+              }
             }
           },
         )
@@ -550,13 +554,22 @@ class WearRealtimeTalkControllerTest {
         testTalkController(
           requestGateway = { method, params, _ ->
             when (method) {
-              "talk.session.create" -> """{"relaySessionId":"relay-1"}"""
-              "talk.client.toolCall" -> toolCallResponse.await()
+              "talk.session.create" -> {
+                """{"relaySessionId":"relay-1"}"""
+              }
+
+              "talk.client.toolCall" -> {
+                toolCallResponse.await()
+              }
+
               "talk.session.submitToolResult" -> {
                 submittedResults += params.orEmpty()
                 """{"ok":true}"""
               }
-              else -> """{"ok":true}"""
+
+              else -> {
+                """{"ok":true}"""
+              }
             }
           },
         )

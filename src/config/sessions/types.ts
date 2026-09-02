@@ -490,8 +490,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
     lastTtsReadLatestAt?: number;
     execHost?: string;
-    execSecurity?: string;
-    execAsk?: string;
     execNode?: string;
     /** Working directory interpreted only by the bound exec node. */
     execCwd?: string;
@@ -599,6 +597,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Explicit authorized immutable library pins; current speakers never replace this selection. */
+    skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
     /**
      * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
@@ -626,6 +626,12 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     name?: string;
     baseRef?: string;
     titleSource: string;
+  };
+  /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
+  transcriptByteCompactionLatch?: {
+    activeBytes: number;
+    sessionId: string;
+    maxBytes: number;
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;

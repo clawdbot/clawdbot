@@ -142,6 +142,35 @@ describe("loadModelProvidersData", () => {
     expect(result.error).toBeNull();
   });
 
+  it("surfaces unavailable auth preparation without discarding configured models", async () => {
+    const unavailable = {
+      code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+      message: "Model authentication status is unavailable. Refresh Models after setup finishes.",
+    };
+    const request = vi.fn(async (method: string) => {
+      switch (method) {
+        case "models.authStatus":
+          return { ts: 1, providers: [], unavailable };
+        case "models.list":
+          return { models: [{ id: "configured", name: "Configured", provider: "test-provider" }] };
+        case "config.get":
+          return { config: {}, hash: "hash" };
+        default:
+          throw new Error(`Unexpected request: ${method}`);
+      }
+    });
+
+    const result = await loadModelProvidersData({ request } as unknown as GatewayBrowserClient, {
+      agentId: "main",
+    });
+
+    expect(result.error).toBe(unavailable.message);
+    expect(result.authStatus).toMatchObject({ unavailable });
+    expect(result.models).toEqual([
+      { id: "configured", name: "Configured", provider: "test-provider" },
+    ]);
+  });
+
   it("degrades an invalid auth-status response without discarding other provider data", async () => {
     const request = vi.fn(async (method: string) => {
       switch (method) {

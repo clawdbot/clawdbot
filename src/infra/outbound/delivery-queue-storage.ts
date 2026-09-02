@@ -414,6 +414,35 @@ export async function reserveDeliveryAttempt(
   });
 }
 
+/** Restore the exact pre-attempt row when lifecycle closure wins before provider dispatch. */
+export function restoreDeliveryAttemptBeforeDispatch(
+  entry: QueuedDelivery,
+  reservedAttemptCount: number,
+  stateDir?: string,
+  claimedAttemptId?: string,
+): void {
+  updateQueuedDelivery(
+    entry.id,
+    stateDir,
+    (current) => {
+      if (current.attemptCount !== reservedAttemptCount) {
+        throw new Error(`Delivery attempt reservation changed before rollback: ${entry.id}`);
+      }
+      return {
+        ...current,
+        attemptCount: entry.attemptCount,
+        availableAt: entry.availableAt,
+        producerClaimId: entry.producerClaimId,
+        platformSendAttemptId: entry.platformSendAttemptId,
+        platformSendStartedAt: entry.platformSendStartedAt,
+        effectiveReplyToId: entry.effectiveReplyToId,
+        recoveryState: entry.recoveryState,
+      };
+    },
+    claimedAttemptId ?? null,
+  );
+}
+
 function updateQueuedDelivery(
   id: string,
   stateDir: string | undefined,

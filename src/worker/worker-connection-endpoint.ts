@@ -12,6 +12,7 @@ import {
 } from "../../packages/gateway-client/src/websocket-transport.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 
 const ENDPOINT_FIELD_MAX_LENGTH = 4_096;
 // JSON needs at most six bytes per UTF-16 code unit (control/lone-surrogate escapes).
@@ -52,16 +53,9 @@ export type WorkerConnectionEndpoint =
       cloudflareAccess?: CloudflareAccessCredentials;
     };
 
-function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => key in value) && Object.keys(value).every((key) => allowed.has(key))
-  );
-}
-
 function parseUnixEndpoint(value: Record<string, unknown>): WorkerConnectionEndpoint | undefined {
   if (
-    !hasExactKeys(value, ["kind", "socketPath"]) ||
+    !hasExactOwnKeys(value, ["kind", "socketPath"]) ||
     value.kind !== "unix" ||
     typeof value.socketPath !== "string" ||
     value.socketPath.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH ||
@@ -81,7 +75,7 @@ function parseWebSocketEndpoint(
       ? normalizeTlsFingerprint(value.tlsFingerprint)
       : undefined;
   if (
-    !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
+    !hasExactOwnKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
     value.kind !== "websocket" ||
     typeof value.url !== "string" ||
     value.url.length > ENDPOINT_FIELD_MAX_LENGTH ||
@@ -125,7 +119,7 @@ function parseCloudflareAccessCredentials(value: unknown): CloudflareAccessCrede
   }
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["clientId", "clientSecret"]) ||
+    !hasExactOwnKeys(value, ["clientId", "clientSecret"]) ||
     typeof value.clientId !== "string" ||
     value.clientId.trim().length === 0 ||
     value.clientId.length > ENDPOINT_FIELD_MAX_LENGTH ||

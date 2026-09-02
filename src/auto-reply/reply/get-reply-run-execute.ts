@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig, resolveAgentRunCwd } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
@@ -40,10 +41,8 @@ import {
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { readSourceFinalizationPrivateOptions } from "./source-finalization-private.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -116,7 +115,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     cfg,
     agentId,
     agentDir,
-    agentCfg,
     command,
     provider,
     model,
@@ -132,7 +130,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     sessionKey,
     storePath,
   } = params;
-  const sourceFinalizationPrivateOptions = readSourceFinalizationPrivateOptions(opts);
   const {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
@@ -189,6 +186,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
       AccountId: ctx.AccountId ?? sessionCtx.AccountId,
       InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
       ChatType: ctx.ChatType ?? sessionCtx.ChatType,
     },
     entry: preparedSessionState.sessionEntry,
@@ -353,6 +351,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   if (queuedToolsAllow && queuedToolIntersections) {
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
+  const admittedSessionSettings = opts?.admittedSessionSettings;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -365,7 +364,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    queuedSourceReplyDelivery: opts?.queuedSourceReplyDelivery,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
@@ -381,14 +379,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
-    ...(sourceFinalizationPrivateOptions?.onBeforeAgentFinalize || opts?.queuedSourceReplyDelivery
-      ? {
-          ...(sourceFinalizationPrivateOptions?.onBeforeAgentFinalize
-            ? { onBeforeAgentFinalize: sourceFinalizationPrivateOptions.onBeforeAgentFinalize }
-            : {}),
-          disableCollectBatching: true,
-        }
-      : {}),
     enqueuedAt: Date.now(),
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
@@ -446,11 +436,16 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
-      cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
-      permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+      cwd:
+        normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(cfg, agentId),
+      permissionMode: admittedSessionSettings
+        ? admittedSessionSettings.permissionMode
+        : preparedSessionState.sessionEntry?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings
+        ? admittedSessionSettings.toolOverrides
+        : preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
@@ -512,8 +507,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
-      deferSourceMessageToolDelivery:
-        sourceFinalizationPrivateOptions?.deferSourceMessageToolDelivery,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,
@@ -527,6 +520,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
           }
         : {}),
+      ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }
@@ -607,9 +601,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       storePath,
       defaultModel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-      toolProgressDetail:
-        normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
-        normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
+      toolProgressDetail: resolveAgentConfig(cfg, agentId)?.toolProgressDetail,
       isNewSession: params.isNewSession,
       blockStreamingEnabled,
       blockReplyChunking,

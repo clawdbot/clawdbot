@@ -5,12 +5,11 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import JSON5 from "json5";
 import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
-  createConfigIO,
+  isDefaultInstallIdentity,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
-} from "../../config/config.js";
-import { isDefaultInstallIdentity } from "../../config/paths.js";
+} from "../../config/paths.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -135,6 +134,7 @@ type CliStatusSummary = {
 type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
 const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
+const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
 const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
 const loadLaunchdModule = createLazyPromise(() => import("../../daemon/launchd.js"));
 const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/service-audit.js"));
@@ -168,8 +168,15 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
   let raw: string;
   try {
     raw = await fs.readFile(configPath, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+      return null;
+    }
+    return {
+      summary: { path: configPath, exists: false, valid: true },
+      cfg: {},
+      mode: "fast",
+    };
   }
 
   let parsed: unknown;
@@ -210,6 +217,7 @@ async function readFullStatusConfig(params: {
   configPath: string;
   pluginValidation?: "full" | "skip";
 }): Promise<StatusConfigRead> {
+  const { createConfigIO } = await loadConfigIoRuntime();
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
@@ -304,6 +312,7 @@ export type DaemonStatus = {
   lastError?: string;
   rpc?: {
     ok: boolean;
+    gatewayReached?: true;
     kind?: "connect" | "read";
     capability?: string;
     auth?: {
@@ -659,12 +668,12 @@ export async function gatherDaemonStatus(
       : [];
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
-  const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
-  const tlsRuntime = shouldUseLocalTlsRuntime
-    ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-        loadGatewayTlsRuntime(daemonCfg.gateway?.tls),
-      )
-    : undefined;
+  const localCertificate =
+    opts.probe && !probeUrlOverride && tlsEnabled
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(daemonCfg.gateway?.tls),
+        )
+      : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   let allowRpcConfigCredentials = true;
@@ -710,10 +719,9 @@ export async function gatherDaemonStatus(
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
           config: daemonCfg,
-          tlsFingerprint:
-            shouldUseLocalTlsRuntime && tlsRuntime?.enabled
-              ? tlsRuntime.fingerprintSha256
-              : undefined,
+          tlsFingerprint: localCertificate?.ok
+            ? localCertificate.value.fingerprintSha256
+            : undefined,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
@@ -766,6 +774,8 @@ export async function gatherDaemonStatus(
   // profile/state dir, so remote/explicit URL probes need remote-owned
   // diagnostics instead.
   // Best-effort: unreadable install records omit this advisory report.
+  // Registry repair lookups belong to deep-status and Doctor command owners;
+  // readiness, support, and triage must not wait for the public registry.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
   if (shouldInspectLocalGateway) {
     try {

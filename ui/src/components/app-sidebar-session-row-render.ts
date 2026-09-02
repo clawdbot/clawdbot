@@ -111,6 +111,7 @@ export interface SessionListHost {
   isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
+  sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
@@ -223,14 +224,12 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedOwnerIdentity } =
+  const { running, leadingIndicator, trailingIndicator, renderedIdentities } =
     renderSessionLeadingState(
       session,
       leadingOwner,
       ownerAttribution,
       ownerViewing,
-      session.participants,
-      session.participantCount,
       channelAvatarAuth,
     );
   const trailingDescription = session.isChild
@@ -247,7 +246,7 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
-  const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
+  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const menuTooltip = t("chat.sidebar.openSessionMenu");
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =
@@ -346,7 +345,7 @@ export function renderRecentSession(params: {
       @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(session.href)}
+        href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}
@@ -371,7 +370,7 @@ export function renderRecentSession(params: {
                 .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
                 .selfInstanceId=${host.sessionData.presenceInstanceId}
                 .sessionKey=${session.key}
-                .excludeIdentity=${renderedOwnerIdentity}
+                .excludeIdentities=${renderedIdentities ?? []}
                 .maxVisible=${3}
                 variant="session"
               ></openclaw-viewer-facepile>

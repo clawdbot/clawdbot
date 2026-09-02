@@ -521,16 +521,6 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
-  it("keeps Matrix source finalization out of the installable Plugin SDK", () => {
-    const subpath = "matrix-source-finalization-runtime";
-
-    expect(pluginSdkEntrypoints).not.toContain(subpath);
-    expect(privateLocalOnlyPluginSdkEntrypoints).not.toContain(subpath);
-    expect(packagedPrivatePluginSdkRuntimeEntrypoints).not.toContain(subpath);
-    expect(buildPluginSdkPackageExports()).not.toHaveProperty(`./plugin-sdk/${subpath}`);
-    expect(fs.existsSync(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`))).toBe(false);
-  });
-
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
       "acpx",

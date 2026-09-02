@@ -250,13 +250,20 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
-  const childRuntime = resolveSandboxRuntimeStatus({
+  const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
-    sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+    sessionKey: requesterKey,
+    agentId: requesterAgentId,
   });
+  // Gateway creation inherits the exact parent's requirement before admitting a child run.
+  const childRuntimeSandboxed =
+    requesterRuntime.sandboxRequired ||
+    resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+    }).sandboxed;
   const requesterSandboxed = params.options?.sandboxed === true || requesterRuntime.sandboxed;
-  if (!childRuntime.sandboxed && (requesterSandboxed || params.sandbox === "require")) {
+  if (!childRuntimeSandboxed && (requesterSandboxed || params.sandbox === "require")) {
     return {
       status: "forbidden",
       error: requesterSandboxed
@@ -273,7 +280,7 @@ export async function maybeSpawnVisibleSession(params: {
     : undefined;
   // Sandbox mounts only the target workspace; cwd must stay within that boundary.
   if (
-    childRuntime.sandboxed &&
+    childRuntimeSandboxed &&
     spawnedCwd &&
     (!spawnedWorkspaceCwd || !isPathInside(spawnedWorkspaceCwd, spawnedCwd))
   ) {
@@ -409,7 +416,7 @@ export async function maybeSpawnVisibleSession(params: {
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: params.options?.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,

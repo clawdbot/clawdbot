@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
 import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
+
+const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
 
 function completeResult(params?: {
   terminal?: EmbeddedRunAttemptResult["terminal"];
+  currentAttemptCompletedAssistant?: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+  replyOptional?: boolean;
+  trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
   successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
@@ -15,6 +22,8 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  toolAutoDeliveryMediaUrls?: string[];
+  messagingToolSentMediaUrls?: string[];
   yieldDetected?: boolean;
   yieldAcknowledgment?: string;
   toolMetas?: Array<{
@@ -28,16 +37,18 @@ function completeResult(params?: {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
-  discarded?: boolean;
 }) {
   return completeEmbeddedAttemptResult({
     attempt: {
       runId: "run-1",
+      admittedRunContext: { operationalRunInstance: TEST_OPERATIONAL_RUN_INSTANCE },
       sessionId: "session-1",
       provider: "test",
       modelId: "model",
       model: { api: "openai-responses" },
       trigger: "user",
+      allowEmptyAssistantReplyAsSilent: params?.replyOptional,
+      terminalReplyExpectation: params?.replyOptional ? "optional" : undefined,
     } as never,
     subscription: {
       assistantTexts: [],
@@ -53,11 +64,12 @@ function completeResult(params?: {
       getLastToolError: () => undefined,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getLatestMcpConnectAction: () => undefined,
-      getMessagingToolSentMediaUrls: () => [],
+      getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
       getMessagingToolSourceReplyPayloads: () => [],
       getPendingToolMediaReply: () => params?.pendingToolMediaReply,
+      getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
       getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
       getSuccessfulCronAdds: () => [],
       getVisibleBlockReplyCount: () => 0,
@@ -67,6 +79,8 @@ function completeResult(params?: {
     } as never,
     state: {
       terminal: params?.terminal ?? { kind: "ok" },
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
       sessionIdUsed: "session-1",
       messagesSnapshot: params?.messagesSnapshot ?? [],
       successfulNestedToolNames: params?.successfulNestedToolNames,
@@ -74,18 +88,11 @@ function completeResult(params?: {
       yieldAcknowledgment: params?.yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
-      ...(params?.discarded
-        ? {
-            beforeAgentFinalizeDiscarded: true as const,
-            lastAssistant: { role: "assistant", content: "discarded draft" },
-            currentAttemptAssistant: { role: "assistant", content: "discarded draft" },
-            currentAttemptCompletedAssistant: { role: "assistant", content: "discarded draft" },
-          }
-        : {}),
     } as never,
     clientToolCallSlots: params?.clientToolCallSlots ?? [],
     hookRunner: null,
     hookAgentId: "main",
+    trajectoryRecorder: params?.trajectoryRecorder,
     bootstrapPromptWarning: {},
     cache: {
       observabilityEnabled: false,
@@ -111,6 +118,51 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it.each([
+    {
+      label: "a completed refusal",
+      assistant: makeAssistantMessageFixture({
+        content: [],
+        diagnostics: [{ type: "provider_refusal", timestamp: 1, details: { category: "cyber" } }],
+      }),
+      expectedStatus: "error",
+      terminalError: undefined,
+    },
+    {
+      label: "a completed empty length stop",
+      assistant: makeAssistantMessageFixture({
+        content: [],
+        stopReason: "length",
+        errorMessage: undefined,
+      }),
+      expectedStatus: "error",
+      terminalError: "non_deliverable_terminal_turn",
+    },
+    {
+      label: "an actually empty optional turn",
+      assistant: undefined,
+      expectedStatus: "success",
+      terminalError: undefined,
+    },
+  ])(
+    "records $label after transcript projection",
+    ({ assistant, expectedStatus, terminalError }) => {
+      const recordEvent = vi.fn<EmbeddedRunAttemptTrajectoryRecorder["recordEvent"]>();
+      const result = completeResult({
+        currentAttemptCompletedAssistant: assistant,
+        replyOptional: true,
+        trajectoryRecorder: { recordEvent, flush: async () => {} },
+      });
+
+      expect(result.currentAttemptAssistant).toBeUndefined();
+      expect(result.currentAttemptCompletedAssistant).toEqual(assistant);
+      expect(recordEvent).toHaveBeenCalledWith(
+        "session.ended",
+        expect.objectContaining({ status: expectedStatus, terminalError }),
+      );
+    },
+  );
+
   it.each([
     {
       label: "provider socket reset",
@@ -277,21 +329,6 @@ describe("attempt result projection", () => {
     ]);
   });
 
-  it("removes a discarded draft and pending client action from the attempt result", () => {
-    const result = completeResult({
-      discarded: true,
-      clientToolCallSlots: [
-        { toolCallId: "pending", name: "computer_use", params: { task: "stale" }, completed: true },
-      ],
-    });
-
-    expect(result.clientToolCalls).toBeUndefined();
-    expect(result.assistantTexts).toEqual([]);
-    expect(result.lastAssistant).toBeUndefined();
-    expect(result.currentAttemptAssistant).toBeUndefined();
-    expect(result.currentAttemptCompletedAssistant).toBeUndefined();
-  });
-
   it("filters invalid tool metadata and preserves terminal flags", () => {
     expect(
       completeResult({
@@ -351,6 +388,29 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+    const autoDeliveryResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+    });
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        autoDeliveryResult,
+        autoDeliveryResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
+    const alreadySentResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+      messagingToolSentMediaUrls: ["/tmp/reply.opus"],
+    });
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        alreadySentResult,
+        alreadySentResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
+    ).toEqual([]);
   });
 
   it("projects the latest MCP App channel view without result data", () => {

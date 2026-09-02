@@ -3,6 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import type { Snapshot } from "quickjs-wasi";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -44,7 +45,7 @@ type CodeModeRunState = {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
@@ -455,7 +456,7 @@ export function storeSnapshotState(params: {
   pending: PendingBridgeState[];
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -490,7 +491,7 @@ export function storeSnapshotState(params: {
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
-    snapshotBytes: params.snapshotBytes,
+    snapshot: params.snapshot,
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
@@ -503,17 +504,22 @@ export function storeSnapshotState(params: {
     bridgeDispatch: params.bridgeDispatch,
     owner: params.owner,
   };
+  const result = params.output.takeResult(
+    {
+      status: "waiting" as const,
+      runId,
+      reason: codeModeWaitingReason(params.pending),
+      pendingToolCalls: pendingToolCalls(params.pending),
+      replaySafe: params.replaySafe,
+      telemetry: telemetry(params.runtime),
+    },
+    {},
+    params.runtime.hasNetworkContent(),
+  );
+  // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return {
-    status: "waiting" as const,
-    runId,
-    reason: codeModeWaitingReason(params.pending),
-    pendingToolCalls: pendingToolCalls(params.pending),
-    replaySafe: params.replaySafe,
-    output: params.output.take().output,
-    telemetry: telemetry(params.runtime),
-  };
+  return result;
 }
 
 export function codeModeAbortedResult(params: {
@@ -522,15 +528,18 @@ export function codeModeAbortedResult(params: {
   replaySafe: boolean;
   runtime: ToolSearchRuntime;
 }) {
-  return {
-    status: "failed" as const,
-    ...params.output.take({ error: "code mode execution aborted" }),
-    code: "aborted" as const,
-    failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
-    bridgeDispatchStarted: params.bridgeDispatch.started,
-    replaySafe: params.replaySafe,
-    telemetry: telemetry(params.runtime),
-  };
+  return params.output.takeResult(
+    {
+      status: "failed" as const,
+      code: "aborted" as const,
+      failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
+      bridgeDispatchStarted: params.bridgeDispatch.started,
+      replaySafe: params.replaySafe,
+      telemetry: telemetry(params.runtime),
+    },
+    { error: "code mode execution aborted" },
+    params.runtime.hasNetworkContent(),
+  );
 }
 
 export function codeModeWaitingReason(

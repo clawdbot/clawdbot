@@ -1,5 +1,6 @@
 // Covers message predicates whose truth values intentionally differ from the central outcome.
 import { describe, expect, it } from "vitest";
+import { isTransientHttpError } from "./classification-rules.js";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
@@ -8,7 +9,6 @@ import {
   isContextOverflowError,
   isFailoverErrorMessage,
   isTimeoutErrorMessage,
-  isTransientHttpError,
 } from "./classify.js";
 import { isAuthPermanentErrorMessage } from "./message-patterns.js";
 

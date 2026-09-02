@@ -1,19 +1,39 @@
+import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadTranscriptEventsSync,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { ImageContent } from "../../../llm/types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { readBtwTranscriptMessages } from "../../btw-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import {
   beginPromptCacheObservation,
   completePromptCacheObservation,
 } from "../prompt-cache-observability.js";
 import {
+  clearActiveEmbeddedRun,
+  getActiveEmbeddedRunSnapshot,
+  setActiveEmbeddedRun,
+} from "../runs.js";
+import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
+import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
+import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
+type PromptActiveSession = Parameters<typeof submitEmbeddedAttemptPrompt>[0]["promptActiveSession"];
+type PromptOptions = Parameters<PromptActiveSession>[1];
 
 function createSession() {
   const state = {
@@ -27,6 +47,9 @@ function createSession() {
     state,
     streamFn: baseStreamFn,
     transformContext: originalTransformContext,
+    reset: () => {
+      state.messages = [];
+    },
   };
   const activeSession = {
     get messages() {
@@ -65,6 +88,202 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it.each([
+    { scenario: "first-turn", excludeCurrentUser: true },
+    { scenario: "after-reset", excludeCurrentUser: true },
+    { scenario: "after-reset-metadata", excludeCurrentUser: true },
+    { scenario: "skipped-prepared", excludeCurrentUser: false },
+    { scenario: "raw-probe", excludeCurrentUser: false },
+    { scenario: "settled-finalization", excludeCurrentUser: false },
+  ])(
+    "preserves the pre-turn BTW snapshot boundary: $scenario",
+    async ({ scenario, excludeCurrentUser }) => {
+      await withOpenClawTestState({ label: "btw-current-user" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId,
+          sessionKey: `agent:main:btw-current-user-${scenario}`,
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+        const sessionManager = SessionManager.open(target, state.workspaceDir);
+        if (scenario !== "first-turn") {
+          sessionManager.appendMessage({ role: "user", content: "old conversation", timestamp: 1 });
+          sessionManager.appendResetBoundary("reset");
+        }
+        const beforeCurrentUserLeaf = sessionManager.getLeafId();
+        const currentUser = {
+          role: "user" as const,
+          content: "Current main task, not prior conversation",
+          idempotencyKey: "btw-current-user:user",
+          timestamp: 2,
+        };
+        const appended = sessionManager.appendMessageWithTranscriptAnchor(currentUser);
+        if (!appended.anchor) {
+          throw new Error("Expected a persisted current-user admission");
+        }
+        const recorder = createUserTurnTranscriptRecorder({
+          message: currentUser,
+          target: () => undefined,
+        });
+        recorder.markRuntimePersisted(currentUser, appended.anchor);
+        const { activeSession } = createSession();
+        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+        const input = createBaseInput();
+        const isRawModelRun = scenario === "raw-probe";
+        const isFinalization = scenario === "settled-finalization";
+        const attempt = {
+          config: {},
+          operation: isFinalization ? "settled-tool-finalization" : "attempt",
+          skipPreparedUserTurnMessage: isFinalization || scenario === "skipped-prepared",
+          model: { id: "test-model", provider: "test-provider", api: "openai-responses" },
+          modelId: "test-model",
+          provider: "test-provider",
+          prompt: currentUser.content,
+          runId: "btw-current-user",
+          sessionId,
+          sessionKey: target.sessionKey,
+          sessionTarget: target,
+          trigger: "user",
+          userTurnTranscriptRecorder: recorder,
+          workspaceDir: state.workspaceDir,
+        } as Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["attempt"];
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession: activeSession as unknown as Parameters<
+            typeof prepareEmbeddedAttemptSessionBoundary
+          >[0]["activeSession"],
+          attempt,
+          getUserTranscriptContexts: () => undefined,
+          isRawModelRun,
+          preparedUserTurnMessage: attempt.skipPreparedUserTurnMessage ? undefined : currentUser,
+          sessionManager,
+          setActiveSessionSystemPrompt: vi.fn(),
+        });
+        const expectedSnapshotMessages = isFinalization ? [currentUser] : [];
+        expect(activeSession.messages).toEqual(expectedSnapshotMessages);
+        expect(sessionManager.getLeafId()).toBe(appended.entryId);
+        if (scenario === "after-reset-metadata") {
+          sessionManager.appendThinkingLevelChange("low");
+        }
+        const persistedBefore = loadTranscriptEventsSync(target);
+        const handle = {
+          runId: attempt.runId,
+          queueMessage: async () => undefined,
+          isStreaming: () => true,
+          isCompacting: () => false,
+          abort: () => undefined,
+        };
+        const admission = prepareSystemAgentRunAdmission(
+          {},
+          attempt.runId,
+          target.agentId,
+          "btw-snapshot-test",
+        );
+        setActiveEmbeddedRun(sessionId, handle, target.sessionKey);
+        try {
+          attempt.admittedRunContext = await admission.admit("embedded");
+          const assembly = await prepareEmbeddedAttemptPromptAssembly({
+            attempt,
+            activeSession: activeSession as unknown as Parameters<
+              typeof prepareEmbeddedAttemptPromptAssembly
+            >[0]["activeSession"],
+            sessionManager,
+            hookRunner: null,
+            hookAgentId: "main",
+            diagnosticTrace: { traceId: "11111111111111111111111111111111" },
+            isRawModelRun,
+            sessionAgentId: "main",
+            runtimeModel: "test-model",
+            systemPromptText: input.systemPrompt,
+            applyPromptBuildToolsAllow: () => [],
+            setActiveSessionSystemPrompt: vi.fn(),
+            setLeasedSteering: vi.fn(),
+            cache: {
+              observabilityEnabled: false,
+              retention: "none",
+              streamStrategy: "default",
+              transport: "sse",
+              tools: [],
+              trace: null,
+            },
+          });
+          await submitEmbeddedAttemptPrompt({
+            ...input,
+            attempt,
+            activeSession,
+            transcriptLeafId: assembly.transcriptLeafId,
+            transcriptPrompt: currentUser.content,
+            modelPrompt: currentUser.content,
+            promptActiveSession: async () => undefined,
+          });
+          const snapshot = getActiveEmbeddedRunSnapshot(sessionId);
+          if (!snapshot) {
+            throw new Error("Expected the submitted main-run snapshot");
+          }
+          expect(snapshot.messages).toEqual(expectedSnapshotMessages);
+          expect(snapshot.inFlightPrompt).toBe(currentUser.content);
+          const messages = await readBtwTranscriptMessages({
+            ...target,
+            sessionFile: target.sessionKey,
+            snapshotLeafId: snapshot.transcriptLeafId,
+          });
+          expect(messages).toEqual(excludeCurrentUser ? [] : [currentUser]);
+          expect(snapshot.transcriptLeafId).toBe(
+            excludeCurrentUser ? beforeCurrentUserLeaf : sessionManager.getLeafId(),
+          );
+          expect(loadTranscriptEventsSync(target)).toEqual(persistedBefore);
+        } finally {
+          admission.close();
+          clearActiveEmbeddedRun(sessionId, handle, target.sessionKey);
+          forgetPromptBuildDrainCacheForRun(attempt.runId);
+        }
+      });
+    },
+  );
+
+  it.each([
+    { skipPreparedUserTurnMessage: false, expectedKey: "persisted-current-user" },
+    { skipPreparedUserTurnMessage: true, expectedKey: undefined },
+  ])(
+    "passes persisted user identity when prepared-user skipping is $skipPreparedUserTurnMessage",
+    async ({ skipPreparedUserTurnMessage, expectedKey }) => {
+      const { activeSession } = createSession();
+      const input = createBaseInput();
+      const persistedUser = {
+        role: "user" as const,
+        content: "transcript prompt",
+        idempotencyKey: "persisted-current-user",
+        timestamp: 1,
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: persistedUser,
+        target: async () => undefined,
+      });
+      recorder.markRuntimePersisted(persistedUser);
+      const promptActiveSession = vi.fn(
+        async (_prompt: string, _options?: PromptOptions) => undefined,
+      );
+
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: {
+          sessionId,
+          skipPreparedUserTurnMessage,
+          userTurnTranscriptRecorder: recorder,
+        },
+        activeSession,
+        promptActiveSession,
+      });
+
+      const promptOptions = promptActiveSession.mock.calls[0]?.[1];
+      if (expectedKey) {
+        expect(promptOptions).toMatchObject({ persistedUserIdempotencyKey: expectedKey });
+      } else {
+        expect(promptOptions).not.toHaveProperty("persistedUserIdempotencyKey");
+      }
+    },
+  );
+
   it("submits runtime-only prompts without images and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();

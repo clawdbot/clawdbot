@@ -406,7 +406,7 @@ describe("matrix thread bindings", () => {
     const [to, message, options] = latestSendMessageCall();
     const sendOptions = options as { cfg?: unknown; accountId?: string; threadId?: string };
     expect(to).toBe("room:!room:example");
-    expect(message).toContain("Session ended automatically");
+    expect(message).toContain("Conversation binding expired");
     expect(sendOptions.cfg).toEqual({});
     expect(sendOptions.accountId).toBe("ops");
     expect(sendOptions.threadId).toBe("$thread");

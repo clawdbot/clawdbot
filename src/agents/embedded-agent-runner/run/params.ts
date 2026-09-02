@@ -10,7 +10,6 @@ import type {
 } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
-import type { TurnLocalBeforeAgentFinalize } from "../../../auto-reply/reply/source-finalization.types.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
@@ -35,6 +34,7 @@ import type {
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
+import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -107,6 +107,8 @@ export type RunEmbeddedAgentParams = {
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
+  sandboxAgentId?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -186,8 +188,6 @@ export type RunEmbeddedAgentParams = {
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
-  /** Restrict one internal post-mutation recovery attempt to audited core reads. */
-  forceCodeModeReconciliationTools?: boolean;
   /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
   forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
@@ -213,6 +213,7 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
+  skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -258,8 +259,6 @@ export type RunEmbeddedAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
-  /** Turn-local source adapter gate evaluated before terminal delivery. */
-  onBeforeAgentFinalize?: TurnLocalBeforeAgentFinalize;
   provider?: string;
   model?: string;
   /** Outer model-fallback owner facts for this admitted attempt. */
@@ -272,6 +271,8 @@ export type RunEmbeddedAgentParams = {
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Prepared fallback availability fact shared by selection and failure reporting. */
+  modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** True when the pinned non-default harness owns model selection for this session. */
@@ -404,8 +405,6 @@ export type RunEmbeddedAgentParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  /** Hold exact-source message-tool sends until the source final gate settles. */
-  deferSourceMessageToolDelivery?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
@@ -480,6 +479,7 @@ export type RunEmbeddedAgentParams = {
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,
   | "agentDir"
+  | "sandboxAgentId"
   | "promptCacheKey"
   | "reasoningLevel"
   | "messageChannel"

@@ -10,6 +10,7 @@ import type {
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -104,6 +105,11 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Host-private bounded recovery state for this exact attempt. */
+  codeModeRecovery?: Exclude<
+    import("./terminal-retry-state.js").CodeModeRecoveryState,
+    { kind: "idle" }
+  >;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -170,14 +176,28 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
-  /** Signals that the attempt's own run-timeout watchdog is active. */
+  /** Shipped harness notification; core uses onAttemptDeadlineChanged for queue ownership. */
   onAttemptTimeoutArmed?: () => void;
+  /** Hands the lane an authoritative deadline, never a progress-idle estimate. */
+  onAttemptDeadlineChanged?: (deadline: CommandQueueTaskDeadline) => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
+  permissionChange?: {
+    readonly owner: object;
+    readonly baseExecOverrides: Readonly<NonNullable<RunEmbeddedAgentParams["execOverrides"]>>;
+    readonly notice?: string;
+    request: (
+      mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null,
+    ) => Promise<boolean>;
+    /** False means a newer permission request superseded this prepared attempt. */
+    applied: () => boolean;
+    recordApplied: (mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null) => void;
+  };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
@@ -243,7 +263,11 @@ export type EmbeddedRunAttemptResult = {
     providerStarted?: boolean;
   };
   codexAppServerFailure?: {
-    kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    kind:
+      | "client_closed_before_turn_completed"
+      | "turn_settlement_timeout"
+      // Published harness result contract: older plugins may still report idle-watch failures.
+      | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
     transport: "stdio" | "unix" | "websocket";
     threadId?: string;
@@ -278,20 +302,15 @@ export type EmbeddedRunAttemptResult = {
   finalPromptText?: string;
   /** Exact provider-response count when the harness can observe model iterations directly. */
   modelIterations?: number;
+  /** Saved provider retry setting resolved by the prepared session owner. */
+  providerRetryMaxRetries?: number;
   messagesSnapshot: AgentMessage[];
-  /**
-   * Complete application transcript frozen through a settled tool boundary.
-   * Projection-backed finalizers must fail closed when their harness does not provide it.
-   */
-  settledTurnFinalizationContext?: {
-    readonly source: "openclaw-transcript";
-    readonly messages: readonly AgentMessage[];
-  };
+  /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
+  settledTurnFinalizationContext?:
+    | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
+    | { readonly source: "harness"; readonly data: unknown }
+    | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
-  /** A source-local revision requested that every retry after the rejected draft omit tools. */
-  beforeAgentFinalizeRevisionDisableTools?: true;
-  /** A source-local final-candidate gate deterministically suppressed the rejected draft. */
-  beforeAgentFinalizeDiscarded?: true;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
@@ -367,8 +386,8 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
-  /** Host-authenticated request for one bounded post-mutation inspection attempt. */
-  codeModeReconciliationCandidate?: boolean;
+  /** Host-authenticated facts for bounded post-mutation inspection and recovery. */
+  codeModeRecoveryCandidate?: import("./terminal-retry-state.js").CodeModeRecoveryCandidate;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

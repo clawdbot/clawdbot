@@ -6,6 +6,7 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -87,7 +88,9 @@ describe("worker launch descriptor", () => {
     expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
       "invalid worker launch descriptor",
     );
-    descriptor.assignment.prompt = [{ ...image, data: "x".repeat(25 * 1024 * 1024) }];
+    descriptor.assignment.prompt = [
+      { ...image, data: "x".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
+    ];
     expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
       "invalid worker launch descriptor",
     );
@@ -101,6 +104,19 @@ describe("worker launch descriptor", () => {
       client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
       admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
     });
+  });
+
+  it("rejects a launch version inherited from the prototype", () => {
+    const descriptor = launchDescriptor();
+    const { version, ...ownFields } = descriptor;
+    const candidate = Object.assign(
+      Object.create({ version }) as Record<string, unknown>,
+      ownFields,
+    );
+
+    expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+      "invalid worker launch descriptor",
+    );
   });
 
   it("accepts the permission context pair only when both fields are present", () => {
@@ -305,6 +321,54 @@ describe("worker launch descriptor", () => {
         parseWorkerLaunchDescriptor({
           ...descriptor,
           assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("requires a computer descriptor and grant together and rejects target substitution fields", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.computer = {
+      nodeId: "worker-desktop",
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      },
+    };
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow(
+      "invalid worker launch descriptor",
+    );
+    descriptor.assignment.toolAuthority.allowedToolNames = ["computer"];
+    descriptor.assignment.prompt = [{ type: "image", data: "AA==", mimeType: "image/png" }];
+    expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+    const { computer, ...assignmentFields } = descriptor.assignment;
+    const inheritedComputerAssignment = Object.assign(
+      Object.create({ computer }),
+      assignmentFields,
+    );
+    expect(() =>
+      parseWorkerLaunchDescriptor({
+        ...descriptor,
+        assignment: inheritedComputerAssignment,
+      }),
+    ).toThrow("invalid worker launch descriptor");
+    const { nodeId, ...computerFields } = descriptor.assignment.computer;
+    const inheritedNodeIdComputer = Object.assign(Object.create({ nodeId }), computerFields);
+    for (const candidateComputer of [
+      undefined,
+      { ...descriptor.assignment.computer, gatewayUrl: "ws://other" },
+      { ...descriptor.assignment.computer, nodeId: "" },
+      inheritedNodeIdComputer,
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, computer: candidateComputer },
         }),
       ).toThrow("invalid worker launch descriptor");
     }

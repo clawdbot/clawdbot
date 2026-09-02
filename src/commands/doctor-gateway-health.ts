@@ -3,6 +3,8 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
+import { compareCliGatewayStateDirs, type GatewayHello } from "../cli/state-dir-gateway-check.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -91,9 +93,28 @@ export async function checkGatewayHealth(params: {
       params: { includeChannelSummary: false },
       timeoutMs,
       config: params.cfg,
+      onHelloOk: ({ snapshot }: GatewayHello) => {
+        if (!snapshot.stateDir) {
+          return;
+        }
+        const comparison = compareCliGatewayStateDirs({
+          cliStateDir: resolveStateDir(process.env),
+          cliConfigPath: resolveConfigPath(process.env),
+          gatewayStateDir: snapshot.stateDir,
+          gatewayConfigPath: snapshot.configPath,
+          source: "live Gateway",
+          mode: "warn",
+        });
+        if (comparison.kind === "warn") {
+          note(comparison.message, "Gateway state directory mismatch");
+        }
+      },
     });
     healthOk = true;
     noteCliGatewayVersionSkew(status);
+    if (status.startupMigrationWarning) {
+      note(sanitizeTerminalText(status.startupMigrationWarning), "Startup migration warnings");
+    }
     const secretDegradations = projectDoctorSecretRuntimeDegradations(status);
     if (secretDegradations.length > 0) {
       note(

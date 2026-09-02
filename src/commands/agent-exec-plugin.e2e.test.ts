@@ -161,7 +161,7 @@ function buildChildEnv(stateDir: string): NodeJS.ProcessEnv {
 
 function buildCliSource(args: string[]): string {
   return `
-    import { runMainOrRootHelp } from "./src/entry.ts";
+    import { runMainOrRootHelp } from "./dist/entry.js";
     await runMainOrRootHelp(${JSON.stringify(["node", "openclaw", ...args])});
   `;
 }
@@ -176,7 +176,7 @@ describe("agent exec installed plugin isolation", () => {
 
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", source],
+      ["--input-type=module", "--eval", source],
       {
         cwd: path.resolve(import.meta.dirname, "../.."),
         encoding: "utf8",
@@ -199,8 +199,6 @@ describe("agent exec installed plugin isolation", () => {
       await execFileAsync(
         process.execPath,
         [
-          "--import",
-          "tsx",
           "--input-type=module",
           "--eval",
           buildCliSource([
@@ -253,7 +251,7 @@ describe("agent exec installed plugin isolation", () => {
     await writeConfig(stateDir, config);
     const source = `
       import fs from "node:fs";
-      import { agentCommandFromIngress } from "./src/plugin-sdk/agent-runtime.ts";
+      import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
       const result = await agentCommandFromIngress({
         agentId: "main",
         sessionId: "ingress-one-shot-session",
@@ -272,16 +270,12 @@ describe("agent exec installed plugin isolation", () => {
       fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify(result));
     `;
     const [completion] = await Promise.allSettled([
-      execFileAsync(
-        process.execPath,
-        ["--import", "tsx", "--input-type=module", "--eval", source],
-        {
-          cwd: path.resolve(import.meta.dirname, "../.."),
-          encoding: "utf8",
-          env: buildChildEnv(stateDir),
-          timeout: 30_000,
-        },
-      ),
+      execFileAsync(process.execPath, ["--input-type=module", "--eval", source], {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        encoding: "utf8",
+        env: buildChildEnv(stateDir),
+        timeout: 30_000,
+      }),
     ]);
 
     // A completed result followed by a timeout identifies retained process resources.

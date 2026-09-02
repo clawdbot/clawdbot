@@ -3,7 +3,9 @@ import {
   formatErrorMessage,
   isHostScopedAgentToolActive,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import {
@@ -32,6 +34,19 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParams): string {
+  const agentId = resolveSessionAgentIdsStrict({
+    config: params.params.config,
+    sessionKey: params.params.sessionKey,
+    agentId: params.agentId ?? params.params.agentId,
+  }).sessionAgentId;
+  return (
+    params.agentDir ??
+    params.params.agentDir ??
+    resolveAgentDir(params.params.config ?? {}, agentId)
+  );
+}
 
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
   await assertCodexModelBackedReviewerEffectiveConfig({
@@ -76,11 +91,12 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
       ? undefined
-      : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
+      : await buildCodexUserMcpServersThreadConfigPatchForRun({
+          run: params.params,
+          cwd: params.cwd,
           agentId: params.agentId ?? params.params.agentId,
-          agentDir: params.params.agentDir,
           allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
-          toolOverrides: params.params.toolOverrides,
+          warn: (message) => embeddedAgentLog.warn(message),
           onServerUnavailable: (serverName, error) =>
             embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
               serverName,
@@ -114,11 +130,10 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const ringZeroActive =
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params.params);
-  const isolateNativeHooks =
+  const restrictedToolSurface =
     ringZeroActive ||
     messageOnlySourceReply ||
     params.params.pluginHarnessToolPolicyRestricted === true;
-  const restrictedToolSurface = isolateNativeHooks || params.params.disableTools === true;
   const imageGenerationDenied =
     params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
@@ -135,7 +150,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         params.client,
         {
           restrictedToolSurface,
-          preserveNativeHooks: !isolateNativeHooks,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
         },
         params.signal,

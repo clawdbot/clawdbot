@@ -5,6 +5,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA = "openclaw.plugin-sdk-api-release-evidence/v1";
+const PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA =
+  "openclaw.plugin-sdk-api-release-evidence-set/v1";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -78,15 +80,48 @@ export function createPluginSdkApiReleaseEvidence({
   };
 }
 
+export function selectPluginSdkApiReleaseEvidence({ evidence, npmDistTag }) {
+  if (evidence?.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA) {
+    return evidence;
+  }
+  const selectors = evidence.selectors;
+  if (
+    Object.keys(evidence).length !== 2 ||
+    !isReleaseEvidenceObject(selectors) ||
+    Object.keys(selectors).length !== 2 ||
+    ["beta", "latest"].some(
+      (selector) => selectors[selector]?.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA,
+    ) ||
+    selectors.beta.headSha !== selectors.latest.headSha ||
+    selectors.beta.workflowSha !== selectors.latest.workflowSha
+  ) {
+    throw new Error(
+      "Plugin SDK API selector evidence must bind beta and latest to one release and tooling SHA",
+    );
+  }
+  if (npmDistTag !== "beta" && npmDistTag !== "latest") {
+    throw new Error("Plugin SDK API selector evidence requires the beta or latest npm dist-tag");
+  }
+  return selectors[npmDistTag];
+}
+
+export function createPluginSdkApiReleaseEvidenceSet(selectors) {
+  const evidence = { schema: PLUGIN_SDK_API_RELEASE_EVIDENCE_SET_SCHEMA, selectors };
+  selectPluginSdkApiReleaseEvidence({ evidence, npmDistTag: "beta" });
+  return evidence;
+}
+
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
   currentSelectorRef = "",
   currentSelectorSha = "",
-  evidence,
+  evidence: inputEvidence,
   expectedHeadSha,
   expectedWorkflowSha,
+  npmDistTag = "",
   targetRef = "",
 }) {
+  const evidence = selectPluginSdkApiReleaseEvidence({ evidence: inputEvidence, npmDistTag });
   assertSha(expectedHeadSha, "Expected Plugin SDK API evidence head SHA");
   if (
     !isReleaseEvidenceObject(evidence) ||
@@ -169,7 +204,7 @@ function readArgs(argv) {
     const value = argv[index + 1];
     if (!flag?.startsWith("--") || value === undefined) {
       throw new Error(
-        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --workflow-sha <sha> [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
+        "Usage: plugin-sdk-api-release-evidence --manifest <path> --head <sha> --workflow-sha <sha> [--npm-dist-tag <tag>] [--acknowledge <digest>] [--current-selector-ref <tag> --current-selector-sha <sha> --target-ref <tag>]",
       );
     }
     values.set(flag, value);
@@ -192,6 +227,7 @@ function main() {
     evidence: manifest.pluginSdkApi,
     expectedHeadSha: args.get("--head"),
     expectedWorkflowSha: args.get("--workflow-sha"),
+    npmDistTag: args.get("--npm-dist-tag"),
     targetRef: args.get("--target-ref"),
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);

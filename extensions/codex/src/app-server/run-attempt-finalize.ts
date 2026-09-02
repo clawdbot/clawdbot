@@ -28,7 +28,6 @@ import {
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import {
-  buildCodexAppServerTimeoutDiagnostics,
   clearCodexBindingAfterInvalidImagePayload,
   markCodexAppServerBindingCoveredThroughTurn,
   shouldUseFreshCodexThreadAfterContextEngineOverflow,
@@ -38,7 +37,6 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
-import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
   createCodexUsageLimitPromptError,
   isCodexUsageLimitPromptError,
@@ -77,15 +75,7 @@ export async function finalizeCodexAttempt(
     startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
-  const {
-    state,
-    completion,
-    pendingOpenClawDynamicToolCompletionIds,
-    activeTurnItemIds,
-    activeCompletionBlockerItemIds,
-    activeFinalizationHookRunIds,
-    turnWatches,
-  } = turnRuntime;
+  const { state, completion, deadlines } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
   const { codexModelCallDiagnostics } = requestRuntime;
@@ -97,113 +87,65 @@ export async function finalizeCodexAttempt(
     notifyUserMessagePersisted,
   } = activeTurn;
   await completion;
-  await state.abortCleanup;
-  // Timeout and Stop still join queued projections within the abort grace;
-  // normal completion awaits the full drain.
-  const drain = drainNotificationQueue();
   const abortGraceElapsed = createDeferred<void>();
+  let settlementClosed = false;
   let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
-  const abortListener = addAbortListener(runAbortController.signal, () => {
+  const beginAbortGrace = () => {
+    if (settlementClosed) {
+      return;
+    }
     abortGraceTimer = setTimeout(
       () => abortGraceElapsed.resolve(),
       TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
     );
     abortGraceTimer.unref?.();
+  };
+  const abortListener = addAbortListener(runAbortController.signal, () => {
+    // Abort may first arrive after native completion. Its authoritative cleanup
+    // must finish before projection gets the full five-second drain grace.
+    void state.abortCleanup.then(beginAbortGrace, beginAbortGrace);
   });
+  const closeProjection = () => {
+    state.projectionClosed = true;
+    return activeProjector.closeProjection();
+  };
+  const settlement = drainNotificationQueue().then(closeProjection);
   try {
-    await Promise.race([drain, abortGraceElapsed.promise]);
+    // Native completion does not end accepted projection or checkpoint work.
+    // Both remain under the original receipt-anchored settlement deadline.
+    await Promise.race([settlement, abortGraceElapsed.promise]);
+    if (runAbortController.signal.aborted) {
+      await state.abortCleanup;
+    }
   } finally {
+    settlementClosed = true;
     abortListener[Symbol.dispose]();
     clearTimeout(abortGraceTimer);
+    deadlines.dispose();
+    if (!state.projectionClosed) {
+      await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
+    }
   }
-  const hasQuiescentCompletedAssistant =
-    activeProjector.hasCompletedTerminalAssistantText() &&
-    state.activeAppServerTurnRequests === 0 &&
-    activeTurnItemIds.size === 0 &&
-    activeCompletionBlockerItemIds.size === 0 &&
-    pendingOpenClawDynamicToolCompletionIds.size === 0 &&
-    activeFinalizationHookRunIds.size === 0 &&
-    state.unsettledFinalizationHookCount === 0 &&
-    state.rejectedFinalizationHookAssistant === undefined;
-  const hasRecoverableCompletedAssistant =
-    !turnWatches.isCompletionIdleWatchPinnedByTerminalError() &&
-    turnWatches.isAssistantCompletionIdleWatchArmed() &&
-    hasQuiescentCompletedAssistant;
-  const recoveredTurnWatchTimeout =
-    state.turnCompletionIdleTimedOut &&
-    !terminalState.explicitCancellationObserved &&
-    hasRecoverableCompletedAssistant &&
-    activeProjector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout();
-  if (recoveredTurnWatchTimeout) {
-    embeddedAgentLog.warn(
-      "codex app-server recovered completed assistant output after missing turn completion",
-      {
-        threadId: resourceState.thread.threadId,
-        turnId: activeTurnId,
-        timeoutKind: state.turnWatchTimeoutKind,
-        idleMs: state.turnWatchTimeoutIdleMs,
-        timeoutMs: state.turnWatchTimeoutMs,
-      },
-    );
-    trajectoryRecorder?.recordEvent("turn.watch_timeout_recovered", {
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-      timeoutKind: state.turnWatchTimeoutKind,
-      idleMs: state.turnWatchTimeoutIdleMs,
-      timeoutMs: state.turnWatchTimeoutMs,
-    });
-  }
-  let result = activeProjector.buildResult(toolBridge.telemetry, {
+  const result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,
   });
-  const turnLocalFinalizationDisposition =
-    resourceState.nativeHookRelay?.sealTurnLocalFinalization(activeTurnId);
-  if (turnLocalFinalizationDisposition) {
-    const messagesSnapshot = result.messagesSnapshot.filter(
-      (message) => readMirrorIdentity(message) !== `${activeTurnId}:assistant`,
-    );
-    result = {
-      ...result,
-      messagesSnapshot,
-      ...(turnLocalFinalizationDisposition.action === "revise"
-        ? {
-            beforeAgentFinalizeRevisionReason: turnLocalFinalizationDisposition.instruction,
-            beforeAgentFinalizeRevisionDisableTools: true as const,
-          }
-        : {
-            assistantTexts: [],
-            lastAssistant: undefined,
-            currentAttemptAssistant: undefined,
-            currentAttemptCompletedAssistant: undefined,
-            lastAssistantTextMessageIndex: undefined,
-            beforeAgentFinalizeDiscarded: true as const,
-          }),
-    };
-  }
   const projectedTerminal = attemptTerminal.project(result.terminal);
-  const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
-  const effectiveTurnCompletionIdleTimedOut =
-    state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
+  const effectiveTimedOut = state.timeout !== undefined;
   // Transport loss aborts in-flight work mechanically, but its terminal outcome
   // must remain a failure unless the operator explicitly canceled the attempt.
   const isFinalAborted = () =>
     terminalState.explicitCancellationObserved ||
     (!resourceState.executionDisconnectError &&
       (projectedTerminal.aborted ||
-        (runAbortController.signal.aborted &&
-          !state.clientClosedAbort &&
-          !recoveredTurnWatchTimeout)));
-  const clientClosedPromptErrorForFinal =
-    state.clientClosedPromptError && hasRecoverableCompletedAssistant
-      ? undefined
-      : state.clientClosedPromptError;
+        (runAbortController.signal.aborted && !state.clientClosedAbort)));
+  const clientClosedPromptErrorForFinal = state.clientClosedPromptError;
   let finalPromptError =
     resourceState.executionDisconnectError ??
     clientClosedPromptErrorForFinal ??
-    (effectiveTurnCompletionIdleTimedOut
-      ? state.turnCompletionIdleTimeoutMessage
-      : effectiveTimedOut
-        ? "codex app-server attempt timed out"
+    (state.timeout?.kind === "settlement"
+      ? "codex app-server terminal settlement timed out"
+      : state.timeout?.kind === "execution"
+        ? "codex app-server execution budget timed out"
         : projectedTerminal.promptError);
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
@@ -275,41 +217,29 @@ export async function finalizeCodexAttempt(
       : projectedTerminal.promptErrorSource;
   const codexAppServerFailureKind = clientClosedPromptErrorForFinal
     ? "client_closed_before_turn_completed"
-    : effectiveTurnCompletionIdleTimedOut
-      ? "turn_completion_idle_timeout"
+    : state.timeout?.kind === "settlement"
+      ? "turn_settlement_timeout"
       : undefined;
   const replayBlockedReason = codexAppServerFailureKind
     ? resolveCodexAppServerReplayBlockedReason(result)
     : undefined;
-  const promptTimeoutOutcome = buildCodexAppServerPromptTimeoutOutcome({
-    result,
-    turnCompletionIdleTimedOut: effectiveTurnCompletionIdleTimedOut,
-    turnWatchTimeoutKind: state.turnWatchTimeoutKind,
-  });
+  const promptTimeoutOutcome = buildCodexAppServerPromptTimeoutOutcome(state.timeout);
   const failureDiagnostics =
     codexAppServerFailureKind === "client_closed_before_turn_completed" &&
     state.clientClosedDiagnostic
       ? { transportError: state.clientClosedDiagnostic }
-      : codexAppServerFailureKind === "turn_completion_idle_timeout" &&
-          state.turnWatchTimeoutKind === "completion"
-        ? buildCodexAppServerTimeoutDiagnostics({
-            idleMs: state.turnWatchTimeoutIdleMs,
-            timeoutMs: state.turnWatchTimeoutMs,
-            lastActivityReason: state.turnWatchTimeoutLastActivityReason,
-            details: state.turnWatchTimeoutDetails,
-          })
+      : state.timeout?.kind === "settlement"
+        ? { timeoutMs: state.timeout.timeoutMs }
         : undefined;
   const codexAppServerFailure = codexAppServerFailureKind
     ? ({
         kind: codexAppServerFailureKind,
-        ...(codexAppServerFailureKind === "turn_completion_idle_timeout" &&
-        state.turnWatchTimeoutKind
-          ? { turnWatchTimeoutKind: state.turnWatchTimeoutKind }
-          : {}),
         transport: appServer.start.transport,
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
-        replaySafe: replayBlockedReason === undefined,
+        replaySafe:
+          codexAppServerFailureKind === "client_closed_before_turn_completed" &&
+          replayBlockedReason === undefined,
         ...(replayBlockedReason ? { replayBlockedReason } : {}),
         ...(failureDiagnostics ? { diagnostics: failureDiagnostics } : {}),
       } satisfies NonNullable<EmbeddedRunAttemptResult["codexAppServerFailure"]>)
@@ -318,14 +248,14 @@ export async function finalizeCodexAttempt(
   const completedTurnStatus = activeProjector.getCompletedTurnStatus();
   const locallyCompletedTurn =
     state.completed &&
-    (state.localCompletionRequested || !state.terminalTurnNotificationQueued) &&
-    !state.timedOut &&
+    state.localCompletionRequested &&
+    !state.timeout &&
     clientClosedPromptErrorForFinal === undefined;
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
+    (completedTurnStatus === "completed" || locallyCompletedTurn);
   const completedSourceReply = toolBridge.telemetry.messagingToolSentTargets.some(
     (target) => target.sourceReplyFinal === true,
   );
@@ -349,7 +279,6 @@ export async function finalizeCodexAttempt(
     classifyCodexModelCallFailureKind({
       error: finalPromptError,
       timedOut: effectiveTimedOut,
-      turnCompletionIdleTimedOut: effectiveTurnCompletionIdleTimedOut,
       runAborted: finalAborted,
       abortReason: terminalState.explicitCancellationReason ?? runAbortController.signal.reason,
       clientClosedAbort: state.clientClosedAbort,
@@ -379,89 +308,75 @@ export async function finalizeCodexAttempt(
   });
   const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
     mirrorOutcome;
-  if (turnLocalFinalizationDisposition) {
-    try {
-      await resourceState.nativeHookRelay?.acceptTurnLocalFinalization(activeTurnId);
-    } catch (error) {
-      embeddedAgentLog.warn(
-        `turn-local revision acceptance cleanup failed after Codex transcript suppression; ` +
-          `continuing runId=${params.runId} sessionId=${params.sessionId}: ${String(error)}`,
-      );
-    }
-  }
   const shouldCaptureSettledTurnFinalizationContext =
-    !turnLocalFinalizationDisposition &&
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult") &&
     (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
-    ? await captureCodexSettledTurnFinalizationContext({
+    ? ((await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,
         mirroredMessages: mirrorOutcome.mirroredMessages,
         settledMessages: result.messagesSnapshot,
         turnId: activeTurnId,
-      })
+      })) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;
-  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
-    // The isolated child must not infer around a partial or drifting transcript.
-    // Omitting this field preserves the existing incomplete-turn failure.
+  if (settledTurnFinalizationContext?.source === "unavailable") {
+    // Unavailable evidence forbids native inference, but must not revoke this
+    // eligible turn's path to the existing host-owned fallback.
     embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
     });
   }
-  if (!turnLocalFinalizationDisposition) {
-    runAgentHarnessLlmOutputHook({
-      event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: usesSupervisionConnection
-          ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-          : params.provider,
-        model: usesSupervisionConnection
-          ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-          : params.modelId,
-        ...hookContextWindowFields,
-        resolvedRef: usesSupervisionConnection
-          ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
-          : (params.runtimePlan?.observability.resolvedRef ??
-            `${params.provider}/${params.modelId}`),
-        ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
-          ? { harnessId: params.runtimePlan.observability.harnessId }
-          : {}),
-        assistantTexts: result.assistantTexts,
-        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
-        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
-      },
-      ctx: hookContext,
-      hookRunner,
-    });
-    await runCodexAgentEndHook(params, {
-      event: {
-        messages: result.messagesSnapshot,
-        success: !finalAborted && !finalPromptError,
-        ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
-        durationMs: Date.now() - attemptStartedAt,
-      },
-      ctx: {
-        ...hookContext,
-        modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
-        modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
-        authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
-        modelIterations: result.modelIterations ?? 0,
-        skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
-          attemptTools.toolBridge.availableSpecs,
-        ).some((tool) => tool.name === "skill_workshop"),
-        compacted: (result.compactionCount ?? 0) > 0,
-        senderId: params.senderId ?? undefined,
-        foregroundPromptContext: buildEmbeddedForegroundPromptContext(
-          { ...params, agentId: sessionAgentId },
-          agentDir,
-        ),
-      },
-      hookRunner,
-    });
-  }
+  runAgentHarnessLlmOutputHook({
+    event: {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      provider: usesSupervisionConnection
+        ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
+        : params.provider,
+      model: usesSupervisionConnection
+        ? (resourceState.thread.model ?? effectiveRuntimeModelId)
+        : params.modelId,
+      ...hookContextWindowFields,
+      resolvedRef: usesSupervisionConnection
+        ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
+        : (params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`),
+      ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
+        ? { harnessId: params.runtimePlan.observability.harnessId }
+        : {}),
+      assistantTexts: result.assistantTexts,
+      ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+      ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+    },
+    ctx: hookContext,
+    hookRunner,
+  });
+  await runCodexAgentEndHook(params, {
+    event: {
+      messages: result.messagesSnapshot,
+      success: !finalAborted && !finalPromptError,
+      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      durationMs: Date.now() - attemptStartedAt,
+    },
+    ctx: {
+      ...hookContext,
+      modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
+      modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
+      authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
+      modelIterations: result.modelIterations ?? 0,
+      skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
+        attemptTools.toolBridge.availableSpecs,
+      ).some((tool) => tool.name === "skill_workshop"),
+      compacted: (result.compactionCount ?? 0) > 0,
+      senderId: params.senderId ?? undefined,
+      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+        { ...params, agentId: sessionAgentId },
+        agentDir,
+      ),
+    },
+    hookRunner,
+  });
   state.shouldDelayNativeHookRelayUnregister =
     completedTurnStatus === "completed" &&
     !effectiveTimedOut &&
@@ -530,7 +445,6 @@ export async function finalizeCodexAttempt(
   markTrajectoryEndRecorded();
   const terminalAssistantText = collectTerminalAssistantText(result);
   if (
-    !turnLocalFinalizationDisposition &&
     terminalAssistantText &&
     (!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
     !finalAborted &&
@@ -557,8 +471,8 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  const finalizedResult: EmbeddedRunAttemptResult = {
-    ...result,
+  // Preserve the exact result identity carrying host-issued TTS delivery provenance.
+  const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
     ...(toolState.yieldAcknowledgment
       ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
       : {}),
@@ -572,9 +486,7 @@ export async function finalizeCodexAttempt(
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
     ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
-    ...(terminalAnchor && turnLocalFinalizationDisposition?.action !== "revise"
-      ? { contextEngineTerminalAnchor: terminalAnchor }
-      : {}),
+    ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
@@ -582,7 +494,7 @@ export async function finalizeCodexAttempt(
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
-  };
+  });
   if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
     resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
   }

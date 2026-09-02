@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 /**
  * Prepares stream subscription, tool execution, and the active run queue.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
@@ -20,6 +21,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
   createNestedToolActivity,
   readNestedToolActivity,
@@ -29,10 +31,7 @@ import {
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import {
-  buildToolLifecycleErrorResult,
-  sanitizeToolResult,
-} from "../../embedded-agent-tool-results.js";
+import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
@@ -42,13 +41,21 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import {
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { isToolResultError } from "../../tool-result-error.js";
+import { hashToolCall } from "../../tool-loop-detection.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
-import { ACTIVE_EMBEDDED_RUNS, setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  setActiveEmbeddedRunLifecycleGeneration,
+} from "../run-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -63,6 +70,7 @@ import {
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
+import { registerCodeModeRecoveryJournalEntry } from "./code-mode-recovery-journal.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
@@ -72,6 +80,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -89,7 +98,11 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 };
 
 export function prepareEmbeddedAttemptStream(input: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
+  applyPermissionMode?: (
+    mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
+    revokeApprovals: () => void,
+  ) => void;
   activeSession: AgentSession;
   runtimeChannel?: string;
   hookRunner: HookRunner;
@@ -123,14 +136,11 @@ export function prepareEmbeddedAttemptStream(input: {
   const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
-  let beforeAgentFinalizeRevisionDisableTools = false;
-  let beforeAgentFinalizeRevisionAccepted: (() => Promise<void> | void) | undefined;
-  let beforeAgentFinalizeDiscarded = false;
   let acceptingSteerMessages = true;
   let activeQueueAdmissions = 0;
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
-    (hookRunner?.hasHooks("before_agent_finalize") || attempt.onBeforeAgentFinalize !== undefined);
+    hookRunner?.hasHooks("before_agent_finalize");
   const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
     ? async (event: {
         messages: AgentMessage[];
@@ -138,7 +148,6 @@ export function prepareEmbeddedAttemptStream(input: {
         assistantEntryId?: string;
         lastAssistant?: AgentMessage;
         assistantTexts: readonly string[];
-        hostFinalDeferredCandidate?: string;
         hasAssistantVisibleText: boolean;
         isError: boolean;
         incompleteTerminalAssistant: boolean;
@@ -149,13 +158,12 @@ export function prepareEmbeddedAttemptStream(input: {
           event.willRetry ||
           event.isError ||
           event.incompleteTerminalAssistant ||
-          (!event.hasAssistantVisibleText && !event.hostFinalDeferredCandidate)
+          !event.hasAssistantVisibleText
         ) {
           return;
         }
         const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
         const lastAssistantMessage =
-          normalizeOptionalString(event.hostFinalDeferredCandidate) ??
           normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
           normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
           normalizeOptionalString(event.assistantTexts.join("\n\n"));
@@ -170,13 +178,14 @@ export function prepareEmbeddedAttemptStream(input: {
           state.aborted ||
           state.promptError ||
           state.timedOut ||
+          hasCompletedClientToolCall ||
           state.yieldDetected ||
           silentFinalReply
         ) {
           return;
         }
         const hookMessages = projectNestedToolActivityForHooks(
-          input.activeSession.messages.slice(),
+          input.activeSession.messages,
           input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({
@@ -209,97 +218,45 @@ export function prepareEmbeddedAttemptStream(input: {
         }
         let keepAdmissionClosed = false;
         try {
-          // Preserve the historical client-tool safety boundary for arbitrary
-          // global hooks. A source-local gate is allowed to inspect the final
-          // candidate because its revision contract hard-disables tools.
-          let outcome = hasCompletedClientToolCall
-            ? ({ action: "continue" } as const)
-            : await runAgentHarnessBeforeAgentFinalizeHook({
-                event: {
-                  runId: attempt.runId,
-                  sessionId: attempt.sessionId,
-                  ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-                  provider: reportedModelRef.provider,
-                  model: reportedModelRef.model,
-                  ...((attempt.cwd ?? attempt.workspaceDir)
-                    ? { cwd: attempt.cwd ?? attempt.workspaceDir }
-                    : {}),
-                  ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
-                  stopHookActive: false,
-                  lastAssistantMessage,
-                  messages: hookMessages,
-                },
-                ctx: {
-                  runId: attempt.runId,
-                  trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-                  agentId: input.hookAgentId,
-                  sessionKey: attempt.sessionKey,
-                  sessionId: attempt.sessionId,
-                  workspaceDir: attempt.workspaceDir,
-                  modelProviderId: reportedModelRef.provider,
-                  modelId: reportedModelRef.model,
-                  trigger: attempt.trigger,
-                  ...buildAgentHookContextChannelFields(attempt),
-                  ...buildAgentHookContextIdentityFields({
-                    trigger: attempt.trigger,
-                    senderId: attempt.senderId,
-                    chatId: attempt.chatId,
-                    channelContext: attempt.channelContext,
-                  }),
-                },
-                hookRunner,
-              });
-          if (outcome.action === "finalize") {
-            return;
-          }
-          let sourceLocalRevision = false;
-          let sourceLocalDiscard = false;
-          if (outcome.action === "continue" && attempt.onBeforeAgentFinalize) {
-            if (!event.assistantEntryId) {
-              return;
-            }
-            try {
-              const localOutcome = await attempt.onBeforeAgentFinalize({
-                runId: attempt.runId,
-                sessionId: attempt.sessionId,
-                ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-                provider: reportedModelRef.provider,
-                model: reportedModelRef.model,
-                lastAssistantMessage,
-                revisionAttempt: attempt.beforeAgentFinalizeRevisionAttempts ?? 0,
-              });
-              if (localOutcome.action === "discard") {
-                sourceLocalDiscard = true;
-                beforeAgentFinalizeRevisionAccepted = localOutcome.onAccepted;
-              } else if (localOutcome.action === "revise" && localOutcome.instruction.trim()) {
-                sourceLocalRevision = true;
-                outcome = { action: "revise", reason: localOutcome.instruction.trim() };
-                beforeAgentFinalizeRevisionDisableTools = localOutcome.disableTools ?? false;
-                beforeAgentFinalizeRevisionAccepted = localOutcome.onAccepted;
-              } else {
-                outcome = { action: "continue" };
-              }
-            } catch (error) {
-              log.warn(
-                `turn-local before-finalize gate failed; finalizing ` +
-                  `runId=${attempt.runId} sessionId=${attempt.sessionId}: ${String(error)}`,
-              );
-              return;
-            }
-          }
-          if (sourceLocalDiscard) {
-            keepAdmissionClosed = true;
-            beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
-            beforeAgentFinalizeDiscarded = true;
-            return { suppressTerminalDelivery: true };
-          }
+          const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+            event: {
+              runId: attempt.runId,
+              sessionId: attempt.sessionId,
+              ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+              provider: reportedModelRef.provider,
+              model: reportedModelRef.model,
+              ...((attempt.cwd ?? attempt.workspaceDir)
+                ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+                : {}),
+              ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+              stopHookActive: false,
+              lastAssistantMessage,
+              messages: hookMessages,
+            },
+            ctx: {
+              runId: attempt.runId,
+              trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
+              agentId: input.hookAgentId,
+              sessionKey: attempt.sessionKey,
+              sessionId: attempt.sessionId,
+              workspaceDir: attempt.workspaceDir,
+              modelProviderId: reportedModelRef.provider,
+              modelId: reportedModelRef.model,
+              trigger: attempt.trigger,
+              ...buildAgentHookContextChannelFields(attempt),
+              ...buildAgentHookContextIdentityFields({
+                trigger: attempt.trigger,
+                senderId: attempt.senderId,
+                chatId: attempt.chatId,
+                channelContext: attempt.channelContext,
+              }),
+            },
+            hookRunner,
+          });
           if (outcome.action !== "revise") {
             return;
           }
-          if (
-            event.hadDeterministicSideEffect &&
-            !(sourceLocalRevision && beforeAgentFinalizeRevisionDisableTools)
-          ) {
+          if (event.hadDeterministicSideEffect) {
             log.warn(
               `before_agent_finalize requested revision after potential side effects; finalizing ` +
                 `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
@@ -341,6 +298,7 @@ export function prepareEmbeddedAttemptStream(input: {
     reasoningMode: attempt.reasoningLevel ?? "off",
     thinkingLevel: attempt.thinkLevel,
     toolResultFormat: attempt.toolResultFormat,
+    toolProgressDetail: attempt.toolProgressDetail,
     shouldEmitToolResult: attempt.shouldEmitToolResult,
     shouldEmitToolOutput: attempt.shouldEmitToolOutput,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
@@ -358,10 +316,6 @@ export function prepareEmbeddedAttemptStream(input: {
     blockReplyBreak: attempt.blockReplyBreak,
     blockReplyChunking: attempt.blockReplyChunking,
     onPartialReply: attempt.onPartialReply,
-    // A source gate owns provisional previews; global hooks retain their full
-    // delivery quarantine even when the same turn also has a source finalizer.
-    partialReplyIsProvisional:
-      attempt.onBeforeAgentFinalize !== undefined && !hookRunner?.hasHooks("before_agent_finalize"),
     onAssistantMessageStart: attempt.onAssistantMessageStart,
     onExecutionPhase: attempt.onExecutionPhase,
     onAgentEvent: attempt.onAgentEvent,
@@ -397,6 +351,10 @@ export function prepareEmbeddedAttemptStream(input: {
     silentExpected: attempt.silentExpected,
     suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
     config: attempt.config,
+    providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
+    compactionCountOwner: attempt.compactionCountOwner,
+    onContextAccountingEvent: attempt.onContextAccountingEvent,
+    sessionPersistence: attempt.sessionPersistence,
     // Live events belong to the transcript session. The sandbox key is only
     // authority context and may intentionally point at a visible parent.
     sessionKey: attempt.sessionKey,
@@ -442,9 +400,59 @@ export function prepareEmbeddedAttemptStream(input: {
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
+        onTerminal: async (terminal) => {
+          const message = {
+            ...createNestedToolActivity({
+              runId: attempt.runId,
+              scopeId: activityScope,
+              afterEntryId,
+              startOrder,
+              parentToolCallId: toolParams.parentToolCallId,
+              toolCallId: toolParams.toolCallId,
+              toolName: toolParams.toolName,
+              input: terminal.executedArguments,
+              result: sanitizeToolResult(terminal.result),
+              isError: terminal.isError,
+              startedAt,
+              timestamp: Date.now(),
+            }),
+            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+          };
+          await runWithOwnedSessionTranscriptWrite(
+            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
+            () => {
+              // Revalidate the exact attempt after awaited acceptance and writer admission.
+              if (
+                ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
+                input.getRunState().aborted
+              ) {
+                return;
+              }
+              if (isRecord(terminal.result)) {
+                copyInternalToolResultState(terminal.result, message);
+              }
+              manager.appendMessage(message);
+              const recorded = readNestedToolActivity(
+                redactTranscriptMessage(message, attempt.config),
+              );
+              if (!recorded) {
+                throw new Error("Nested activity became invalid during transcript redaction");
+              }
+              registerCodeModeRecoveryJournalEntry(recorded, {
+                actionKey: hashToolCall(
+                  normalizeToolPolicyName(toolParams.toolName),
+                  terminal.executedArguments,
+                ),
+                effectState: terminal.effectReceipt.state,
+              });
+              input.nestedToolActivities.push(recorded);
+            },
+          );
+          notifyToolActivity(attempt.runId);
+        },
         execute: async (onImplementationStart) => {
           // Acceptance belongs inside execution: observers must never see a rejected success.
-          const outcome = await raceWithAbortSignal(
+          return await raceWithAbortSignal(
             (async () => {
               signal.throwIfAborted();
               const preparer = getInternalToolExecutionPreparer(toolParams.tool);
@@ -478,53 +486,7 @@ export function prepareEmbeddedAttemptStream(input: {
             })().then(toolParams.acceptResultBeforeProjection),
             signal,
             yieldRunSignal,
-          ).then(
-            (result) => ({ result }),
-            (error: unknown) => ({ result: buildToolLifecycleErrorResult(error), error }),
           );
-          const activity = createNestedToolActivity({
-            runId: attempt.runId,
-            scopeId: activityScope,
-            afterEntryId,
-            startOrder,
-            parentToolCallId: toolParams.parentToolCallId,
-            toolCallId: toolParams.toolCallId,
-            toolName: toolParams.toolName,
-            input: toolParams.input,
-            result: sanitizeToolResult(outcome.result),
-            isError: isToolResultError(outcome.result),
-            startedAt,
-            timestamp: Date.now(),
-          });
-          await runWithOwnedSessionTranscriptWrite(
-            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
-            () => {
-              // Revalidate the exact attempt after awaited acceptance and writer admission.
-              if (
-                ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
-                input.getRunState().aborted
-              ) {
-                return;
-              }
-              const message = {
-                ...activity,
-                idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
-              };
-              manager.appendMessage(message);
-              const recorded = readNestedToolActivity(
-                redactTranscriptMessage(activity, attempt.config),
-              );
-              if (!recorded) {
-                throw new Error("Nested activity became invalid during transcript redaction");
-              }
-              input.nestedToolActivities.push(recorded);
-            },
-          );
-          notifyToolActivity(attempt.runId);
-          if ("error" in outcome) {
-            throw outcome.error;
-          }
-          return outcome.result;
         },
       }),
       signal,
@@ -577,15 +539,39 @@ export function prepareEmbeddedAttemptStream(input: {
   };
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
+  const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
+    permissionChangeOwner: attempt.permissionChange?.owner,
     diagnosticOwner: input.diagnosticOwner,
     closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     startedAtMs: attempt.startedAtMs,
-    ...(attempt.toolAuthorityFingerprint
-      ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
-      : {}),
+    get toolAuthorityFingerprint() {
+      return attempt.toolAuthorityFingerprint;
+    },
+    applyPermissionMode: applyPermissionMode
+      ? async (mode, revokeApprovals) => {
+          if (
+            !acceptingSteerMessages ||
+            input.runAbortController.signal.aborted ||
+            ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) !== queueHandle
+          ) {
+            return false;
+          }
+          if ((attempt.permissionMode ?? null) === mode) {
+            return true;
+          }
+          try {
+            applyPermissionMode(mode, revokeApprovals);
+            return true;
+          } catch (error) {
+            // A partially rebuilt surface must never resume its revoked tools.
+            input.abortRun(false, error);
+            throw error;
+          }
+        }
+      : undefined,
     claimPendingUserInputAnswer: (text, options) =>
       claimEmbeddedPendingUserInputAnswer(text, options, attempt.sessionKey),
     cancelPendingUserInput: (resolvedBy) =>
@@ -620,7 +606,13 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
-  setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
+  setActiveEmbeddedRun(
+    attempt.sessionId,
+    queueHandle,
+    attempt.sessionKey,
+    attempt.sessionFile,
+    input.hookAgentId,
+  );
   if (attempt.deferTerminalLifecycle && attempt.onDeferredLifecycleOwner) {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,
@@ -649,9 +641,6 @@ export function prepareEmbeddedAttemptStream(input: {
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
-    getBeforeAgentFinalizeRevisionDisableTools: () => beforeAgentFinalizeRevisionDisableTools,
-    getBeforeAgentFinalizeRevisionAccepted: () => beforeAgentFinalizeRevisionAccepted,
-    getBeforeAgentFinalizeDiscarded: () => beforeAgentFinalizeDiscarded,
     stopAcceptingSteerMessages: () => {
       acceptingSteerMessages = false;
     },

@@ -1,10 +1,25 @@
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Duplex } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "./relay-server.js";
+
+function upgradeRequest(): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.method = "GET";
+  req.url = "/extension";
+  req.headers = {
+    host: "127.0.0.1",
+    connection: "Upgrade",
+    upgrade: "websocket",
+    "sec-websocket-version": "13",
+    "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+  };
+  return req;
+}
 
 describe("pre-auth WebSocket head admission", () => {
   it("rejects oversized upgrade-head auth data before challenge or bridge promotion", async () => {
@@ -16,16 +31,7 @@ describe("pre-auth WebSocket head admission", () => {
         callback();
       },
     });
-    const req = new IncomingMessage(new Socket());
-    req.method = "GET";
-    req.url = "/extension";
-    req.headers = {
-      host: "127.0.0.1",
-      connection: "Upgrade",
-      upgrade: "websocket",
-      "sec-websocket-version": "13",
-      "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
-    };
+    const req = upgradeRequest();
     const wss = new WebSocketServer({
       noServer: true,
       maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
@@ -55,4 +61,72 @@ describe("pre-auth WebSocket head admission", () => {
       });
     }
   });
+
+  it.each([false, true])(
+    "owns a pending raw write error through close (terminated=%s)",
+    async (terminated) => {
+      let pendingWrite: ((error?: Error | null) => void) | undefined;
+      const socket = new Duplex({
+        read() {},
+        write(chunk: Buffer, _encoding, callback) {
+          if (chunk.toString().startsWith("HTTP/1.1")) {
+            callback();
+          } else {
+            pendingWrite = callback;
+          }
+        },
+      });
+      const rawClosed = vi.fn();
+      socket.once("close", rawClosed);
+      const req = upgradeRequest();
+      const wss = new WebSocketServer({
+        noServer: true,
+        maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
+      });
+      const writeResult = vi.fn();
+      try {
+        let closeWebSocket = () => {};
+        const closed = new Promise<void>((resolve) => {
+          handlePreAuthWebSocketUpgrade({
+            wss,
+            req,
+            socket,
+            head: Buffer.alloc(0),
+            onUpgrade: (ws) => {
+              ws.once("close", () => resolve());
+              closeWebSocket = () => ws.terminate();
+              ws.send("pending reply", writeResult);
+            },
+          });
+        });
+        await setImmediate();
+        expect(pendingWrite).toBeTypeOf("function");
+        const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+        // Node can deliver the write callback before the raw socket's queued
+        // error event. Destroying the wrapper must not orphan that event.
+        process.nextTick(() => pendingWrite?.(error));
+        socket.destroy(error);
+        if (terminated) {
+          closeWebSocket();
+        }
+        await closed;
+        await setImmediate();
+        expect(writeResult).toHaveBeenCalledExactlyOnceWith(error);
+        expect(rawClosed).toHaveBeenCalledOnce();
+        expect(socket.listenerCount("data")).toBe(0);
+        expect(socket.listenerCount("end")).toBe(0);
+        expect(socket.listenerCount("error")).toBe(0);
+        expect(wss.clients.size).toBe(0);
+      } finally {
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+        socket.destroy();
+        req.destroy();
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
+      }
+    },
+  );
 });

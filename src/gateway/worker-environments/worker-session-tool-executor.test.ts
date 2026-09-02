@@ -1,29 +1,31 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  type AgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import * as environmentServiceModule from "./service.js";
 import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementStore,
-} from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
-import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
+  SOURCE,
+  CHILD,
+  GRANDCHILD,
+  PARENT_EXECUTION_IDENTITY_TOKEN,
+  resolveGatewayContext,
+  installWorkerSessionToolTestFixture,
+} from "./worker-session-tool-executor.test-support.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 const delivered = vi.hoisted(() => vi.fn());
@@ -34,7 +36,6 @@ const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
 const githubPublicationRequest = vi.hoisted(() => vi.fn());
-const resolveGatewayContext = () => undefined;
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -108,193 +109,116 @@ vi.mock("../../agents/tools/in-process-gateway.js", () => ({
   },
 }));
 
-const SOURCE = {
-  agentId: "main",
-  sessionId: "source-session",
-  sessionKey: "agent:main:dashboard:source",
-  environmentId: "source-environment",
-  ownerEpoch: 3,
+const fixtureMocks = {
+  sessionEntries,
+  delivered,
+  gatewayRequest,
+  gatewayCreate,
+  gatewayRuntimeIdentity,
+  dispatchChild,
+  spawnCallerIdentity,
+  spawnArgs,
+  githubPublicationRequest,
+  scopedSessionAccess,
 };
-const TARGET = {
-  agentId: "main",
-  sessionId: "target-session",
-  sessionKey: "agent:main:dashboard:target",
-  environmentId: "target-environment",
-  ownerEpoch: 4,
-};
-const PARENT = {
-  sessionId: "parent-session",
-  sessionKey: "agent:main:dashboard:parent",
-};
-const CHILD = {
-  agentId: "main",
-  sessionId: "spawned-child-session",
-  environmentId: "spawned-child-environment",
-  ownerEpoch: 5,
-};
-const GRANDCHILD = {
-  agentId: "main",
-  sessionId: "spawned-grandchild-session",
-  environmentId: "spawned-grandchild-environment",
-  ownerEpoch: 6,
-};
-const PARENT_EXECUTION_IDENTITY_TOKEN = {
-  tokenVersion: 1,
-  contextId: "parent-context",
-  executionId: "parent-execution",
-  runId: "source-run",
-  createdAt: 1,
-} satisfies ExecutionIdentityAdmissionToken;
 
 describe("worker session tool topology", () => {
-  let root: string;
-  let database: OpenClawStateDatabase;
-  let placements: WorkerSessionPlacementStore;
-  let identity: WorkerConnectionIdentity;
-  let execute: ReturnType<typeof createWorkerSessionToolExecutor>;
-  let sourceClaim: ReturnType<WorkerSessionPlacementStore["claimTurn"]>;
-  let delegatedAuthorities: AgentRunDelegatedAuthority[];
-  let childSessionKey: string | undefined;
-  let spawnOrder: string[];
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
+  let placements: ReturnType<typeof getFixture>["placements"];
+  let identity: ReturnType<typeof getFixture>["identity"];
+  let execute: ReturnType<typeof getFixture>["execute"];
+  let sourceClaim: ReturnType<typeof getFixture>["sourceClaim"];
+  let delegatedAuthorities: ReturnType<typeof getFixture>["delegatedAuthorities"];
+  let spawnState: ReturnType<typeof getFixture>["spawnState"];
+  let activate: ReturnType<typeof getFixture>["activate"];
+  let setEntry: ReturnType<typeof getFixture>["setEntry"];
+  let spawn: ReturnType<typeof getFixture>["spawn"];
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"));
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    placements = createWorkerSessionPlacementStore({ database });
-    activate(SOURCE);
-    activate(TARGET);
-    sourceClaim = placements.claimTurn({
-      sessionId: SOURCE.sessionId,
-      agentId: SOURCE.agentId,
-      sessionKey: SOURCE.sessionKey,
-      claimId: "source-claim",
-      runId: "source-run",
-      owner: {
-        kind: "worker",
-        environmentId: SOURCE.environmentId,
-        ownerEpoch: SOURCE.ownerEpoch,
-      },
-    });
-    placements.authorizeWorkerTurnTools(sourceClaim, [
-      "sessions_send",
-      "sessions_spawn",
-      "github_publish",
-    ]);
-    delegatedAuthorities = [];
-    const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
-    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
-    bindWorkerTurnExecutionIdentity(
+  beforeEach(() => {
+    resetGlobalHookRunner();
+    ({
       placements,
+      identity,
+      execute,
       sourceClaim,
-      PARENT_EXECUTION_IDENTITY_TOKEN,
-      sourceOperationalRun,
-      { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
-    );
-    identity = {
-      environmentId: SOURCE.environmentId,
-      credentialHash: "credential-hash",
-      bundleHash: "a".repeat(64),
-      sessionId: SOURCE.sessionId,
-      runId: sourceClaim.runId,
-      turnClaim: sourceClaim,
-      ownerEpoch: SOURCE.ownerEpoch,
-      rpcSetVersion: 1,
-      protocolFeatures: ["worker-session-tools-v1"],
-      credentialExpiresAtMs: Date.now() + 60_000,
-    };
-    sessionEntries.clear();
-    delivered.mockReset();
-    gatewayRequest.mockReset();
-    gatewayCreate.mockReset();
-    gatewayRuntimeIdentity.mockReset();
-    dispatchChild.mockReset();
-    spawnCallerIdentity.mockReset();
-    spawnArgs.mockReset();
-    githubPublicationRequest.mockReset();
-    githubPublicationRequest.mockResolvedValue({
-      requestId: "publication-1",
-      status: "requested",
-      message: "Publication was accepted.",
+      delegatedAuthorities,
+      spawnState,
+      activate,
+      setEntry,
+      spawn,
+    } = getFixture());
+  });
+
+  afterEach(() => resetGlobalHookRunner());
+
+  it("blocks a worker spawn before child effects and replays the decision", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const receipts: DecisionReceiptV1[] = [];
+    const clearReceipts = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
     });
-    scopedSessionAccess.mockClear();
-    childSessionKey = undefined;
-    spawnOrder = [];
-    gatewayCreate.mockImplementation(
-      async (request: { method: string; params: Record<string, unknown> }) => {
-        spawnOrder.push("create");
-        childSessionKey = String(request.params.key);
-        setEntry(childSessionKey, CHILD.sessionId, {
-          sessionKey: SOURCE.sessionKey,
-          sessionId: SOURCE.sessionId,
-        });
-        return { ok: true, key: childSessionKey, sessionId: CHILD.sessionId };
-      },
+    const beforeToolCall = vi.fn(() => ({
+      block: true,
+      blockReason: "blocked by worker session policy",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", matcher: ["sessions_spawn"], handler: beforeToolCall },
+      ]),
     );
-    dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      spawnOrder.push("dispatch");
-      expect(placements.get(CHILD.sessionId)).toBeUndefined();
-      activate({
-        ...CHILD,
-        sessionKey: request.sessionKey,
-      });
-      return placements.get(CHILD.sessionId);
+
+    const [first, replay] = await (async () => {
+      try {
+        return [await spawn("blocked-worker-spawn"), await spawn("blocked-worker-spawn")] as const;
+      } finally {
+        clearReceipts();
+      }
+    })();
+
+    expect(replay.resultJson).toBe(first.resultJson);
+    expect(JSON.parse(first.resultJson)).toMatchObject({
+      details: { status: "blocked", reason: "blocked by worker session policy" },
     });
-    gatewayRequest.mockImplementation(
-      async (request: { method: string; params: Record<string, unknown> }) => {
-        if (request.method === "agent") {
-          spawnOrder.push("send");
-          expect(placements.get(CHILD.sessionId)?.state).toBe("active");
-          return { runId: "spawned-child-run", status: "accepted" };
-        }
-        throw new Error(`Unexpected gateway request: ${request.method}`);
-      },
-    );
-    execute = createWorkerSessionToolExecutor({
-      resolveGatewayContext,
-      placements,
-      dispatchChild,
-      githubPublication: { requestForClaim: githubPublicationRequest },
-      portals: {
-        getService: () => undefined,
-        carrier: { open: vi.fn() },
-        onChanged: vi.fn(),
-      },
-      environments: {
-        get: (environmentId: string) => {
-          if (environmentId === SOURCE.environmentId) {
-            return {
-              state: "attached",
-              ownerEpoch: SOURCE.ownerEpoch,
-              attachedSessionIds: [SOURCE.sessionId],
-              providerId: "fake",
-              profileId: "cloud-profile",
-              profileSnapshot: { install: "bundle", settings: { region: "source" } },
-            };
-          }
-          if (environmentId === CHILD.environmentId) {
-            return {
-              state: "attached",
-              ownerEpoch: CHILD.ownerEpoch,
-              attachedSessionIds: [CHILD.sessionId],
-              providerId: "fake",
-              profileId: "cloud-profile",
-              profileSnapshot: { install: "bundle", settings: { region: "source" } },
-            };
-          }
-          if (environmentId === GRANDCHILD.environmentId) {
-            return {
-              state: "attached",
-              ownerEpoch: GRANDCHILD.ownerEpoch,
-              attachedSessionIds: [GRANDCHILD.sessionId],
-              providerId: "fake",
-              profileId: "cloud-profile",
-              profileSnapshot: { install: "bundle", settings: { region: "source" } },
-            };
-          }
-          return undefined;
+    expect(beforeToolCall).toHaveBeenCalledOnce();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      contextId: PARENT_EXECUTION_IDENTITY_TOKEN.contextId,
+      executionId: PARENT_EXECUTION_IDENTITY_TOKEN.executionId,
+      runId: PARENT_EXECUTION_IDENTITY_TOKEN.runId,
+      action: { family: "plugin", operation: "before_tool_call" },
+      decision: { outcome: "denied", reasonCode: "plugin_hook_blocked" },
+      enforcement: { coverageState: "enforced" },
+      source: { owner: "plugin-hook" },
+    });
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("blocks an invalid worker policy rewrite before child effects", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["sessions_spawn"],
+          handler: async () => ({ params: { task: "" } }),
         },
-      } as never,
+      ]),
+    );
+
+    const result = await spawn("invalid-worker-policy-rewrite");
+
+    expect(JSON.parse(result.resultJson)).toMatchObject({
+      details: {
+        status: "blocked",
+        reason: "Tool call blocked because before_tool_call returned invalid sessions_spawn input.",
+      },
     });
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
   });
 
   it("records publication intent with the exact claim and no credential fields", async () => {
@@ -358,84 +282,6 @@ describe("worker session tool topology", () => {
     expect(githubPublicationRequest).not.toHaveBeenCalled();
   });
 
-  afterEach(async () => {
-    for (const authority of delegatedAuthorities) {
-      releaseAgentRunDelegatedAuthority(authority);
-    }
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  function activate(session: {
-    agentId: string;
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId: string;
-    sessionKey: string;
-  }): void {
-    let placement = placements.startDispatch(session);
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: session.environmentId },
-    });
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `manifest-${session.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${session.sessionId}`,
-      },
-    });
-    placements.transition({
-      sessionId: session.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: session.ownerEpoch },
-    });
-  }
-
-  function setEntry(
-    sessionKey: string,
-    sessionId: string,
-    parent?: { sessionKey: string; sessionId: string },
-  ): void {
-    sessionEntries.set(sessionKey, {
-      sessionId,
-      updatedAt: Date.now(),
-      ...(parent ? { parentSessionKey: parent.sessionKey, parentSessionId: parent.sessionId } : {}),
-    });
-  }
-
-  async function send(toolCallId: string) {
-    return await execute({
-      identity,
-      toolName: "sessions_send",
-      request: {
-        toolCallId,
-        sessionKey: TARGET.sessionKey,
-        message: "status",
-        timeoutSeconds: 0,
-      },
-    });
-  }
-
-  function spawn(toolCallId: string, task = "start the child") {
-    return execute({ identity, toolName: "sessions_spawn", request: { toolCallId, task } });
-  }
-
   it.each([false, true])(
     "creates and replays a cloud child with inherited required isolation (%s)",
     async (required) => {
@@ -449,8 +295,8 @@ describe("worker session tool topology", () => {
       const first = await spawn("spawn-cloud-child", "run in the nested cloud session");
       const replay = await spawn("spawn-cloud-child", "run in the nested cloud session");
 
-      expect(childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
-      expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
+      expect(spawnState.childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
+      expect(spawnState.order).toEqual(["create", "dispatch", "send"]);
       expect(gatewayCreate).toHaveBeenCalledOnce();
       expect(gatewayCreate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -471,17 +317,21 @@ describe("worker session tool topology", () => {
       expect(gatewayCreate.mock.calls[0]?.[0]?.creation?.sandbox).toBe(
         required ? "required" : undefined,
       );
-      expect(dispatchChild).toHaveBeenCalledWith({
-        sessionId: CHILD.sessionId,
-        sessionKey: childSessionKey,
-        agentId: CHILD.agentId,
-        executionMode: "worker-turn",
-        profileId: "cloud-profile",
-        inheritedProfile: {
-          providerId: "fake",
-          profileSnapshot: { install: "bundle", settings: { region: "source" } },
+      expect(dispatchChild).toHaveBeenCalledWith(
+        {
+          sessionId: CHILD.sessionId,
+          sessionKey: spawnState.childSessionKey,
+          agentId: CHILD.agentId,
+          executionMode: "worker-turn",
+          profileId: "cloud-profile",
+          inheritedProfile: {
+            providerId: "fake",
+            profileSnapshot: { install: "bundle", settings: { region: "source" } },
+          },
         },
-      });
+        undefined,
+        expect.any(Function),
+      );
       expect(gatewayRequest).toHaveBeenLastCalledWith(
         expect.objectContaining({
           agentRunTracking: "native_subagent",
@@ -497,7 +347,7 @@ describe("worker session tool topology", () => {
         expect.objectContaining({ expectsCompletionMessage: false, visible: true, worktree: true }),
       );
       expect(placements.get(CHILD.sessionId)?.state).toBe("active");
-      expect(sessionEntries.get(childSessionKey!)).toMatchObject({
+      expect(sessionEntries.get(spawnState.childSessionKey!)).toMatchObject({
         sessionId: CHILD.sessionId,
         parentSessionKey: SOURCE.sessionKey,
         parentSessionId: SOURCE.sessionId,
@@ -601,9 +451,9 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     gatewayCreate.mockImplementationOnce(
       async (request: { method: string; params: Record<string, unknown> }) => {
-        spawnOrder.push("create");
-        childSessionKey = String(request.params.key);
-        setEntry(childSessionKey, CHILD.sessionId, {
+        spawnState.order.push("create");
+        spawnState.childSessionKey = String(request.params.key);
+        setEntry(spawnState.childSessionKey, CHILD.sessionId, {
           sessionKey: SOURCE.sessionKey,
           sessionId: SOURCE.sessionId,
         });
@@ -613,7 +463,7 @@ describe("worker session tool topology", () => {
     const first = await spawn("spawn-response-loss");
     const replay = await spawn("spawn-response-loss");
 
-    expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
+    expect(spawnState.order).toEqual(["create", "dispatch", "send"]);
     expect(gatewayCreate).toHaveBeenCalledOnce();
     expect(first.resultJson).not.toContain('"status":"error"');
     expect(replay.resultJson).toBe(first.resultJson);
@@ -622,7 +472,7 @@ describe("worker session tool topology", () => {
   it("recovers an active placement when cloud dispatch loses its response", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     dispatchChild.mockImplementationOnce(async (request: { sessionKey: string }) => {
-      spawnOrder.push("dispatch");
+      spawnState.order.push("dispatch");
       activate({
         ...CHILD,
         sessionKey: request.sessionKey,
@@ -632,7 +482,7 @@ describe("worker session tool topology", () => {
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
         if (request.method === "agent") {
-          spawnOrder.push("send");
+          spawnState.order.push("send");
           return { runId: "spawned-child-run", status: "accepted" };
         }
         throw new Error(`Unexpected gateway request: ${request.method}`);
@@ -642,7 +492,7 @@ describe("worker session tool topology", () => {
     const result = await spawn("spawn-dispatch-response-loss");
 
     expect(result.resultJson).not.toContain('"status":"error"');
-    expect(spawnOrder).toEqual(["create", "dispatch", "send"]);
+    expect(spawnState.order).toEqual(["create", "dispatch", "send"]);
     expect(gatewayCreate).toHaveBeenCalledOnce();
     expect(placements.get(CHILD.sessionId)?.state).toBe("active");
   });
@@ -653,7 +503,7 @@ describe("worker session tool topology", () => {
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
         if (request.method === "agent") {
-          spawnOrder.push("send");
+          spawnState.order.push("send");
           sendKeys.push(String(request.params.idempotencyKey));
           if (sendKeys.length === 1) {
             throw new Error("initial task response was lost");
@@ -667,7 +517,7 @@ describe("worker session tool topology", () => {
     const result = await spawn("spawn-initial-task-response-loss");
 
     expect(result.resultJson).not.toContain('"status":"error"');
-    expect(spawnOrder).toEqual(["create", "dispatch", "send", "send"]);
+    expect(spawnState.order).toEqual(["create", "dispatch", "send", "send"]);
     expect(sendKeys).toHaveLength(2);
     expect(sendKeys[1]).toBe(sendKeys[0]);
   });
@@ -675,7 +525,7 @@ describe("worker session tool topology", () => {
   it("spawns a grandchild from the child cloud turn and communicates across both levels", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await spawn("spawn-child-for-nesting");
-    const spawnedChildKey = childSessionKey!;
+    const spawnedChildKey = spawnState.childSessionKey!;
     const childClaim = placements.claimTurn({
       sessionId: CHILD.sessionId,
       agentId: CHILD.agentId,
@@ -698,12 +548,16 @@ describe("worker session tool topology", () => {
     } satisfies ExecutionIdentityAdmissionToken;
     const childOperationalRun = createOperationalRunInstanceRef(childClaim.runId);
     delegatedAuthorities.push(claimAgentRunDelegatedAuthority(childOperationalRun));
-    bindWorkerTurnExecutionIdentity(
+    bindWorkerTurnOwner(
       placements,
       childClaim,
       childExecutionIdentityToken,
       childOperationalRun,
-      { agentId: CHILD.agentId, sessionKey: spawnedChildKey },
+      {
+        agentId: CHILD.agentId,
+        sessionKey: spawnedChildKey,
+      },
+      () => {},
     );
     const childIdentity: WorkerConnectionIdentity = {
       ...identity,
@@ -756,7 +610,7 @@ describe("worker session tool topology", () => {
       sessionId: GRANDCHILD.sessionId,
     });
 
-    await execute({
+    const childSend = await execute({
       identity: childIdentity,
       toolName: "sessions_send",
       request: {
@@ -765,6 +619,7 @@ describe("worker session tool topology", () => {
         message: "child reporting to root",
       },
     });
+    expect(JSON.parse(childSend.resultJson)).toMatchObject({ details: { status: "ok" } });
     const grandchildClaim = placements.claimTurn({
       sessionId: GRANDCHILD.sessionId,
       agentId: GRANDCHILD.agentId,
@@ -778,7 +633,23 @@ describe("worker session tool topology", () => {
       },
     });
     placements.authorizeWorkerTurnTools(grandchildClaim, ["sessions_send"]);
-    await execute({
+    const grandchildOperationalRun = createOperationalRunInstanceRef(grandchildClaim.runId);
+    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(grandchildOperationalRun));
+    bindWorkerTurnOwner(
+      placements,
+      grandchildClaim,
+      {
+        ...PARENT_EXECUTION_IDENTITY_TOKEN,
+        contextId: "grandchild-context",
+        executionId: "grandchild-execution",
+        runId: grandchildClaim.runId,
+        createdAt: 3,
+      },
+      grandchildOperationalRun,
+      { agentId: GRANDCHILD.agentId, sessionKey: spawnedGrandchildKey! },
+      () => {},
+    );
+    const grandchildSend = await execute({
       identity: {
         ...identity,
         environmentId: GRANDCHILD.environmentId,
@@ -794,6 +665,7 @@ describe("worker session tool topology", () => {
         message: "grandchild reporting to child",
       },
     });
+    expect(JSON.parse(grandchildSend.resultJson)).toMatchObject({ details: { status: "ok" } });
 
     expect(delivered).toHaveBeenCalledTimes(2);
     expect(delivered.mock.calls.map((call) => call[0].args.sessionKey)).toEqual([
@@ -806,9 +678,9 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     gatewayCreate.mockImplementationOnce(
       async (request: { method: string; params: Record<string, unknown> }) => {
-        spawnOrder.push("create");
-        childSessionKey = String(request.params.key);
-        setEntry(childSessionKey, CHILD.sessionId, {
+        spawnState.order.push("create");
+        spawnState.childSessionKey = String(request.params.key);
+        setEntry(spawnState.childSessionKey, CHILD.sessionId, {
           sessionKey: "agent:main:dashboard:other-parent",
           sessionId: "other-parent-session",
         });
@@ -824,246 +696,148 @@ describe("worker session tool topology", () => {
     expect(gatewayRequest).not.toHaveBeenCalled();
     expect(() => placements.releaseTurn(sourceClaim)).not.toThrow();
   });
+});
 
-  it("delivers only across exact live parent, child, and sibling incarnations", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-    await expect(send("parent-to-child")).resolves.toBeDefined();
+describe("worker spawn startup composition", () => {
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
 
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId, {
-      sessionKey: TARGET.sessionKey,
-      sessionId: TARGET.sessionId,
-    });
-    setEntry(TARGET.sessionKey, TARGET.sessionId);
-    await expect(send("child-to-parent")).resolves.toBeDefined();
-
-    setEntry(PARENT.sessionKey, PARENT.sessionId);
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, PARENT);
-    await expect(send("sibling-to-sibling")).resolves.toBeDefined();
-
-    expect(delivered).toHaveBeenCalledTimes(3);
-    expect(scopedSessionAccess).toHaveBeenCalledOnce();
-    expect(scopedSessionAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedSessionId: PARENT.sessionId,
-        targetSessionKey: PARENT.sessionKey,
-      }),
-    );
-    expect(delivered).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
-        options: expect.objectContaining({
-          expectedTargetSessionId: TARGET.sessionId,
-          idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
-        }),
-      }),
-    );
-  });
-
-  it.each([
-    { relation: "parent", placement: "unplaced" },
-    { relation: "parent", placement: "local" },
-    { relation: "sibling", placement: "unplaced" },
-    { relation: "sibling", placement: "local" },
-  ] as const)(
-    "delivers to an authorized Gateway $relation with $placement placement",
-    async ({ relation, placement }) => {
-      setEntry(TARGET.sessionKey, TARGET.sessionId);
-      setEntry(SOURCE.sessionKey, SOURCE.sessionId, relation === "parent" ? PARENT : TARGET);
-      setEntry(PARENT.sessionKey, PARENT.sessionId, relation === "sibling" ? TARGET : undefined);
-      if (placement === "local") {
-        const claim = placements.claimTurn({
-          ...PARENT,
-          agentId: SOURCE.agentId,
-          claimId: "gateway-target-claim",
-          runId: "gateway-target-run",
-          owner: { kind: "local" },
+  it.each([false, true])(
+    "retains parent authority across runtime-bound provisioning (closed=%s)",
+    async (closed) => {
+      const { root, placements, identity, setEntry, activate, closeSourceRun } = getFixture();
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      const { createDesktopSessionRegistry } = await import("../desktop/session-registry.js");
+      const { createGatewayWorkerEnvironmentRuntime, loadGatewayWorkerEnvironmentStartupState } =
+        await import("../server-worker-environment-startup.js");
+      const factory = vi.spyOn(environmentServiceModule, "createWorkerEnvironmentService");
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+          const startup = await loadGatewayWorkerEnvironmentStartupState();
+          const registry = createEmptyPluginRegistry();
+          const runtime = await createGatewayWorkerEnvironmentRuntime({
+            getPluginRegistry: () => registry,
+            getPortalRuntime: () => undefined,
+            resolveGatewayContext,
+            desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+            startup: { ...startup, placementStore: placements },
+            log: { child: () => ({ warn: () => {} }) },
+          });
+          const service = runtime.workerEnvironmentService;
+          const execute = factory.mock.calls.at(-1)?.[0].executeSessionTool;
+          if (!service || !execute || !runtime.bindWorkerSessionDispatch) {
+            throw new Error("worker session-tool runtime was not composed");
+          }
+          startup.store.createIntent({
+            environmentId: SOURCE.environmentId,
+            providerId: "fake",
+            profileId: "cloud-profile",
+            profileSnapshot: { install: "bundle", settings: { region: "source" } },
+            provisionOperationId: "source-provision",
+          });
+          const base = service.get(SOURCE.environmentId);
+          if (!base) {
+            throw new Error("source environment fixture was not created");
+          }
+          const getEnvironment = vi.spyOn(service, "get").mockImplementation((environmentId) => {
+            const owner = environmentId === SOURCE.environmentId ? SOURCE : CHILD;
+            return {
+              ...base,
+              environmentId,
+              state: "attached",
+              leaseId: `lease-${environmentId}`,
+              ownerEpoch: owner.ownerEpoch,
+              attachedSessionIds: [owner.sessionId],
+            };
+          });
+          const provisioning = createDeferred();
+          const finishProvisioning = createDeferred();
+          runtime.bindWorkerSessionDispatch(async (request, _onTransition, authorize) => {
+            provisioning.resolve();
+            await finishProvisioning.promise;
+            authorize?.();
+            activate({ ...CHILD, sessionKey: request.sessionKey });
+            const placement = placements.get(CHILD.sessionId);
+            if (placement?.state !== "active") {
+              throw new Error("child fixture did not activate");
+            }
+            return placement;
+          });
+          try {
+            const pending = execute({
+              identity,
+              toolName: "sessions_spawn",
+              request: { toolCallId: "startup-parent-closure", task: "start the child" },
+            });
+            await Promise.race([
+              provisioning.promise,
+              pending.then(() => {
+                throw new Error("worker spawn completed before provisioning");
+              }),
+            ]);
+            if (closed) {
+              closeSourceRun();
+            }
+            finishProvisioning.resolve();
+            const result = await pending;
+            expect(placements.get(CHILD.sessionId)?.state).toBe(closed ? undefined : "active");
+            expect(gatewayRequest).toHaveBeenCalledTimes(closed ? 0 : 1);
+            expect(result.resultJson.includes('"status":"error"')).toBe(closed);
+          } finally {
+            finishProvisioning.resolve();
+            getEnvironment.mockRestore();
+            await service.stop();
+          }
         });
-        placements.releaseTurn(claim);
-        expect(placements.get(PARENT.sessionId)?.state).toBe("local");
-      } else {
-        expect(placements.get(PARENT.sessionId)).toBeUndefined();
+      } finally {
+        factory.mockRestore();
       }
-
-      const result = await execute({
-        identity,
-        toolName: "sessions_send",
-        request: {
-          toolCallId: "send-to-gateway",
-          sessionKey: PARENT.sessionKey,
-          message: "Report the Gateway result",
-          timeoutSeconds: 30,
-        },
-      });
-
-      expect(JSON.parse(result.resultJson)).toMatchObject({ details: { status: "ok" } });
-      expect(delivered).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          args: expect.objectContaining({ sessionKey: PARENT.sessionKey }),
-          options: expect.objectContaining({ expectedTargetSessionId: PARENT.sessionId }),
-        }),
-      );
-    },
-  );
-
-  it("deduplicates retries without collapsing distinct identical sends", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-
-    const first = await send("identical-send-one");
-    const replay = await send("identical-send-one");
-    await send("identical-send-two");
-
-    expect(replay.resultJson).toBe(first.resultJson);
-    expect(delivered).toHaveBeenCalledTimes(2);
-    const firstKey = (
-      delivered.mock.calls[0]?.[0] as { options?: { idempotencyKey?: string } } | undefined
-    )?.options?.idempotencyKey;
-    const secondKey = (
-      delivered.mock.calls[1]?.[0] as { options?: { idempotencyKey?: string } } | undefined
-    )?.options?.idempotencyKey;
-    expect(firstKey).toMatch(/^worker-session-send:/u);
-    expect(secondKey).toMatch(/^worker-session-send:/u);
-    expect(secondKey).not.toBe(firstKey);
-  });
-
-  it("coalesces concurrent retries into one message effect", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-    let finishDelivery: (() => void) | undefined;
-    delivered.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          finishDelivery = resolve;
-        }),
-    );
-
-    const retries = Array.from({ length: 32 }, () => send("concurrent-retry"));
-    await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
-    finishDelivery?.();
-    const results = await Promise.all(retries);
-
-    expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
-    expect(delivered).toHaveBeenCalledOnce();
-  });
-
-  it("replays a completed send after the target incarnation changes", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-
-    const first = await send("completed-before-target-replacement");
-    setEntry(TARGET.sessionKey, "replacement-target", {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-    const replay = await send("completed-before-target-replacement");
-
-    expect(replay.resultJson).toBe(first.resultJson);
-    expect(delivered).toHaveBeenCalledOnce();
-  });
-
-  it("records repeated downstream send failures as unknown instead of replayable failure", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    setEntry(TARGET.sessionKey, TARGET.sessionId, {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-    delivered.mockImplementation(() => {
-      throw new Error("target send response was lost");
-    });
-
-    const first = await send("send-response-loss");
-    const replay = await send("send-response-loss");
-
-    expect(first.resultJson).toContain("outcome is unknown");
-    expect(replay.resultJson).toContain("prior operation outcome is unknown");
-    expect(delivered).toHaveBeenCalledTimes(2);
-    expect(() => placements.releaseTurn(sourceClaim)).not.toThrow();
-  });
-
-  it("denies stale parent incarnations, parent-key reuse, self-send, and cross-tree targets", async () => {
-    const denied = [
-      {
-        name: "stale-parent",
-        sourceParent: PARENT,
-        targetParent: PARENT,
-        parentEntryId: "replacement-parent",
-        error: "outside the authorized session tree",
-      },
-      {
-        name: "parent-key-reuse",
-        sourceParent: PARENT,
-        targetParent: { ...PARENT, sessionId: "other-parent" },
-        parentEntryId: PARENT.sessionId,
-        error: "outside the authorized session tree",
-      },
-      {
-        name: "cross-tree",
-        sourceParent: PARENT,
-        targetParent: { sessionKey: "agent:main:dashboard:other", sessionId: "other-parent" },
-        parentEntryId: PARENT.sessionId,
-        error: "outside the authorized session tree",
-      },
-    ];
-    for (const testCase of denied) {
-      sessionEntries.clear();
-      setEntry(PARENT.sessionKey, testCase.parentEntryId);
-      setEntry(SOURCE.sessionKey, SOURCE.sessionId, testCase.sourceParent);
-      setEntry(TARGET.sessionKey, TARGET.sessionId, testCase.targetParent);
-      const result = await send(testCase.name);
-      expect(result.resultJson).toContain(testCase.error);
-    }
-
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    const selfSend = await execute({
-      identity,
-      toolName: "sessions_send",
-      request: {
-        toolCallId: "self-send",
-        sessionKey: SOURCE.sessionKey,
-        message: "status",
-      },
-    });
-    expect(selfSend.resultJson).toContain("not an exact live session");
-    expect(delivered).not.toHaveBeenCalled();
-  });
-
-  it.each(["target", "shared parent"] as const)(
-    "denies a replaced %s incarnation after awaiting sibling admission",
-    async (replaced) => {
-      setEntry(PARENT.sessionKey, PARENT.sessionId);
-      setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
-      setEntry(TARGET.sessionKey, TARGET.sessionId, PARENT);
-      scopedSessionAccess.mockImplementationOnce(async (params) => {
-        if (replaced === "target") {
-          setEntry(TARGET.sessionKey, "replacement-target", PARENT);
-          activate({ ...TARGET, sessionId: "replacement-target" });
-        } else {
-          setEntry(PARENT.sessionKey, "replacement-parent");
-        }
-        return await params.run();
-      });
-
-      const result = await send("replaced-during-admission");
-      expect(result.resultJson).toContain(
-        replaced === "target"
-          ? "target incarnation changed"
-          : "outside the authorized session tree",
-      );
-      expect(delivered).not.toHaveBeenCalled();
     },
   );
 });
+
+describe.each([false, true])(
+  "worker spawn parent authority (audit=%s)",
+  (collectExecutionIdentity) => {
+    const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
+      collectExecutionIdentity,
+    });
+
+    it.each([false, true])(
+      "launches the child only while the parent owner is active (closed=%s)",
+      async (closed) => {
+        const { setEntry, spawn, placements, sourceClaim, closeSourceRun } = getFixture();
+        setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+        const dispatch = dispatchChild.getMockImplementation();
+        if (!dispatch) {
+          throw new Error("Missing child placement fixture");
+        }
+        const provisioning = createDeferred();
+        const finishProvisioning = createDeferred();
+        dispatchChild.mockImplementationOnce(async (...args) => {
+          provisioning.resolve();
+          await finishProvisioning.promise;
+          return await dispatch(...args);
+        });
+
+        const pending = spawn("parent-closes-during-provisioning");
+        await provisioning.promise;
+        let drained: Promise<void> | undefined;
+        if (closed) {
+          closeSourceRun();
+          drained = placements.closeWorkerTurnToolState(sourceClaim);
+          // Parent teardown retains this claim until the admitted spawn settles.
+          expect(placements.validateTurnClaim(sourceClaim)).toBe(true);
+        }
+        finishProvisioning.resolve();
+        const result = await pending;
+        await drained;
+
+        expect(gatewayRequest).toHaveBeenCalledTimes(closed ? 0 : 1);
+        expect(result.resultJson.includes('"status":"error"')).toBe(closed);
+        expect(spawnCallerIdentity.mock.calls[0]?.[0]?.executionIdentityToken).toBe(
+          collectExecutionIdentity ? PARENT_EXECUTION_IDENTITY_TOKEN : undefined,
+        );
+      },
+    );
+  },
+);
