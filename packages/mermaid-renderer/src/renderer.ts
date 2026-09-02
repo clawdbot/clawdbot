@@ -1,9 +1,8 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import createDOMPurify from "dompurify";
 import type { MermaidConfig } from "mermaid";
-import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url";
-import frameScriptUrl from "./markdown-mermaid-frame.runtime.js?url&no-inline";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
+import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url&no-inline";
+import frameScriptUrl from "./frame.js?url&no-inline";
 
 export type MermaidTheme = {
   background: string;
@@ -14,6 +13,9 @@ export type MermaidTheme = {
   fontFamily: string;
   darkMode: boolean;
 };
+
+// Native hosts must not retain engine failures in their permanent failure cache.
+export class MermaidTransientError extends Error {}
 
 const MAX_SOURCE_LENGTH = 20_000;
 const MAX_EDGES = 200;
@@ -147,7 +149,7 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
   }
   const colorParser = document.createElement("canvas").getContext("2d");
   if (!colorParser) {
-    throw new Error("Mermaid diagram colors could not be prepared.");
+    throw new MermaidTransientError("Mermaid diagram colors could not be prepared.");
   }
   for (const element of elements) {
     for (const attribute of ["marker-start", "marker-mid", "marker-end", "clip-path", "mask"]) {
@@ -224,13 +226,13 @@ function createMermaidFrame(): MermaidFrame {
     },
     render(source, config) {
       if (disposed || !frame.isConnected) {
-        return Promise.reject(new Error("Mermaid renderer is unavailable."));
+        return Promise.reject(new MermaidTransientError("Mermaid renderer is unavailable."));
       }
       return new Promise((resolve, reject) => {
         const id = ++nextId;
         pending = { id, resolve, reject };
         timeout = window.setTimeout(
-          () => instance.dispose(new Error("Mermaid diagram rendering timed out.")),
+          () => instance.dispose(new MermaidTransientError("Mermaid diagram rendering timed out.")),
           RENDER_TIMEOUT_MS,
         );
         channel.port1.postMessage({
@@ -271,7 +273,7 @@ function createMermaidFrame(): MermaidFrame {
   channel.port1.start();
   frame.addEventListener("load", () => {
     if (loaded) {
-      instance.dispose(new Error("Mermaid renderer navigated unexpectedly."));
+      instance.dispose(new MermaidTransientError("Mermaid renderer navigated unexpectedly."));
       return;
     }
     loaded = true;
@@ -288,9 +290,19 @@ function createMermaidFrame(): MermaidFrame {
     "position:fixed;left:-10000px;top:0;width:1024px;height:768px;border:0;visibility:hidden;pointer-events:none";
   const scripts = [mermaidScriptUrl, frameScriptUrl].map((url) => new URL(url, location.href).href);
   const policy = `default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
-  frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${escapeMarkdownHtml(policy)}">${scripts.map((url) => `<script src="${escapeMarkdownHtml(url)}"></script>`).join("")}</head><body></body></html>`;
+  const page = document.implementation.createHTMLDocument("");
+  const meta = page.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = policy;
+  page.head.append(meta);
+  for (const url of scripts) {
+    const script = page.createElement("script");
+    script.src = url;
+    page.head.append(script);
+  }
+  frame.srcdoc = `<!doctype html>${page.documentElement.outerHTML}`;
   timeout = window.setTimeout(
-    () => instance.dispose(new Error("Mermaid renderer could not be loaded.")),
+    () => instance.dispose(new MermaidTransientError("Mermaid renderer could not be loaded.")),
     RENDER_TIMEOUT_MS,
   );
   document.body.append(frame);
@@ -307,7 +319,7 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
   // one serialized owner, including after a failed render or a theme change.
   const result = renderQueue.then(async () => {
     if (renderer && !renderer.frame.isConnected) {
-      renderer.dispose(new Error("Mermaid renderer was removed."));
+      renderer.dispose(new MermaidTransientError("Mermaid renderer was removed."));
     }
     renderer ??= createMermaidFrame();
     const active = renderer;
@@ -351,4 +363,6 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
   return result;
 }
 
-window.addEventListener("pagehide", () => renderer?.dispose(new Error("Mermaid renderer closed.")));
+window.addEventListener("pagehide", () =>
+  renderer?.dispose(new MermaidTransientError("Mermaid renderer closed.")),
+);

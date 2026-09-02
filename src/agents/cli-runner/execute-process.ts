@@ -75,7 +75,6 @@ export async function executeCliProcess(params: {
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
   useManagedClaudeLiveSession: boolean;
-  usePluginOwnedExecution: boolean;
   initialGatewayCaptureKey?: string;
   useResume: boolean;
   cliSessionIdToUse?: string;
@@ -333,9 +332,9 @@ export async function executeCliProcess(params: {
     );
   }
 
-  const stdout = stdoutParseBuffer.toString("utf8").trim();
+  let stdout: string | undefined;
+  const readStdout = () => (stdout ??= stdoutParseBuffer.toString("utf8").trim());
   const stdoutDiagnostic = stdoutTail.trim();
-  const stderr = stderrParseBuffer.toString("utf8").trim();
   const stderrDiagnostic = stderrTail.trim();
   const processDiagnostics = {
     backendId: context.backendResolved.id,
@@ -372,7 +371,7 @@ export async function executeCliProcess(params: {
     streamedJsonlOutput ??
     (params.outputMode === "json" && !stdoutParseExceeded
       ? parseCliOutput({
-          raw: stdout,
+          raw: readStdout(),
           backend: params.backend,
           providerId: context.backendResolved.id,
           outputMode: params.outputMode,
@@ -464,9 +463,10 @@ export async function executeCliProcess(params: {
       );
     }
     const retryEmptyFailure = result.reason === "exit" && !params.events.hasObservedCliActivity();
+    const stderr = stderrParseBuffer.toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
-      candidates: [stderr, stdout, stderrDiagnostic, stdoutDiagnostic],
+      candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       fallbackMessage: "CLI failed.",
       retryEmptyFailure,
       resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
@@ -487,7 +487,7 @@ export async function executeCliProcess(params: {
         `CLI backend ${context.backendResolved.id} does not support manual compaction`,
       );
     }
-    const validation = manualCompaction.validateOutput(stdout);
+    const validation = manualCompaction.validateOutput(readStdout());
     if (!validation.ok) {
       throw createCliFailoverError(validation.reason, "unknown", failoverContext);
     }
@@ -501,7 +501,7 @@ export async function executeCliProcess(params: {
   const parsed =
     parsedStructuredOutput ??
     parseCliOutput({
-      raw: stdout,
+      raw: readStdout(),
       backend: params.backend,
       providerId: context.backendResolved.id,
       outputMode: params.outputMode,

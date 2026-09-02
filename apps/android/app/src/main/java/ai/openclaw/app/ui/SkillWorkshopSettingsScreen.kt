@@ -105,21 +105,26 @@ internal fun SkillWorkshopSettingsScreen(
       onConfirm = {
         pendingAction = null
         when (action.action) {
-          SkillWorkshopProposalAction.Apply ->
+          SkillWorkshopProposalAction.Apply -> {
             viewModel.applySkillWorkshopProposal(
               proposalId = action.proposalId,
               agentId = selectedAgentParam,
             )
-          SkillWorkshopProposalAction.Reject ->
+          }
+
+          SkillWorkshopProposalAction.Reject -> {
             viewModel.rejectSkillWorkshopProposal(
               proposalId = action.proposalId,
               agentId = selectedAgentParam,
             )
-          SkillWorkshopProposalAction.Quarantine ->
+          }
+
+          SkillWorkshopProposalAction.Quarantine -> {
             viewModel.quarantineSkillWorkshopProposal(
               proposalId = action.proposalId,
               agentId = selectedAgentParam,
             )
+          }
         }
       },
     )
@@ -180,16 +185,20 @@ internal fun SkillWorkshopSettingsScreen(
     }
 
     when {
-      !isConnected ->
+      !isConnected -> {
         SkillWorkshopEmptyPanel(
           title = nativeString("Gateway offline"),
           detail = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
         )
-      filteredProposals.isEmpty() ->
+      }
+
+      filteredProposals.isEmpty() -> {
         SkillWorkshopEmptyPanel(
           title = nativeString("No proposals"),
           detail = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
         )
+      }
+
       else -> {
         SkillWorkshopProposalList(
           proposals = filteredProposals,
@@ -270,12 +279,17 @@ private fun SkillWorkshopActionConfirmDialog(
     }
   val dialogBody =
     when (action.action) {
-      SkillWorkshopProposalAction.Apply ->
+      SkillWorkshopProposalAction.Apply -> {
         nativeString("This will apply \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      SkillWorkshopProposalAction.Reject ->
+      }
+
+      SkillWorkshopProposalAction.Reject -> {
         nativeString("This will reject \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      SkillWorkshopProposalAction.Quarantine ->
+      }
+
+      SkillWorkshopProposalAction.Quarantine -> {
         nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
+      }
     }
   AlertDialog(
     onDismissRequest = onDismiss,

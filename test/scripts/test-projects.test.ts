@@ -238,6 +238,55 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it.each([
+    "packages/mermaid-renderer/package.json",
+    "packages/mermaid-renderer/vite.config.ts",
+    "packages/mermaid-renderer/native/index.html",
+    "packages/mermaid-renderer/src/renderer.ts",
+    "packages/mermaid-renderer/src/frame.js",
+    "packages/mermaid-renderer/src/native.ts",
+  ])("runs both Mermaid browser boundaries when %s changes", (changedPath) => {
+    expectSingleVitestRunPlan(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [changedPath]),
+      {
+        config: "test/vitest/vitest.ui-browser.config.ts",
+        includePatterns: [
+          "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+          "ui/src/components/markdown-mermaid-native.browser.test.ts",
+        ],
+      },
+    );
+  });
+
+  it.each([
+    [
+      "packages/normalization-core/src/record-coerce.ts",
+      "packages/normalization-core/src/record-coerce.test.ts",
+    ],
+    [
+      "packages/normalization-core/package.json",
+      "packages/normalization-core/src/package-exports.test.ts",
+    ],
+    ["tsconfig.json", "test/scripts/changed-lanes.test.ts"],
+  ])("retains owner proof and adds both Mermaid boundaries for %s", (changedPath, ownerTest) => {
+    const plan = resolveChangedTestTargetPlan([changedPath]);
+    const browserTargets = [
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+      "ui/src/components/markdown-mermaid-native.browser.test.ts",
+    ];
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual(expect.arrayContaining([ownerTest, ...browserTargets]));
+    const runPlans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      changedPath,
+    ]);
+    expect(runPlans).toContainEqual({
+      config: "test/vitest/vitest.ui-browser.config.ts",
+      forwardedArgs: [],
+      includePatterns: browserTargets,
+      watchMode: false,
+    });
+  });
+
   it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
     const target = "src/selector/topic";
     const rejectedFiles = [

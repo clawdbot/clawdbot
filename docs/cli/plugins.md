@@ -143,7 +143,7 @@ sources with guarded environment variables. See
 [Plugin install overrides](/plugins/install-overrides).
 
 <Warning>
-Bare package names install from npm by default during the launch cutover, unless they match a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead of hitting the npm registry. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code; prefer pinned versions.
+Bare package names install from npm by default. Bundled plugin ids select the bundled copy. Official plugin ids and unqualified official package names (bare or `@latest`) use their declared npm source first and ClawHub second when npm has no published target. ClawHub-only plugins stay on ClawHub. Integrity, compatibility, trust, install-policy, and capability-consent failures stop the install without switching sources. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code; prefer pinned versions.
 </Warning>
 
 <Warning>
@@ -172,18 +172,25 @@ load. Results include the ClawHub package name, family, channel, version,
 summary, and an install hint such as `openclaw plugins install clawhub:<package>`.
 
 <Note>
-ClawHub is the primary distribution and discovery surface for most plugins. Npm
-remains a supported fallback and direct-install path. OpenClaw-owned
+Default installs use declared npm sources first and declared ClawHub sources second.
+ClawHub also provides plugin discovery. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
 [plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
-Fresh beta-channel installs of official plugins require the npm `beta` dist-tag
-and stop if that release is missing; pass an explicit version to choose another
-release. Doctor, onboarding, and plugin-update recovery paths can fall back to
-the recorded or default selector with a visible warning. On the extended-stable
-channel, official npm plugins with bare/default or `latest` intent resolve to
-the exact installed core version. Exact pins and explicit non-`latest` tags,
-third-party packages, and non-npm sources are not rewritten.
+Fresh beta-channel installs with bare/default or `@latest` intent target the
+installed core's exact beta version for eligible official npm and trusted
+official ClawHub plugins. If the core is not a beta release, they target `@beta`.
+The selected release must exist in a declared source; pass an explicit version
+to choose another release. Doctor, onboarding, and plugin-update recovery paths
+can fall back to the recorded or default selector with a visible warning.
+On the extended-stable channel, eligible official plugins with bare/default or
+`@latest` intent resolve to the installed core version (the base release cohort
+for version-bound plugins).
+The install record retains the requested selector. Exact pins and explicit
+non-`latest` tags keep their targets. Unrelated third-party packages are not pinned
+to the core version. Doctor separately refreshes stale official runtime plugins
+that are bound to the current OpenClaw release cohort; an existing exact npm
+pin becomes the exact replacement version on the same registry.
 </Note>
 
 <AccordionGroup>
@@ -226,7 +233,7 @@ third-party packages, and non-npm sources are not rewritten.
 
     Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` count as stable for this check. If npm resolves either form to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag (`@beta`/`@rc`) or an exact prerelease version (`@1.2.3-beta.4`).
 
-    For npm installs without an exact version (`npm:<package>` or `npm:<package>@latest`), OpenClaw checks the resolved package metadata before install. If the latest stable package requires a newer OpenClaw plugin API or minimum host version, OpenClaw inspects older stable versions and installs the newest compatible release instead. Exact versions and explicit dist-tags stay strict: an incompatible selection fails and asks you to upgrade OpenClaw or choose a compatible version.
+    For npm installs without an exact version (`npm:<package>` or `npm:<package>@latest`), OpenClaw checks the resolved package metadata before install. If the latest stable package requires a newer OpenClaw plugin API or minimum host version, OpenClaw inspects older stable versions and installs the newest compatible release instead. Exact versions and explicit non-`latest` dist-tags stay strict: an incompatible selection fails and asks you to upgrade OpenClaw or choose a compatible version.
 
     If a bare install spec matches an official plugin id (for example `diffs`), OpenClaw installs the catalog entry directly. To install an npm package with the same name, use an explicit scoped spec (for example `@scope/diffs`).
 
@@ -464,7 +471,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
     During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
 
-    That targeted-update rule differs from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
+    Bulk `openclaw plugins update --all` also preserves ordinary exact pins and explicit tags. Floating trusted official records follow the current registry-channel policy. Doctor separately refreshes stale official runtime plugins bound to the current OpenClaw release cohort, keeping the recorded registry and recording an exact replacement version when the previous npm record was pinned.
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
@@ -472,10 +479,13 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. On an installed beta core, eligible official npm plugins target that exact core version when the effective plugin update channel is beta. This prevents a moving plugin `@beta` tag from selecting a different beta release. Targeted updates with an explicitly configured stable channel retain that selection. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. For floating trusted official records, it uses the canonical registry-channel resolver to choose the install target without rewriting the stored selector. Bulk `openclaw plugins update --all` uses the same resolver when it syncs trusted official plugin records to the official catalog target. On an installed beta core, eligible official npm and trusted official ClawHub plugins with default/latest intent target that exact core version when the effective plugin update channel is beta. This prevents a moving plugin `@beta` tag from selecting a different beta release. Targeted updates with an explicitly configured stable channel retain that selection. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
-    `openclaw update` resolves plugin targets from the newly installed core, so a one-off beta `--tag` also aligns eligible official npm plugins even when the configured channel is stable. Other default-line npm and ClawHub plugin records on the beta channel try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates except while completing the trusted plugin id replacement above.
+    `openclaw update` resolves plugin targets from the newly installed core, so a one-off beta `--tag` also aligns eligible official npm and trusted official ClawHub plugins even when the configured channel is stable. Other default-line npm and ClawHub plugin records on the beta channel try `@beta` first. OpenClaw falls back to the recorded default/latest spec only if the selected beta release is unavailable. Integrity, compatibility, trust, install-policy, and capability-consent failures do not trigger fallback. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit non-`latest` tags stay pinned to that selector for targeted and bulk updates except while completing the trusted plugin id replacement above.
 
+  </Accordion>
+  <Accordion title="Existing plugin source choices">
+    Updates retain the recorded npm or ClawHub source and selector. Older install records do not distinguish automatic ClawHub selection from an explicit `clawhub:` request, so OpenClaw does not silently switch those records to npm. To change an existing plugin deliberately, review and run `openclaw plugins install npm:<package> --force`. Automatic externalization of an image-owned bundled plugin uses npm first and its declared ClawHub source second.
   </Accordion>
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, the update is skipped without downloading, reinstalling, or rewriting `openclaw.json`.

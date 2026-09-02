@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
@@ -119,9 +120,9 @@ describe("channel migration artifact consent", () => {
     installers.npm.mockImplementation(install);
     installers.clawhub.mockImplementation(install);
     if (source === "fallback") {
-      installers.clawhub.mockResolvedValueOnce({
+      installers.npm.mockResolvedValueOnce({
         ok: false,
-        code: "package_not_found",
+        code: "npm_package_not_found",
         error: "not found",
       });
     }
@@ -146,9 +147,8 @@ describe("channel migration artifact consent", () => {
       externalizedBundledPluginBridges: [
         {
           bundledPluginId: pluginId,
-          preferredSource: source === "npm" ? "npm" : "clawhub",
-          npmSpec: packageName,
-          clawhubSpec: pluginId,
+          npmSpec: source === "clawhub" ? undefined : packageName,
+          clawhubSpec: `clawhub:${pluginId}`,
         },
       ],
       onCapabilityConsent: review === "absent" ? undefined : onCapabilityConsent,
@@ -165,12 +165,17 @@ describe("channel migration artifact consent", () => {
           version: "2.0.0",
           acceptedSurface: declared,
           acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
-          acceptedSurfaceIntegrity: source === "clawhub" ? "sha256-next" : "sha512-next",
+          acceptedSurfaceIntegrity: source === "npm" ? "sha512-next" : "sha256-next",
         });
         expect(result.summary.errors).toEqual([]);
       } else {
         expect(result.config).toEqual(originalConfig);
-        expect(result.summary.errors.join("\n")).toMatch(/capabilit/i);
+        expect(result.summary.errors).toEqual([
+          expect.objectContaining({ pluginId, code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }),
+        ]);
+        if (source !== "npm") {
+          expect(result.summary.errors[0]?.message).toContain(`(ClawHub clawhub:${pluginId}).`);
+        }
       }
     }
     expect(committed).toBe(review === "accept");

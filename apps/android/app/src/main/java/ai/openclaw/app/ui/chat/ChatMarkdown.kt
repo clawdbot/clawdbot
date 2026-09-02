@@ -133,8 +133,14 @@ fun ChatMarkdown(
             isStreaming = isStreaming,
           )
         }
-        is ChatMarkdownSourceBlock.Math -> ChatMathBlock(latex = block.latex, textColor = textColor)
-        is ChatMarkdownSourceBlock.MathFallback -> ChatMathFallback(latex = block.latex)
+
+        is ChatMarkdownSourceBlock.Math -> {
+          ChatMathBlock(latex = block.latex, textColor = textColor)
+        }
+
+        is ChatMarkdownSourceBlock.MathFallback -> {
+          ChatMathFallback(latex = block.latex)
+        }
       }
     }
   }
@@ -150,7 +156,7 @@ private fun RenderMarkdownBlocks(
 ) {
   for (block in blocks) {
     when (block) {
-      is ChatMarkdownRenderBlock.CommonMark ->
+      is ChatMarkdownRenderBlock.CommonMark -> {
         RenderCommonMarkBlock(
           current = block.node,
           textColor = textColor,
@@ -158,8 +164,13 @@ private fun RenderMarkdownBlocks(
           listDepth = listDepth,
           isStreaming = isStreaming,
         )
-      is ChatMarkdownRenderBlock.LiteralHtml -> RenderLiteralHtml(block.source, textColor)
-      is ChatMarkdownRenderBlock.Disclosure ->
+      }
+
+      is ChatMarkdownRenderBlock.LiteralHtml -> {
+        RenderLiteralHtml(block.source, textColor)
+      }
+
+      is ChatMarkdownRenderBlock.Disclosure -> {
         RenderMarkdownDisclosure(
           disclosure = block,
           textColor = textColor,
@@ -167,6 +178,7 @@ private fun RenderMarkdownBlocks(
           listDepth = listDepth,
           isStreaming = isStreaming,
         )
+      }
     }
   }
 }
@@ -183,6 +195,7 @@ private fun RenderCommonMarkBlock(
     is Paragraph -> {
       RenderParagraph(current, textColor = textColor, inlineStyles = inlineStyles)
     }
+
     is Heading -> {
       val headingText = remember(current) { buildInlineMarkdown(current.firstChild, inlineStyles) }
       Text(
@@ -191,19 +204,25 @@ private fun RenderCommonMarkBlock(
         color = textColor,
       )
     }
+
     is FencedCodeBlock -> {
-      ChatCodeBlock(
-        code = current.literal.orEmpty(),
-        language = current.info?.trim()?.ifEmpty { null },
-        // Streaming: an unclosed fence grows on every delta, so keep it plain until the
-        // closing marker arrives. Finalized messages may validly end at EOF without a
-        // closing fence (CommonMark), so completeness comes from stream state, not syntax.
-        isComplete = !isStreaming || current.closingFenceLength != null,
-      )
+      if (isChatMermaidFence(current, isStreaming)) {
+        ChatMermaidBlock(current.literal.orEmpty())
+      } else {
+        ChatCodeBlock(
+          code = current.literal.orEmpty(),
+          language = current.info?.trim()?.ifEmpty { null },
+          // Streaming fences remain plain until closed. Finalized messages may validly
+          // end at EOF without a closing fence under CommonMark.
+          isComplete = !isStreaming || current.closingFenceLength != null,
+        )
+      }
     }
+
     is IndentedCodeBlock -> {
       ChatCodeBlock(code = current.literal.orEmpty(), language = null)
     }
+
     is BlockQuote -> {
       Row(
         modifier =
@@ -235,6 +254,7 @@ private fun RenderCommonMarkBlock(
         }
       }
     }
+
     is BulletList -> {
       RenderBulletList(
         list = current,
@@ -244,6 +264,7 @@ private fun RenderCommonMarkBlock(
         isStreaming = isStreaming,
       )
     }
+
     is OrderedList -> {
       RenderOrderedList(
         list = current,
@@ -253,6 +274,7 @@ private fun RenderCommonMarkBlock(
         isStreaming = isStreaming,
       )
     }
+
     is TableBlock -> {
       RenderTableBlock(
         table = current,
@@ -260,6 +282,7 @@ private fun RenderCommonMarkBlock(
         inlineStyles = inlineStyles,
       )
     }
+
     is ThematicBreak -> {
       Box(
         modifier =
@@ -269,6 +292,7 @@ private fun RenderCommonMarkBlock(
             .background(ClawTheme.colors.textMuted.copy(alpha = 0.25f)),
       )
     }
+
     is HtmlBlock -> {
       RenderLiteralHtml(current.literal.orEmpty(), textColor)
     }
@@ -588,9 +612,18 @@ private fun AnnotatedString.Builder.appendInlineNode(
   var current = node
   while (current != null) {
     when (current) {
-      is MarkdownTextNode -> append(current.literal)
-      is SoftLineBreak -> append('\n')
-      is HardLineBreak -> append('\n')
+      is MarkdownTextNode -> {
+        append(current.literal)
+      }
+
+      is SoftLineBreak -> {
+        append('\n')
+      }
+
+      is HardLineBreak -> {
+        append('\n')
+      }
+
       is Code -> {
         withStyle(
           SpanStyle(
@@ -602,6 +635,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
           append(current.literal)
         }
       }
+
       is Emphasis -> {
         withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
           appendInlineNode(
@@ -612,6 +646,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
           )
         }
       }
+
       is StrongEmphasis -> {
         withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
           appendInlineNode(
@@ -622,6 +657,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
           )
         }
       }
+
       is Strikethrough -> {
         withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
           appendInlineNode(
@@ -632,6 +668,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
           )
         }
       }
+
       is Link -> {
         appendLinkNode(
           link = current,
@@ -640,6 +677,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
           linkColor = linkColor,
         )
       }
+
       is MarkdownImage -> {
         val alt = buildPlainText(current.firstChild)
         if (alt.isNotBlank()) {
@@ -648,11 +686,13 @@ private fun AnnotatedString.Builder.appendInlineNode(
           append("image")
         }
       }
+
       is HtmlInline -> {
         if (!current.literal.isNullOrBlank()) {
           append(current.literal)
         }
       }
+
       else -> {
         appendInlineNode(
           current.firstChild,
@@ -932,10 +972,12 @@ private class DisclosureTokenizer {
             }
             balanceStack += BalanceFrame(isStructural = isStructural)
           }
+
           TagKind.UNSUPPORTED_DETAILS_OPEN -> {
             appendLiteral(tag.raw)
             balanceStack += BalanceFrame(isStructural = false)
           }
+
           TagKind.DETAILS_CLOSE,
           TagKind.UNSUPPORTED_DETAILS_CLOSE,
           -> {
@@ -951,6 +993,7 @@ private class DisclosureTokenizer {
               }
             }
           }
+
           TagKind.SUMMARY_OPEN -> {
             // The web block rule also pairs summary tags within one line;
             // multiline summaries deliberately remain literal on every surface.
@@ -970,9 +1013,12 @@ private class DisclosureTokenizer {
             }
             appendLiteral(tag.raw)
           }
+
           TagKind.SUMMARY_CLOSE,
           TagKind.UNSUPPORTED_SUMMARY,
-          -> appendLiteral(tag.raw)
+          -> {
+            appendLiteral(tag.raw)
+          }
         }
         cursor = tag.range.last + 1
         index += 1
@@ -1009,11 +1055,26 @@ private class DisclosureTokenizer {
 
     private fun kind(raw: String): TagKind =
       when (raw.lowercase(Locale.US)) {
-        "<details>" -> TagKind.DETAILS_OPEN
-        "<details open>" -> TagKind.DETAILS_OPEN_EXPANDED
-        "</details>" -> TagKind.DETAILS_CLOSE
-        "<summary>" -> TagKind.SUMMARY_OPEN
-        "</summary>" -> TagKind.SUMMARY_CLOSE
+        "<details>" -> {
+          TagKind.DETAILS_OPEN
+        }
+
+        "<details open>" -> {
+          TagKind.DETAILS_OPEN_EXPANDED
+        }
+
+        "</details>" -> {
+          TagKind.DETAILS_CLOSE
+        }
+
+        "<summary>" -> {
+          TagKind.SUMMARY_OPEN
+        }
+
+        "</summary>" -> {
+          TagKind.SUMMARY_CLOSE
+        }
+
         else -> {
           val lower = raw.lowercase(Locale.US)
           when {

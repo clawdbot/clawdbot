@@ -52,6 +52,7 @@ import {
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
+  emitClawFailure,
   formatClawDiagnostics,
   logClawAddPlanSummary,
   logClawExperimentalWarning,
@@ -106,17 +107,12 @@ function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
   const message = opts.yes
     ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
     : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
-  if (opts.json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
+  emitClawFailure(runtime, opts.json, message, {
+    schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
+    stability: CLAW_OUTPUT_STABILITY,
+    ok: false,
+    error: { code, message },
+  });
   return true;
 }
 
@@ -128,17 +124,12 @@ function requireRemoveConsent(opts: ClawsRemoveOptions, runtime: RuntimeEnv): bo
   const message = opts.yes
     ? "Claw remove consent must include --plan-integrity from the exact dry-run plan."
     : "Claw remove requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to remove owned state.";
-  if (opts.json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
+  emitClawFailure(runtime, opts.json, message, {
+    schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+    stability: CLAW_OUTPUT_STABILITY,
+    ok: false,
+    error: { code, message },
+  });
   return true;
 }
 
@@ -150,17 +141,12 @@ export async function runClawsInspectCommand(
   assertExperimentalClawsEnabled();
   const result = await readClawManifestFile(sourcePath);
   if (!result.ok) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_INSPECT_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        valid: false,
-        diagnostics: result.diagnostics,
-      });
-    } else {
-      runtime.error(formatClawDiagnostics(result.diagnostics));
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+      schemaVersion: CLAW_INSPECT_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      valid: false,
+      diagnostics: result.diagnostics,
+    });
     return;
   }
 
@@ -231,17 +217,12 @@ export async function runClawsAddCommand(
     },
   });
   if (!result.ok) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        valid: false,
-        diagnostics: result.diagnostics,
-      });
-    } else {
-      runtime.error(formatClawDiagnostics(result.diagnostics));
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+      schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      valid: false,
+      diagnostics: result.diagnostics,
+    });
     return;
   }
   const config = getRuntimeConfig();
@@ -432,18 +413,13 @@ export async function runClawsAddCommand(
   const consentPlanIntegrity = legacyResumePlan?.planIntegrity ?? plan.planIntegrity;
   if (opts.planIntegrity !== consentPlanIntegrity) {
     const message = "The consented Claw plan no longer matches; run add --dry-run again.";
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        status: "failed",
-        planIntegrity: plan.planIntegrity,
-        error: { code: "plan_integrity_mismatch", message },
-      });
-    } else {
-      runtime.error(message);
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, message, {
+      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      status: "failed",
+      planIntegrity: plan.planIntegrity,
+      error: { code: "plan_integrity_mismatch", message },
+    });
     return;
   }
 
@@ -467,17 +443,12 @@ export async function runClawsAddCommand(
   } catch (error) {
     const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
     const message = (error as Error).message;
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        status: "failed",
-        error: { code, message },
-      });
-    } else {
-      runtime.error(message);
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, message, {
+      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      status: "failed",
+      error: { code, message },
+    });
     return;
   }
 
@@ -605,17 +576,12 @@ export async function runClawsRemoveCommand(
   } catch (error) {
     const code = error instanceof ClawRemoveError ? error.code : "remove_failed";
     const message = error instanceof Error ? error.message : String(error);
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        status: "failed",
-        error: { code, message },
-      });
-    } else {
-      runtime.error(message);
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, message, {
+      schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      status: "failed",
+      error: { code, message },
+    });
   }
 }
 
@@ -650,16 +616,11 @@ export async function runClawsExportCommand(
   } catch (error) {
     const code = error instanceof ClawExportError ? error.code : "export_failed";
     const message = error instanceof Error ? error.message : String(error);
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        status: "failed",
-        error: { code, message },
-      });
-    } else {
-      runtime.error(message);
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, message, {
+      schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      status: "failed",
+      error: { code, message },
+    });
   }
 }

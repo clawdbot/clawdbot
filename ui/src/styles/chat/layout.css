@@ -7988,7 +7988,7 @@ button.chat-pr__diff {
 .agent-chat__recents {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   width: min(100%, 520px);
   margin-top: 12px;
   text-align: left;
@@ -8000,7 +8000,7 @@ button.chat-pr__diff {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 2px 4px;
+  margin: 0 0 2px 12px;
 }
 
 .agent-chat__recent {
@@ -8010,19 +8010,16 @@ button.chat-pr__diff {
   min-height: 40px;
   padding: 8px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid transparent;
+  border: none;
   background: transparent;
   color: var(--text);
   font-size: 13px;
   text-align: left;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
+  transition: background 0.15s;
 }
 
 .agent-chat__recent:hover {
-  background: var(--panel);
-  border-color: var(--border);
+  background: var(--bg-hover);
 }
 
 .agent-chat__recent-name {

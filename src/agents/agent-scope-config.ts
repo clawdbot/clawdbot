@@ -252,16 +252,24 @@ export function resolveAmbientOwnerAgentId(
   return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
-/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+/** Returns a CLI operation owner while preserving legacy defaults outside explicit fleets. */
+export function tryResolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string | undefined {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId);
+  }
+  return tryResolveLegacyCompatibilityAgentId(cfg);
+}
+
+/** Resolves a CLI operation owner, requiring selection when no owner is configured. */
 export function resolveAgentOperationAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
   context?: AgentSelectionContext,
 ): string {
-  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
-    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
-  }
-  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
+  return tryResolveAgentOperationAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
 /**

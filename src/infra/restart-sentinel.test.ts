@@ -821,6 +821,31 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it.each([
+    { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
+    {
+      serviceRestartSafe: true,
+      version: "1.0.0",
+      buildId: "restored-git-build",
+      service: "healthy",
+    },
+    { serviceRestartSafe: false, reason: "state-migration-started" },
+  ] as const)(
+    "preserves recovery through the typed sentinel round trip ($serviceRestartSafe)",
+    async (recovery) => {
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+            meta: {},
+          }),
+        );
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
+      });
+    },
+  );
+
   it("reports a successful same-revision Git run as already current", () => {
     const payload = buildUpdateRestartSentinelPayload({
       result: {

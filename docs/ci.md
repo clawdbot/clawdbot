@@ -105,6 +105,12 @@ provenance metadata. Private QA shards select their private runtime entries. The
 `build-artifacts` job owns Control UI and SDK declaration validation; release
 package builds still generate the full declarations.
 
+Declaration caches hash the selected writer's transitive generator imports,
+package and plugin metadata, explicit schema and build metadata inputs, and
+the compiler's recorded source files. Editing an unrelated CI script does not
+rebuild declarations. Resolution topology still participates in the cache key,
+and an unresolved generator import stops the build instead of trusting a cache.
+
 Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
 builds. The orchestrator passes the resolved heap budget to every child process,
 including the SDK declaration writer, so local builds do not depend on CI's

@@ -211,8 +211,8 @@ importers:
         specifier: 0.3.4
         version: 0.3.4
       '@trycua/cua-driver':
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.22.0
+        version: 0.22.0
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -841,8 +841,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@trycua/cua-driver':
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.22.0
+        version: 0.22.0
       rastermill:
         specifier: 0.3.2
         version: 0.3.2
@@ -2431,6 +2431,22 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  packages/mermaid-renderer:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+      dompurify:
+        specifier: 3.4.14
+        version: 3.4.14
+      mermaid:
+        specifier: 11.17.2
+        version: 11.17.2
+    devDependencies:
+      vite:
+        specifier: 8.2.2
+        version: 8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+
   packages/model-catalog-core:
     dependencies:
       '@openclaw/normalization-core':
@@ -2561,6 +2577,9 @@ importers:
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
+      '@openclaw/mermaid-renderer':
+        specifier: workspace:*
+        version: link:../packages/mermaid-renderer
       '@openclaw/model-catalog-core':
         specifier: workspace:*
         version: link:../packages/model-catalog-core
@@ -2609,9 +2628,6 @@ importers:
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
-      mermaid:
-        specifier: 11.17.1
-        version: 11.17.1
       remend:
         specifier: 1.3.0
         version: 1.3.0
@@ -5151,40 +5167,40 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
-  '@trycua/cua-driver-darwin-arm64@0.21.0':
-    resolution: {integrity: sha512-wiQRixfS+zkakpcBI1zAfPQrE3slN1mozvkcFYgp0HufuzDuO/aShX+qLrTyw1a0MiKa7JjjyNdPXpJBE1wUiA==}
+  '@trycua/cua-driver-darwin-arm64@0.22.0':
+    resolution: {integrity: sha512-CD83Bvwx5XQtds+nxDOcY2CxKqSxr6spjjdpwYDb/34jtTt46jedt1A73QEEP/xkf9Ckw9Z7CWs68bt+bmGMYA==}
     cpu: [arm64]
     os: [darwin]
 
-  '@trycua/cua-driver-darwin-x64@0.21.0':
-    resolution: {integrity: sha512-MFWkXLESSmr1LxE8FGwNWWUcZgZM+4kIFSPCV6uwy5W2ctSn5O/G4DrjjCAiuONRZzMpU0jlovcfQEB55Eje4g==}
+  '@trycua/cua-driver-darwin-x64@0.22.0':
+    resolution: {integrity: sha512-uHqMAbYRqLs8MUHyODrAR0kX7rmgwFINcSGVGgrULr5E2OmeJHx6F/THQk/1lLV6jtrKX/bZsqxROehRJmtPNg==}
     cpu: [x64]
     os: [darwin]
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.21.0':
-    resolution: {integrity: sha512-Udb+CeHmogSndIR8yChucYPg70zFqAC595ykeXOWUOs+oGE2QN1a92uJRZSqCYtx1hi2MkLamW/tQksigJTFrw==}
+  '@trycua/cua-driver-linux-arm64-gnu@0.22.0':
+    resolution: {integrity: sha512-UCGS0LRnySNwAYqymH+jShoyDUtqAkVPEMbCDDALu5R4BqtsyGfawxKYAYg9/tBya48Dkf4NcjE5lGDKs2ku9g==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-linux-x64-gnu@0.21.0':
-    resolution: {integrity: sha512-CuT/FNR2/zShtIK6cSbIZVCUc6khlH88SgQi8w1mYjDx7xEDyuLxuoBhu9JRpMKDvj2EOf4bqlSUOBa4zJSSyA==}
+  '@trycua/cua-driver-linux-x64-gnu@0.22.0':
+    resolution: {integrity: sha512-9wtKFGaDbQk0BHXnyWMLKKgkTvhNi0Qv8y39inbXL5mfhQoUvUUx1QnhD5SZiImE0GoGvLq/BcwoizmjO3pLNw==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.21.0':
-    resolution: {integrity: sha512-qVwBJgsYHyhP/LZih0km+TJrVcV4vFB8h1URtcYgHgiZ+XdT/WwXzTAuB/34+gb2acyI2oddQPw/JQE3klM5Lw==}
+  '@trycua/cua-driver-win32-arm64-msvc@0.22.0':
+    resolution: {integrity: sha512-zJJuFJAYCchablDpgDv4ybbBaBVUiPNvt38XeoTKwIkZZHqfAYXUO0gWQ6tU2PpTfZHZAdidpwjln+xO0OUE5w==}
     cpu: [arm64]
     os: [win32]
 
-  '@trycua/cua-driver-win32-x64-msvc@0.21.0':
-    resolution: {integrity: sha512-BTHCfX2t6ht6TsJxIBjBxF3FfkMVsuOuakOqCBRhE8eYbfhouqKHHF8dwwCtOKk6g1KJSOkYC83+Qkq2yuoVdQ==}
+  '@trycua/cua-driver-win32-x64-msvc@0.22.0':
+    resolution: {integrity: sha512-32E9FZCrXKgXV9vg+2wsdJUarsrn3cj0nBMxcY8z1QyfXjuYKYX0J5XJUlxbNC8PJRbYPEBnd09F1qb05Rv64w==}
     cpu: [x64]
     os: [win32]
 
-  '@trycua/cua-driver@0.21.0':
-    resolution: {integrity: sha512-5oe8+1mm40pvMYSuXvPf5RTMPITgeGAUJhwQkkrL8nX57Goe2n5zs48q5e5kpT+jaGwGuxX4PotOn5UuNVSymA==}
+  '@trycua/cua-driver@0.22.0':
+    resolution: {integrity: sha512-NElsgryvNTl7arPdx7trvYhz4geMhPztsi8RFeECY2XhuuhWWzSPPPHTC4cBVsb/gprqqPtb+Hy2I1kGGEGddg==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -7820,8 +7836,8 @@ packages:
     resolution: {integrity: sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==}
     engines: {node: '>= 8'}
 
-  mermaid@11.17.1:
-    resolution: {integrity: sha512-G1BP6qU4BRwEGk2SdsxgDk1cSuApimT32Nkb52YRSv+856FrmB8qo28BaNk9Ee8Fvuon3OxpXDJ4L6cD5AykXg==}
+  mermaid@11.17.2:
+    resolution: {integrity: sha512-V6K3C8EBdEsPFZXSKMJe6ppQOENxuHARr9GvHX4hh47lAbhMRD9qf4oEK7LoaRQxULMa80/qt5gHO73aCleBBg==}
 
   micromark-core-commonmark@2.0.3:
     resolution: {integrity: sha512-RDBrHEMSxVFLg6xvnXmb1Ayr2WzLAWjeSATAoxwKYJV94TeNavgoIdA0a9ytzDSVzBy2YKFK+emCPOEibLeCrg==}
@@ -12352,35 +12368,35 @@ snapshots:
 
   '@tokenizer/token@0.3.0': {}
 
-  '@trycua/cua-driver-darwin-arm64@0.21.0':
+  '@trycua/cua-driver-darwin-arm64@0.22.0':
     optional: true
 
-  '@trycua/cua-driver-darwin-x64@0.21.0':
+  '@trycua/cua-driver-darwin-x64@0.22.0':
     optional: true
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.21.0':
+  '@trycua/cua-driver-linux-arm64-gnu@0.22.0':
     optional: true
 
-  '@trycua/cua-driver-linux-x64-gnu@0.21.0':
+  '@trycua/cua-driver-linux-x64-gnu@0.22.0':
     optional: true
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.21.0':
+  '@trycua/cua-driver-win32-arm64-msvc@0.22.0':
     optional: true
 
-  '@trycua/cua-driver-win32-x64-msvc@0.21.0':
+  '@trycua/cua-driver-win32-x64-msvc@0.22.0':
     optional: true
 
-  '@trycua/cua-driver@0.21.0':
+  '@trycua/cua-driver@0.22.0':
     dependencies:
       '@ubjs/core': 0.31.0-3
       '@ubjs/node': 0.31.0-3
     optionalDependencies:
-      '@trycua/cua-driver-darwin-arm64': 0.21.0
-      '@trycua/cua-driver-darwin-x64': 0.21.0
-      '@trycua/cua-driver-linux-arm64-gnu': 0.21.0
-      '@trycua/cua-driver-linux-x64-gnu': 0.21.0
-      '@trycua/cua-driver-win32-arm64-msvc': 0.21.0
-      '@trycua/cua-driver-win32-x64-msvc': 0.21.0
+      '@trycua/cua-driver-darwin-arm64': 0.22.0
+      '@trycua/cua-driver-darwin-x64': 0.22.0
+      '@trycua/cua-driver-linux-arm64-gnu': 0.22.0
+      '@trycua/cua-driver-linux-x64-gnu': 0.22.0
+      '@trycua/cua-driver-win32-arm64-msvc': 0.22.0
+      '@trycua/cua-driver-win32-x64-msvc': 0.22.0
 
   '@tufjs/canonical-json@2.0.0': {}
 
@@ -15250,7 +15266,7 @@ snapshots:
 
   merge2@1.4.1: {}
 
-  mermaid@11.17.1:
+  mermaid@11.17.2:
     dependencies:
       '@braintree/sanitize-url': 7.1.2
       '@iconify/utils': 3.1.4

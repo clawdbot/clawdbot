@@ -164,8 +164,9 @@ extension OnboardingAISetupModel {
         if status == "cancelled" {
             return .failure(OnboardingAISetupError.activationCancelled)
         }
-        return .failure(OnboardingAISetupError
-            .activationFailed(error ?? "The Gateway did not return a verified model."))
+        return .failure(status == "error"
+            ? OnboardingAISetupError.activationFailed(error ?? "AI setup failed.")
+            : OnboardingAISetupError.activationOutcomeUnavailable)
     }
 
     struct Candidate: Identifiable, Equatable {
@@ -468,6 +469,10 @@ extension OnboardingAISetupModel {
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
         if case OnboardingAISetupError.activationCancelled = error {
+            return true
+        }
+        // A terminal wizard error arrives after its runner and setup admission settle.
+        if case OnboardingAISetupError.activationFailed = error {
             return true
         }
         if let response = error as? GatewayResponseError {

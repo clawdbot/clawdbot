@@ -1002,6 +1002,8 @@ when omitted. Prefer narrow `allowedHostnames` entries over the broad
 
 Automation jobs, run history, and quarantined malformed jobs live in the shared SQLite state database. Use the CLI or Gateway API to change jobs; `cron.store` is retired.
 
+Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots missed while the Gateway was offline. At startup, those jobs advance to their next future occurrence instead of catching up, avoiding stale reminders and unnecessary model calls at the cost of dropping missed work. The default is `false` (catch up); one-shot (`at`) jobs retain their normal catch-up behavior either way.
+
 Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 <AccordionGroup>

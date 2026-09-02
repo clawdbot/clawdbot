@@ -226,7 +226,7 @@ website, and private dist-tags; do not run those steps for this Gateway path.
 
 ## Regular release operator checklist
 
-This checklist is the public shape of the release flow. Private credentials, signing, notarization, dist-tag recovery, and emergency rollback details stay in the maintainer-only release runbook.
+This checklist is the public shape of the release flow. Private credentials and service-specific signing, notarization, dist-tag recovery, and emergency rollback procedures stay in the maintainer-only release runbook.
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed, and confirm `main` CI is green enough to branch from.
 2. Create `release/YYYY.M.PATCH` from that commit. Backports are optional; apply only the operator-selected set. Bump every required version location, run `pnpm release:prep`, finish release fixes and required forward-ports, and review `src/plugins/compat/registry.ts` plus `src/commands/doctor/shared/deprecation-compat.ts`.
@@ -371,6 +371,8 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on the candidate update tarball, so installer e2e catches accidental pack bloat before the release publish path.
 - If the release work touched CI planning, extension timing manifests, or extension test matrices, regenerate and review the planner-owned `plugin-prerelease-extension-shard` matrix outputs from `.github/workflows/plugin-prerelease.yml` before approval so release notes do not describe a stale CI layout.
 - Stable macOS release readiness also includes the updater surfaces: the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`; `appcast.xml` on `main` must point at the new stable zip after publish (the macOS publish workflow commits it automatically, or opens an appcast PR when direct push is blocked); the packaged app must keep a non-debug bundle id, a non-empty Sparkle feed URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor for that release version.
+- Signed macOS packaging retains `dist/macos-notarization-recovery/` before waiting for Apple. It contains the exact signed app archive, symbols, submission IDs, available DMG, and source-bound SHA-256 inventory. Keep the complete checkpoint if notarization fails; do not rebuild or replace its files. Successful packaging marks it complete for artifact retention; the next ordinary package invocation verifies and retires that completed checkpoint automatically.
+- Resume with `scripts/package-mac-dist.sh --resume-notarization` from the same source commit and version, with the original signing/notary credentials available. Recovery verifies the checkpoint, restores the signed app, and waits on existing Apple submissions. It creates a DMG only if that packaging step had not completed. Apple rejection, changed bytes, wrong source/version, or invalid signatures remain failures.
 
 ## Release test boxes
 

@@ -35,7 +35,7 @@ import {
   runUpdateStep,
 } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolvePostInstallDoctorEnv } from "./update-command-service-env.js";
+import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -118,7 +118,12 @@ export async function runPackageInstallUpdate(params: {
       if (!entryPath) {
         return null;
       }
-      await createUpdateConfigSnapshot();
+      const doctorEnv = resolveUpdateTargetEnv({
+        serviceEnv: params.managedServiceEnv,
+        invocationCwd: params.invocationCwd,
+      });
+      // Backup and Doctor must select the same installation before Doctor can rewrite it.
+      await createUpdateConfigSnapshot(doctorEnv);
       const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
       const doctorResultPath = createUpdatePostInstallDoctorResultPath();
       const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
@@ -144,10 +149,7 @@ export async function runPackageInstallUpdate(params: {
         argv: doctorArgv,
         cwd: verifiedPackageRoot,
         env: {
-          ...resolvePostInstallDoctorEnv({
-            serviceEnv: params.managedServiceEnv,
-            invocationCwd: params.invocationCwd,
-          }),
+          ...doctorEnv,
           ...buildUpdateDoctorEnv({
             allowGatewayServiceRepair: params.allowGatewayServiceRepair,
             allowGatewayActivation: params.allowGatewayActivation,
@@ -182,7 +184,7 @@ export async function runPackageInstallUpdate(params: {
     root: packageUpdate.verifiedPackageRoot ?? params.root,
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
-    after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,
     recovery: packageUpdate.recovery,
     durationMs: Date.now() - params.startedAt,

@@ -68,6 +68,19 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+If status reports an index identity warning after changing embedding settings,
+check the affected agent's provider, model, sources, and extra paths, then rebuild:
+
+```bash
+openclaw memory status --deep --agent <id>
+openclaw memory index --force --agent <id>
+openclaw memory status --agent <id>
+```
+
+`openclaw memory status --index --agent <id>` also rebuilds an incompatible index.
+Both repair commands replace the derived memory index while preserving other agent
+state. Use `--agent` to limit the repair to the affected agent.
+
 <Warning>
 The default `openclaw-agent.sqlite` database also contains session history and
 other durable agent state. Do not delete it or its `-wal`, `-shm`, or `-journal`

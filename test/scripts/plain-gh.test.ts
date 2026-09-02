@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   execGhApiRead,
   execGhJson,
@@ -23,6 +23,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const commandDirs = useAutoCleanupTempDirTracker(afterAll);
 const shellHelper = path.resolve("scripts/lib/plain-gh.sh");
 const tokenNames = [
   "GH_TOKEN",
@@ -31,9 +32,14 @@ const tokenNames = [
   "GITHUB_ENTERPRISE_TOKEN",
 ] as const;
 const engines = ["shell", "Node"] as const;
+let commands: ReturnType<typeof makeCommandFixture>;
 
-function makeFixture() {
-  const root = tempDirs.make("plain-gh-");
+beforeAll(() => {
+  commands = makeCommandFixture();
+});
+
+function makeCommandFixture() {
+  const root = commandDirs.make("plain-gh-commands-");
   const home = path.join(root, "home");
   const protectedBin = path.join(home, "bin");
   const secondBin = path.join(root, "second");
@@ -42,8 +48,6 @@ function makeFixture() {
     mkdirSync(dir, { recursive: true });
   }
   symlinkSync("/usr/bin/env", path.join(toolsBin, "env"));
-  const calls = path.join(root, "calls.jsonl");
-  writeFileSync(calls, "");
   for (const [dir, route] of [
     [protectedBin, "protected"],
     [secondBin, "second"],
@@ -76,6 +80,15 @@ if (argv[0] === "auth" && argv[1] === "token") {
     );
     chmodSync(gh, 0o755);
   }
+  return { home, protectedBin, secondBin, toolsBin };
+}
+
+function makeFixture() {
+  const root = tempDirs.make("plain-gh-");
+  // Share executable files only; environments and outputs stay private to each test.
+  const { home, protectedBin, secondBin, toolsBin } = commands;
+  const calls = path.join(root, "calls.jsonl");
+  writeFileSync(calls, "");
   const env: NodeJS.ProcessEnv = {
     HOME: home,
     PATH: [protectedBin, secondBin, toolsBin].join(path.delimiter),
