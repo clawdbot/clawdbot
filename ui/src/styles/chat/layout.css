@@ -2165,10 +2165,9 @@ button.chat-reply-preview--message:disabled {
    covers it. The solid tail sits behind rounded corners, so card silhouettes
    cannot expose unfaded text; its chat-surface color is invisible when there
    is no transcript behind it. */
-.agent-chat__composer-shell::before {
+.chat-main__conversation > .agent-chat__composer-shell::before {
   position: absolute;
-  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) calc(0px - var(--chat-thread-gutter))
-    auto;
+  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(
     var(--chat-transcript-fade-height, 20px) + var(--chat-transcript-fade-stack-overlap, 20px)
   );
@@ -7261,6 +7260,10 @@ button.chat-pr__diff {
     gap: 6px;
   }
 
+  .chat-main__conversation > .agent-chat__composer-shell::before {
+    inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
+  }
+
   .session-suggestions {
     width: calc(100% - 8px);
   }
@@ -7432,12 +7435,6 @@ button.chat-pr__diff {
    the secondary controls share one smaller box so model and effort can remain
    visible instead of collapsing into the model menu. */
 @media (max-width: 560px) {
-  /* The taller mobile fade follows the transcript content bounds, not the
-     scroll viewport bounds, so the edge gutters and scrollbar stay uncovered. */
-  .agent-chat__composer-shell::before {
-    inset-inline: calc(var(--chat-thread-gutter) - 4px);
-  }
-
   .agent-chat__input--mobile-toolbar {
     --chat-composer-min-height: 105px;
     --chat-mobile-row-target-size: 32px;

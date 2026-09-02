@@ -1938,6 +1938,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [1200, 800, "desktop"],
+    [900, 500, "mobile-landscape-900"],
+    [640, 900, "mobile-responsive-640"],
     [320, 568, "mobile-320"],
     [375, 812, "mobile-375"],
     [430, 932, "mobile-430"],
@@ -1987,15 +1989,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 width: bounds.width,
               };
             };
+            const composer = document
+              .querySelector<HTMLElement>(".agent-chat__composer-shell")!
+              .getBoundingClientRect();
+            const thread = document
+              .querySelector<HTMLElement>(".chat-thread")!
+              .getBoundingClientRect();
+            const fade = getComputedStyle(
+              document.querySelector<HTMLElement>(".agent-chat__composer-shell")!,
+              "::before",
+            );
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
+              fadeInsetLeft: composer.left + Number.parseFloat(fade.left) - thread.left,
+              fadeInsetRight: thread.right - (composer.right - Number.parseFloat(fade.right)),
+              scrollbarSize: Number.parseFloat(
+                getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
+              ),
               thread: rect(".chat-thread"),
             };
           });
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
         expect(await page.locator(".agent-chat__composer-overlay").isVisible()).toBe(false);
         const before = await geometry();
+        expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
+        expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         await page.locator(".chat-topbar-notices").evaluate((node) => {
           node.innerHTML =
             '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
