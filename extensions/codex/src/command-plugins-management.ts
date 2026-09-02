@@ -1,3 +1,7 @@
+import {
+  renderMessagePresentationFallbackText,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 // Codex plugin module implements command plugins management behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
@@ -5,6 +9,7 @@ import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js
 import type { v2 } from "./app-server/protocol.js";
 import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
 import {
   buildCodexCommandPickerPresentation,
   type CodexCommandPickerButton,
@@ -439,20 +444,34 @@ async function installCodexPlugin(
 
   const appsNeedingAuth = result?.appsNeedingAuth ?? [];
   if (appsNeedingAuth.length > 0) {
-    const apps = appsNeedingAuth
-      .map((app) => formatCodexDisplayText(app.name))
-      .slice(0, 5)
-      .join(", ");
+    const authRequirement =
+      appsNeedingAuth.length === 1
+        ? "1 app still requires"
+        : `${appsNeedingAuth.length} apps still require`;
+    const presentation: MessagePresentation = {
+      title: "Codex plugin app setup",
+      tone: "warning",
+      blocks: [
+        {
+          type: "text",
+          text: `${formatCodexDisplayText(requestedId)} bundle was installed in Codex. OpenClaw app access is configured. ${authRequirement} connector authentication in ChatGPT. Installation does not confirm app connections or current-conversation readiness.`,
+        },
+        ...buildCodexPluginAppLinks(appsNeedingAuth),
+        { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
+      ],
+    };
     return {
-      text: `${formatCodexDisplayText(requestedId)} was installed and authorized, but ${apps} still require connector authentication. Complete sign-in before using those apps.${refreshWarning} ${POLICY_REFRESH_HINT}`,
+      text: renderMessagePresentationFallbackText({ presentation }),
+      presentation,
+      presentationTextMode: "fallback",
     };
   }
 
   const status = alreadyInstalled
-    ? "was already installed in Codex and is now authorized"
-    : "was installed and authorized";
+    ? "bundle was already installed in Codex"
+    : "bundle was installed in Codex";
   return {
-    text: `${formatCodexDisplayText(requestedId)} ${status}.${refreshWarning} ${POLICY_REFRESH_HINT}`,
+    text: `${formatCodexDisplayText(requestedId)} ${status}. OpenClaw app access is configured.${refreshWarning} ${POLICY_REFRESH_HINT}`,
   };
 }
 
