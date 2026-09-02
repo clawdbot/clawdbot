@@ -1137,6 +1137,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body {
+  --sidebar-inset: 9px;
+  --sidebar-lead: 20px;
+  --sidebar-row-gap: 8px;
+  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+
   min-height: 0;
   flex: 1;
   display: flex;
@@ -1172,11 +1177,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-sessions,
 .sidebar-online {
-  --sidebar-inset: 8px;
-  --sidebar-lead: 20px;
-  --sidebar-row-gap: 8px;
-  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
-
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -4498,7 +4498,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   flex: 0 0 16px;
 }
 
-.sidebar-recent-sessions .sidebar-session-indicator {
+.sidebar-recent-session .sidebar-session-indicator {
   width: var(--sidebar-lead);
   flex-basis: var(--sidebar-lead);
 }

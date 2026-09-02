@@ -33,6 +33,7 @@ suite.define(() => {
       key: index === 0 ? "agent:main:alignment" : `agent:main:alignment-${index}`,
       kind: "direct",
       label: index === 0 ? "Alignment fixture" : `Overflow session ${index}`,
+      pinned: index === 0,
       category: index % 2 === 0 ? "OpenClaw" : "Gateway",
       updatedAt: 60 - index,
     }));
@@ -118,8 +119,15 @@ suite.define(() => {
             '[data-session-section="category:Gateway"] .sidebar-recent-sessions__head',
           ),
           nav: bounds(".nav-item"),
+          navLabel: bounds(".nav-item__text"),
           onlineHeader: bounds(".sidebar-online .sidebar-recent-sessions__head"),
           onlineRow: bounds(".sidebar-online__person"),
+          pinnedSessionLabel: bounds(
+            '.sidebar-zone-entry .sidebar-recent-session[data-session-key="agent:main:alignment"] .sidebar-recent-session__name',
+          ),
+          regularSessionLabel: bounds(
+            '.sidebar-sessions .sidebar-recent-session[data-session-key="agent:main:alignment-1"] .sidebar-recent-session__name',
+          ),
           scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
           scrollbarWidth,
           overflows: scroller.scrollHeight > scroller.clientHeight,
@@ -151,6 +159,8 @@ suite.define(() => {
       expect(layout.nav.right).toBe(layout.sessionRow.right);
       expect(layout.catalogCodex.right).toBe(layout.sessionHeader.right);
       expect(layout.catalogClaude.right).toBe(layout.sessionHeader.right);
+      expect(layout.pinnedSessionLabel.left).toBe(layout.navLabel.left);
+      expect(layout.regularSessionLabel.left).toBe(layout.navLabel.left);
       expect(layout.contentEdge - layout.sessionRow.right).toBe(4);
     } finally {
       await suite.closeBrowserContext(context);
