@@ -22,6 +22,12 @@ const describeRowAnatomy = canRunPlaywrightChromium(chromiumExecutablePath)
 const LONG_DESCRIPTION =
   "macOS-only. Wraps four native Swift CLIs (calendar-cli, reminder-cli, contacts-cli, mail-cli) you build locally from source via ./setup.sh — no binaries are downloaded by the registry. Grants the agent read/write access to Calendar, Reminders, Contacts, and Mail.app (including send/delete) once you approve the corresponding macOS TCC and Automation prompts.";
 
+// A configured MCP endpoint is identity, not a summary, and the row offers no
+// detail surface for it: whatever the operator configured has to stay readable
+// in the row however long it is.
+const LONG_MCP_TARGET =
+  "https://mcp.example.com/tenants/acme-production-eu-west/workspaces/platform-observability/servers/streamable-http/v1/endpoint?region=eu-west-1&profile=read-only-analytics&session=persistent&trace=enabled&compat=2026-08&channel=stable&retry=exponential&fallback=queue";
+
 // Row shapes copied from their renderers: renderPluginRow (plugins/view.ts) and
 // renderConfiguredRow (channels/view.ts). Both lead with an art tile, so both
 // depend on the copy column never being the item that starts a new flex line.
@@ -38,7 +44,9 @@ const FIXTURE_MARKUP = `
               <span class="plugins-version">v3.16.1</span>
             </button>
           </h3>
-          <span class="settings-row__desc" data-probe="desc">${LONG_DESCRIPTION}</span>
+          <span class="settings-row__desc plugins-item__summary" data-probe="desc"
+            >${LONG_DESCRIPTION}</span
+          >
           <span class="settings-row__desc plugins-meta" data-probe="meta"
             >Global<span aria-hidden="true"> · </span
             ><span class="plugins-meta__mono">apple-pim-cli</span></span
@@ -60,6 +68,21 @@ const FIXTURE_MARKUP = `
         </div>
         <div class="plugins-row-message plugins-row-message--error" role="alert" data-probe="message">
           Failed to load plugin manifest.
+        </div>
+      </article>
+      <article class="settings-row plugins-item" data-row="mcp">
+        <span class="plugins-tile plugins-tile--fallback" aria-hidden="true">HO</span>
+        <div class="settings-row__text">
+          <h3 class="settings-row__title">hosted-analytics</h3>
+          <span class="settings-row__desc plugins-meta__mono" data-probe="desc"
+            >${LONG_MCP_TARGET}</span
+          >
+          <span class="settings-row__desc plugins-meta" data-probe="meta"
+            >MCP<span aria-hidden="true"> · </span>streamable-http</span
+          >
+        </div>
+        <div class="settings-row__control">
+          <button type="button" class="btn btn--sm">Disable</button>
         </div>
       </article>
       <button type="button" class="settings-row settings-row--nav channels-item" data-row="channel">
@@ -180,6 +203,7 @@ describeRowAnatomy("Control UI settings row anatomy", () => {
     ).toEqual([
       { row: "plugin", copyFollowsTile: true, controlFollowsCopy: true },
       { row: "plugin-message", copyFollowsTile: true, controlFollowsCopy: true },
+      { row: "mcp", copyFollowsTile: true, controlFollowsCopy: true },
       { row: "channel", copyFollowsTile: true, controlFollowsCopy: true },
     ]);
   });
@@ -197,6 +221,7 @@ describeRowAnatomy("Control UI settings row anatomy", () => {
     ).toEqual([
       { row: "plugin", copyFollowsTile: true, controlBelowCopy: true },
       { row: "plugin-message", copyFollowsTile: true, controlBelowCopy: true },
+      { row: "mcp", copyFollowsTile: true, controlBelowCopy: true },
       { row: "channel", copyFollowsTile: true, controlBelowCopy: true },
     ]);
   });
@@ -216,6 +241,15 @@ describeRowAnatomy("Control UI settings row anatomy", () => {
       descriptionTruncated: true,
       metaLines: 1,
     });
+  });
+
+  it.each([1440, 393])("never clips a configured MCP target at %ipx", async (width) => {
+    const target = (await probeRows(width)).find((row) => row.row === "mcp");
+
+    expect(target).toMatchObject({ descriptionTruncated: false, metaLines: 1 });
+    // Long enough that the clamp would have hidden it; the assertion above is
+    // only meaningful while this row still overflows two lines.
+    expect(target?.descriptionLines).toBeGreaterThan(2);
   });
 
   it("anchors the plugin tile to the row title instead of the copy block", async () => {

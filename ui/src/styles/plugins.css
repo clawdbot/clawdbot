@@ -179,10 +179,11 @@
 }
 
 /* Registry descriptions run to paragraphs: two lines keep the shelf scannable
-   and the row near the intrinsic-size hint above, and the plugin card carries
-   the full text. The meta line is a .settings-row__desc too, and owns its
-   single-line ellipsis below. */
-.plugins-item .settings-row__desc:not(.plugins-meta) {
+   and the row near the intrinsic-size hint above. Opt in per row instead of
+   matching .settings-row__desc: only the plugin summary has a detail card
+   carrying its full text, while sibling rows put identity there (the MCP
+   target, the meta line) and must stay readable in the row itself. */
+.plugins-item__summary {
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
