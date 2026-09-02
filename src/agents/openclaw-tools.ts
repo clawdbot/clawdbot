@@ -434,7 +434,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ...(embedded
       ? []
       : [
-          createGatewayTool(),
+          createGatewayTool({ senderIsOwner: options?.senderIsOwner }),
           ...createOpenClawDelegateToolsForRun({ ...options, sessionAgentId }),
         ]),
     createAgentsListTool({

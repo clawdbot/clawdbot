@@ -83,7 +83,7 @@ export function createOpenClawDelegateToolsForRun(
     name: "openclaw",
     label: "OpenClaw",
     description:
-      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. " +
+      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
         : "Changes need human approval."),

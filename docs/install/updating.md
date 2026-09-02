@@ -87,6 +87,18 @@ default/latest release.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+### From chat
+
+The OpenClaw owner can say "update" (the agent uses the `gateway` action
+`update.run`) or send `/update`. The bot acknowledges, the Gateway restarts,
+and a completion or failure notice arrives in the same chat. If the update
+cannot start, the bot explains why and provides the manual command when available.
+
+The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
+`/update` also requires `commands.restart` (enabled by default).
+Agents must never run `npm install -g openclaw` or stop the Gateway service
+from a chat shell; use the update action so restart and notification stay coordinated.
+
 ## Retire update recovery data
 
 Once you have verified the update and your conversations, preview retained
