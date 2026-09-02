@@ -7,6 +7,7 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
+  beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -406,6 +407,48 @@ describe("followup queue drain restart after idle window", () => {
       });
       expect(attempts).toBe(1);
       expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+    } finally {
+      clearSessionQueues([key]);
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("resumes a queued followup after a restart-signal fence rolls back", async () => {
+    resetGatewayWorkAdmission();
+    const key = `test-restart-signal-rollback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstFailed = createDeferred();
+    const delivered = createDeferred();
+    let attempts = 0;
+    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission>;
+
+    const runFollowup = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        signal = beginGatewayRestartSignalAdmission();
+        firstFailed.resolve();
+        throw new GatewayDrainingError();
+      }
+      delivered.resolve();
+    };
+
+    try {
+      enqueueFollowupRun(key, createRun({ prompt: "queued during pending restart" }), settings);
+      scheduleFollowupDrain(key, runFollowup);
+      await firstFailed.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(attempts).toBe(1);
+      expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+      expect(signal?.rollback()).toBe(true);
+      await vi.waitFor(() => {
+        expect(attempts).toBe(2);
+      });
+      await delivered.promise;
+      await vi.waitFor(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
     } finally {
       clearSessionQueues([key]);
       resetGatewayWorkAdmission();

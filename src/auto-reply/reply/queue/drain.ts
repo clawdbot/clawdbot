@@ -19,7 +19,9 @@ import {
 } from "../../../plugin-sdk/channel-route.js";
 import {
   isGatewayRestartDrainError,
+  isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkContinuation,
+  waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
@@ -1669,10 +1671,11 @@ export function scheduleFollowupDrain(
       if (isFollowupRunDeferredError(err)) {
         retryDeferred = true;
       } else if (isGatewayRestartDrainError(err)) {
-        // Restart drain is one-way; another generation cannot succeed.
-        // Persistence/replay stays with that owner. Rescheduling here
-        // keeps the dying process alive until SIGKILL.
-        restartDrainRejected = true;
+        // Pending-signal fences can roll back. Wait, then stop only if
+        // one-way restart drain is still active. Rescheduling a committed
+        // drain keeps the dying process alive until SIGKILL.
+        await waitForGatewayRestartFenceSettlement();
+        restartDrainRejected = isGatewayRestartDraining();
       } else {
         defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
       }
