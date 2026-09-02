@@ -2143,7 +2143,7 @@
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
     "@mdx-js/mdx": "3.1.1",
-    "@openclaw/crabline": "0.1.17",
+    "@openclaw/crabline": "0.1.20",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.221.0",
     "@shikijs/core": "4.4.3",

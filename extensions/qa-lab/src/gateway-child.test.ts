@@ -1767,7 +1767,7 @@ describe("buildQaRuntimeEnv", () => {
       }
       const prefix = provider
         ? `installed package mock auth bootstrap failed for ${provider}: `
-        : "installed package plugin setup failed: ";
+        : `installed package plugin setup failed (update repair${phase === "help" ? " --help" : ""}): `;
       const detail = provider
         ? "OpenClaw CLI exited 9: Authorization: Bearer <redacted>"
         : "OpenClaw CLI exited 8: plugin fixture rejected: Authorization: Bearer <redacted>";

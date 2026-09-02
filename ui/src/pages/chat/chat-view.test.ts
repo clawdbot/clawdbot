@@ -6992,9 +6992,9 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    { target: "session", label: "Selection target: This session only" },
-    { target: "agent", label: "Selection target: This agent's default" },
-    { target: "global", label: "Selection target: Global default" },
+    { target: "session", label: "This session" },
+    { target: "agent", label: "Agent default" },
+    { target: "global", label: "Global default" },
   ] as const)(
     "discloses the $target write target before pointer selection",
     ({ target, label }) => {
@@ -7226,9 +7226,6 @@ describe("chat model controls", () => {
     });
     renderModelControls(state, { onModelSelect }, container);
 
-    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
-      "Only for this session",
-    );
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     const modelSelect = getChatModelSelect(container);
     const details = modelSelect.closest<HTMLDetailsElement>("details");
@@ -7237,7 +7234,8 @@ describe("chat model controls", () => {
       details.open = true;
     }
     expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.textContent?.trim()).toBe("Use default (GPT-5)");
+    expect(reset?.textContent?.trim()).toBe("Reset session model");
+    expect(reset?.title).toBe("Use default (GPT-5) for this session");
     reset?.focus();
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
@@ -7247,8 +7245,8 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    { target: "agent", targetLabel: "Selection target: This agent's default" },
-    { target: "global", targetLabel: "Selection target: Global default" },
+    { target: "agent", targetLabel: "Agent default" },
+    { target: "global", targetLabel: "Global default" },
   ] as const)(
     "keeps a pinned reset session-only while model rows write to the $target target",
     ({ target, targetLabel }) => {
@@ -7271,10 +7269,10 @@ describe("chat model controls", () => {
       expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
         targetLabel,
       );
-      expect(container.querySelector("[data-chat-model-pin-provenance]")?.textContent).toContain(
-        "Only for this session",
-      );
-      container.querySelector<HTMLButtonElement>("[data-chat-model-reset]")?.click();
+      const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+      expect(reset?.textContent?.trim()).toBe("Reset session model");
+      expect(reset?.title).toContain("for this session");
+      reset?.click();
 
       expect(onModelSelect).toHaveBeenCalledWith("", "main");
     },
@@ -7303,9 +7301,7 @@ describe("chat model controls", () => {
     const container = renderModelControls(state, { onModelSelect });
     document.body.append(container);
 
-    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
-      "Only for this session",
-    );
+    expect(container.querySelector("[data-chat-model-reset]")).not.toBeNull();
     const defaultRow = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.4"]',
     );
@@ -7326,9 +7322,7 @@ describe("chat model controls", () => {
       },
     };
     renderModelControls(state, { onModelSelect }, container);
-    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
-      "Only for this session",
-    );
+    expect(container.querySelector("[data-chat-model-reset]")).not.toBeNull();
     container.remove();
   });
 
@@ -7485,7 +7479,7 @@ describe("chat model controls", () => {
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     details!.open = true;
     expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-      "Selection target: This agent's default",
+      "Agent default",
     );
     search!.value = "anth";
     search!.dispatchEvent(new InputEvent("input", { bubbles: true }));

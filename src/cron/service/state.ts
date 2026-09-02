@@ -292,7 +292,8 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
-    onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+    /** Persists the transport-owned terminal fact before Gateway work admission releases. */
+    onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
