@@ -741,14 +741,63 @@ _openclaw_root_completion
       expected: ["--shell=fish"],
     },
     {
-      name: "an inline short shell flag",
+      name: "an unsupported equals prefix in a short option value",
       words: ["openclaw", "completion", "-s=f"],
-      expected: ["-s=fish"],
+      expected: [],
     },
   ])("completes validated values in real Bash after $name", ({ words, expected }) => {
     expect(runGeneratedBashCompletion(createDocumentedCompletionProgram(), words)).toEqual(
       expected,
     );
+  });
+
+  it.skipIf(process.platform === "win32").each([
+    {
+      line: "openclaw completion --shell=",
+      words: ["openclaw", "completion", "--shell", "="],
+      word: "",
+      expected: ["zsh", "bash", "powershell", "fish"],
+    },
+    {
+      line: "openclaw --profile=gateway completion --shell f",
+      words: ["openclaw", "--profile", "=", "gateway", "completion", "--shell", "f"],
+      word: "f",
+      expected: ["fish"],
+    },
+    {
+      line: "openclaw completion --shell=f",
+      words: ["openclaw", "completion", "--shell=f"],
+      word: "f",
+      expected: ["fish"],
+    },
+    {
+      line: "openclaw gateway --token = status --j",
+      words: ["openclaw", "gateway", "--token", "=", "status", "--j"],
+      word: "--j",
+      expected: ["--json"],
+    },
+    {
+      line: "openclaw completion>/dev/null --shell f",
+      words: ["openclaw", "completion", ">", "/dev/null", "--shell", "f"],
+      word: "f",
+      expected: ["fish"],
+    },
+    {
+      line: "openclaw gateway --token=prefix:status --f",
+      words: ["openclaw", "gateway", "--token", "=", "prefix", ":", "status", "--f"],
+      word: "--f",
+      expected: ["--force"],
+    },
+    {
+      line: "openclaw gateway --token=foo==status --f",
+      words: ["openclaw", "gateway", "--token", "=", "foo", "==", "status", "--f"],
+      word: "--f",
+      expected: ["--force"],
+    },
+  ])("respects native Bash word boundaries in $line", ({ line, words, word, expected }) => {
+    const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
+
+    expect(runGeneratedBashCompletion(program, words, { line, word })).toEqual(expected);
   });
 
   it.skipIf(process.platform === "win32").each([
@@ -892,7 +941,9 @@ _openclaw_root_completion
         "--shell=fish",
       ]);
       expect(
-        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"]),
+        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"], {
+          line: "openclaw completion --shell=f",
+        }),
       ).toEqual(["fish"]);
       expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-sf"])).toEqual([
         "-sfish",
@@ -909,6 +960,21 @@ _openclaw_root_completion
         "-yspowershell",
         "-ysfish",
       ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves pending short-cluster choices that start with a hyphen in real Bash",
+    () => {
+      const program = new Command()
+        .name("openclaw")
+        .option("-v, --verbose", "Verbose output")
+        .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]))
+        .exitOverride();
+
+      program.parse(["-vm", "-legacy"], { from: "user" });
+      expect(program.opts()).toEqual({ verbose: true, mode: "-legacy" });
+      expect(runGeneratedBashCompletion(program, ["openclaw", "-vm", "-le"])).toEqual(["-legacy"]);
     },
   );
 

@@ -23,7 +23,11 @@ export function createAliasedCompletionProgram(): Command {
   return program;
 }
 
-export function runGeneratedBashCompletion(program: Command, words: readonly string[]): string[] {
+export function runGeneratedBashCompletion(
+  program: Command,
+  words: readonly string[],
+  input: { line?: string; word?: string } = {},
+): string[] {
   const script = getCompletionScript("bash", program);
   const result = spawnSync(
     "bash",
@@ -34,7 +38,8 @@ export function runGeneratedBashCompletion(program: Command, words: readonly str
       `${script}
 COMP_WORDS=(${words.map(quoteCliArg).join(" ")})
 COMP_CWORD=${words.length - 1}
-_openclaw_completion
+COMP_LINE=${quoteCliArg(input.line ?? words.join(" "))}
+_openclaw_completion openclaw ${quoteCliArg(input.word ?? words.at(-1) ?? "")}
 printf '%s\\n' "\${COMPREPLY[@]}"
 `,
     ],
