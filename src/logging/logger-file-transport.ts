@@ -187,8 +187,7 @@ function rotateIfNeeded(entry: FileLogQueueEntry, cursor: FileCursor, synchronou
 
 async function writeEntries(entries: FileLogQueueEntry[], generation: number): Promise<void> {
   const cursors = new Map<string, FileCursor>();
-  let index = 0;
-  while (index < entries.length) {
+  for (let index = 0; index < entries.length; index += 1) {
     if (generation !== drainGeneration || processExiting) {
       return;
     }
@@ -216,17 +215,16 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
       warnAboutAppendFailure(entry, false);
     } finally {
       activeAppendInFlight = false;
+      // Drains share entries; release settled text even while a later append is still pending.
+      entry.payload = "";
     }
     activeIndex = index + 1;
-    index += 1;
   }
 }
 
 function writeEntriesSync(entries: FileLogQueueEntry[]): void {
   const cursors = new Map<string, FileCursor>();
-  let index = 0;
-  while (index < entries.length) {
-    const entry = entries[index];
+  for (const entry of entries) {
     if (!entry) {
       return;
     }
@@ -245,7 +243,7 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       // Match the old best-effort transport: a failed append must not stop later records.
       warnAboutAppendFailure(entry, true);
     }
-    index += 1;
+    entry.payload = "";
   }
 }
 

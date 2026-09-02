@@ -2844,7 +2844,7 @@ describe("talk.client.toolCall handler", () => {
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-      display: false,
+      transcript: { display: false, excludeFromContext: true },
     });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
@@ -2970,7 +2970,10 @@ describe("talk.client.toolCall handler", () => {
       thinking: "low",
       fastMode: true,
     });
-    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({ toolsAllow: undefined, display: false });
+    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
+      toolsAllow: undefined,
+      transcript: { display: false, excludeFromContext: true },
+    });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 

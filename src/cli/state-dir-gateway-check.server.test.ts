@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayCall from "../gateway/call.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { checkCliGatewayStateDir } from "./state-dir-gateway-check.js";
+import { checkCliGatewayStateDir, type GatewayHello } from "./state-dir-gateway-check.js";
 
 describe("state-dir guard with a real token Gateway", () => {
   const token = "state-dir-test-token";
@@ -14,6 +15,7 @@ describe("state-dir guard with a real token Gateway", () => {
   let port: number;
   let gatewayStateDir: string;
   let cliStateDir: string;
+  let hello: GatewayHello | undefined;
 
   const setCliStateDir = (stateDir: string) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -69,11 +71,29 @@ describe("state-dir guard with a real token Gateway", () => {
         reject(new Error(`Gateway fixture exited early: ${code}\n${childStderr}`));
       });
     });
+  }, 120_000);
+
+  beforeEach(() => {
     vi.stubEnv("HOME", path.join(root, "cli-home"));
     setCliStateDir(cliStateDir);
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", String(port));
     vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", `openclaw-state-dir-server-${process.pid}`);
-  }, 120_000);
+    hello = undefined;
+    const callGateway = gatewayCall.callGateway;
+    vi.spyOn(gatewayCall, "callGateway").mockImplementation((options) =>
+      callGateway({
+        ...options,
+        onHelloOk(value) {
+          hello = value;
+          options.onHelloOk?.(value);
+        },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   afterAll(async () => {
     vi.unstubAllEnvs();
@@ -95,7 +115,13 @@ describe("state-dir guard with a real token Gateway", () => {
         config: { gateway: { mode: "local", port, auth: { mode: "token", token } } },
       }),
     ).resolves.toEqual({ kind: "allow" });
-    setCliStateDir(cliStateDir);
+    expect(hello).toMatchObject({
+      snapshot: {
+        stateDir: gatewayStateDir,
+        configPath: path.join(gatewayStateDir, "openclaw.json"),
+      },
+      auth: { scopes: expect.arrayContaining(["operator.admin"]) },
+    });
   });
 
   it("refuses mismatched authenticated hello paths", async () => {

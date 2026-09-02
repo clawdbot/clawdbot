@@ -1,5 +1,5 @@
 ---
-summary: "Create and update workspace skills through Skill Workshop review"
+summary: "Author workspace proposals and profile-owned personal skills through Skill Workshop"
 read_when:
   - You want the agent to create or update a skill from chat
   - You need to review, apply, reject, or quarantine a generated skill draft
@@ -14,19 +14,63 @@ skills. Through this path, agents and operators create a **proposal** (pending
 draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
-Skill Workshop writes workspace skills only. It never touches bundled,
-plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
+The workspace proposal workflow described below writes workspace skills only.
+It never rewrites bundled, plugin, ClawHub, extra-root, managed-local,
+personal-agent, or system skill sources. The same authoring tool also supports
+[personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
+when the Gateway supplies an authorized library target; those operations publish
+managed revisions rather than workspace proposals.
+
+## Personal library authoring
+
+On a shared Gateway, ask the agent normally: **Create a skill for me that
+summarizes a reviewed change list.** The authenticated requester owns the
+result, even when another person created or owns the session. No separate
+authoring mode or identity argument is required. A single administrator keeps
+the workspace workflow by default; explicitly ask for a personal-library skill
+when that is the intended destination.
+
+Personal create and update operations publish complete managed revisions after
+validation and scanning. The response identifies the skill and revision and
+explains when it becomes available. Publication does not replace the current
+session's selection: ask to attach or refresh it explicitly for the next turn.
+Read before updating: the response includes the human-facing `slug`, generated
+command `name`, revision, and personal edit permission. The update parameter
+`name` means the slug, not the command name. Omit `name` or `proposal_content`
+on update to preserve them.
+
+For personal model operations, `files` contains named support-file upserts;
+omitting it or passing `[]` preserves all other files. Omitted executable flags
+are preserved too. Use `delete_files` to intentionally remove exact supporting
+paths. Duplicate or conflicting edits and removal of `SKILL.md` are rejected;
+change its full body with `proposal_content`. Operator `skills.library.save`
+continues to replace the complete bundle.
+
+Use `read` with `artifact_path` to read one whole UTF-8 support file, defaulting
+to `SKILL.md`. Binary or oversized artifacts produce a visible omission and
+direct you to My skills or the CLI; they are never returned as partial
+instructions or a base64 dump. Personal authoring has no pending-draft action:
+unsolicited improvements are suggestions, not publications.
+
+Personal mutations require a current, authenticated human turn. Autonomous
+reviews, cron jobs, and child runs do not acquire fresh personal authoring
+permission. If a different person steers an active authoring turn, send a fresh
+attributed message before publishing. Sharing makes a skill usable by the team;
+only an administrator can transfer its management ownership to the team.
 
 ## How it works
+
+The following lifecycle applies to workspace proposals:
 
 - **Proposal first:** generated content is stored as `PROPOSAL.md`, not
   `SKILL.md`.
 - **Apply is the only live write:** create, update, and revise never change
   active skills.
-- **Workshop-owned updates:** creates target the workspace `skills/` root;
-  updates are allowed only when an applied Workshop `create` proposal owns the
-  workspace-relative skill directory. Handwritten and externally installed
-  workspace skills remain read-only.
+- **Workshop-owned agent updates:** creates target the workspace `skills/`
+  root. An agent may apply an update only when an applied Workshop `create`
+  proposal owns the workspace-relative skill directory. Operators can explicitly
+  approve updates to handwritten or externally installed workspace skills;
+  autonomous collection review leaves those user-authored skills untouched.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
@@ -109,8 +153,9 @@ skills stay untouched.
 
 ## Chat
 
-Ask the agent for the skill you want; it calls `skill_workshop` and returns a
-proposal id.
+For workspace authoring, ask the agent for the skill you want; it calls
+`skill_workshop` and returns a proposal id. Personal library authoring instead
+returns the managed publication receipt described above.
 
 ### Learn from recent work
 
@@ -131,6 +176,12 @@ skill, or create a proposal when neither exists.
 
 The resulting proposal stays `pending`; `/learn` never applies it. Review and
 apply it through the normal approval flow or with `openclaw skills workshop`.
+
+When the actual turn supports only personal publication, including paired-node
+personal CLI authoring, `/learn` stops without changing a skill. Ask normally
+for explicit personal creation if you want to publish a revision, or use the
+existing administrator UI or CLI for workspace proposal review. Personal
+pending drafts are not currently supported.
 
 Create:
 
@@ -277,9 +328,20 @@ and paths outside the standard support folders.
 
 ## Agent tool
 
-The model uses `skill_workshop` with one required `action`:
+For personal library operations, `skill_workshop` exposes
+`list | read | create | update | share | unshare | transfer | activate | remove | rollback`.
+The Gateway chooses the authorized namespace. When workspace authoring is also
+available, `target: "personal"` selects the personal library. Reads return a
+stable skill ID and revision. Updates require `skill_id` and `expected_revision`;
+omit `proposal_content` to preserve the instructions. Use `files` for named
+support-file upserts and `delete_files` for explicit removals. Unmentioned
+support files are preserved. Large instructions are returned whole or explicitly
+omitted with directions to the operator workflow; binary supporting content is
+not injected into model context.
+
+For workspace proposals, the tool uses one required `action`:
 `create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
-Other parameters apply depending on the action:
+Other workspace parameters apply depending on the action:
 
 | Parameter                  | Used by                                                          | Notes                                                                 |
 | -------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
@@ -319,8 +381,10 @@ prompt-enforced. A hard guard is not currently possible at the tool-policy seam.
 `skill_workshop` to the active `tools.allow` list, or use
 `tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
 explicit `tools.allow`. Sandboxed runs do not construct the host-side
-Skill Workshop tool, so run proposal review actions from a normal host-side
-agent session or the CLI.
+workspace proposal tool. When an authorized personal-library capability is
+available, sandbox and cloud runs use its Gateway-backed authoring surface
+instead; the library and database are not mounted writable into the worker.
+Use a normal host-side session or the CLI for workspace proposal review.
 </Note>
 
 ## Self-learning

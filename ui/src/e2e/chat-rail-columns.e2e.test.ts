@@ -996,7 +996,7 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.getByRole("textbox", { name: "Message OpenClaw", exact: true });
+        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,

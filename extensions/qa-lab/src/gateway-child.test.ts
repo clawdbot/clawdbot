@@ -487,6 +487,7 @@ describe("Gateway child fixture helpers", () => {
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      autoCompactTokenLimit: 1,
     });
 
     expect(modelCatalogPath).toBe(path.join(tempRoot, "codex-model-catalog.json"));
@@ -496,12 +497,14 @@ describe("Gateway child fixture helpers", () => {
     expect(catalog.models).toEqual([
       expect.objectContaining({
         slug: "gpt-5.6-luna",
+        auto_compact_token_limit: 1,
         apply_patch_tool_type: "freeform",
         supports_reasoning_summary_parameter: true,
         tool_mode: "direct",
       }),
       expect.objectContaining({
         slug: "gpt-5.6-luna-alt",
+        auto_compact_token_limit: 1,
         apply_patch_tool_type: "freeform",
         supports_reasoning_summary_parameter: true,
         tool_mode: "direct",

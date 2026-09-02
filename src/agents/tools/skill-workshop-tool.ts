@@ -64,6 +64,7 @@ import {
   readSupportFilesParam,
   skillWorkshopAgentEventActor,
 } from "./skill-workshop-tool-helpers.js";
+import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 import {
   assertSkillPatchRunUsage,
   executePrepareSkillPatch,
@@ -133,6 +134,7 @@ function bindProposalRevisionConstraint(
 }
 
 type SkillWorkshopToolOptions = {
+  libraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   workspaceDir: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -158,6 +160,14 @@ type SkillWorkshopToolOptions = {
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
+  if (options.libraryAuthoring) {
+    return createLibrarySkillWorkshopTool(
+      options.libraryAuthoring,
+      options.libraryAuthoring.defaultTarget === "workspace"
+        ? createSkillWorkshopTool({ ...options, libraryAuthoring: undefined })
+        : undefined,
+    );
+  }
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
   const projectionBudgets = resolveSkillWorkshopProjectionBudgets(options.modelContextWindowTokens);
   const readSkillHashes =

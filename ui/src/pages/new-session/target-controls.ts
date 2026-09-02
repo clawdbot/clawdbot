@@ -14,6 +14,7 @@ export function renderAgentSelect(params: {
   agentIdentity?: AgentIdentityCapability;
   disabled: boolean;
   onSelect: (agentId: string) => void;
+  onOpenChange: (open: boolean) => void;
 }) {
   const selectedId = normalizeAgentId(params.agentId);
   return html`
@@ -30,6 +31,8 @@ export function renderAgentSelect(params: {
         .menuLabel=${t("newSession.agents")}
         .disabled=${params.disabled}
         .onSelect=${params.onSelect}
+        @wa-show=${() => params.onOpenChange(true)}
+        @wa-hide=${() => params.onOpenChange(false)}
       ></openclaw-agent-select>
     </span>
   `;

@@ -192,9 +192,11 @@ non-latest tag such as `@beta` or `@rc`. Use `npm:` to select npm explicitly; th
 unified installer supports other plugin sources described in
 [`openclaw plugins`](/cli/plugins).
 
-Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. npm pack and
-project-local dependency installation use `--ignore-scripts`; this does not
-sandbox the installed handler.
+Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. Copied hook
+packs resolve runtime packages from `dependencies` and `optionalDependencies`,
+including packs with only optional dependencies. Packages listed only in
+`devDependencies` are omitted. npm pack and dependency installation use
+`--ignore-scripts`; this does not sandbox the installed handler.
 
 ### Install options and trust
 

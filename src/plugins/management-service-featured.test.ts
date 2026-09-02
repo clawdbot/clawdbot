@@ -726,7 +726,14 @@ describe("plugin management Featured authority", () => {
     ]);
   });
 
-  it.each(["one", "repeated object", "clone", "npm source only"])(
+  it.each([
+    "one",
+    "repeated object",
+    "clone",
+    "npm source only",
+    "dual-source feed",
+    "npm namesake",
+  ])(
     "preserves installed identity and package suppression for %s hosted occurrence",
     async (mode) => {
       const localIcon = "https://cdn.example.test/local.png";
@@ -751,14 +758,26 @@ describe("plugin management Featured authority", () => {
       const hosted = {
         ...compositionEntry(
           "remote",
-          mode === "npm source only"
-            ? { npmSpec: "@acme/installed" }
+          mode === "npm source only" || mode === "npm namesake"
+            ? { npmSpec: mode === "npm namesake" ? "@acme/shared" : "@acme/installed" }
             : { clawhubSpec: "clawhub:@acme/shared" },
         ),
         title: "Remote",
         icon: hostedIcon,
+        ...(mode === "dual-source feed"
+          ? {
+              state: "available",
+              publisher: { trust: "official" },
+              install: {
+                candidates: [
+                  { sourceRef: "public-npm", package: "@acme/installed" },
+                  { sourceRef: "public-clawhub", package: "@acme/shared" },
+                ],
+              },
+            }
+          : {}),
       };
-      // The name arrives from the overlay. Its npm fallback must participate in suppression.
+      // The declared ClawHub counterpart suppresses duplicates without inventing npm identity.
       const entries =
         mode === "repeated object"
           ? [hosted, hosted]
@@ -773,17 +792,27 @@ describe("plugin management Featured authority", () => {
         env: {},
         pluginId: "installed",
       });
+      const curated = mode === "one" || mode === "dual-source feed";
 
       expect(catalog.plugins).toEqual([
+        ...(mode === "npm namesake"
+          ? [
+              expect.objectContaining({
+                id: "remote",
+                installed: false,
+                packageName: "@acme/shared",
+              }),
+            ]
+          : []),
         expect.objectContaining({
           id: "installed",
           installed: true,
-          name: mode === "one" ? "Remote" : "Local",
-          featured: mode === "one",
+          name: curated ? "Remote" : "Local",
+          featured: curated,
           hasIcon: true,
         }),
       ]);
-      expect(icon).toBe(mode === "one" ? hostedIcon : localIcon);
+      expect(icon).toBe(curated ? hostedIcon : localIcon);
     },
   );
 
@@ -905,11 +934,24 @@ describe("plugin management Featured authority", () => {
       source: "official",
     },
     { name: "npm", install: { npmSpec: "@acme/action@1.2.3" }, source: "official" },
+    {
+      name: "npm with unversioned ClawHub",
+      install: { npmSpec: "@acme/action@1.2.3", clawhubSpec: "clawhub:@acme/action" },
+      source: "official",
+    },
     { name: "local", install: { localPath: "./plugin" }, source: "official" },
     { name: "malformed ClawHub", install: { clawhubSpec: "clawhub:" }, source: "official" },
     {
       name: "malformed npm selector",
       install: { npmSpec: "@acme/action@^1.2.3" },
+      source: "official",
+    },
+    {
+      name: "malformed npm selector with unversioned ClawHub",
+      install: {
+        npmSpec: "@acme/action@^1.2.3",
+        clawhubSpec: "clawhub:@acme/action",
+      },
       source: "official",
     },
     { name: "no install", install: {}, source: undefined },

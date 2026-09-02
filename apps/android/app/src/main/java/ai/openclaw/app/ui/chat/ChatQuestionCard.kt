@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -202,7 +202,7 @@ private fun QuestionSection(
     Text(
       text = question.header.uppercase(),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.primary,
+      color = ClawTheme.colors.text,
       fontWeight = FontWeight.SemiBold,
     )
     Text(text = question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
@@ -278,18 +278,16 @@ private fun QuestionFooter(
       ) {
         Text(nativeString("Skip"))
       }
-      Button(
-        onClick = { answers?.let { onSubmit(prompt, it) } },
-        enabled = answers != null && status == ChatQuestionStatus.Pending,
-      ) {
-        Text(
+      ClawPrimaryButton(
+        text =
           if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
             nativeString("Submitting…")
           } else {
             nativeString("Submit")
           },
-        )
-      }
+        onClick = { answers?.let { onSubmit(prompt, it) } },
+        enabled = answers != null && status == ChatQuestionStatus.Pending,
+      )
     }
     prompt.errorText?.let { error ->
       Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)

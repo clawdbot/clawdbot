@@ -197,8 +197,21 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
-    expect(menu.textContent).toContain("Assign to me");
-    expect(menu.textContent).toContain("Assign to…");
+    expect(
+      Array.from(menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"))
+        .map((item) => item.querySelector(".session-menu__text")?.textContent?.trim())
+        .filter((label) => label?.startsWith("Assign to")),
+    ).toEqual(["Assign to…"]);
+    const assignmentMenu = Array.from(
+      menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"),
+    ).find(
+      (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
+    );
+    expect(
+      Array.from(
+        assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
+      ).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
+    ).toEqual(["Me", "Bob"]);
     menu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
@@ -222,7 +235,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
     const selfItem = selfMenu.querySelector<HTMLElement>(
-      ':scope > wa-dropdown > wa-dropdown-item[value="assign-owner:human:profile-ada"]',
+      ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
     );
     selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {

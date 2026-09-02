@@ -133,6 +133,14 @@ describe("checkGatewayHealth", () => {
     expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
   });
 
+  it("reports startup migration warnings without marking the gateway unhealthy", async () => {
+    const startupMigrationWarning = 'Retained legacy state. Run "openclaw doctor --fix".';
+    callGateway.mockResolvedValueOnce({ startupMigrationWarning }).mockResolvedValue({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
+    expect(note).toHaveBeenCalledWith(startupMigrationWarning, "Startup migration warnings");
+  });
+
   it("renders the shared redacted telemetry exporter summary", async () => {
     callGateway
       .mockResolvedValueOnce({ ok: true })

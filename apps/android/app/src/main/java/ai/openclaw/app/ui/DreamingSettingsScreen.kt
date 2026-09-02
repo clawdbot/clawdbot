@@ -79,11 +79,15 @@ internal fun DreamingSettingsScreen(
       }
     }
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load dreaming."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> DreamingPanel(summary = summary)
+      }
+
+      else -> {
+        DreamingPanel(summary = summary)
+      }
     }
   }
 }

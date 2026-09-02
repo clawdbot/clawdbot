@@ -304,6 +304,14 @@ export type OpenClawPluginNodeInvokePolicy = {
    */
   dangerous?: boolean;
   /**
+   * Explicitly permits one approval to cover later launches on the same managed placement.
+   * The scope is a stable semantic capability key, never user or action arguments.
+   */
+  standingApproval?: {
+    kind: "placement";
+    scope: string;
+  };
+  /**
    * iOS foreground-restricted commands should be queued for foreground delivery
    * when an iOS node reports BACKGROUND_UNAVAILABLE.
    */

@@ -653,6 +653,10 @@ describe("registerMaintenanceCommands doctor action", () => {
         updateResult: "/tmp/update-failure.json",
       },
     },
+    ...["claude", "codex", "opencode", "pi"].map((agent) => ({
+      args: ["--agent", agent],
+      options: { json: false, noExport: false, run: false, agent },
+    })),
   ])("forwards triage options for $args", async ({ args, options }) => {
     triageCommand.mockResolvedValue(undefined);
 
@@ -680,6 +684,31 @@ describe("registerMaintenanceCommands doctor action", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
+
+  it("rejects conflicting embedded and external triage routes", async () => {
+    await runMaintenanceCli(["triage", "--run", "--agent", "codex"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("triage --run cannot be combined with --agent.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each([false, true])(
+    "rejects an unknown triage agent before diagnostics (json=%s)",
+    async (json) => {
+      await runMaintenanceCli(["triage", "--agent", "unknown-agent", ...(json ? ["--json"] : [])]);
+
+      expect(triageCommand).not.toHaveBeenCalled();
+      const message = "Invalid --agent. Use claude, codex, opencode, or pi.";
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+        expect(runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.error).toHaveBeenCalledWith(message);
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
 
   it("passes reset options to reset command", async () => {
     resetCommand.mockResolvedValue(undefined);

@@ -10,10 +10,12 @@
     "playwright-core": "1.62.1",
     "typebox": "1.3.17",
     "ws": "8.21.3",
+    "yargs-parser": "22.0.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
+    "@types/yargs-parser": "21.0.3",
     "undici": "8.10.0"
   },
   "openclaw": {

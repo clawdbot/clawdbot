@@ -25,7 +25,6 @@ import {
   adoptGeneration,
   issueFrame,
   verifyFrame,
-  verifyReferenceWidth,
   type CuaDesktopGeometry,
   type CuaFrameState,
   type CuaLastFrame,
@@ -71,7 +70,7 @@ type ImageProcessor = {
     options: {
       format: "jpeg" | "png";
       quality?: number;
-      resize?: { width: number; enlarge: false };
+      resize?: { maxSide: number; enlarge: false };
     },
   ): Promise<{ data: Buffer; width: number; height: number }>;
 };
@@ -264,9 +263,7 @@ async function currentFrame(
     frameState.lastFrame = undefined;
     throw new Error("COMPUTER_STALE_FRAME: the computer driver reconnected; take a new screenshot");
   }
-  const frame = verifyFrame(frameState, params.displayFrameId, current);
-  verifyReferenceWidth(frameState, frame, params.refWidth);
-  return frame;
+  return verifyFrame(frameState, params.displayFrameId, current, params.refWidth);
 }
 
 async function handleDesktopAct(
@@ -557,18 +554,22 @@ export function createCuaComputerProvider(
             let encoded = nativePng;
             let width = geometry.screenshotWidth;
             let height = geometry.screenshotHeight;
-            if (format === "jpeg" || width > maxWidth) {
+            if (format === "jpeg" || Math.max(width, height) > maxWidth) {
               const result = await imageProcessor.encode(nativePng, {
                 format,
                 ...(format === "jpeg" ? { quality: Math.round(quality * 100) } : {}),
-                ...(width > maxWidth ? { resize: { width: maxWidth, enlarge: false } } : {}),
+                resize: { maxSide: maxWidth, enlarge: false },
               });
               encoded = result.data;
               width = result.width;
               height = result.height;
             }
             adoptGeneration(frameState, executionDriver.generation);
-            const displayFrameId = issueFrame(frameState, geometry, { width, height });
+            const displayFrameId = issueFrame(frameState, geometry, {
+              width,
+              height,
+              referenceWidth: maxWidth,
+            });
             return JSON.stringify({
               format,
               base64: encoded.toString("base64"),

@@ -129,16 +129,13 @@ export function registerTabAccessEvents({
     })();
   });
 
-  const onGroupChanged = (group) => {
+  const onGroupChanged = (group, removed = false) => {
     const eventRevision = ++groupEventRevision;
     scheduleTabsSync();
-    policy.invalidateDocumentGroup(group);
+    policy.invalidateGroup(group, removed);
     if (policy.mode !== ACCESS_MODE_SELECTED) {
       return;
     }
-    // Group title/removal changes mutate the selected-mode ACL. Retire every
-    // attachment epoch synchronously before any readiness or Chrome lookup.
-    policy.invalidateAll(group);
     const generations = [...attachments]
       .filter(([, record]) => !record.retired)
       .map(([tabId, generation]) => [tabId, generation, policy.capture(tabId)]);
@@ -189,5 +186,5 @@ export function registerTabAccessEvents({
     });
   };
   chromeApi.tabGroups.onUpdated.addListener(onGroupChanged);
-  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group));
+  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group, true));
 }

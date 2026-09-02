@@ -22,6 +22,7 @@ import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-decl
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
+  isExternallyDistributedPlugin,
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
@@ -59,15 +60,6 @@ export type BundledPluginPackageDescriptor = {
   packageName?: string;
 };
 
-function resolvePluginPathIdentity(
-  value: string,
-  env: NodeJS.ProcessEnv,
-  realpathCache: Map<string, string>,
-): string {
-  const resolved = path.resolve(resolveUserPath(value, env));
-  return safeRealpathSync(resolved, realpathCache) ?? resolved;
-}
-
 /** Keep doctor diagnostics and actual package repair on the same discovery snapshot. */
 export async function resolveConfiguredPluginInstallContext(params: {
   cfg: OpenClawConfig;
@@ -77,6 +69,11 @@ export async function resolveConfiguredPluginInstallContext(params: {
   blockedPluginIds?: ReadonlySet<string>;
   baselineRecords?: Record<string, PluginInstallRecord>;
 }) {
+  const realpathCache = new Map<string, string>();
+  const resolvePathIdentity = (value: string): string => {
+    const resolved = path.resolve(resolveUserPath(value, params.env));
+    return safeRealpathSync(resolved, realpathCache) ?? resolved;
+  };
   const snapshot = loadManifestMetadataSnapshot({ config: params.cfg, env: params.env });
   const currentBundledPlugins = loadInstalledPluginIndex({
     config: params.cfg,
@@ -94,9 +91,9 @@ export async function resolveConfiguredPluginInstallContext(params: {
     configuredChannelIds: params.configuredChannelIds,
   });
   const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
-    currentBundledPlugins.map(
-      (plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const,
-    ),
+    currentBundledPlugins
+      .filter((plugin) => !isExternallyDistributedPlugin(plugin))
+      .map((plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const),
   );
   const configuredPluginIdsWithStaleDescriptors =
     collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
@@ -114,6 +111,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
       snapshot,
       installRecords: records,
+      resolvePathIdentity,
     });
   const installedPluginIdsWithStaleVersionBoundRuntimePackages =
     collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages({
@@ -137,21 +135,18 @@ export async function resolveConfiguredPluginInstallContext(params: {
       blockedPluginIds: params.blockedPluginIds,
     }).keys(),
   );
-  const realpathCache = new Map<string, string>();
   const configuredLoadPathIdentities = new Set(
     snapshot.discovery?.candidates
       .filter((candidate) => candidate.configSelected)
       .flatMap((candidate) => [candidate.rootDir, candidate.source])
-      .map((value) => resolvePluginPathIdentity(value, params.env, realpathCache)),
+      .map(resolvePathIdentity),
   );
   const configuredLoadPathPluginsById = new Map<string, string>();
   for (const plugin of snapshot.plugins) {
     if (
       plugin.origin === "config" ||
       [plugin.rootDir, plugin.source].some((value) =>
-        configuredLoadPathIdentities.has(
-          resolvePluginPathIdentity(value, params.env, realpathCache),
-        ),
+        configuredLoadPathIdentities.has(resolvePathIdentity(value)),
       )
     ) {
       configuredLoadPathPluginsById.set(plugin.id, plugin.rootDir);
@@ -169,17 +164,10 @@ export async function resolveConfiguredPluginInstallContext(params: {
     if (!configPluginRoot || record.source !== "path" || recordedPaths.length === 0) {
       continue;
     }
-    const configRootIdentity = resolvePluginPathIdentity(
-      configPluginRoot,
-      params.env,
-      realpathCache,
-    );
+    const configRootIdentity = resolvePathIdentity(configPluginRoot);
     if (
       isInstalledRecordMissingOnDisk(record, params.env) &&
-      recordedPaths.every(
-        (value) =>
-          resolvePluginPathIdentity(value, params.env, realpathCache) !== configRootIdentity,
-      )
+      recordedPaths.every((value) => resolvePathIdentity(value) !== configRootIdentity)
     ) {
       stalePathInstallPluginIds.add(pluginId);
     }
@@ -206,6 +194,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
+  "extension entry not found",
   "extension entry escapes package directory",
   "extension entry unreadable",
   "requires compiled runtime output",
@@ -503,6 +492,7 @@ function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
 function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
+  resolvePathIdentity: (value: string) => string;
 }): Set<string> {
   const pluginIds = new Set<string>();
   for (const diagnostic of params.snapshot.diagnostics) {
@@ -510,7 +500,12 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
     if (!pluginId || !Object.hasOwn(params.installRecords, pluginId)) {
       continue;
     }
+    const installPath = params.installRecords[pluginId]?.installPath;
+    // A same-id source copy must never authorize replacing the recorded package.
     if (
+      installPath &&
+      diagnostic.source &&
+      params.resolvePathIdentity(diagnostic.source) === params.resolvePathIdentity(installPath) &&
       REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS.some((marker) =>
         diagnostic.message.includes(marker),
       )

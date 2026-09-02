@@ -780,6 +780,7 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
     expect(call.provider).toBe("claude-cli");
     expect(call.model).toBe("claude-opus-4-8");
     expect(call.systemAgentTool).toEqual({
+      agentId: "main",
       surface: "cli",
       approvalArmed: false,
       proposalRef: {},

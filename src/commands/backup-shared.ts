@@ -189,7 +189,9 @@ async function resolveBackupPlanFromPaths(params: {
   const configPath = params.configPath;
   const oauthDir = params.oauthDir;
   const archiveRoot = buildBackupArchiveRoot(params.nowMs);
-  const workspaceDirs = includeWorkspace ? (params.workspaceDirs ?? []) : [];
+  const requestedWorkspaceDirs = params.workspaceDirs ?? [];
+  const workspaceDirs = includeWorkspace ? requestedWorkspaceDirs : [];
+  const excludedWorkspaceDirs = includeWorkspace ? [] : requestedWorkspaceDirs;
   const agentRoots = onlyConfig ? [] : (params.agentRoots ?? []);
   const configInsideState = params.configInsideState ?? false;
   const oauthInsideState = params.oauthInsideState ?? false;
@@ -201,6 +203,20 @@ async function resolveBackupPlanFromPaths(params: {
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
+    // Walker sees lexical state-tree names. A workspace-root symlink's
+    // canonical target does not contain that entry; keep both so
+    // --no-include-workspace still excludes it before the symlink guard.
+    // Drop any alias that is the state root or contains it — otherwise
+    // ordinary state/config/credential files disappear from the archive.
+    excludedWorkspaceDirs: (
+      await Promise.all(
+        excludedWorkspaceDirs.map(async (workspaceDir) =>
+          [path.resolve(workspaceDir), await canonicalizePathForContainment(workspaceDir)].filter(
+            (dir) => dir !== canonicalStateDir && !isPathWithin(canonicalStateDir, dir),
+          ),
+        ),
+      )
+    ).flat(),
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
     pluginRoots: params.pluginInventory?.pluginRoots ?? [],
@@ -555,20 +571,20 @@ export async function resolveBackupPlanFromDisk(
   const agentRoots = unresolvedOwnership
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
-  const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
+  const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
   const pluginInventory = unresolvedOwnership
     ? undefined
     : resolveActivatedPluginBackupInventory({
         config: discoverySnapshot.config,
         env: process.env,
         stateDir,
-        workspaceDirs,
+        workspaceDirs: includeWorkspace ? discoveredWorkspaceDirs : [],
       });
   return await resolveBackupPlanFromPaths({
     stateDir,
     configPath,
     oauthDir,
-    workspaceDirs,
+    workspaceDirs: discoveredWorkspaceDirs,
     agentRoots,
     pluginInventory,
     unresolvedOwnership,

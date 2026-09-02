@@ -74,16 +74,19 @@ async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
+  signal?: AbortSignal;
   timeoutMs?: number;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
   return await dispatchSubagentAnnounceAgent(params.agentParams, {
+    cancelOnDeadline: true,
     expectFinal: params.expectFinal,
     forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
       params.agentParams.inputProvenance,
     ),
     operatorRoleActor: { kind: "system" },
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+    signal: params.signal,
     timeoutMs: params.timeoutMs,
     resolveGatewayContext: params.resolveGatewayContext,
   });
@@ -391,6 +394,7 @@ export async function sendSubagentAnnounceDirectly(params: {
                   }
                 : undefined,
             expectFinal: true,
+            signal: params.signal,
             timeoutMs: announceTimeoutMs,
             resolveGatewayContext: params.resolveGatewayContext,
           });

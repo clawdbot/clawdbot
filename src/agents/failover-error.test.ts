@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { getFailoverErrorCode } from "./failover/error.js";
+import { AgentHarnessPreflightError } from "./harness/errors.js";
 
 // Classification here is message/status table behavior. Provider-attributed
 // structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
@@ -59,6 +60,27 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it.each([
+    {
+      message: "handoff refused",
+      cause: { status: 401, code: "INVALID_API_KEY", message: "API key has been revoked" },
+    },
+    {
+      message: "handoff refused: 529 OVERLOADED",
+      cause: { status: 529, code: "OVERLOADED", message: "overloaded" },
+    },
+    { message: "503 service unavailable; reconnect before continuing", cause: { status: 503 } },
+  ])(
+    "does not promote a direct preflight into a provider failure: $message",
+    ({ message, cause }) => {
+      const error = new AgentHarnessPreflightError(message, { cause });
+      expect(resolveFailoverReasonFromError(error)).toBeNull();
+      expect(coerceToFailoverError(error)).toBeNull();
+      expect(describeFailoverError(error)).toEqual({ message });
+      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      expect(error.cause).toBe(cause);
+    },
+  );
   it("finds structured CLI timeout context through aggregate wrappers", () => {
     const timeout = new FailoverError("CLI exceeded timeout", {
       reason: "timeout",
@@ -490,67 +512,22 @@ describe("failover-error", () => {
     ).toBe("format");
   });
 
-  it("treats HTTP 422 as format error", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 422,
-        message: "check open ai req parameter error",
-      }),
-    ).toBe("format");
+  it.each([
+    ["check open ai req parameter error", "format"],
+    ["insufficient credits", "billing"],
+  ])("classifies HTTP 422 message %s as %s", (message, reason) => {
+    expect(resolveFailoverReasonFromError({ status: 422, message })).toBe(reason);
   });
 
-  it("treats 422 with billing message as billing instead of format", () => {
+  it.each([
+    ["402", "Monthly spend limit reached. Please visit your billing settings.", "rate_limit"],
+    ["HTTP 402", "rate limit exceeded", "rate_limit"],
+    ["HTTP 402", "Your usage limit has been reached. Please upgrade your plan.", "billing"],
+  ])("keeps %s wrappers aligned with status-split payloads: %s", (prefix, message, reason) => {
     expect(
-      resolveFailoverReasonFromError({
-        status: 422,
-        message: "insufficient credits",
-      }),
-    ).toBe("billing");
-  });
-
-  it("keeps raw 402 wrappers aligned with status-split temporary spend limits", () => {
-    const message = "Monthly spend limit reached. Please visit your billing settings.";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `402 Payment Required: ${message}`,
-      }),
-    ).toBe("rate_limit");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps explicit 402 rate-limit wrappers aligned with status-split payloads", () => {
-    const message = "rate limit exceeded";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `HTTP 402 Payment Required: ${message}`,
-      }),
-    ).toBe("rate_limit");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps plan-upgrade 402 wrappers aligned with status-split billing payloads", () => {
-    const message = "Your usage limit has been reached. Please upgrade your plan.";
-    expect(
-      resolveFailoverReasonFromError({
-        message: `HTTP 402 Payment Required: ${message}`,
-      }),
-    ).toBe("billing");
-    expect(
-      resolveFailoverReasonFromError({
-        status: 402,
-        message,
-      }),
-    ).toBe("billing");
+      resolveFailoverReasonFromError({ message: `${prefix} Payment Required: ${message}` }),
+    ).toBe(reason);
+    expect(resolveFailoverReasonFromError({ status: 402, message })).toBe(reason);
   });
 
   it("infers timeout from common node error codes", () => {

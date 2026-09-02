@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerChatAbortController } from "../chat-abort.js";
+import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
@@ -28,15 +30,24 @@ vi.mock("./agent-turn-service.js", () => ({
   }),
 }));
 
-function createFacade() {
+function createContext() {
+  return Object.assign({} as GatewayRequestContext, {
+    agentRunSeq: new Map(),
+    broadcast: vi.fn(),
+    chatAbortControllers: new Map(),
+    chatRunState: createChatRunState(),
+    dedupe: new Map(),
+    getRuntimeConfig: () => ({}),
+    logGateway: { error: vi.fn(), warn: vi.fn() },
+    nodeSendToSession: vi.fn(),
+    removeChatRun: vi.fn(() => undefined),
+  });
+}
+
+function createFacade(context = createContext()) {
   return createInternalAgentTurnFacade({
     client: createSyntheticPluginRuntimeClient(),
-    getContext: () =>
-      ({
-        dedupe: new Map(),
-        getRuntimeConfig: () => ({}),
-        logGateway: { error: vi.fn(), warn: vi.fn() },
-      }) as unknown as GatewayRequestContext,
+    getContext: () => context,
   });
 }
 
@@ -136,5 +147,104 @@ describe("createInternalAgentTurnFacade", () => {
       ),
     ).resolves.toMatchObject({ ok: true });
     expect(onExecutionStarted).toHaveBeenCalledOnce();
+  });
+
+  it("cancels only the accepted run when its opted-in dispatch deadline expires", async () => {
+    vi.useFakeTimers();
+    const context = createContext();
+    const unrelated = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId: "unrelated-run",
+      sessionId: "unrelated-session",
+      sessionKey: "agent:main:unrelated",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    let accepted: ReturnType<typeof registerChatAbortController> | undefined;
+    startTurn.mockImplementation(async ({ io }) => {
+      const registration = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: "deadline-run",
+        sessionId: "deadline-session",
+        sessionKey: "agent:main:deadline",
+        timeoutMs: 60_000,
+        kind: "agent",
+      });
+      accepted = registration;
+      io.emitAcceptance([true, { runId: "deadline-run", status: "accepted" }, undefined], {
+        runId: "deadline-run",
+      });
+      await new Promise<void>((_resolve, reject) => {
+        registration.controller.signal.addEventListener(
+          "abort",
+          () => reject(new Error("deadline run aborted")),
+          { once: true },
+        );
+      });
+    });
+
+    try {
+      const result = createFacade(context).dispatchRaw(
+        {
+          message: "settle requester",
+          sessionKey: "agent:main:deadline",
+          idempotencyKey: "deadline-run",
+        },
+        { cancelOnDeadline: true, expectFinal: true, timeoutMs: 20 },
+      );
+      const outcome = expect(result).rejects.toThrow("gateway request timeout for agent");
+      await vi.advanceTimersByTimeAsync(20);
+
+      await outcome;
+      expect(accepted?.controller.signal.aborted).toBe(true);
+      expect(unrelated.controller.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a run accepted after its opted-in dispatch deadline", async () => {
+    vi.useFakeTimers();
+    const context = createContext();
+    let accept!: () => void;
+    const acceptanceGate = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    let accepted: ReturnType<typeof registerChatAbortController> | undefined;
+    startTurn.mockImplementation(async ({ io }) => {
+      await acceptanceGate;
+      accepted = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: "late-run",
+        sessionId: "late-session",
+        sessionKey: "agent:main:late",
+        timeoutMs: 60_000,
+        kind: "agent",
+      });
+      io.emitAcceptance([true, { runId: "late-run", status: "accepted" }, undefined], {
+        runId: "late-run",
+      });
+    });
+
+    try {
+      const result = createFacade(context).dispatchRaw(
+        {
+          message: "settle requester",
+          sessionKey: "agent:main:late",
+          idempotencyKey: "late-run",
+        },
+        { cancelOnDeadline: true, expectFinal: true, timeoutMs: 20 },
+      );
+      const outcome = expect(result).rejects.toThrow("gateway request timeout for agent");
+      await vi.advanceTimersByTimeAsync(20);
+      await outcome;
+
+      accept();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted?.controller.signal.aborted).toBe(true);
+    } finally {
+      accept();
+      vi.useRealTimers();
+    }
   });
 });

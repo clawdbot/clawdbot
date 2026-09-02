@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
+import { isImageMediaPath, isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
@@ -29,8 +30,6 @@ import {
 } from "./chat-message-local-media.ts";
 import {
   isChatMediaResourceCurrent,
-  isImageMediaPath,
-  isSvgImageMediaPath,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,

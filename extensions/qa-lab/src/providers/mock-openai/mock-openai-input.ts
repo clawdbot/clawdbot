@@ -199,7 +199,10 @@ export const extractToolOutputValue = (input: ResponsesInputItem[]) =>
 
 export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const item = findCurrentToolOutput(input);
-  return item?.is_error === true || item?.isError === true;
+  // Explicit success overrides error-shaped content; absent status permits text evidence.
+  return [item?.is_error, item?.isError].find(
+    (value): value is boolean => typeof value === "boolean",
+  );
 }
 
 export function extractToolOutputCallId(input: ResponsesInputItem[]) {

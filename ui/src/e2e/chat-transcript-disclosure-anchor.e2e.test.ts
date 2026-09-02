@@ -146,6 +146,7 @@ suite.define(() => {
           recordVideo: { dir: artifactDir },
         },
         async ({ page }) => {
+          await page.clock.install();
           const gateway = await installMockGateway(page, {
             heldMethods: ["chat.message.get"],
             historyMessages: Array.from({ length: 60 }, (_, index) => ({
@@ -413,10 +414,8 @@ suite.define(() => {
           await waitForChatScrollIdle(page);
           // Outlast virtual-core's five-second scroll reconciliation deadline:
           // the assertion protects durable geometry, not a transient resize frame.
-          const final = await bubble.evaluate(async (element, nextId) => {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 5_500);
-            });
+          await page.clock.runFor(5_500);
+          const final = await bubble.evaluate((element, nextId) => {
             const row = element.closest<HTMLElement>(".chat-virtual-row")!;
             const scroller = row.closest<HTMLElement>(".chat-thread")!;
             const next = scroller

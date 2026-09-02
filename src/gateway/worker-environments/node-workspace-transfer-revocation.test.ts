@@ -198,7 +198,7 @@ describe("attachment transfer revocation", () => {
         expect.soft(result).toBe("rejected");
         expect.soft(readsAfterRevocation).toEqual([]);
         if (boundary.startsWith("inside-")) {
-          // fs-safe 0.5.6 cannot cancel or identity-roll back an entered create.
+          // fs-safe 0.7.0 cannot cancel or identity-roll back an entered create.
           await expect(fs.readFile(path.join(workspaceDir, fresh), "utf8")).resolves.toBe(
             "private new input",
           );

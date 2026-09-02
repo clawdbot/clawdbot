@@ -223,15 +223,19 @@ private fun GatewayLogsPanel(
       }
     }
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load recent logs."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      summary.entries.isEmpty() ->
+      }
+
+      summary.entries.isEmpty() -> {
         ClawPanel {
           Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else ->
+      }
+
+      else -> {
         ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
           val entries = summary.entries.takeLast(12)
           Column {
@@ -243,6 +247,7 @@ private fun GatewayLogsPanel(
             }
           }
         }
+      }
     }
     if (summary.truncated) {
       Text(text = nativeString("Showing the latest log chunk."), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)

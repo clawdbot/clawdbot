@@ -30,6 +30,10 @@ import type {
   WorkerInferenceStartResponseFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type {
+  WorkerSkillWorkshopParams,
+  WorkerSkillWorkshopResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
@@ -84,7 +88,6 @@ export class WorkerConnection {
   private readonly reconnectAbort = new AbortController();
   private readonly exitPromise: Promise<WorkerConnectionExit>;
   private resolveExit!: (exit: WorkerConnectionExit) => void;
-  private exitSettled = false;
   private generation = 0;
   private socket: WebSocket | undefined;
   private startPromise: Promise<WorkerHelloOk> | undefined;
@@ -129,11 +132,11 @@ export class WorkerConnection {
     if (this.stateValue.kind === "ready") {
       return Promise.resolve(this.stateValue.hello);
     }
-    if (this.startPromise) {
-      return this.startPromise;
-    }
     if (this.isTerminal()) {
       return Promise.reject(this.terminalError());
+    }
+    if (this.startPromise) {
+      return this.startPromise;
     }
     this.startPromise = this.connectUntilReady();
     return this.startPromise;
@@ -182,24 +185,11 @@ export class WorkerConnection {
   }
 
   async stop(): Promise<void> {
-    if (this.stateValue.kind === "stopped") {
-      return;
-    }
-    this.reconnectAbort.abort(new Error("worker connection stopped"));
-    this.stopHeartbeat();
-    const stopped = new WorkerConnectionStoppedError();
-    this.frames.rejectPending(stopped);
-    this.rejectReadyWaiters(stopped);
-    this.socket?.close(1000, "worker stopped");
-    this.socket = undefined;
-    this.transition({ kind: "stopped" });
-    this.settleExit({ kind: "stopped" });
+    this.finishTerminal({ kind: "stopped" });
   }
 
   fence(reason: WorkerFencedReason): void {
-    if (!this.isTerminal()) {
-      this.finishFenced(reason);
-    }
+    this.finishTerminal({ kind: "fenced", reason });
   }
 
   requestHeartbeat(params: WorkerHeartbeatParams): Promise<WorkerHeartbeatResponseFrame> {
@@ -242,6 +232,11 @@ export class WorkerConnection {
 
   requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
     return this.frames.request("portal", params);
+  }
+  requestSkillWorkshop(
+    params: WorkerSkillWorkshopParams,
+  ): Promise<WorkerSkillWorkshopResponseFrame> {
+    return this.frames.request("skill-workshop", params);
   }
 
   requestComputer(params: WorkerComputerParams): Promise<WorkerComputerResponseFrame> {
@@ -313,6 +308,9 @@ export class WorkerConnection {
           Math.min(this.admissionTimeoutMs, remainingMs),
         );
         this.reportConnectionFailure(undefined);
+        if (this.isTerminal()) {
+          throw this.terminalError();
+        }
         return hello;
       } catch (error) {
         if (this.isTerminal()) {
@@ -331,7 +329,7 @@ export class WorkerConnection {
           throw error;
         }
         if (error instanceof WorkerConnectionEndpointError) {
-          this.finishFailed(error);
+          this.finishTerminal({ kind: "failed", error });
           throw error;
         }
         attempt += 1;
@@ -355,9 +353,10 @@ export class WorkerConnection {
         this.transition({ kind: "admitting", attempt });
       },
       onReady: (hello) => {
+        // Arm before notifying owners so a synchronous stop cancels the heartbeat.
+        this.startHeartbeat(hello.policy.heartbeatIntervalMs);
         this.transition({ kind: "ready", hello });
         this.notifyReady(hello);
-        this.startHeartbeat(hello.policy.heartbeatIntervalMs);
       },
       onReadyFrame: (frame, socket) => {
         this.frames.dispatchReadyFrame(frame, socket);
@@ -377,11 +376,11 @@ export class WorkerConnection {
       return;
     }
     if (reason && isFencedCloseReason(reason)) {
-      this.finishFenced(reason);
+      this.finishTerminal({ kind: "fenced", reason });
       return;
     }
     if (reason && !isRetryableWorkerCloseReason(reason)) {
-      this.finishFailed(new WorkerAdmissionError(reason, false));
+      this.finishTerminal({ kind: "failed", error: new WorkerAdmissionError(reason, false) });
       return;
     }
     if (!this.reconnectPromise) {
@@ -394,7 +393,7 @@ export class WorkerConnection {
       await this.connectUntilReady();
     } catch (error) {
       if (!this.isTerminal()) {
-        this.finishFailed(toWorkerConnectionError(error));
+        this.finishTerminal({ kind: "failed", error: toWorkerConnectionError(error) });
       }
     } finally {
       this.reconnectPromise = undefined;
@@ -403,10 +402,10 @@ export class WorkerConnection {
 
   private handleAdmissionFailure(error: WorkerAdmissionError): void {
     if (isFencedCloseReason(error.reason)) {
-      this.finishFenced(error.reason);
+      this.finishTerminal({ kind: "fenced", reason: error.reason });
       return;
     }
-    this.finishFailed(error);
+    this.finishTerminal({ kind: "failed", error });
   }
 
   private startHeartbeat(intervalMs: number): void {
@@ -431,18 +430,21 @@ export class WorkerConnection {
       if (response.ok) {
         if (response.payload.ownerEpoch !== this.options.connectParams.admission.ownerEpoch) {
           // Fenced: state is now terminal, so the trailing kind==="ready" guard skips re-arming.
-          this.finishFenced("owner-epoch-mismatch");
+          this.finishTerminal({ kind: "fenced", reason: "owner-epoch-mismatch" });
         }
       } else if (isFencedCloseReason(response.error.details.reason)) {
-        this.finishFenced(response.error.details.reason);
+        this.finishTerminal({ kind: "fenced", reason: response.error.details.reason });
         return;
       } else {
-        this.finishFailed(new Error(`worker heartbeat rejected: ${response.error.details.reason}`));
+        this.finishTerminal({
+          kind: "failed",
+          error: new Error(`worker heartbeat rejected: ${response.error.details.reason}`),
+        });
         return;
       }
     } catch (error) {
       if (!(error instanceof WorkerConnectionInterruptedError) && !this.isTerminal()) {
-        this.finishFailed(toWorkerConnectionError(error));
+        this.finishTerminal({ kind: "failed", error: toWorkerConnectionError(error) });
         return;
       }
     }
@@ -487,23 +489,30 @@ export class WorkerConnection {
     }
   }
 
-  private finishFenced(reason: WorkerFencedReason): void {
+  private finishTerminal(state: WorkerConnectionExit): void {
+    if (this.stateValue.kind === "stopped" || (state.kind !== "stopped" && this.isTerminal())) {
+      return;
+    }
+    const error = this.terminalError(state);
+    const socket = this.socket;
+    this.socket = undefined;
+    // Fence ownership before listeners or socket cleanup can reenter. The first exit stays final.
+    this.resolveExit(state);
+    this.transition(state);
+    // Clearing the live set also ends readiness delivery if one of its observers stopped us.
+    this.readyListeners.clear();
+    this.reconnectAbort.abort(error);
     this.stopHeartbeat();
-    const error = new WorkerFencedError(reason);
     this.frames.rejectPending(error);
     this.rejectReadyWaiters(error);
-    this.socket?.close(1008, reason);
-    this.transition({ kind: "fenced", reason });
-    this.settleExit({ kind: "fenced", reason });
-  }
-
-  private finishFailed(error: Error): void {
-    this.stopHeartbeat();
-    this.frames.rejectPending(error);
-    this.rejectReadyWaiters(error);
-    this.socket?.close(1008, "invalid-frame");
-    this.transition({ kind: "failed", error });
-    this.settleExit({ kind: "failed", error });
+    const code = state.kind === "stopped" ? 1000 : 1008;
+    const reason =
+      state.kind === "fenced"
+        ? state.reason
+        : state.kind === "stopped"
+          ? "worker stopped"
+          : "invalid-frame";
+    socket?.close(code, reason);
   }
 
   private rejectReadyWaiters(error: Error): void {
@@ -512,14 +521,6 @@ export class WorkerConnection {
     for (const waiter of waiters) {
       waiter.reject(error);
     }
-  }
-
-  private settleExit(exit: WorkerConnectionExit): void {
-    if (this.exitSettled) {
-      return;
-    }
-    this.exitSettled = true;
-    this.resolveExit(exit);
   }
 
   private failAdmissionDeadline(attempts: number, lastFailure: Error | undefined): Error {
@@ -534,7 +535,7 @@ export class WorkerConnection {
       ),
     );
     this.reportConnectionFailure(error);
-    this.finishFailed(error);
+    this.finishTerminal({ kind: "failed", error });
     return error;
   }
 

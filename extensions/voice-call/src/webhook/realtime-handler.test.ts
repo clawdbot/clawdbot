@@ -8,7 +8,7 @@ import type {
   RealtimeVoiceSessionHarness,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
@@ -145,7 +145,7 @@ function makeHandler(
   };
   const realtimeProvider = deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge());
   const providerConfig = deps?.providerConfig ?? { apiKey: "test-key" };
-  return new RealtimeCallHandler(
+  const handler = new RealtimeCallHandler(
     config,
     {
       processEvent: vi.fn(),
@@ -168,6 +168,8 @@ function makeHandler(
     },
     undefined,
   );
+  onTestFinished(() => handler.close());
+  return handler;
 }
 
 const startRealtimeServer = async (
