@@ -903,13 +903,13 @@ describe("PluginExternalVerificationRuntime", () => {
     await expect(harness.decision).resolves.toBeNull();
   });
 
-  it("aborts retry and run-cancelled attempts and permanently closes presentation", async () => {
+  it("aborts a retried attempt but spares an allow-always attempt through run abort into a grant-only mint", async () => {
     const attempts: PluginExternalVerificationAttempt[] = [];
-    const { manager, owner, decision } = createHarness(async (attempt) => {
+    const { manager, owner, decision, databaseOptions } = createHarness(async (attempt) => {
       attempts.push(attempt);
       await attempt.present({ message: "Verify now." });
     });
-    const first = await runtime!.start({
+    await runtime!.start({
       approvalId: "plugin:runtime-approval",
       decision: "allow-once",
       interactionId: "a".repeat(64),
@@ -922,10 +922,14 @@ describe("PluginExternalVerificationRuntime", () => {
       present: async () => undefined,
     });
 
+    // The superseded allow-once retry is aborted and its presentation permanently closed.
     expect(attempts[0]?.signal.aborted).toBe(true);
     await expect(attempts[0]?.present({ message: "stale retry output" })).rejects.toThrow(
       "reviewer-retry",
     );
+
+    // The run aborts: the approval is cancelled, but the live allow-always attempt is
+    // spared so a completing World proof can still mint the session-trust grant.
     expect(
       manager.forceDenyDetailed(
         "plugin:runtime-approval",
@@ -934,10 +938,10 @@ describe("PluginExternalVerificationRuntime", () => {
         "cancelled",
       ),
     ).toMatchObject({ outcome: "denied", record: { status: "cancelled" } });
-    expect(attempts[1]?.signal.aborted).toBe(true);
-    await expect(attempts[1]?.present({ message: "stale cancelled output" })).rejects.toThrow(
-      "run-aborted",
-    );
+    expect(attempts[1]?.signal.aborted).toBe(false);
+
+    // Completing the spared attempt mints a grant-only authorization without resurrecting
+    // the cancelled approval.
     await expect(
       runtime!.complete(owner, "agentkit", {
         attemptId: second.id,
@@ -945,8 +949,10 @@ describe("PluginExternalVerificationRuntime", () => {
       }),
     ).resolves.toMatchObject({
       applied: false,
-      attempt: { outcome: "cancelled", terminalSource: "run-aborted" },
+      grantAuthorization: { attemptId: second.id, decision: "allow-always" },
+      attempt: { outcome: "succeeded", terminalSource: "grant-only-completion" },
     });
+    expect(readApproval(databaseOptions)).toMatchObject({ status: "cancelled" });
     await expect(decision).resolves.toBeNull();
   });
 

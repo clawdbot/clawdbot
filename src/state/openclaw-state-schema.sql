@@ -585,13 +585,21 @@ CREATE TRIGGER IF NOT EXISTS trg_operator_approval_closes_external_verification
 AFTER UPDATE OF status ON operator_approvals
 WHEN OLD.status = 'pending' AND NEW.status != 'pending'
 BEGIN
+  -- Close the attached verification attempt when its approval leaves pending,
+  -- EXCEPT an allow-always ceremony whose approval was cancelled by run abort:
+  -- that carries session-trust intent, so it survives the abandoned run and a
+  -- completing World proof mints a session grant (grant-only; the cancelled
+  -- approval is never resurrected — its blocked call is already gone). Deny,
+  -- expiry, gateway-restart, and allow-once still close the attempt.
   UPDATE plugin_external_verification_attempts
   SET
     ended_at_ms = NEW.resolved_at_ms,
     outcome = CASE WHEN NEW.status = 'expired' THEN 'timed-out' ELSE 'cancelled' END,
     terminal_source = NEW.terminal_reason,
     completion_applied = 0
-  WHERE approval_id = NEW.approval_id AND ended_at_ms IS NULL;
+  WHERE approval_id = NEW.approval_id
+    AND ended_at_ms IS NULL
+    AND NOT (NEW.terminal_reason = 'run-aborted' AND decision = 'allow-always');
 END;
 
 CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (

@@ -83,6 +83,104 @@ function getApproval(id: string, databaseOptions: OpenClawStateDatabaseOptions, 
 }
 
 describe("plugin external verification store", () => {
+  it("mints a grant-only completion after the approval's run aborts an allow-always ceremony", () => {
+    const databaseOptions = createDatabaseOptions();
+    expect(insertExternalApproval({ databaseOptions })).toMatchObject({ outcome: "inserted" });
+
+    // Reviewer dispatches a trust-for-session (allow-always) challenge.
+    const started = startExternalVerificationAttempt({
+      approvalId: "plugin:approval-1",
+      decision: "allow-always",
+      interactionId: "g".repeat(64),
+      runtimeEpoch: "epoch-1",
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    expect(started).toMatchObject({ outcome: "started" });
+    const attemptId = started.outcome === "started" ? started.attempt.id : "";
+
+    // The run aborts: the approval is cancelled, but the close trigger spares
+    // the live allow-always attempt.
+    forceDenyOperatorApproval({
+      id: "plugin:approval-1",
+      status: "cancelled",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: null },
+      runtimeEpoch: "epoch-1",
+      nowMs: 3_000,
+      databaseOptions,
+    });
+    const spared = getExternalVerificationAttemptSnapshot({
+      attemptId,
+      pluginId: "agentkit",
+      databaseOptions,
+    });
+    expect(spared?.outcome).toBeUndefined();
+    expect(getApproval("plugin:approval-1", databaseOptions, 3_500)?.status).toBe("cancelled");
+
+    // The reviewer's scan completes: grant-only mint, approval stays cancelled.
+    const completed = completeExternalVerificationAttempt({
+      attemptId,
+      pluginId: "agentkit",
+      outcome: "succeeded",
+      runtimeEpoch: "epoch-1",
+      nowMs: 4_000,
+      databaseOptions,
+    });
+    expect(completed).toMatchObject({ outcome: "completed", applied: false });
+    expect(completed.outcome === "completed" && completed.grantAuthorization?.decision).toBe(
+      "allow-always",
+    );
+    expect(completed.outcome === "completed" ? completed.attempt.terminalSource : "").toBe(
+      "grant-only-completion",
+    );
+    // The cancelled approval is never resurrected.
+    expect(getApproval("plugin:approval-1", databaseOptions, 4_500)?.status).toBe("cancelled");
+  });
+
+  it("does not grant-only complete an allow-once ceremony after run abort", () => {
+    const databaseOptions = createDatabaseOptions();
+    expect(insertExternalApproval({ databaseOptions })).toMatchObject({ outcome: "inserted" });
+    const started = startExternalVerificationAttempt({
+      approvalId: "plugin:approval-1",
+      decision: "allow-once",
+      interactionId: "h".repeat(64),
+      runtimeEpoch: "epoch-1",
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    const attemptId = started.outcome === "started" ? started.attempt.id : "";
+    forceDenyOperatorApproval({
+      id: "plugin:approval-1",
+      status: "cancelled",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: null },
+      runtimeEpoch: "epoch-1",
+      nowMs: 3_000,
+      databaseOptions,
+    });
+    // allow-once is closed by the trigger (no session-trust intent to preserve).
+    const attempt = getExternalVerificationAttemptSnapshot({
+      attemptId,
+      pluginId: "agentkit",
+      databaseOptions,
+    });
+    expect(attempt?.outcome).toBe("cancelled");
+    const completed = completeExternalVerificationAttempt({
+      attemptId,
+      pluginId: "agentkit",
+      outcome: "succeeded",
+      runtimeEpoch: "epoch-1",
+      nowMs: 4_000,
+      databaseOptions,
+    });
+    // No grant is minted for a closed allow-once attempt (it replays terminal).
+    expect(
+      "grantAuthorization" in completed ? completed.grantAuthorization : undefined,
+    ).toBeUndefined();
+    expect(attempt?.outcome).toBe("cancelled");
+  });
+
   it("resolves grant-covered pending approvals once and records the ledger attempt", () => {
     const databaseOptions = createDatabaseOptions();
     expect(insertExternalApproval({ databaseOptions })).toMatchObject({ outcome: "inserted" });
@@ -729,12 +827,14 @@ describe("plugin external verification store", () => {
     ).not.toHaveProperty("outcome");
   });
 
-  it("records run cancellation as terminal before replaying a late completion", () => {
+  it("records run cancellation as terminal before replaying a late allow-once completion", () => {
     const databaseOptions = createDatabaseOptions();
     insertExternalApproval({ databaseOptions });
+    // allow-once carries no session-trust intent, so run-abort still closes it
+    // (allow-always run-abort grant-only completion is covered separately).
     const started = startExternalVerificationAttempt({
       approvalId: "plugin:approval-1",
-      decision: "allow-always",
+      decision: "allow-once",
       interactionId: "a".repeat(64),
       runtimeEpoch: "epoch-1",
       nowMs: 2_000,

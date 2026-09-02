@@ -51,6 +51,7 @@ type PresentExternalVerification = (message: string) => Promise<void>;
 
 type LiveAttempt = {
   approvalId: string;
+  decision: "allow-once" | "allow-always";
   controller: AbortController;
   presentations: string[];
   pluginId: string;
@@ -179,14 +180,27 @@ export class PluginExternalVerificationRuntime {
     if (event.phase !== "terminal" || event.record.kind !== "plugin") {
       return;
     }
-    this.abortApprovalAttempts(event.record.id, event.record.terminalReason ?? "approval-terminal");
+    const reason = event.record.terminalReason ?? "approval-terminal";
+    // A run-aborted allow-always ceremony is spared in-process to match the
+    // close trigger: the reviewer's scan can still complete and mint the
+    // session grant. Its blocked call is already gone, so nothing runs.
+    this.abortApprovalAttempts(event.record.id, reason, {
+      spareGrantOnly: reason === "run-aborted",
+    });
     this.clearApprovalAttemptSetups(event.record.id);
     this.clearApprovalNativeActions(event.record.id);
   }
 
-  private abortApprovalAttempts(approvalId: string, reason: string, exceptId?: string): void {
+  private abortApprovalAttempts(
+    approvalId: string,
+    reason: string,
+    options: { exceptId?: string; spareGrantOnly?: boolean } = {},
+  ): void {
     for (const [attemptId, live] of this.liveAttempts) {
-      if (live.approvalId !== approvalId || attemptId === exceptId) {
+      if (live.approvalId !== approvalId || attemptId === options.exceptId) {
+        continue;
+      }
+      if (options.spareGrantOnly && live.decision === "allow-always") {
         continue;
       }
       live.controller.abort(new Error(`external verification cancelled: ${reason}`));
@@ -410,6 +424,7 @@ export class PluginExternalVerificationRuntime {
     });
     this.liveAttempts.set(attempt.id, {
       approvalId: attempt.context.approvalId,
+      decision: attempt.context.decision,
       controller,
       presentations: [],
       pluginId: attempt.context.pluginId,
@@ -641,7 +656,10 @@ export class PluginExternalVerificationRuntime {
       );
       this.liveAttempts.delete(stored.attempt.id);
     }
-    if (stored.applied && stored.grantAuthorization) {
+    // Coverage runs whenever a grant mints — including grant-only completion,
+    // where the originating approval stays cancelled (applied is false) but the
+    // World proof still established session trust.
+    if (stored.grantAuthorization) {
       await this.applySessionGrantCoverage(stored.attempt.context, stored.grantAuthorization.id);
     }
     return {

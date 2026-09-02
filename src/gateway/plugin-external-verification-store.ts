@@ -754,6 +754,52 @@ export function completeExternalVerificationAttempt(params: {
     if (matchesApproval && approval.expires_at_ms <= nowMs) {
       return { outcome: "approval-expired", approvalId: attempt.approval_id };
     }
+    // Grant-only completion: the approval was cancelled because its run aborted,
+    // but the allow-always ceremony (spared by the close trigger) still carries
+    // session-trust intent. A completing World proof mints the session grant
+    // from the frozen attempt scope; the cancelled approval is never resurrected
+    // (its blocked call is gone) and the grant is bounded by the original
+    // approval window.
+    const grantOnlyEligible =
+      approval?.kind === "plugin" &&
+      approval.runtime_epoch === params.runtimeEpoch &&
+      approval.status === "cancelled" &&
+      approval.terminal_reason === "run-aborted" &&
+      approval.source_run_id === attempt.run_id &&
+      attempt.decision === "allow-always" &&
+      approval.expires_at_ms > nowMs &&
+      approval.presentation_json.length > 0 &&
+      readExternalResolution(approval)?.decisions.includes("allow-always") === true;
+    if (grantOnlyEligible) {
+      const grantAuthorizationId = stableGrantAuthorizationId(attempt.attempt_id);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .updateTable("plugin_external_verification_attempts")
+          .set({
+            ended_at_ms: nowMs,
+            outcome: "succeeded",
+            terminal_source: "grant-only-completion",
+            completion_applied: 1,
+            grant_authorization_id: grantAuthorizationId,
+            grant_issued_at_ms: nowMs,
+            resolver_plugin_id: params.pluginId,
+          })
+          .where("attempt_id", "=", params.attemptId)
+          .where("ended_at_ms", "is", null),
+      );
+      attempt = selectAttempt(database, params.attemptId)!;
+      const grantAuthorization = buildGrantAuthorization(attempt);
+      // applied stays false: the approval remains cancelled. The grant is the
+      // sole product, and the runtime runs session-grant coverage from it.
+      return {
+        outcome: "completed",
+        applied: false,
+        approvalId: attempt.approval_id,
+        attempt: decodeAttempt(attempt),
+        ...(grantAuthorization ? { grantAuthorization } : {}),
+      };
+    }
     if (!matchesApproval) {
       executeSqliteQuerySync(
         database.db,

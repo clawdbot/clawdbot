@@ -82,7 +82,7 @@ export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void 
 const PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_START =
   "CREATE TABLE IF NOT EXISTS plugin_external_verification_attempts (";
 const PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_END =
-  "WHERE approval_id = NEW.approval_id AND ended_at_ms IS NULL;\nEND;";
+  "AND NOT (NEW.terminal_reason = 'run-aborted' AND decision = 'allow-always');\nEND;";
 
 /**
  * Lazily install the additive external verification attempt ledger (table,
