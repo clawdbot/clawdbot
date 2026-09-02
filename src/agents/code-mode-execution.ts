@@ -7,7 +7,6 @@ import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
 } from "./code-mode-catalog.js";
-import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
@@ -26,7 +25,6 @@ import {
   type CodeModeWorkerResult,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
-import { prepareSource } from "./code-mode-source.js";
 import {
   activeRuns,
   cancelPendingBridgeStates,
@@ -103,13 +101,6 @@ export async function runCodeModeExec(params: {
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
   try {
-    const source = await awaitCodeModeDeadline({
-      operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      remainingMs: deadlineMs - performance.now(),
-      signal,
-      createTimeoutError: () => new Error("interrupted"),
-      createAbortError: () => new Error("code mode execution aborted"),
-    });
     const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       throw new Error("interrupted");
@@ -117,7 +108,7 @@ export async function runCodeModeExec(params: {
     const result = await runCodeModeWorker(
       {
         kind: "exec",
-        source,
+        source: params.code,
         language: params.language,
         config: { ...config, timeoutMs: remainingMs },
         catalog: catalogProjection.guestBindings,
