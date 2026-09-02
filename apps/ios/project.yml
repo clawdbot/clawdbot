@@ -446,6 +446,8 @@ targets:
         group: ShareExtension
       - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
         group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchComposerInput.swift
+        group: WatchApp/Sources
       - path: WatchApp/Sources/WatchInboxMessages.swift
         group: WatchApp/Sources
       - path: WatchApp/Sources/WatchMascot.swift

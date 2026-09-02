@@ -348,9 +348,11 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     'return "Expires in \\(deltaSeconds / 60)m"',
     'return "Pending review"',
     'return "Review command below"',
+  ],
+  "apps/ios/WatchApp/Sources/WatchChatTimelineView.swift": [
     'return "Stop speaking"',
-    'return "Cancel voice turn"',
-    'return "Start voice turn"',
+    'return "Cancel spoken reply"',
+    'return "Dictate a message"',
   ],
   "apps/ios/WatchApp/Sources/WatchDirectNode.swift": [
     'private(set) var statusText = "',
