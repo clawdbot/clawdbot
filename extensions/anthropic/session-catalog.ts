@@ -107,6 +107,7 @@ function toGenericClaudeHost(
     label: host.label,
     kind: host.kind,
     connected: host.connected,
+    canStartTerminal: host.kind === "gateway" ? cliAvailable : host.canStartTerminal === true,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
       const terminal = catalogTerminal.terminalEligibility(host, session.source, cliAvailable);
@@ -251,6 +252,11 @@ export function createClaudeSessionCatalogRuntime(
       // Node launches run in the paired node's environment, not gateway HOME;
       // only local starts fall under the process-HOME isolation guard.
       if (!request.nodeId) {
+        if (request.hostId && request.hostId !== CLAUDE_LOCAL_SESSION_HOST_ID) {
+          throw new ClaudeCatalogParamsError(
+            "Claude terminal host is unavailable; select a listed host",
+          );
+        }
         assertClaudeLocalAccess(CLAUDE_LOCAL_SESSION_HOST_ID, request.allowProcessHomeFallback);
       }
       return await catalogTerminal.startClaudeCatalogTerminal(request);

@@ -63,7 +63,7 @@ jobs:
     if: ${{ inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '') }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
@@ -141,7 +141,9 @@ jobs:
           fetch-depth: 1
           filter: blob:none
           persist-credentials: false
-          sparse-checkout: scripts
+          sparse-checkout: |
+            .github/actions/git-owner
+            scripts
 
       - &validate_npm_source
         name: Validate npm package source metadata
@@ -172,16 +174,18 @@ jobs:
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
+      - name: Establish source ancestry with main
+        env:
+          RELEASE_ANCESTRY_MODE: merge-base
+          RELEASE_ANCESTRY_TARGET_REF: refs/heads/main
+        run: |
+          exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
+            --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
-        run: |
-          set -euo pipefail
-          # Ratchets compare against the real main merge base; fetch those two
-          # histories without collecting every remote branch or release tag.
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$(git rev-parse HEAD)" "+refs/heads/main:refs/remotes/origin/main"
-          pnpm check --include-test-types --include-architecture
+        run: pnpm check --include-test-types --include-architecture
 
       - name: Seal source-check evidence
         id: source_evidence
@@ -201,7 +205,7 @@ jobs:
     if: ${{ inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all' }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       prepared_bundle_json: ${{ steps.describe.outputs.bundle_json }}
     steps:
@@ -209,6 +213,7 @@ jobs:
       - *validate_npm_ref
       - *forbid_npm_promotion
       - *checkout_npm_source
+      - *checkout_npm_harness
       - name: Validate Tideclaw alpha preflight target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
         env:
@@ -224,15 +229,16 @@ jobs:
             echo "Tideclaw alpha preflight runs must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
             exit 1
           fi
-          alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$(git rev-parse HEAD)" "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-            echo "Alpha preflight target must be reachable from ${alpha_branch}." >&2
-            exit 1
-          fi
 
-      - *checkout_npm_harness
+      - name: Establish Tideclaw alpha ancestry
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        env:
+          RELEASE_ANCESTRY_MODE: ancestor
+          RELEASE_ANCESTRY_TARGET_REF: ${{ github.ref }}
+        run: |
+          exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
+            --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
       - *validate_npm_source
       - name: Setup Node environment
         id: setup-node-env
@@ -371,7 +377,7 @@ jobs:
   check_sdk_npm:
     name: Check npm Plugin SDK
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -500,7 +506,7 @@ jobs:
   check_dependencies_npm:
     name: Check npm dependencies
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -645,7 +651,7 @@ jobs:
     if: >-
       ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -808,7 +814,7 @@ jobs:
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
           needs.check_contents_npm.result == 'success' }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:

@@ -198,11 +198,9 @@ export function loadGatewaySessionEntry(
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: {
-    agentId?: string;
-    clone?: boolean;
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  },
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }

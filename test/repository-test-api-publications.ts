@@ -37,9 +37,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.contextEngineMaintenanceTestApi",
   ),
   "src/agents/embedded-agent-runner/extra-params.ts": Symbol.for("openclaw.extraParamsTestApi"),
-  "src/agents/embedded-agent-runner/run/auth-plan.ts": Symbol.for(
-    "openclaw.embeddedRunAuthPlanTestApi",
-  ),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
   "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
@@ -122,7 +119,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.doctorHealthContributionsTestApi",
   ),
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
-  "src/infra/session-cost-usage-cache-runtime.ts": Symbol.for("openclaw.sessionCostUsageTestApi"),
   "src/infra/session-delivery-queue-runtime.ts": Symbol.for(
     "openclaw.sessionDeliveryQueueRuntimeTestApi",
   ),

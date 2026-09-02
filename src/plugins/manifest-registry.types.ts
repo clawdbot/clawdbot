@@ -60,6 +60,8 @@ export type PluginManifestContractListKey =
 
 export type PluginManifestRecord = {
   id: string;
+  /** Process-local source selection, never persisted in the installed index. */
+  sourcePreferred?: true;
   backupResources?: PluginManifestBackupResource[];
   name?: string;
   description?: string;

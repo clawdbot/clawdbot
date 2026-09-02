@@ -140,7 +140,7 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 10
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
@@ -179,7 +179,7 @@ jobs:
     name: Validate selected ref
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 30
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
@@ -259,7 +259,7 @@ jobs:
     name: Run QA Lab mock parity lane
     needs: [validate_selected_ref]
     if: inputs.expected_sha == '' || inputs.run_mock_parity
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 30
     env:
       QA_PARITY_CONCURRENCY: "1"
@@ -333,7 +333,7 @@ jobs:
     name: Run live runtime token-efficiency lane
     needs: [authorize_actor, validate_selected_ref]
     if: github.event_name == 'schedule'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     environment: qa-live-shared
     env:
@@ -443,7 +443,7 @@ jobs:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
     if: inputs.expected_sha == '' || inputs.run_matrix
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 90
     concurrency:
       group: qa-live-matrix-${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -509,7 +509,7 @@ jobs:
     name: Run Buzz live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
     if: inputs.run_buzz
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     concurrency:
       group: qa-live-buzz-shared
@@ -649,7 +649,7 @@ jobs:
     name: Run Telegram live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
     if: inputs.expected_sha == '' || inputs.run_telegram
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     environment: qa-live-shared
     steps:
@@ -747,7 +747,7 @@ jobs:
     name: Run Discord live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
     if: inputs.expected_sha == '' || inputs.run_discord
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     environment: qa-live-shared
     steps:
@@ -833,7 +833,7 @@ jobs:
     name: Run WhatsApp live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
     if: inputs.expected_sha == '' || inputs.run_whatsapp
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     concurrency:
       group: qa-live-whatsapp-shared
@@ -912,7 +912,7 @@ jobs:
     name: Run Slack live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
     if: inputs.expected_sha == '' || inputs.run_slack
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     environment: qa-live-shared
     steps:

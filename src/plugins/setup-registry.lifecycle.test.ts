@@ -69,6 +69,10 @@ describe("plugin setup registry artifact lifecycle", () => {
       const artifactRoot = path.join(packageRoot, artifactRootName, "extensions", "bundled-setup");
       fs.mkdirSync(rootDir, { recursive: true });
       fs.mkdirSync(artifactRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(artifactRoot, "package.json"),
+        JSON.stringify({ openclaw: { setupEntry: "./setup-api.js" } }),
+      );
       const sourcePath = path.join(rootDir, "setup-api.ts");
       const artifactPath = path.join(artifactRoot, "setup-api.js");
       const dependencyPath =

@@ -1803,7 +1803,6 @@ src/agents/embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.ts	3
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.ts	1
 src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts	11
 src/agents/embedded-agent-runner/run/auth-controller.ts	1
-src/agents/embedded-agent-runner/run/auth-plan.ts	1
 src/agents/embedded-agent-runner/run/auth-profile-success.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	3
@@ -2000,7 +1999,6 @@ src/agents/subagents/registry/subagent-registry.ts	2
 src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-admission.ts	1
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	11
-src/agents/subagents/spawn/subagent-depth.ts	1
 src/agents/subagents/spawn/subagent-spawn-cleanup.ts	1
 src/agents/subagents/spawn/subagent-spawn-gateway.ts	3
 src/agents/subagents/spawn/subagent-spawn-session-patch.ts	1
@@ -2630,7 +2628,6 @@ src/config/runtime-overrides.ts	2
 src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.hints.ts	15
-src/config/schema.tags.ts	1
 src/config/schema.ts	1
 src/config/sessions/archive-compression.ts	1
 src/config/sessions/cleanup-service.ts	3
@@ -2927,7 +2924,7 @@ src/gateway/server-methods/talk-shared.ts	6
 src/gateway/server-methods/talk.ts	7
 src/gateway/server-methods/task-suggestions.ts	7
 src/gateway/server-methods/terminal-upload.ts	1
-src/gateway/server-methods/terminal.ts	7
+src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
@@ -3164,7 +3161,6 @@ src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	3
 src/infra/retry-policy.ts	3
 src/infra/session-cost-usage-aggregation.ts	5
-src/infra/session-cost-usage-cache-runtime.ts	1
 src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	6
@@ -3325,7 +3321,7 @@ src/node-host/node-worker-transfer-http.ts	2
 src/node-host/node-worker-tree-control.ts	2
 src/node-host/node-worker-workspace.ts	6
 src/node-host/plugin-node-host.ts	1
-src/node-host/pty-command.ts	11
+src/node-host/pty-command.ts	6
 src/node-host/runtime.ts	2
 src/node-host/skills.ts	1
 src/node-host/worker-support.ts	4
@@ -3452,7 +3448,7 @@ src/plugins/installed-plugin-index-policy.ts	1
 src/plugins/installed-plugin-index-record-builder.ts	1
 src/plugins/installed-plugin-index-record-state.ts	1
 src/plugins/installed-plugin-index-store.ts	2
-src/plugins/interactive-state.ts	3
+src/plugins/interactive-state.ts	2
 src/plugins/interactive.ts	4
 src/plugins/lazy-service-module.ts	1
 src/plugins/legacy-session-surfaces.ts	3
@@ -4010,7 +4006,7 @@ ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
 ui/src/pages/chat/components/chat-message-markdown.ts	1
-ui/src/pages/chat/components/chat-message-media.ts	13
+ui/src/pages/chat/components/chat-message-media.ts	3
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
 ui/src/pages/chat/components/chat-model-picker.ts	7
@@ -4055,7 +4051,6 @@ ui/src/pages/config/security.ts	1
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/settings-select-row.ts	1
 ui/src/pages/config/talk-page.ts	1
-ui/src/pages/config/talk.ts	1
 ui/src/pages/config/view-appearance-preferences.ts	2
 ui/src/pages/config/view-appearance.ts	1
 ui/src/pages/config/view-diff.ts	6

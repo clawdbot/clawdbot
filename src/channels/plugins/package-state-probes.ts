@@ -3,11 +3,13 @@
  *
  * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
  */
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isBundledSourceOverlayPath } from "../../plugins/bundled-source-overlays.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
@@ -15,7 +17,6 @@ import {
 import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import { isPluginSourceModulePath } from "../../plugins/native-module-require.js";
 import { pluginCacheExistsSync } from "../../plugins/plugin-cache-files.js";
-import { listBuiltBundledPluginRoots } from "../../plugins/plugin-runtime-artifact-selection.js";
 import { isSafeChannelEnvVarTriggerName } from "../../secrets/channel-env-var-names.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
@@ -61,12 +62,52 @@ function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): b
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function resolveSourceBundledPluginRoot(rootDir: string): {
+  packageRoot: string;
+  dirName: string;
+} | null {
+  const pluginRoot = path.resolve(rootDir);
+  const extensionsDir = path.dirname(pluginRoot);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return null;
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
+    return null;
+  }
+  return {
+    packageRoot,
+    dirName: path.basename(pluginRoot),
+  };
+}
+
+function isBundledSourceOverlayPluginRoot(rootDir: string): boolean {
+  const pluginRoot = path.resolve(rootDir);
+  return (
+    isBundledSourceOverlayPath({ sourcePath: pluginRoot }) ||
+    (path.basename(path.dirname(pluginRoot)) === "extensions" &&
+      isBundledSourceOverlayPath({ sourcePath: path.dirname(pluginRoot) }))
+  );
+}
+
 function listBuiltBundledPackageStateModules(params: {
   rootDir: string;
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
+  if (isBundledSourceOverlayPluginRoot(params.rootDir)) {
+    // Source overlays intentionally shadow built artifacts; probing dist would
+    // mix old built code with the active source overlay.
+    return [];
+  }
+  const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
+  if (!sourceRoot) {
+    return [];
+  }
   const locations: ChannelPackageStateModuleLocation[] = [];
-  for (const rootDir of listBuiltBundledPluginRoots(params.rootDir, ["dist", "dist-runtime"])) {
+  for (const rootDir of [
+    path.join(sourceRoot.packageRoot, "dist", "extensions", sourceRoot.dirName),
+    path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
+  ]) {
     const modulePath = resolveExistingPluginModulePath(rootDir, params.specifier);
     if (pluginCacheExistsSync(modulePath) && !isPluginSourceModulePath(modulePath)) {
       locations.push({ modulePath, rootDir });
@@ -75,14 +116,21 @@ function listBuiltBundledPackageStateModules(params: {
   return locations;
 }
 
+function resolveChannelPackageStateModuleLocation(params: {
+  entry: PluginChannelCatalogEntry;
+  specifier: string;
+}): ChannelPackageStateModuleLocation {
+  return {
+    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
+    rootDir: params.entry.rootDir,
+  };
+}
+
 function listChannelPackageStateModuleLocations(params: {
   entry: PluginChannelCatalogEntry;
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
-  const source = {
-    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
-    rootDir: params.entry.rootDir,
-  };
+  const source = resolveChannelPackageStateModuleLocation(params);
   // Prefer built bundled artifacts when present so probes match shipped runtime
   // behavior, then fall back to source for local development.
   const built = listBuiltBundledPackageStateModules({

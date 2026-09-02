@@ -17,7 +17,7 @@ extension CronSettings {
             self.updateActiveWork(active: active)
         }
         .onDisappear {
-            self.store.stop()
+            self.store.stop(.settings)
             self.channelsStore.stop()
         }
         .sheet(isPresented: self.$showEditor) {
@@ -57,10 +57,10 @@ extension CronSettings {
 
     private func updateActiveWork(active: Bool) {
         if active {
-            self.store.start()
+            self.store.start(.settings)
             self.channelsStore.start()
         } else {
-            self.store.stop()
+            self.store.stop(.settings)
             self.channelsStore.stop()
         }
     }

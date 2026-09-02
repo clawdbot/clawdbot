@@ -556,7 +556,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     };
     const fallback = createNodeTestShardBundles(options);
     // Runtime consumers retain their build floor without unrelated Doctor work.
-    // The complete CLI catalog still leaves its slow gateway file alone.
+    // The complete CLI catalog still leaves its slow gateway files alone.
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
@@ -570,6 +570,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ).toEqual([
       {
         groups: ["agentic-cli-process-hosted-1"],
+        pretestBuildMode: undefined,
+        predictedSeconds: 200,
+      },
+      {
+        groups: ["agentic-cli-process-hosted-2"],
         pretestBuildMode: undefined,
         predictedSeconds: 200,
       },
@@ -702,6 +707,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ...expectedToolingOwnerNames,
       "core-tooling-isolated",
     ]);
+    const gatewayFiles = [
+      "src/cli/gateway-backed-exit.process.test.ts",
+      "src/cli/gateway-backed-exit-health.process.test.ts",
+    ];
 
     for (const profile of [
       {
@@ -725,7 +734,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "agentic-commands-doctor",
           "agentic-agents-core-isolated",
         ],
-        largeFile: "src/cli/update-dry-run-state.process.test.ts",
+        largeFiles: ["src/cli/update-dry-run-state.process.test.ts"],
       },
       {
         name: "GitHub-hosted",
@@ -736,7 +745,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "agentic-agents-tools",
           "core-runtime-infra-storage-state",
         ],
-        largeFile: undefined,
+        largeFiles: [],
       },
       {
         name: "hybrid",
@@ -748,7 +757,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "agentic-control-plane-runtime-shared-token",
           "agentic-commands-doctor-platform",
         ],
-        largeFile: "src/cli/gateway-backed-exit.process.test.ts",
+        largeFiles: gatewayFiles,
       },
     ]) {
       expect(profile.push.length, `${profile.name} excludes PR-only work`).toBeLessThan(
@@ -767,8 +776,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             `${profile.name}: ${owner}`,
           ).toBe(true);
         }
-        const largeFile = profile.largeFile;
-        if (largeFile) {
+        for (const largeFile of profile.largeFiles) {
           const selected = groups.filter((group) => group.includePatterns?.includes(largeFile));
           expect(selected, largeFile).toHaveLength(1);
           expect(selected[0]?.runner, largeFile).toBe(DEFAULT_NODE_TEST_RUNNER);
@@ -778,17 +786,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
           ),
         );
-        expect(cliProcessJobs, profile.name).toHaveLength(5);
-        const gatewayJob = cliProcessJobs.find((shard) =>
-          shard.groups.some((group) =>
-            group.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts"),
-          ),
-        );
-        expect(gatewayJob?.groups, profile.name).toEqual([
-          expect.objectContaining({
-            includePatterns: ["src/cli/gateway-backed-exit.process.test.ts"],
+        expect(cliProcessJobs, profile.name).toHaveLength(7);
+        const gatewayJobs = new Set(
+          gatewayFiles.map((file) => {
+            const gatewayJob = cliProcessJobs.find((shard) =>
+              shard.groups.some((group) => group.includePatterns?.includes(file)),
+            );
+            expect(gatewayJob?.groups, `${profile.name}: ${file}`).toEqual([
+              expect.objectContaining({ includePatterns: [file] }),
+            ]);
+            return gatewayJob;
           }),
-        ]);
+        );
         const runtimeCliJobs = cliProcessJobs.filter((shard) => shard.pretestBuildMode);
         expect(runtimeCliJobs).toHaveLength(2);
         expect(runtimeCliJobs).toEqual(
@@ -810,10 +819,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ),
         );
         for (const shard of cliProcessJobs) {
-          // The indivisible gateway file takes 200s. Hosted runtime preparation
+          // The gateway files retain 200s budgets. Hosted runtime preparation
           // alone costs 160s; other groups retain the 150s admission budget.
           const budget =
-            shard === gatewayJob ||
+            gatewayJobs.has(shard) ||
             (profile.name === "GitHub-hosted" && shard.pretestBuildMode === "runtime")
               ? 200
               : 150;

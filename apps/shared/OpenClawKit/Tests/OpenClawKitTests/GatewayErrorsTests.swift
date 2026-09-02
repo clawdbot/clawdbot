@@ -38,14 +38,19 @@ struct GatewayErrorsTests {
         #expect(!unrelated.isAuthorizationFailure)
     }
 
-    @Test func `bootstrap token invalid is non recoverable`() {
-        let error = GatewayConnectAuthError(
-            message: "setup code expired",
-            detailCode: GatewayConnectAuthDetailCode.authBootstrapTokenInvalid.rawValue,
-            canRetryWithDeviceToken: false)
+    @Test func `terminal auth errors are non recoverable`() {
+        for detail in [
+            GatewayConnectAuthDetailCode.authBootstrapTokenInvalid,
+            .authVerifiedUserRequired,
+        ] {
+            let error = GatewayConnectAuthError(
+                message: "authentication failed",
+                detailCode: detail.rawValue,
+                canRetryWithDeviceToken: false)
 
-        #expect(error.isNonRecoverable)
-        #expect(error.detail == .authBootstrapTokenInvalid)
+            #expect(error.isNonRecoverable)
+            #expect(error.detail == detail)
+        }
     }
 
     @Test func `connect auth error preserves structured metadata`() {

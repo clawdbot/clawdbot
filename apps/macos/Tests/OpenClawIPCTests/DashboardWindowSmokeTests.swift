@@ -695,6 +695,17 @@ extension DashboardWindowSmokeTests {
                 dividerThickness: controller._testLinkBrowserDividerThickness,
                 persistedWidth: resizedWidth)
             #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
+
+            for (size, width) in [
+                (DashboardWindowLayout.windowSize, CGFloat(800)),
+                (DashboardWindowLayout.windowMinSize, CGFloat(500)),
+            ] {
+                defaults.set(Double(width), forKey: key)
+                controller._testCloseLinkBrowser()
+                controller.window?.setContentSize(size)
+                controller._testOpenLinkBrowser(link)
+                #expect(abs(controller._testLinkBrowserWidth - width) < 1)
+            }
         }
     }
 
