@@ -1665,6 +1665,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("uses the caller context token budget during runtime compaction", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      runId: "manual-compaction-operation",
       sessionKey: TEST_SESSION_KEY,
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
@@ -1676,6 +1677,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
     expectRecordFields(mockCallArg(guardSessionManagerMock, 0, 1), {
       contextWindowTokens: 64_000,
+      runId: "manual-compaction-operation",
     });
     expectRecordFields(mockCallArg(createPreparedEmbeddedAgentSettingsManagerMock), {
       contextTokenBudget: 64_000,

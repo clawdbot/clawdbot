@@ -25,6 +25,8 @@ import {
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
+import { matchesCompactionOperation } from "./chat-progress.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 const chatSessionProjections = new WeakMap<
   object,
@@ -49,7 +51,17 @@ type ChatSessionProjectionOwner = ChatComposerScope & {
   chatSubmissions?: ApplicationChatSubmissions;
   currentSessionId?: string | null;
   chatDisplayedLeafEntryId?: string | null;
+  compactionStatus?: CompactionStatus | null;
+  compactionClearTimer?: number | null;
 };
+
+function resetCompactionProjection(owner: ChatSessionProjectionOwner): void {
+  if (owner.compactionClearTimer != null) {
+    clearTimeout(owner.compactionClearTimer);
+    owner.compactionClearTimer = null;
+  }
+  owner.compactionStatus = null;
+}
 
 type ChatSessionProjectionScopeOptions = Omit<SessionProjectionScope, "sessionId"> & {
   sessionId?: string | null;
@@ -208,6 +220,29 @@ export function publishChatSessionProjection(
 ): void {
   const current = chatSessionProjections.get(owner);
   const runId = current?.runId;
+  if (
+    current?.projection &&
+    chatProjectionScopeChanged(current.projection.scope, projection.scope)
+  ) {
+    const status = owner.compactionStatus;
+    const sessionKeys = ["sessionKey", "sessionId", "agentId"] as const;
+    const previousScope = current.projection.scope;
+    const sessionChanged = sessionKeys.some(
+      (key) =>
+        Object.hasOwn(projection.scope, key) &&
+        previousScope[key] !== undefined &&
+        previousScope[key] !== projection.scope[key],
+    );
+    // Appending the completed marker advances the active leaf. Retain its live
+    // identity through that refresh, but never carry it into another session or branch.
+    if (
+      sessionChanged ||
+      !status ||
+      !projection.messages.some((message) => matchesCompactionOperation(message, status))
+    ) {
+      resetCompactionProjection(owner);
+    }
+  }
   chatSessionProjections.set(owner, {
     projection,
     runId:
@@ -462,6 +497,9 @@ export function reduceChatSessionProjection(
     });
   }
   projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
+  if (event.type === "sessionReset" && projection !== current) {
+    resetCompactionProjection(owner);
+  }
   // Without a transcript anchor this is best-effort display chronology, assuming
   // comparable browser/Gateway clocks. Never assign a sequence or reorder canonical
   // rows; older or untimestamped history stays ahead until authoritative adoption.

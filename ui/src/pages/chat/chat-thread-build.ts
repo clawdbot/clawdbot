@@ -30,7 +30,8 @@ import {
   buildGuardianNoticeItem,
   buildResetDividerItem,
   clearWorkingProgress,
-  projectContextCompactionActivity,
+  isContextCompactionMessage,
+  matchesCompactionOperation,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
@@ -72,12 +73,14 @@ import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = {
   paneId: string;
   sessionKey: string;
   archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
   runId?: string | null;
+  compactionStatus?: CompactionStatus | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
   messages: unknown[];
@@ -124,18 +127,33 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
   const persistedCanvasIdentities = new Set<string>();
+  const compaction = props.compactionStatus;
+  const compactionKey = compaction
+    ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
+    : undefined;
+  let hasPersistedCompaction = false;
   for (const [i, item] of buildMessageItems(history).entries()) {
-    const msg = projectContextCompactionActivity(item.message);
-    item.message = msg;
+    const msg = item.message;
     const itemKey = item.key;
-    const normalized = safeNormalizeMessage(msg);
-    if (!normalized) {
+    const raw = asRecord(msg) ?? {};
+    const marker = asRecord(raw["__openclaw"]);
+    if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
+      const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
+      const divider = buildCompactionDividerItem(
+        marker ?? {},
+        rawMessageTimestamp(msg) ?? Date.now(),
+        i,
+      );
+      items.push({
+        ...divider,
+        compactionId: divider.key,
+        ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
+      });
+      hasPersistedCompaction ||= matchesLive;
       continue;
     }
-    const raw = asRecord(msg) ?? {};
-    const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
-    if (marker && marker.kind === "compaction") {
-      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+    const normalized = safeNormalizeMessage(msg);
+    if (!normalized) {
       continue;
     }
     if (marker && marker.kind === "reset") {
@@ -243,6 +261,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     pendingInputs,
     props.searchOpen ? props.searchQuery : undefined,
   ).map((item) => ({ item }));
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -522,11 +554,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
   const showWorkingIndicator =
-    (props.runWorking === true && !initialHistoryLoad) ||
-    hasEmptyLiveStream ||
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    (!compaction || compaction.phase === "complete") &&
+    ((props.runWorking === true && !initialHistoryLoad) ||
+      hasEmptyLiveStream ||
+      queuedSends.some(
+        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+      ));
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
