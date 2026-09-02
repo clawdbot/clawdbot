@@ -3455,6 +3455,7 @@ process.on("SIGINT", shutdown);`,
     let firstTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
     let secondTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
     let nowMs = 100_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let resolveCount = 0;
     const releaseResolution = createDeferred();
     const resolutionStarted = createDeferred();
@@ -3546,6 +3547,7 @@ process.on("SIGINT", shutdown);`,
       } else {
         delete singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
       }
+      clock.mockRestore();
       await proof.close();
     }
   });
