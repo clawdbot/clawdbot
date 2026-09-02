@@ -195,6 +195,7 @@ describe("skill collection review", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         toolsAllow: ["skill_workshop"],
+        cliBackendDispatch: "subscription-auth",
         skillWorkshopProposalOnly: true,
         disableTrajectory: true,
       }),

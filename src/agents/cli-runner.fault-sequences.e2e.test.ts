@@ -23,7 +23,7 @@ const testMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
   nativeRunBudgetAttempt: vi.fn(),
   resolveAuthProfileOrder: vi.fn(() => []),
-  resolveCliRuntimeExecutionProvider: vi.fn(() => undefined),
+  resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
   resolveModelAuthMode: vi.fn(() => "oauth"),
   resolveRuntimeCliBackends: vi.fn(() => [{ id: "claude-cli", subscriptionAuthDispatch: true }]),
   runCliAgent: vi.fn(),
@@ -290,6 +290,55 @@ describe("CLI runner fault sequences", () => {
       runCliAgentCalls: 1,
       wholeTurnRetries: 0,
     });
+  });
+
+  it("dispatches the skill collection review shape through the subscription CLI bridge", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      managedRun(successExit("collection review bridge ok")),
+    );
+    testMocks.resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
+
+    const result = await runEmbeddedAgent({
+      admittedRunContext: createTestAdmittedRunContext("skill-collection-review-e2e"),
+      sessionId: "skill-review-session",
+      sessionKey: "agent:main:skill-collection-review:incognito-local",
+      sessionManager: undefined,
+      agentId: "main",
+      workspaceDir: scenarioRoot,
+      agentDir: path.join(scenarioRoot, "agent"),
+      config: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: scenarioRoot }],
+          defaults: {
+            models: {
+              "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      prompt: "Review the local skill collection.",
+      provider: "anthropic",
+      model: "claude-opus-5",
+      trigger: "cron",
+      modelSelectionLocked: true,
+      modelFallbacksOverride: [],
+      cliBackendDispatch: "subscription-auth",
+      toolsAllow: ["skill_workshop"],
+      skillWorkshopProposalOnly: true,
+      timeoutMs: 5_000,
+      runId: "skill-collection-review-e2e",
+    });
+
+    expect(result.payloads).toEqual([{ text: "collection review bridge ok" }]);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(testMocks.nativeRunBudgetAttempt).not.toHaveBeenCalled();
+    expect(testMocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        cliToolAvailability: { native: [], openClaw: ["skill_workshop"] },
+      }),
+    );
   });
 
   it.each([
