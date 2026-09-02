@@ -900,6 +900,7 @@ export function buildGatewayCronService(params: {
       requestHeartbeatAndWait(resolveCronHeartbeatWake(opts).wake, lifecycle),
     runHeartbeatOnce: async (opts) => {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
+      const { getReplyFromConfig: _getReplyFromConfig, ...heartbeatDeps } = params.deps;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         ...wake,
@@ -907,7 +908,8 @@ export function buildGatewayCronService(params: {
         // the cron run that is awaiting it.
         owningCronJobMarker: opts?.owningCronJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
-        deps: { ...params.deps, runtime: defaultRuntime },
+        // Gateway heartbeats acquire reply preparation from their published runtime boundary.
+        deps: { ...heartbeatDeps, runtime: defaultRuntime },
       });
     },
     runSkillCollectionReview: ({ agentId, abortSignal }) =>
