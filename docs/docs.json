@@ -1347,6 +1347,7 @@
                   "channels/group-messages",
                   "channels/groups",
                   "channels/ambient-room-events",
+                  "channels/bot-loop-protection",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
@@ -1455,6 +1456,7 @@
                   "plugins/codex-supervision",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
+                  "plugins/copilot",
                   "plugins/logbook",
                   "plugins/meeting-plugins",
                   "plugins/google-meet",
@@ -1655,6 +1657,7 @@
                   "providers/anthropic",
                   "providers/arcee",
                   "providers/azure-speech",
+                  "providers/baseten",
                   "providers/cerebras",
                   "providers/chutes",
                   "providers/clawrouter",
@@ -1887,7 +1890,8 @@
                   "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
-                  "security/CONTRIBUTING-THREAT-MODEL"
+                  "security/CONTRIBUTING-THREAT-MODEL",
+                  "security/incident-response"
                 ]
               },
               {
@@ -1980,7 +1984,8 @@
                       "cli/promos",
                       "cli/sessions",
                       "cli/system",
-                      "cli/tasks"
+                      "cli/tasks",
+                      "cli/transcripts"
                     ]
                   },
                   {
@@ -2061,7 +2066,8 @@
                 "group": "Codex harness",
                 "pages": [
                   "plugins/codex-harness-reference",
-                  "plugins/codex-harness-runtime"
+                  "plugins/codex-harness-runtime",
+                  "specs/codex-supervision"
                 ]
               },
               {
@@ -2118,6 +2124,7 @@
                   "agent-runtime-architecture",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
+                  "reference/secret-placeholder-conventions",
                   "reference/openclaw-ai",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
@@ -2215,7 +2222,10 @@
                 "pages": [
                   "help/testing",
                   "help/testing-updates-plugins",
-                  "help/testing-live"
+                  "help/testing-live",
+                  "concepts/mantis",
+                  "concepts/mantis-slack-desktop-runbook",
+                  "channels/qa-channel"
                 ]
               },
               {
