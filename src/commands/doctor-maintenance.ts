@@ -94,9 +94,9 @@ function assertDoctorMaintenanceInspection(
   // Non-owned services grant no stop authority. The native lifecycle owner
   // must prove them offline before Doctor can repair its own selected state.
   if (
-    !inspection.blockMessage &&
     inspection.inspected &&
-    (kind === "owned" || kind === "absent" || inspection.offline === true)
+    (inspection.offline === true ||
+      (!inspection.blockMessage && (kind === "owned" || kind === "absent")))
   ) {
     return;
   }

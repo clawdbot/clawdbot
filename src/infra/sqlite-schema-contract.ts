@@ -513,11 +513,14 @@ function compareTableDefinitions(
       }
       continue;
     }
-    if (actualDefinition === expectedDefinition) {
+    if (
+      actualDefinition === expectedDefinition ||
+      normalizeSqlWhitespace(actualDefinition) === normalizeSqlWhitespace(expectedDefinition)
+    ) {
       continue;
     }
     const allowed = compatibility.allowedColumnDefinitions?.[objectName] ?? [];
-    if (!allowed.some((definition) => normalizeSqlWhitespace(definition) === actualDefinition)) {
+    if (!allowed.some((definition) => normalizeSqlWhitespace(definition) === normalizeSqlWhitespace(actualDefinition))) {
       add("column-definition-drift", objectName);
     }
   }
