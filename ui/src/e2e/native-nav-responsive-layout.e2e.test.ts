@@ -145,6 +145,29 @@ suite.define(() => {
         }),
       )
       .toEqual(["28px", "28px", "none"]);
+    const actionStyles = await sidebarBrand
+      .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
+      .evaluateAll((actions) =>
+        actions.map((action) => {
+          const icon = action.querySelector("svg");
+          const actionStyle = getComputedStyle(action);
+          const iconStyle = icon ? getComputedStyle(icon) : null;
+          return {
+            backgroundColor: actionStyle.backgroundColor,
+            borderStyle: actionStyle.borderTopStyle,
+            borderWidth: actionStyle.borderTopWidth,
+            boxShadow: actionStyle.boxShadow,
+            color: actionStyle.color,
+            iconHeight: iconStyle?.height,
+            iconOpacity: iconStyle?.opacity,
+            iconStrokeWidth: iconStyle?.strokeWidth,
+            iconWidth: iconStyle?.width,
+          };
+        }),
+      );
+    expect(actionStyles).toHaveLength(3);
+    expect(actionStyles[1]).toEqual(actionStyles[0]);
+    expect(actionStyles[2]).toEqual(actionStyles[0]);
 
     const actionInset = async (direction: "ltr" | "rtl") => {
       const [brandBox, actionsBox] = await Promise.all([
