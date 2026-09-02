@@ -291,7 +291,10 @@ async function finalizeLineInboundContext(params: {
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
-  inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  // The whole entry, not the three fields a transcript line needs: a kept
+  // message's media and messageId are what a following mention reattaches, and
+  // narrowing here would drop them where the type still checks.
+  inboundHistory?: HistoryEntry[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {

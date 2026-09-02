@@ -457,12 +457,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const historyLimit = context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   if (isGroup && decision.access.activationAccess.shouldSkip) {
     const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
-    const historyLimit = context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
     // A disabled window (documented as `historyLimit: 0`) keeps nothing, so the
     // download below would spend bandwidth on bytes the recorder then drops.
     if (historyKey && context.groupHistories && historyLimit > 0) {
@@ -477,10 +477,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         : senderId;
       // History has one sender string; keep the stable ID when display names collide.
       const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
-      // Only an image survives history reattachment, so nothing else is fetched
-      // for a message this group already declined to answer. Resolving before the
-      // record keeps the answered path's failure semantics: a retryable
-      // preparation error rejects the event for one replay, not a second record.
+      // An image is the only kind LINE serves bytes for that history can reattach:
+      // stickers reattach too, but LINE has no content endpoint for them. Nothing
+      // else is fetched for a message this group already declined to answer.
+      // Resolving before the record keeps the answered path's failure semantics: a
+      // retryable preparation error rejects the event for one replay, not a second
+      // record.
       const download =
         message.type === "image" ? await downloadLineInboundMedia(event, context) : undefined;
       const media = download
@@ -517,7 +519,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const historyReservation = reserveLineGroupHistory(
     context.groupHistories,
     groupHistoryKey,
-    context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    historyLimit,
   );
 
   try {
