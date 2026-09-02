@@ -60,6 +60,7 @@ function resolveSwarmWaitOwnerSessionKeys(
 export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
+  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>;
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -180,7 +181,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       accumulatedRuntimeMs: 0,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
-      requesterSettleWake: undefined,
+      requesterSettleWake: registerParams.requesterSettleWake
+        ? structuredClone(registerParams.requesterSettleWake)
+        : undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,

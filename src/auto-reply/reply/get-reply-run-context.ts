@@ -144,6 +144,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           turnModelOverride: resolveTurnModelOverride(opts),
         })
       : sourceReplyDeliveryMode);
+
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,

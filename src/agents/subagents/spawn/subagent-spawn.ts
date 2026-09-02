@@ -62,6 +62,7 @@ import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-ga
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
+import { resolveInheritedRequesterSettleWake } from "./subagent-spawn-requester-settle.js";
 import {
   createInitialSubagentSession,
   persistInitialChildSessionRuntimeModel,
@@ -536,9 +537,14 @@ export async function spawnSubagentDirect(
             });
           }
         }
+        const requesterSettleWake = resolveInheritedRequesterSettleWake(
+          ctx.requesterTurnRunId,
+          runId,
+        );
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          ...(requesterSettleWake ? { requesterSettleWake } : {}),
           childSessionKey,
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,

@@ -1,6 +1,7 @@
 /**
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
+
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -248,13 +249,18 @@ export async function sendSubagentAnnounceDirectly(params: {
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
-    // Synthetic requester-settle turns must not inherit a tool-only mode that suppresses the final.
-    const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
-      ? "message_tool_only"
-      : params.requireVisibleReply && deliveryTarget.deliver
-        ? "automatic"
+    // A yielded requester wake owns the original user's final. It must route
+    // that final automatically even if the ambient source policy is tool-only.
+    const forceVisibleRequesterFinal =
+      params.requireVisibleReply === true && deliveryTarget.deliver;
+    const completionSourceReplyDeliveryMode = forceVisibleRequesterFinal
+      ? "automatic"
+      : requiresMessageToolDelivery
+        ? "message_tool_only"
         : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    const shouldDeliverAgentFinal =
+      deliveryTarget.deliver && (forceVisibleRequesterFinal || !requiresMessageToolDelivery);
+
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -366,6 +372,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       ...(completionSourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
         : {}),
+      // An explicitly required visible requester final must not inherit the
+      // ambient message-tool-only policy from the synthetic source session.
+      // Disabling the tool makes the automatic mode authoritative in the
+      // runner's stable-policy resolution as well as in this delivery layer.
+      ...(forceVisibleRequesterFinal ? { disableMessageTool: true } : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
     let directAnnounceResponse: unknown;
@@ -453,6 +464,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
@@ -492,6 +504,7 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
+
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
       (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
@@ -531,6 +544,7 @@ export async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
+      !forceVisibleRequesterFinal &&
       !hasMessagingToolDelivery &&
       (!hasIntentionalSilentCompletionReply ||
         subagentDirectMessageCompletionRequiresMessageTool ||
@@ -572,10 +586,14 @@ export async function sendSubagentAnnounceDirectly(params: {
             directAnnounceResult.deliveryStatus?.status !== "suppressed") ||
             (terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0)))),
     );
+    const acceptsIntentionalSilentCompletion =
+      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!params.requireVisibleReply &&
-        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload)) ||
+        (hasMessagingToolDelivery ||
+          acceptsIntentionalSilentCompletion ||
+          hasVisibleNonSilentGatewayPayload)) ||
       // Nested requesters and internal sessions observe the final in their transcript.
       // Unresolved external origins still require delivery evidence.
       (!requiresMessageToolDelivery &&
@@ -587,16 +605,13 @@ export async function sendSubagentAnnounceDirectly(params: {
               ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
               : !origin?.to,
           )));
-    const acceptsIntentionalSilentCompletion =
-      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       !hasVisibleCompletionReply &&
       (params.requireVisibleReply ||
         (params.expectsCompletionMessage &&
           !shouldDeliverAgentFinal &&
-          !requiresMessageToolDelivery &&
           !hasCompletionSideEffect &&
-          !acceptsIntentionalSilentCompletion))
+          (requiresMessageToolDelivery || !acceptsIntentionalSilentCompletion)))
     ) {
       return {
         delivered: false,

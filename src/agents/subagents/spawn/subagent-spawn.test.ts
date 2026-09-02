@@ -2380,6 +2380,28 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(params.extraSystemPrompt).toBe("system-prompt");
   });
 
+  it("retains requester-settle ownership for a successor spawned by a yielded wake", async () => {
+    const result = await spawnSubagentDirect(
+      { task: "continue after yielded requester wake" },
+      {
+        agentSessionKey: "agent:main:main",
+        requesterTurnRunId: "announce:requester-settle:main:agent:main:main:run-a:yield-1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      requesterTurnRunId: "announce:requester-settle:main:agent:main:main:run-a:yield-1",
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [result.runId],
+        requesterYieldBatch: true,
+        afterRequesterYield: true,
+      },
+    });
+  });
+
   it.each([
     { phase: "parent snapshot", message: "parent session unavailable" },
     { phase: "child patch", message: "invalid model: bad-model" },

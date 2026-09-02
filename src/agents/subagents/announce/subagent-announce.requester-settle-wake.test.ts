@@ -104,6 +104,13 @@ function makeSettledChild(overrides: SettledChildOverrides): SubagentRunRecord {
   };
 }
 
+const singleUndeliveredChild = (): SubagentRunRecord =>
+  makeSettledChild({
+    runId: "run-b",
+    delivery: { status: "suspended", suspendedAt: 4_000 },
+    completion: { required: true, resultText: "orphaned findings" },
+  });
+
 const transitionBatchSpy = vi.fn();
 const completeBatchSpy = vi.fn();
 
@@ -439,8 +446,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(deliveredCallArg().requireVisibleReply).toBe(true);
+    expect(deliveredCallArg().expectsCompletionMessage).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("NO_REPLY");
+    expect(message).toContain(
+      "Continue your workflow using these results. Spawn more subagents if needed, otherwise send your final answer.",
+    );
     expect(message).toContain("original user request still requires your visible final answer");
     expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
@@ -542,18 +553,28 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("wakes for a single required completion whose announce never delivered", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        delivery: { status: "suspended", suspendedAt: 4_000 },
-        completion: { required: true, resultText: "orphaned findings" },
-      }),
-    ]);
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([singleUndeliveredChild()]);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
     expect(woke).toBe(true);
     expect(String(deliveredCallArg().triggerMessage)).toContain("orphaned findings");
+  });
+
+  it("carries a single undelivered completion as a trusted direct-fallback event", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([singleUndeliveredChild()]);
+
+    await expect(maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).resolves.toBe(true);
+
+    expect(deliveredCallArg().internalEvents).toEqual([
+      expect.objectContaining({
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:run-b",
+        result: "orphaned findings",
+        status: "ok",
+      }),
+    ]);
   });
 
   it("wakes with captured fallback output after a resumed completion returns NO_REPLY", async () => {

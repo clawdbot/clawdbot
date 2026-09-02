@@ -107,6 +107,7 @@ export function resolveFollowupDeliveryDecision(params: {
     requested: turn.queued.run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
     sendPolicy: turn.sendPolicy,
   });
+
   const hasDestination = Boolean(
     (isRoutableChannel(turn.queued.originatingChannel) && turn.queued.originatingTo) ||
     opts?.onBlockReply,
@@ -299,7 +300,8 @@ export function resolveFollowupDeliveryDecision(params: {
     const explicitlyDeliverable = payloads.filter(
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
     );
-    return explicitlyDeliverable.length > 0
+    const isDeliverable = explicitlyDeliverable.length > 0;
+    return isDeliverable
       ? { kind: "deliver", payloads: explicitlyDeliverable, resolved: runtimeResolved }
       : { kind: "suppress", reason: "message-tool-only" };
   }
