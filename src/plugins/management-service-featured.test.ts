@@ -735,14 +735,12 @@ describe("plugin management Featured authority", () => {
   ])(
     "preserves installed identity and package suppression for %s hosted occurrence",
     async (mode) => {
-      const localIcon = "https://cdn.example.test/local.png";
       const hostedIcon = "https://cdn.example.test/hosted.png";
       mocks.metadata.mockReturnValue(
         metadataSnapshot({
           id: "installed",
           name: "Local",
           packageName: "@acme/installed",
-          icon: localIcon,
         }),
       );
       mocks.bundledEntries = [
@@ -829,7 +827,6 @@ describe("plugin management Featured authority", () => {
       name: "First",
       origin: "global",
       packageName: "@acme/first",
-      icon: "https://cdn.example.test/raw-first.png",
       installRecord: {
         source: "clawhub",
         clawhubUrl: "https://clawhub.ai",
