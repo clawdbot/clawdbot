@@ -26,6 +26,7 @@ type PreparedInboundRegistryInput = Pick<
 export type PreparedInboundRegistryLoader = (
   input: PreparedInboundRegistryInput,
   metadataSnapshot: PluginMetadataSnapshot,
+  configuredHarnessRuntimes?: readonly string[],
 ) => PluginRegistry;
 
 function inboundRegistryIdentity(input: PreparedInboundRegistryInput): string {
@@ -59,6 +60,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
 export function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
   metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
+  configuredHarnessRuntimes?: readonly string[],
 ): PluginRegistry {
   const activeRegistry = getActivePluginRegistry();
   // Identity is the generation authority. Manifest equivalence alone could let a
@@ -90,6 +92,7 @@ export function loadPreparedInboundPluginRegistry(
       ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
       metadataSnapshot,
       preferBuiltPluginArtifacts: true,
+      configuredHarnessRuntimes,
     });
   prepareOwnedPluginLoadContext(input, input.env ?? process.env, registry, metadataSnapshot, true);
   return registry;
@@ -101,13 +104,17 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     string,
     { metadataSnapshot: PluginMetadataSnapshot; registry: PluginRegistry }
   >();
-  return (input, metadataSnapshot) => {
+  return (input, metadataSnapshot, configuredHarnessRuntimes) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
     if (existing?.metadataSnapshot === metadataSnapshot) {
       return existing.registry;
     }
-    const registry = loadPreparedInboundPluginRegistry(input, metadataSnapshot);
+    const registry = loadPreparedInboundPluginRegistry(
+      input,
+      metadataSnapshot,
+      configuredHarnessRuntimes,
+    );
     registries.set(key, { metadataSnapshot, registry });
     return registry;
   };
@@ -120,6 +127,7 @@ export function prepareWorkspacePluginRegistries(
   loadInboundRegistry?: PreparedInboundRegistryLoader,
   preferBuiltPluginArtifacts = false,
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
+  getConfiguredHarnessRuntimes?: () => readonly string[],
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
@@ -129,9 +137,11 @@ export function prepareWorkspacePluginRegistries(
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
+  // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
   const inboundPluginRegistry = input.readOnly
     ? undefined
-    : (reusableGeneration?.inboundPluginRegistry ?? loadInboundRegistry?.(input, metadataSnapshot));
+    : (reusableGeneration?.inboundPluginRegistry ??
+      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.()));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
@@ -151,6 +161,7 @@ export function prepareWorkspacePluginRegistries(
           metadataSnapshot,
           ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
+          configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
         })
       : baseRegistry;
   return {

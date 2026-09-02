@@ -279,10 +279,14 @@ no route-specific URL parameters.
 | Skill Workshop      | `/skills/workshop`          | -                         | -                                                                 |
 | Skills              | `/skills`                   | -                         | -                                                                 |
 | Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                                      |
-| Automations         | `/cron`                     | -                         | -                                                                 |
+| Automations         | `/cron`                     | -                         | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                        |
 | Tasks               | `/tasks`                    | -                         | -                                                                 |
 | Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                                  |
 | Plugin tab host     | `/plugin`                   | -                         | `?plugin=<pluginId>&id=<tabId>`                                   |
+
+Automation links open the exact job independently of the current list filters or
+loaded page. Adding `run` opens its run history and highlights the matching loaded
+run. A missing job shows the Gateway's lookup error.
 
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;

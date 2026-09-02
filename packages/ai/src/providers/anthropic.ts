@@ -30,6 +30,7 @@ import {
 } from "../transports/anthropic-compaction-replay.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
 import {
+  assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpResponse,
   transportAbortError,
@@ -60,7 +61,6 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -671,11 +671,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
               output.stopReason = mapAnthropicStopReason(event.delta.stop_reason);
             }
           }
-          // Only update usage fields if present (not null).
-          // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          if (event.usage) {
-            applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
-          }
+          applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
           calculateCost(costModel, output.usage);
         }
       }
@@ -709,6 +705,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      const terminal = assignTransportErrorDetails(output, error, requestOptions?.signal);
       output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as { index?: number }).index;
@@ -722,8 +719,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
         suppressAnthropicCompaction(output, model, requestOptions);
       }
-      const terminal = projectProviderError(error, requestOptions?.signal);
-      Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }

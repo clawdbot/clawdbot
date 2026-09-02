@@ -59,6 +59,7 @@ export async function ensureOnboardingAgent(params: {
   preserveCandidateRoster?: boolean;
   baseConfig?: OpenClawConfig;
   expectedConfigHash?: string | null;
+  beforePersistentApply?: () => void;
 }): Promise<{
   config: OpenClawConfig;
   agentId: string;
@@ -132,6 +133,7 @@ export async function ensureOnboardingAgent(params: {
     ...(hasExpectedConfigHash ? { expectedConfigHash: params.expectedConfigHash } : {}),
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
+    beforePersistentApply: params.beforePersistentApply,
   });
   if (created.status === "error") {
     throw new Error(created.message);
@@ -151,6 +153,8 @@ export async function ensureOnboardingAgent(params: {
   const sessionMigration = await migrateLegacyMainSessionKeys({
     cfg: after.config,
     mode: "automatic",
+    // Unlike creation bookkeeping, convergence can wait for the next startup.
+    beforePersistentApply: params.beforePersistentApply,
   });
   const sessionMigrationWarnings =
     sessionMigration.armed && !sessionMigration.complete

@@ -4,6 +4,7 @@ import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { summarizeWithFallback } from "./compaction.test-support.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
@@ -57,30 +58,43 @@ describe("summarizeWithFallback", () => {
     vi.useRealTimers();
   });
 
-  it("throws CompactionError when all summarization attempts fail", async () => {
-    const messages: AgentMessage[] = [
-      {
-        role: "user",
-        content: "hello",
-        timestamp: 1,
-      } satisfies UserMessage,
-    ];
+  it.each([
+    { error: new Error("Summarization failed: fetch failed"), attempts: 1 },
+    { error: new DOMException("This operation was aborted", "AbortError"), attempts: 3 },
+  ])(
+    "throws CompactionError after $attempts failed attempts: $error.name",
+    async ({ error, attempts }) => {
+      agentSessionMocks.generateSummary.mockRejectedValue(error);
+      const signal = new AbortController().signal;
+      const messages: AgentMessage[] = [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        } satisfies UserMessage,
+      ];
 
-    const result = expect(
-      summarizeWithFallback({
-        messages,
-        model: testModel,
-        apiKey: "test-key", // pragma: allowlist secret
-        signal: new AbortController().signal,
-        reserveTokens: 1000,
-        maxChunkTokens: 50_000,
-        contextWindow: 200_000,
-      }),
-    ).rejects.toThrow("All summarization attempts failed for 1 messages");
-    await finishAssertionWithTimers(result);
-    // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
-    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
-  });
+      const result = expect(
+        summarizeWithFallback({
+          messages,
+          model: testModel,
+          apiKey: "test-key", // pragma: allowlist secret
+          signal,
+          reserveTokens: 1000,
+          maxChunkTokens: 50_000,
+          contextWindow: 200_000,
+        }).catch((failure: unknown) => {
+          expect(failure).toBeInstanceOf(CompactionError);
+          expect(isAbortError(failure)).toBe(false);
+          throw failure;
+        }),
+      ).rejects.toThrow("All summarization attempts failed for 1 messages");
+      await finishAssertionWithTimers(result);
+      // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
+      expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(attempts);
+      expect(signal.aborted).toBe(false);
+    },
+  );
 
   it("retries provider-side AbortError and returns a real summary when caller signal is not aborted", async () => {
     // Reproduce the undici AbortError("This operation was aborted") shape thrown

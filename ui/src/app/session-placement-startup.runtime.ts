@@ -360,6 +360,7 @@ export default function createApplicationPlacementStartupRuntime(
       }
       return {
         sessionKey: entry.owner.sessionKey,
+        targetKind: entry.work.recovery.target.kind,
         phase,
         startedAt: entry.createdAt,
         initialTurn: initialTurn(entry),

@@ -3,8 +3,8 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 import { testing as adapterTesting } from "./adapter.runtime.js";
-import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
   quiesceCodexApprovalAgentRun,
@@ -43,7 +43,12 @@ function toSlackScenarioExportName(id: string): string {
 }
 
 function findScenario(ids?: string[]) {
-  return resolveSlackQaScenarioIds({ scenarioIds: ids }).map((id) => {
+  return resolveLiveTransportQaScenarioIds({
+    channelId: "slack",
+    providerMode: "live-frontier",
+    scenarioIds: ids,
+    supportsModuleFlows: true,
+  }).map((id) => {
     const implementation = (
       slackScenarioImplementations as unknown as Record<string, SlackQaScenarioImplementation>
     )[toSlackScenarioExportName(id)];

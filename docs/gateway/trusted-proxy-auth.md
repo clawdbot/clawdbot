@@ -505,6 +505,14 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
 ## Troubleshooting
 
+### Control UI says Proxy authentication required
+
+The Gateway is reachable, but it rejected proxy authentication or forwarded identity. For `AUTH_IDENTITY_HEADER_REQUIRED`, a required proxy header was missing or blank; this is not a network outage.
+
+Open the configured authenticated proxy or SSO dashboard URL and sign in there instead of visiting the Gateway's loopback URL directly. If the error persists, ask the Gateway administrator to verify identity and required-header forwarding on **WebSocket upgrade requests**, and confirm that the signed-in account is permitted.
+
+A Gateway token cannot replace proxy authentication. Do not send identity headers from the browser, broaden `trustedProxies`, or remove `allowUsers` to work around the rejection.
+
 <AccordionGroup>
   <Accordion title="trusted_proxy_untrusted_source">
     The request didn't come from an IP in `gateway.trustedProxies`. Check:
@@ -524,7 +532,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
     Fix:
 
-    - Prefer token/password auth for internal same-host clients that do not go through the proxy, or
+    - Use an explicitly configured local password for internal same-host clients that do not go through the proxy; token fallback is not supported in trusted-proxy mode, or
     - Route through a non-loopback trusted proxy address and keep that IP in `gateway.trustedProxies`, or
     - For a deliberate same-host reverse proxy, set `gateway.auth.trustedProxy.allowLoopback = true`, keep the loopback address in `gateway.trustedProxies`, and make sure the proxy strips or overwrites identity headers.
 
@@ -556,7 +564,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
   </Accordion>
   <Accordion title="trusted_proxy_user_not_allowed">
-    The user is authenticated but not in `allowUsers`. Either add them or remove the allowlist.
+    The user is authenticated but not in `allowUsers`. Sign in with a permitted account or ask the Gateway administrator to review the intended access policy. Do not remove the allowlist as a connectivity workaround.
   </Accordion>
   <Accordion title="trusted_proxy_no_proxies_configured / trusted_proxy_config_missing">
     `gateway.auth.mode` is `"trusted-proxy"` but `gateway.trustedProxies` is empty, or `gateway.auth.trustedProxy` itself is missing. Every request is rejected until both are set.

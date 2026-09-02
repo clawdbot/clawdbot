@@ -4,10 +4,13 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
-  getMediaFileExtension,
-  getMediaFileName,
-  hasVideoMediaFileExtension,
+  isAudioTranscriptMediaPath,
+  isImageMediaPath,
+  isSvgImageMediaPath,
+  isVideoTranscriptMediaPath,
+  labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
 
 export type PairingQrExpiryNotice = {
@@ -34,6 +37,7 @@ export type ArtifactDownloadResolver = (params: {
 
 export type ImageRenderOptions = {
   canonicalMessageKey?: string;
+  localSubmission?: boolean;
   connectionEpoch?: number;
   localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
@@ -347,71 +351,6 @@ function buildBase64ImageUrl(params: { data: string; mediaType?: string }): stri
     : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
 }
 
-export function isImageMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
-    }
-    if (normalized !== "application/octet-stream") {
-      return false;
-    }
-  }
-  const ext = getMediaFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
-  );
-}
-
-export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
-  const normalizedMediaType =
-    typeof mediaType === "string" ? mediaType.split(";", 1)[0]?.trim().toLowerCase() : "";
-  return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
-}
-
-function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
-    return true;
-  }
-  const ext = getMediaFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
-  );
-}
-
-function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
-    return true;
-  }
-  return hasVideoMediaFileExtension(path);
-}
-
-// Collision-safe managed inbound URIs store the original filename plus a
-// terminal "---<uuid>" storage suffix in the basename
-// (e.g. media://inbound/report---<uuid>.pdf). Restore the original filename by
-// removing only that final generated segment, so an original name that itself
-// contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
-const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
-const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
-  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^./]*$|$)/i;
-
-function labelForMediaPath(mediaPath: string): string {
-  const trimmed = mediaPath.trim();
-  if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
-    const basename = trimmed.split("/").pop()?.trim() || trimmed;
-    return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
-  }
-  try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const parsed = new URL(trimmed);
-      return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
-    }
-  } catch {}
-  return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
-}
-
 function crossOriginStructuredSvgAttachment(
   source: unknown,
   mediaType: unknown,
@@ -448,7 +387,7 @@ function crossOriginStructuredSvgAttachment(
   };
 }
 
-export function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
+function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
   const content = asNonArrayRecord(message).content;
   if (!Array.isArray(content)) {
     return [];
@@ -524,6 +463,7 @@ export function extractImages(message: unknown): ImageBlock[] {
         continue;
       }
       const b = block as Record<string, unknown>;
+      const blockImages: ImageBlock[] = [];
 
       if (b.type === "image") {
         // Handle source object format from optimistic user sends.
@@ -541,7 +481,7 @@ export function extractImages(message: unknown): ImageBlock[] {
         };
         inlineIndex += 1;
         if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
@@ -550,7 +490,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           });
         } else if (typeof b.data === "string") {
           // Direct tool-result image block from imageResult() / read tool.
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: buildBase64ImageUrl({
               data: b.data,
               mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
@@ -561,7 +501,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof b.url === "string" &&
           !crossOriginStructuredSvgAttachment(b.url, b.mimeType ?? source?.media_type, b)
         ) {
-          appendImageBlock(images, { url: b.url, ...imageMeta });
+          appendImageBlock(blockImages, { url: b.url, ...imageMeta });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
@@ -570,7 +510,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof imageUrl?.url === "string" &&
           !crossOriginStructuredSvgAttachment(imageUrl.url, undefined)
         ) {
-          appendImageBlock(images, { url: imageUrl.url });
+          appendImageBlock(blockImages, { url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
         const imageUrl = b.image_url;
@@ -578,11 +518,11 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof imageUrl === "string" &&
           !crossOriginStructuredSvgAttachment(imageUrl, undefined)
         ) {
-          appendImageBlock(images, { url: imageUrl });
+          appendImageBlock(blockImages, { url: imageUrl });
         } else if (imageUrl && typeof imageUrl === "object") {
           const url = (imageUrl as Record<string, unknown>).url;
           if (typeof url === "string" && !crossOriginStructuredSvgAttachment(url, undefined)) {
-            appendImageBlock(images, { url });
+            appendImageBlock(blockImages, { url });
           }
         }
         const source = b.source as Record<string, unknown> | undefined;
@@ -590,9 +530,9 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof source?.url === "string" &&
           !crossOriginStructuredSvgAttachment(source.url, source.media_type)
         ) {
-          appendImageBlock(images, { url: source.url });
+          appendImageBlock(blockImages, { url: source.url });
         } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
@@ -605,12 +545,14 @@ export function extractImages(message: unknown): ImageBlock[] {
         }
         const imageUrl = b.image_url;
         if (typeof imageUrl === "string") {
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: imageUrl,
             alt: typeof b.alt === "string" ? b.alt : undefined,
           });
         }
       }
+      // Separate blocks are separate attachments, including identical uploads.
+      images.push(...blockImages);
     }
   }
 
@@ -723,7 +665,44 @@ export function schedulePairingQrExpiryRefresh(
   );
 }
 
-export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
+// Reply previews and completed-run actions describe the media the bubble renders.
+export function extractMessageMediaText(
+  message: unknown,
+  content = normalizeMessage(message).content,
+): string {
+  return [
+    ...extractImages(message).map(
+      (image) => image.fileName?.trim() || image.alt?.trim() || t("chat.imageLightbox.untitled"),
+    ),
+    ...extractMessageAttachments(message, content).map(
+      (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),
+    ),
+  ].join("\n");
+}
+
+export function extractMessageAttachments(
+  message: unknown,
+  content: readonly MessageContentItem[],
+): AssistantAttachmentItem[] {
+  const attachmentUrls = new Set<string>();
+  return [
+    ...content.filter(
+      (item): item is AssistantAttachmentItem =>
+        item.type === "attachment" || item.type === "attachment_error",
+    ),
+    ...extractStructuredSvgAttachments(message),
+    ...extractTranscriptAttachments(message),
+  ].filter((item) => {
+    if (item.type === "attachment_error") {
+      return true;
+    }
+    const unique = !attachmentUrls.has(item.attachment.url);
+    attachmentUrls.add(item.attachment.url);
+    return unique;
+  });
+}
+
+function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
   for (const {
     path: mediaPath,

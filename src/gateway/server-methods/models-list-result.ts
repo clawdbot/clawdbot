@@ -14,7 +14,6 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
@@ -238,7 +237,6 @@ export function createGatewayAgentModelCatalogProjector(params: {
           const routeVariants = resolveRouteVariants(entry);
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           const state = resolveLogicalModelCatalogEntryState({
-            entry,
             evaluation,
             routePolicy: openAIModelCatalogRoutePolicy,
           });
@@ -337,16 +335,10 @@ function createPublicModelsListProjector(params: {
       };
       prepared.set(entry, preparedEntry);
     }
-    const syntheticLocalAvailable =
-      evaluation.availability === undefined &&
-      evaluation.routeResolution === null &&
-      normalizeProviderId(entry.provider) !== "openai" &&
-      hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider: entry.provider });
-    const available = evaluation.availability ?? (syntheticLocalAvailable ? true : undefined);
     // Legacy views require a boolean; inventory consumers preserve unknown state.
     const projectedAvailability = params.preserveUnknownAvailability
-      ? available
-      : (available ?? false);
+      ? evaluation.availability
+      : (evaluation.availability ?? false);
     return Object.assign(
       {},
       preparedEntry,
@@ -687,7 +679,6 @@ export async function prepareModelsListResult(
           evaluation.availability === undefined &&
           evaluation.evidence === "synthetic";
         return resolveLogicalModelCatalogEntryState({
-          entry,
           evaluation,
           authBacked: evaluation.availability === true || syntheticLocal,
           routePolicy: openAIModelCatalogRoutePolicy,

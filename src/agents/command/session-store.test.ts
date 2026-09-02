@@ -22,7 +22,8 @@ import {
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
-const { listSessionEntriesCore, loadSessionEntry, replaceSessionEntry } = sessionAccessor;
+const { listSessionEntriesCore, loadSessionEntry, patchSessionEntryCore, replaceSessionEntry } =
+  sessionAccessor;
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
@@ -93,7 +94,11 @@ async function seedSessionStore(
   entries: Record<string, SessionEntry>,
 ): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+    });
   }
 }
 
@@ -470,10 +475,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(Object.keys(persisted)).toHaveLength(42);
-      expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
-      expect(persisted["agent:main:stale:44"]).toBeUndefined();
+      await vi.waitFor(
+        () => {
+          const persisted = loadPersistedSessionStore(storePath);
+          expect(Object.keys(persisted)).toHaveLength(42);
+          expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
+          expect(persisted["agent:main:stale:44"]).toBeUndefined();
+        },
+        { timeout: 5_000 },
+      );
     });
   });
 
@@ -3225,6 +3235,74 @@ describe("consumeCliSessionForkInStore", () => {
         authEpoch: "epoch-1",
         authEpochVersion: 3,
       });
+    });
+  });
+
+  it.each(
+    (["consume", "restore", "successor"] as const).flatMap((operation) =>
+      (
+        ["rebound", "deleted", "session-replaced", "lifecycle-replaced", "writer-replaced"] as const
+      ).map((durableState) => ({ durableState, operation })),
+    ),
+  )("rejects a stale $operation after the durable row is $durableState", async (testCase) => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const { durableState, operation } = testCase;
+      const sessionKey = `agent:main:cli-fork-cas:${operation}`;
+      const sourceBinding = {
+        sessionId: "claude-source-session",
+        forceReuse: true,
+        ...(operation === "consume" ? { forkNextResume: true as const } : {}),
+      };
+      const cached: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        lifecycleRevision: "source-lifecycle",
+        activeWriterRunId: "source-writer",
+        cliSessionBindings: { "claude-cli": sourceBinding },
+      };
+      const rebound: SessionEntry = {
+        ...cached,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-other-session", forceReuse: true },
+        },
+      };
+      const sessionStore = { [sessionKey]: cached };
+      const ownerReplacement =
+        durableState === "session-replaced"
+          ? { sessionId: "openclaw-session-2" }
+          : durableState === "lifecycle-replaced"
+            ? { lifecycleRevision: "replacement-lifecycle" }
+            : durableState === "writer-replaced"
+              ? { activeWriterRunId: "replacement-writer" }
+              : {};
+      const durableEntry =
+        durableState === "rebound" ? rebound : { ...cached, ...ownerReplacement };
+      if (durableState !== "deleted") {
+        await seedSessionStore(storePath, { [sessionKey]: durableEntry });
+      }
+
+      const common = {
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      };
+      const result =
+        operation === "consume"
+          ? await consumeCliSessionForkInStore(common)
+          : operation === "restore"
+            ? await restoreCliSessionForkInStore(common)
+            : await persistCliSessionForkSuccessorInStore({
+                ...common,
+                successorCliSessionId: "claude-successor-session",
+              });
+
+      expect(result).toBeUndefined();
+      expect(sessionStore[sessionKey]).toEqual(cached);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(
+        durableState === "deleted" ? undefined : expect.objectContaining(durableEntry),
+      );
     });
   });
 });

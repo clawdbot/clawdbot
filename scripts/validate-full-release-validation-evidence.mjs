@@ -3,6 +3,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { normalizeReleaseCoveragePolicy } from "./full-release-validation-policy.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
@@ -63,6 +65,11 @@ function displayValue(value) {
  * @property {unknown} [workflowRefType]
  * @property {unknown} [targetRef]
  * @property {unknown} [targetSha]
+ * @property {unknown} [releaseProfile]
+ * @property {unknown} [rerunGroup]
+ * @property {unknown} [runReleaseSoak]
+ * @property {{ package?: { version?: unknown } }} [candidateBinding]
+ * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown }} [validationInputs]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -72,6 +79,7 @@ function displayValue(value) {
  * @property {string} expectedRepository
  * @property {string | number} expectedRunId
  * @property {string} expectedTargetSha
+ * @property {string} [expectedReleaseTag]
  * @property {string} [expectedTrustedWorkflowFullRef]
  * @property {string} [expectedTrustedWorkflowSha]
  * @property {string} [expectedWorkflowBranch]
@@ -118,6 +126,7 @@ export function validateFullReleaseValidationEvidence({
   expectedRepository,
   expectedRunId,
   expectedTargetSha,
+  expectedReleaseTag,
   expectedTrustedWorkflowFullRef,
   expectedTrustedWorkflowSha,
   expectedWorkflowBranch,
@@ -177,6 +186,29 @@ export function validateFullReleaseValidationEvidence({
       `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
     );
   }
+  const coveragePolicy = normalizeReleaseCoveragePolicy({
+    ...manifest.validationInputs,
+    candidateVersion: manifest.candidateBinding?.package?.version,
+    releaseProfile: manifest.releaseProfile,
+    rerunGroup: manifest.rerunGroup,
+    runReleaseSoak: manifest.runReleaseSoak,
+  });
+  const coveredReleaseTag =
+    coveragePolicy === "npm-stable-v1"
+      ? resolveReleaseContextIdentity(
+          scalarString(manifest.validationInputs?.targetContextRef) ||
+            scalarString(manifest.targetRef),
+          scalarString(manifest.validationInputs?.targetVersion),
+        )?.releaseTag
+      : `v${scalarString(manifest.validationInputs?.targetVersion)}`;
+  if (
+    coveragePolicy &&
+    (manifest.version !== 4 || !coveredReleaseTag || expectedReleaseTag !== coveredReleaseTag)
+  ) {
+    throw new Error(
+      "Release coverage policy requires version 4 evidence for the exact publication tag.",
+    );
+  }
   const manifestChecks = [
     ["workflowName", FULL_RELEASE_WORKFLOW],
     ["runId", String(expectedRunId)],
@@ -214,7 +246,7 @@ export function validateFullReleaseValidationEvidence({
           `Direct main validation workflow ${run.headSha} is not reachable from current main.`,
         );
       }
-      return { run, source: "direct" };
+      return { run, source: "direct", coveragePolicy };
     }
     throw new Error(
       `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch ?? "<missing>"}.`,
@@ -293,7 +325,7 @@ export function validateFullReleaseValidationEvidence({
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
     }
   }
-  return { run, source };
+  return { run, source, coveragePolicy };
 }
 
 /**
@@ -380,6 +412,7 @@ function main() {
     expectedRepository: process.env.GITHUB_REPOSITORY,
     expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
     expectedTargetSha: process.env.EXPECTED_SHA,
+    expectedReleaseTag: process.env.RELEASE_TAG,
     expectedTrustedWorkflowFullRef: process.env.TRUSTED_WORKFLOW_FULL_REF,
     expectedTrustedWorkflowSha: process.env.TRUSTED_WORKFLOW_SHA,
     expectedWorkflowBranch: process.env.EXPECTED_WORKFLOW_BRANCH,

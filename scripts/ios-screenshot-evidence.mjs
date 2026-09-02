@@ -397,8 +397,8 @@ export function collectIosScreenshotEvidence({
 
 function loadExpectedManifests(inputDirectory, targetSha) {
   const expectedContainers = {
-    [`ios-release-screenshot-shard-iphone-${targetSha}`]: ["iphone", "watch"],
-    [`ios-release-screenshot-shard-ipad-13-${targetSha}`]: ["ipad-13"],
+    [`ios-release-screenshot-shard-iphone-${targetSha}`]: ["iphone"],
+    [`ios-release-screenshot-shard-ipad-13-${targetSha}`]: ["ipad-13", "watch"],
   };
   const actualContainers = listEntries(inputDirectory);
   if (actualContainers.some((entry) => !entry.isDirectory())) {

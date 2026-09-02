@@ -3,7 +3,8 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
-import androidx.room.Room
+import ai.openclaw.app.ui.chat.outboxItemsForSession
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +63,7 @@ class ChatControllerBranchCoordinationTest {
     gateway: ScriptedGateway,
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
     gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+    commandOutbox: ChatCommandOutbox = outbox,
   ): ChatController {
     val controllerScope = CoroutineScope(SupervisorJob() + dispatcher)
     controllerScopes += controllerScope
@@ -71,7 +73,7 @@ class ChatControllerBranchCoordinationTest {
       requestGateway = gateway::request,
       cacheScope = { ChatCacheScope("gateway-a", 1) },
       gatewayAdvertisesMethod = gatewayAdvertisesMethod,
-      commandOutbox = outbox,
+      commandOutbox = commandOutbox,
     )
   }
 
@@ -178,7 +180,10 @@ class ChatControllerBranchCoordinationTest {
       gateway.respond("sessions.rewind") { throw GatewayRequestOutcomeUnknown("response lost") }
       gateway.respond("chat.history") {
         when (historyCalls.incrementAndGet()) {
-          1, 2 -> throw IllegalStateException("history temporarily unavailable")
+          1, 2 -> {
+            throw IllegalStateException("history temporarily unavailable")
+          }
+
           else -> {
             retryHistoryStarted.complete(Unit)
             releaseRetryHistory.await()
@@ -213,14 +218,7 @@ class ChatControllerBranchCoordinationTest {
       assertTrue(controller.messages.value.isEmpty())
 
       releaseRetryHistory.complete(Unit)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) {
-          while (gateway.callCount("chat.send") == 0) {
-            runCurrent()
-            kotlinx.coroutines.delay(10)
-          }
-        }
-      }
+      awaitBranchProgress { gateway.callCount("chat.send") > 0 }
 
       assertFalse(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
       assertEquals(1, gateway.callCount("chat.send"))
@@ -239,7 +237,8 @@ class ChatControllerBranchCoordinationTest {
     runTest {
       val gateway = ScriptedGateway(json)
       val listCalls = AtomicInteger()
-      val firstListFailure = CompletableDeferred<Unit>()
+      val retryListStarted = CompletableDeferred<Unit>()
+      val releaseRetryList = CompletableDeferred<Unit>()
       gateway.respond("sessions.rewind") { throw GatewayRequestOutcomeUnknown("response lost") }
       gateway.respond("chat.history") {
         if (gateway.callCount("chat.history") == 1) throw IllegalStateException("history temporarily unavailable")
@@ -250,9 +249,10 @@ class ChatControllerBranchCoordinationTest {
       }
       gateway.respond("sessions.branches.list") {
         if (listCalls.incrementAndGet() == 1) {
-          firstListFailure.complete(Unit)
           throw IllegalStateException("branches temporarily unavailable")
         }
+        retryListStarted.complete(Unit)
+        releaseRetryList.await()
         """{"branches":[{"leafEntryId":"leaf-rewound","headline":"Rewound","messageCount":1,"active":true}]}"""
       }
       gateway.respondChatSend("started")
@@ -265,8 +265,10 @@ class ChatControllerBranchCoordinationTest {
 
       assertNull(controller.rewindSessionAtEntryResult("main", "entry-a"))
       assertTrue(controller.sendMessageAwaitAcceptance("queued after rewind", "off", emptyList()))
-      firstListFailure.await()
+      // A past failure cannot fence dispatch; keep its successful retry pending while checking.
+      retryListStarted.await()
       assertEquals(0, gateway.callCount("chat.send"))
+      releaseRetryList.complete(Unit)
 
       withContext(Dispatchers.Default.limitedParallelism(1)) {
         withTimeout(5_000) {
@@ -276,6 +278,106 @@ class ChatControllerBranchCoordinationTest {
 
       assertTrue(listCalls.get() >= 2)
       assertFalse(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
+    }
+
+  @Test
+  fun inactiveOrphanHistoryRecordsEmptyRootBeforeRetiringItsHead() =
+    runTest {
+      val key = "agent:main:orphan"
+      val otherKey = "agent:main:other"
+      val branchScope = ChatOutboxScope(key, "main")
+      val gateway = ScriptedGateway(json)
+      val healthy = AtomicBoolean(true)
+      val runningHead = AtomicReference<ChatOutboxItem?>(null)
+      val completedHead = AtomicReference<ChatOutboxItem?>(null)
+      val retirementEntered = CompletableDeferred<ChatOutboxBranchState?>()
+      val releaseRetirement = CompletableDeferred<Unit>()
+      val observedOutbox =
+        object : ChatCommandOutbox by outbox {
+          override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int {
+            if (completedHead.get()?.id in ids) {
+              retirementEntered.complete(outbox.branchState("gateway-a", branchScope))
+              releaseRetirement.await()
+            }
+            return outbox.confirmDeliveredAttempts(ids)
+          }
+        }
+      gateway.respond("health") {
+        check(healthy.get()) { "health unavailable; transport remains connected" }
+        "{}"
+      }
+      gateway.respond("chat.history") { paramsJson ->
+        val sessionKey = requireNotNull(gateway.sessionKeyOf(paramsJson))
+        val head = completedHead.get()?.takeIf { sessionKey == key }
+        historyResponse(
+          sessionId = sessionKey,
+          messages =
+            if (head == null) {
+              emptyList()
+            } else {
+              listOf(
+                ReplayHistoryMessage("user", head.text, 1, idempotencyKey = "${head.id}:user", entryId = "entry-input"),
+                ReplayHistoryMessage("assistant", "completed", 2, entryId = "entry-reply"),
+              )
+            },
+          inFlightRun = runningHead.get()?.takeIf { sessionKey == key && head == null }?.let { it.id to it.text },
+        )
+      }
+      gateway.respond("sessions.branches.list") { paramsJson ->
+        if (gateway.sessionKeyOf(paramsJson) == key && completedHead.get() != null) {
+          """{"branches":[{"leafEntryId":"entry-reply","headline":"Current","messageCount":2,"active":true}]}"""
+        } else {
+          """{"branches":[]}"""
+        }
+      }
+      gateway.respondChatSend("started")
+      val controller = controller(gateway, commandOutbox = observedOutbox)
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load(key)
+      awaitBranchProgress { controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
+      assertNull(outbox.branchState("gateway-a", branchScope)?.lastActiveLeafEntryId)
+      assertTrue(controller.sendMessageAwaitAcceptance("submitted head", "off", emptyList()))
+      val head = outbox.load("gateway-a").single()
+      runningHead.set(head)
+      // Admission can return while the flush lane is still persisting its ACK.
+      awaitBranchProgress { outbox.load("gateway-a").single().status == ChatOutboxStatus.Accepted }
+
+      // Keep the target's reconciled scope while moving its live run offscreen.
+      healthy.set(false)
+      controller.switchSession(otherKey)
+      awaitBranchProgress { !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
+      val successor = enqueue("queued successor", sessionKey = key)
+      assertEquals(ChatOutboxStatus.Accepted, outbox.load("gateway-a").single { it.id == head.id }.status)
+      completedHead.set(head)
+      controller.handleGatewayEvent("chat", chatTerminalPayload(key, head.id, seq = 1, assistantText = "completed"))
+      healthy.set(true)
+      controller.handleGatewayEvent("health", null)
+      awaitBranchProgress { retirementEntered.isCompleted }
+
+      try {
+        assertEquals("Orphan history must record continuity before retiring its proving row", "entry-reply", retirementEntered.await()?.lastActiveLeafEntryId)
+        val rows = outbox.load("gateway-a")
+        assertEquals(ChatOutboxStatus.Accepted, rows.single { it.id == head.id }.status)
+        assertEquals(ChatOutboxStatus.Queued, rows.single { it.id == successor.id }.status)
+        assertEquals(1, gateway.callCount("chat.send"))
+      } finally {
+        releaseRetirement.complete(Unit)
+      }
+
+      awaitBranchProgress {
+        outbox.load("gateway-a").singleOrNull()?.let { it.id == successor.id && it.status == ChatOutboxStatus.Accepted } == true
+      }
+      val sentIds =
+        gateway.calls.filter { it.method == "chat.send" }.map {
+          json
+            .parseToJsonElement(requireNotNull(it.paramsJson))
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive.content
+        }
+      assertEquals(listOf(head.id, successor.id), sentIds)
+      assertEquals(otherKey, controller.sessionKey.value)
     }
 
   @Test
@@ -305,13 +407,8 @@ class ChatControllerBranchCoordinationTest {
       assertTrue(controller.healthOk.value)
 
       assertTrue(controller.sendMessageAwaitAcceptance("dispatch without branches", "off", emptyList()))
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) {
-          while (gateway.callCount("chat.send") == 0 && gateway.callCount("sessions.branches.list") == 0) {
-            runCurrent()
-            kotlinx.coroutines.delay(10)
-          }
-        }
+      awaitBranchProgress {
+        gateway.callCount("chat.send") > 0 || gateway.callCount("sessions.branches.list") > 0
       }
 
       assertEquals(0, gateway.callCount("sessions.branches.list"))
@@ -578,13 +675,22 @@ class ChatControllerBranchCoordinationTest {
     val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
     holdBranches = true
     when (lane) {
-      DispatchGateLane.Refresh -> controller.refresh()
-      DispatchGateLane.RemoteEvent -> controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      DispatchGateLane.Refresh -> {
+        controller.refresh()
+      }
+
+      DispatchGateLane.RemoteEvent -> {
+        controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      }
+
       DispatchGateLane.Reconnect -> {
         controller.onDisconnected("Reconnecting")
         controller.onGatewayConnected()
       }
-      else -> controller.handleGatewayEvent("health", null)
+
+      else -> {
+        controller.handleGatewayEvent("health", null)
+      }
     }
     awaitBranchProgress { heldListings.isNotEmpty() }
     // The gateway changes branches after the history snapshot, without a mutation event.
@@ -732,7 +838,7 @@ class ChatControllerBranchCoordinationTest {
     assertEquals(admitted.id, retained.id)
     assertEquals(admitted.branchEpoch, retained.branchEpoch)
     assertEquals(admitted.attemptVersion, retained.attemptVersion)
-    assertEquals(if (independentListing || olderFirst && branchSwitch) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
+    assertEquals(if (independentListing || (olderFirst && branchSwitch)) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
     assertEquals(3, gateway.callCount("chat.history"))
     assertEquals(0, gateway.callCount("chat.send"))
   }
@@ -750,6 +856,109 @@ class ChatControllerBranchCoordinationTest {
   fun inputAdmittedWhileRemoteBranchHistoryWaitsSurvivesForExplicitRetry() = runTest { verifyInputAcrossHistoryReplacement(gate = ReplacementGate.History, remoteMutation = true) }
 
   @Test
+  fun blankHistoryEntryIdDoesNotStrandBootstrap() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("main", listOf(ReplayHistoryMessage("assistant", "History", 1, entryId = " \t"))),
+      )
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load("main")
+      awaitBranchProgress { ownerJob.children.none() }
+
+      assertTrue(controller.healthOk.value)
+      assertFalse(controller.historyLoading.value)
+      assertNull(
+        controller.messages.value
+          .single()
+          .entryId,
+      )
+      assertEquals(1, gateway.callCount("chat.history"))
+    }
+
+  @Test
+  fun reconnectCompletesWhenEarlierBranchListingFencesHistory() =
+    runTest {
+      val key = "agent:main:branch-proof"
+      val gateway = ScriptedGateway(json)
+      val transcript = AtomicReference(listOf("A"))
+      val holdBranches = AtomicBoolean(false)
+      val holdReconnectHistory = AtomicBoolean(false)
+      val branchesEntered = CompletableDeferred<Job>()
+      val releaseBranches = CompletableDeferred<Unit>()
+      val reconnectHistoryEntered = CompletableDeferred<Job>()
+      val releaseReconnectHistory = CompletableDeferred<Unit>()
+      gateway.respond("chat.history") {
+        val entries = transcript.get()
+        val response =
+          historyResponse(
+            sessionId = "session-${entries.first()}",
+            messages =
+              entries.mapIndexed { index, entry ->
+                ReplayHistoryMessage("assistant", "history $entry", index.toLong() + 1, entryId = "entry-$entry")
+              },
+          )
+        if (holdReconnectHistory.compareAndSet(true, false)) {
+          reconnectHistoryEntered.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseReconnectHistory.await()
+        }
+        response
+      }
+      gateway.respond("sessions.branches.list") {
+        val entries = transcript.get()
+        val response = """{"branches":[{"leafEntryId":"entry-${entries.last()}","headline":"Current","messageCount":${entries.size},"active":true}]}"""
+        if (holdBranches.compareAndSet(true, false)) {
+          branchesEntered.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseBranches.await()
+        }
+        response
+      }
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load(key)
+      awaitBranchProgress { controller.healthOk.value && !controller.historyLoading.value && ownerJob.children.none() }
+      assertEquals("session-A", controller.sessionId.value)
+
+      transcript.set(listOf("B"))
+      holdBranches.set(true)
+      controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      awaitBranchProgress { branchesEntered.isCompleted }
+      val branchesJob = branchesEntered.await()
+      assertEquals("session-B", controller.sessionId.value)
+
+      holdReconnectHistory.set(true)
+      controller.onDisconnected("Reconnecting")
+      controller.onGatewayConnected()
+      awaitBranchProgress { reconnectHistoryEntered.isCompleted }
+      val reconnectHistoryJob = reconnectHistoryEntered.await()
+      assertFalse(controller.healthOk.value)
+      assertTrue(controller.historyLoading.value)
+
+      // The listing settles after reconnect captured its branch evidence, before history returns.
+      releaseBranches.complete(Unit)
+      awaitBranchProgress { branchesJob.isCompleted }
+      // The held response stays at B; recovery must read again to observe this continuation.
+      transcript.set(listOf("B", "B2"))
+      releaseReconnectHistory.complete(Unit)
+      awaitBranchProgress { reconnectHistoryJob.isCompleted && ownerJob.children.none() }
+
+      assertEquals(
+        "Branch listing completed=${branchesJob.isCompleted}; reconnect completed=${reconnectHistoryJob.isCompleted}; " +
+          "remaining controller jobs=${ownerJob.children.count()}",
+        Triple(true, false, "session-B"),
+        Triple(controller.healthOk.value, controller.historyLoading.value, controller.sessionId.value),
+      )
+      assertEquals(listOf("history B", "history B2"), controller.messages.value.map { it.content.single().text })
+    }
+
+  @Test
   fun inputAdmittedAfterHistoryWhileBranchesWaitSendsOnceOnReconnect() = runTest { verifyInputAcrossHistoryReplacement(bootstrap = true, gate = ReplacementGate.Branches) }
 
   @Test
@@ -763,11 +972,11 @@ class ChatControllerBranchCoordinationTest {
 
   private enum class ReplacementGate { None, History, Branches, StaleBranches, ReconnectHealth }
 
-  private suspend fun TestScope.awaitBranchProgress(condition: suspend () -> Boolean) {
+  private suspend fun awaitBranchProgress(condition: suspend () -> Boolean) {
+    // runTest drives the scheduler; pumping it here would run controller callbacks concurrently.
     withContext(Dispatchers.Default.limitedParallelism(1)) {
       withTimeout(5_000) {
         while (true) {
-          runCurrent()
           if (condition()) return@withTimeout
           kotlinx.coroutines.delay(10)
         }
@@ -943,14 +1152,22 @@ class ChatControllerBranchCoordinationTest {
     controller.onDisconnected("Reconnecting")
     healthy.set(true)
     controller.onGatewayConnected()
+    // Matching history can retire a hidden intermediate row; wait for visible failure or completed retirement.
     awaitBranchProgress {
+      val published = controller.outboxItems.value
+      val visible =
+        outboxItemsForSession(
+          items = published,
+          sessionKey = key,
+          mainSessionKey = "main",
+          ownerAgentId = branchScope.ownerAgentId,
+          messages = controller.messages.value,
+        )
       controller.healthOk.value &&
         !controller.historyLoading.value &&
         (
-          controller.outboxItems.value.isEmpty() ||
-            controller.outboxItems.value
-              .singleOrNull()
-              ?.status == ChatOutboxStatus.Failed
+          (published.isEmpty() && outbox.load("gateway-a").isEmpty()) ||
+            visible.singleOrNull()?.status == ChatOutboxStatus.Failed
         )
     }
     val retained = controller.outboxItems.value.singleOrNull()
@@ -998,6 +1215,73 @@ class ChatControllerBranchCoordinationTest {
     awaitBranchProgress { controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
     assertEquals("A second reconnect must not redispatch the confirmed input", 1, gateway.callCount("chat.send"))
   }
+
+  @Test
+  fun reconnectAckPublishesAcceptedUntilHistoryConfirmsDelivery() =
+    runTest {
+      val key = "agent:main:ack-proof"
+      val gateway = ScriptedGateway(json)
+      val initialLoadFinished = CompletableDeferred<Unit>()
+      val sendId = AtomicReference<String?>(null)
+      val confirmationRequested = CompletableDeferred<Unit>()
+      val releaseConfirmation = CompletableDeferred<Unit>()
+      gateway.respond("sessions.list") {
+        initialLoadFinished.complete(Unit)
+        """{"sessions":[]}"""
+      }
+      gateway.respond("chat.history") {
+        val id = sendId.get()
+        if (id != null) {
+          confirmationRequested.complete(Unit)
+          releaseConfirmation.await()
+        }
+        historyResponse(
+          sessionId = "ack-proof",
+          messages =
+            listOf(ReplayHistoryMessage("assistant", "before", 1, entryId = "entry-before")) +
+              if (id == null) {
+                emptyList()
+              } else {
+                listOf(ReplayHistoryMessage("user", "queued", 2, idempotencyKey = "$id:user", entryId = "entry-input"))
+              },
+        )
+      }
+      gateway.respondWith(
+        "sessions.branches.list",
+        """{"branches":[{"leafEntryId":"entry-before","headline":"Current","messageCount":1,"active":true}]}""",
+      )
+      gateway.respond("chat.send") { paramsJson ->
+        val id =
+          json
+            .parseToJsonElement(requireNotNull(paramsJson))
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive
+            .content
+        sendId.set(id)
+        """{"runId":"$id","status":"started"}"""
+      }
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      controller.awaitOutboxRestore()
+      controller.load(key)
+      initialLoadFinished.await()
+      controller.onDisconnected("Queue offline")
+      assertTrue(controller.sendMessageAwaitAcceptance("queued", "off", emptyList()))
+      val admitted = outbox.load("gateway-a").single()
+      assertEquals(ChatOutboxStatus.Queued, admitted.status)
+      controller.onGatewayConnected()
+      try {
+        confirmationRequested.await()
+        val acknowledged = outbox.load("gateway-a").single()
+        assertEquals(admitted.id, acknowledged.id)
+        assertEquals(admitted.attemptVersion, acknowledged.attemptVersion)
+        assertEquals(ChatOutboxStatus.Accepted, acknowledged.status)
+        assertEquals(1, gateway.callCount("chat.send"))
+      } finally {
+        releaseConfirmation.complete(Unit)
+      }
+      awaitBranchProgress { outbox.load("gateway-a").isEmpty() }
+    }
 
   @Test
   fun staleBranchSwitchCompletionCannotOverrideNewerNavigation() =
@@ -1118,11 +1402,13 @@ class ChatControllerBranchCoordinationTest {
               messages = listOf(ReplayHistoryMessage("user", "local", 1, entryId = "leaf-local")),
             )
           }
-          else ->
+
+          else -> {
             historyResponse(
               sessionId = "session-main",
               messages = listOf(ReplayHistoryMessage("user", "winner", 2, entryId = "leaf-winner")),
             )
+          }
         }
       }
       gateway.respond("sessions.branches.list") {
@@ -1284,11 +1570,15 @@ class ChatControllerBranchCoordinationTest {
       runCurrent()
       controller.awaitOutboxRestore()
 
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      val previousJobs = ownerJob.children.toSet()
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"branch-switch","sessionKey":"$backgroundKey","agentId":"main"}""",
       )
-      runCurrent()
+      // Completing this event's work, not draining the test dispatcher, joins Room's IO.
+      val eventJobs = ownerJob.children.filterNot { it in previousJobs }.toList()
+      eventJobs.forEach { it.join() }
       assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
     }
 
@@ -1364,7 +1654,7 @@ class ChatControllerBranchCoordinationTest {
         ),
       )
       enqueue("first queued", sessionKey = "background")
-      assertTrue(outbox.demoteSessionMutationToReconciliation("gateway-a", backgroundScope, lease = null))
+      assertNotNull(outbox.demoteSessionMutationToReconciliationState("gateway-a", backgroundScope, lease = null))
 
       val gateway = ScriptedGateway(json)
       val branchesEntered = CompletableDeferred<Unit>()

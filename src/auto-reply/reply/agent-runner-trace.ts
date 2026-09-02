@@ -229,7 +229,7 @@ export function derivePromptSegments(
             lines.slice(index, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;
@@ -258,7 +258,7 @@ export function derivePromptSegments(
             lines.slice(start, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;

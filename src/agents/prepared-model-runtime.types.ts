@@ -157,6 +157,8 @@ export type PreparedModelRuntimeOwner = {
   generation: number;
   needsRefresh: boolean;
   catalogStale: boolean;
+  /** Completed discovery facts; runtime capability projection belongs to each generation. */
+  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

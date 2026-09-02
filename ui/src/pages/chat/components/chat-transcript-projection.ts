@@ -12,18 +12,18 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
-  assistantMessageExpansionSignature,
   buildCachedChatItems,
   collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  deleteExpansionState,
   getExpansionStateVersion,
-  getExpandedAssistantMessages,
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
@@ -91,8 +91,7 @@ export function projectChatTranscript(
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
@@ -117,6 +116,7 @@ export function projectChatTranscript(
     sessionKey: props.sessionKey,
     archiveNotice,
     runId: props.runId ?? null,
+    compactionStatus: props.compactionStatus,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -154,7 +154,27 @@ export function projectChatTranscript(
   );
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
-  const expandedAssistantMessages = getExpandedAssistantMessages(props.sessionKey);
+  const expandedAssistantMessages = transcript.expandedAssistantMessages;
+  const recoveryKey = (messageId: string) => JSON.stringify([props.fullMessageAgentId, messageId]);
+  if (expandedAssistantMessages.size > 0) {
+    // Search and virtualization only hide rows. Prune against source history so
+    // a removed message retires its body/load without refetching hidden rows.
+    const retainedKeys = new Set(
+      [
+        ...props.messages,
+        ...props.toolMessages,
+        ...(props.pendingInputs ?? []).map((input) => input.message),
+      ]
+        .map((message) => readChatThreadMessageIdentity(message)?.id)
+        .filter((id): id is string => typeof id === "string")
+        .map(recoveryKey),
+    );
+    for (const key of expandedAssistantMessages.keys()) {
+      if (!retainedKeys.has(key)) {
+        deleteExpansionState(expandedAssistantMessages, key);
+      }
+    }
+  }
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -167,25 +187,29 @@ export function projectChatTranscript(
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
-    const current = expandedAssistantMessages.get(messageId);
+    const key = recoveryKey(messageId);
+    const current = expandedAssistantMessages.get(key);
     const loader = props.loadFullAssistantMessage;
     if (!loader || current?.status === "loading") {
       return;
     }
     const revision = (current?.revision ?? 0) + 1;
-    expandedAssistantMessages.set(messageId, { status: "loading", revision });
+    const pending = { status: "loading", revision } as const;
+    setExpansionState(expandedAssistantMessages, key, pending);
     requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
-      const pending = expandedAssistantMessages.get(messageId);
-      if (pending?.status !== "loading" || pending.revision !== revision) {
+      // A reset or source replacement can reuse both message id and revision.
+      // Only the exact pending entry may publish into this presentation.
+      if (expandedAssistantMessages.get(key) !== pending) {
         return;
       }
       const markdown =
         result?.ok && result.message && typeof result.message === "object"
           ? extractTextCached(result.message)
           : null;
-      expandedAssistantMessages.set(
-        messageId,
+      setExpansionState(
+        expandedAssistantMessages,
+        key,
         markdown === null
           ? { status: "error", revision: revision + 1 }
           : { status: "loaded", markdown, revision: revision + 1 },
@@ -242,6 +266,9 @@ export function projectChatTranscript(
   const messageRowKeysById = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    onReply: props.onSetReply
+      ? (target) => state.transcriptRenderContext.onSetReply?.(target)
+      : undefined,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
@@ -294,7 +321,8 @@ export function projectChatTranscript(
         requestUpdate();
       },
       loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
-      getAssistantMessageExpansion: (messageId: string) => expandedAssistantMessages.get(messageId),
+      getAssistantMessageExpansion: (messageId: string) =>
+        expandedAssistantMessages.get(recoveryKey(messageId)),
       onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
@@ -313,9 +341,6 @@ export function projectChatTranscript(
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
-      onReply: props.onSetReply
-        ? (target) => state.transcriptRenderContext.onSetReply?.(target)
-        : undefined,
       resolveReplyPreview,
       onResolveReply: props.replyMessageAccess?.request,
       onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
@@ -513,7 +538,8 @@ export function projectChatTranscript(
     for (const group of groups) {
       for (const source of group.messages) {
         const sourceMessageId = persistedMessageEntryId(source.message);
-        if (sourceMessageId && extractTextCached(source.message)?.trim()) {
+        // The preview resolves content lazily; indexing only needs persisted identities.
+        if (sourceMessageId) {
           messageRowKeysById.set(sourceMessageId, item.key);
           loadedReplySources.set(sourceMessageId, {
             message: source.message,
@@ -578,7 +604,8 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
-    assistantMessageExpansionSignature(expandedAssistantMessages),
+    expandedAssistantMessages,
+    getExpansionStateVersion(expandedAssistantMessages),
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),

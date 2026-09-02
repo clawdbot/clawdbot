@@ -118,8 +118,12 @@ vi.mock("../config/config.js", () => ({
       auditOrigin?: "cli";
       unsetPaths?: string[][];
       explicitSetPaths?: string[][];
+      assertConfigPathForWrite?: () => void;
     };
-  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
+  }) => {
+    params.writeOptions?.assertConfigPathForWrite?.();
+    return mockWriteConfigFile(params.nextConfig, params.writeOptions);
+  },
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -1306,6 +1310,138 @@ describe("config cli", () => {
       });
       expectLogIncludes("Removed inactive gateway.auth.password for gateway.auth.mode=token");
     });
+
+    it("conditionally writes when the authored path is absent or exactly matches JSON", async () => {
+      const absent: OpenClawConfig = { gateway: {} };
+      setSnapshot(absent, { gateway: { port: 18789 } });
+
+      await runConfigSet("gateway.port", "19001", "--strict-json", "--expect-current-absent");
+
+      expect(firstWrittenConfig().gateway?.port).toBe(19001);
+      vi.clearAllMocks();
+      setSnapshot({ gateway: { port: 19001 } }, { gateway: { port: 19001 } });
+
+      await runConfigSet(
+        "gateway.port",
+        "19002",
+        "--strict-json",
+        "--expect-current-json",
+        "19001",
+      );
+
+      expect(firstWrittenConfig().gateway?.port).toBe(19002);
+    });
+
+    it("distinguishes an authored null from an absent path", async () => {
+      const resolved = { gateway: { port: null } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet("gateway.port", "19001", "--strict-json", "--expect-current-absent"),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set expectation did not match the authored config");
+    });
+
+    it("uses deep type-exact comparison for authored expectations", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789, bind: "loopback" },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigSet(
+        "gateway",
+        '{"port":19001,"bind":"loopback"}',
+        "--strict-json",
+        "--expect-current-json",
+        '{"port":18789,"bind":"loopback"}',
+      );
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+
+      vi.clearAllMocks();
+      setSnapshot({ gateway: { port: 1 } }, { gateway: { port: 1 } });
+      await expect(
+        runConfigSet("gateway.port", "2", "--strict-json", "--expect-current-json", '"1"'),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects an absent expectation when a SecretRef redirects away from the caller path", async () => {
+      const existingValue = "caller-value-present";
+      const refId = "REDIRECTED_REF_ID";
+      const resolved = {
+        channels: { discord: { accounts: [{ token: existingValue }] } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet(
+          "channels.discord.accounts[0].token",
+          "--ref-provider",
+          "default",
+          "--ref-source",
+          "env",
+          "--ref-id",
+          refId,
+          "--expect-current-absent",
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set requires a direct, non-redirected config path");
+      const output = JSON.stringify([...mockLog.mock.calls, ...mockError.mock.calls]);
+      expect(output).not.toContain(existingValue);
+      expect(output).not.toContain(refId);
+    });
+
+    it("rejects an exact expectation when a SecretRef value redirects the write path", async () => {
+      const existingValue = "caller-exact-value";
+      const refId = "REDIRECTED_EXACT_REF_ID";
+      const resolved = {
+        channels: { discord: { accounts: [{ token: existingValue }] } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet(
+          "channels.discord.accounts[0].token",
+          JSON.stringify({ source: "env", provider: "default", id: refId }),
+          "--strict-json",
+          "--expect-current-json",
+          JSON.stringify(existingValue),
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set requires a direct, non-redirected config path");
+      const output = JSON.stringify([...mockLog.mock.calls, ...mockError.mock.calls]);
+      expect(output).not.toContain(existingValue);
+      expect(output).not.toContain(refId);
+    });
+
+    it("rejects an exact expectation when roster normalization redirects the write path", async () => {
+      const existingValue = "existing-agent-name";
+      const resolved: OpenClawConfig = {
+        agents: { entries: { main: { name: existingValue } } },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet(
+          "agents.list[0].name",
+          "updated-agent-name",
+          "--expect-current-json",
+          JSON.stringify(existingValue),
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set requires a direct, non-redirected config path");
+      const output = JSON.stringify([...mockLog.mock.calls, ...mockError.mock.calls]);
+      expect(output).not.toContain(existingValue);
+      expect(output).not.toContain("updated-agent-name");
+    });
   });
 
   describe("config get", () => {
@@ -1941,6 +2077,8 @@ describe("config cli", () => {
       expect(helpText).not.toContain("--provider-allow-insecure-path");
       expect(helpText).not.toContain("--provider-allow-symlink-command");
       expect(helpText).toContain("--batch-json");
+      expect(helpText).toContain("--expect-current-absent");
+      expect(helpText).toContain("--expect-current-json <json>");
       expect(helpText).toContain("--dry-run");
       expect(helpText).toContain("--allow-exec");
       // Ignore Commander line wrapping and env-injected CLI prefixes.
@@ -2788,6 +2926,51 @@ describe("config cli", () => {
       expectErrorIncludes(
         "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
       );
+    });
+
+    it.each([
+      {
+        name: "both expectation flags",
+        args: [
+          "gateway.port",
+          "19001",
+          "--expect-current-absent",
+          "--expect-current-json",
+          "18789",
+        ],
+      },
+      {
+        name: "malformed expected JSON",
+        args: ["gateway.port", "19001", "--expect-current-json", "{bad"],
+      },
+      {
+        name: "batch mode",
+        args: [
+          "--batch-json",
+          '[{"path":"gateway.port","value":19001}]',
+          "--expect-current-absent",
+        ],
+      },
+      {
+        name: "dry-run",
+        args: ["gateway.port", "19001", "--expect-current-absent", "--dry-run"],
+      },
+    ])("rejects conditional config set with $name before loading config", async ({ args }) => {
+      await expect(runConfigSet(...args)).rejects.toThrow(ExitError);
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("checks a conditional expectation before reporting No change", async () => {
+      setGatewaySnapshot();
+
+      await expect(
+        runConfigSet("gateway.port", "18789", "--strict-json", "--expect-current-json", "19001"),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectLogExcludes("No change");
     });
 
     it("rejects empty inline batches before reading or rewriting config", async () => {

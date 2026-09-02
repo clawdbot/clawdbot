@@ -150,6 +150,45 @@ describe("install.ps1 failure handling", () => {
     const entrypointLines = extractEntrypointLines(source);
     const cases = [
       {
+        name: "native-npm-stderr",
+        source: [
+          scriptWithoutEntryPoint,
+          `$node = ${toPowerShellSingleQuotedLiteral(process.execPath)}`,
+          String.raw`
+$ErrorActionPreference = 'Stop'
+$beforeLocation = (Get-Location).Path
+$root = Join-Path ([IO.Path]::GetTempPath()) ('openclaw-native-stderr-' + [Guid]::NewGuid().ToString('N'))
+[void](New-Item -ItemType Directory -Path $root)
+$child = Join-Path $root 'child.cjs'
+[IO.File]::WriteAllText($child, 'if (process.argv[2] === "marker") { require("node:fs").writeFileSync(process.argv[3], "spawned"); process.exit(0); } if (process.argv[2] === "warning") process.stderr.write("npm warn proof\n"); process.stdout.write("native-complete\n"); process.exit(Number(process.argv[3]));')
+try {
+    foreach ($wrapper in @('Invoke-NpmCommand', 'Invoke-CommandFromWindowsSafeDirectory')) {
+        foreach ($stream in @('warning', 'quiet')) {
+            foreach ($code in @(0, 17)) {
+                $output = @(& $wrapper -CommandPath $node -Arguments @($child, $stream, [string]$code) -WorkingDirectory $root 2>&1)
+                if ($LASTEXITCODE -ne $code) { throw "$wrapper changed native exit $code" }
+                $text = ($output | ForEach-Object { $_.ToString() }) -join " "
+                if (-not $text.Contains('native-complete')) { throw "$wrapper lost stdout" }
+                if ($text.Contains('npm warn proof') -ne ($stream -eq 'warning')) { throw "$wrapper changed stderr" }
+                if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw "$wrapper leaked caller state" }
+            }
+        }
+    }
+    $marker = Join-Path $root 'unexpected-spawn'
+    foreach ($entry in @(
+        @{command=$node; directory=(Join-Path $root 'missing')},
+        @{command=(Join-Path $root 'missing.exe'); directory=$root}
+    )) {
+        $caught = $false
+        try { Invoke-NpmCommand -CommandPath $entry.command -Arguments @($child, 'marker', $marker) -WorkingDirectory $entry.directory 2>&1 | Out-Null } catch { $caught = $true }
+        if (-not $caught -or (Test-Path -LiteralPath $marker)) { throw 'PowerShell setup failure did not stop the child' }
+        if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw 'PowerShell failure leaked caller state' }
+    }
+} finally { Remove-Item -LiteralPath $root -Recurse -Force }
+`,
+        ].join("\n"),
+      },
+      {
         name: "openclaw-native-command-exit",
         source: [
           scriptWithoutEntryPoint,
@@ -202,13 +241,34 @@ describe("install.ps1 failure handling", () => {
           'if ($tool -ne "--allow-scripts=pnpm@12.0.0") { throw "tool=$tool" }',
           "$alias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate@1.0.0'",
           "if ($alias -ne '--allow-scripts=@scope/candidate') { throw \"alias=$alias\" }",
+          "$archiveAlias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate.tgz@1.0.0'",
+          "if ($archiveAlias -ne '--allow-scripts=@scope/candidate.tgz') { throw \"alias=$archiveAlias\" }",
           "$tarball = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'https://example.invalid/openclaw.tgz'",
           "if ($tarball -ne '--allow-scripts=https://example.invalid/openclaw.tgz') { throw \"tarball=$tarball\" }",
+          '$archiveRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-archive-identity"',
+          '$safeCwd = Join-Path $archiveRoot "work"',
+          '$candidate = Join-Path $archiveRoot "candidate.tgz"',
+          '$archiveUrl = "file:///" + $candidate.Replace("\\", "/").TrimStart("/")',
+          'foreach ($spec in @($candidate, "../candidate.tgz", "file:$candidate", "file:../candidate.tgz", "file:/../candidate.tgz", "file:///../candidate.tgz", $archiveUrl)) {',
+          '  $protocol = if ($spec.StartsWith("file:")) { "file:" } else { "" }',
+          "  $actual = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $spec -NpmCwd $safeCwd",
+          '  if ($actual -ne "--allow-scripts=$protocol$candidate") { throw "archive=$actual" }',
+          "}",
           '$commaRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw,identity"',
+          "$caught = $false",
+          "try { Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec (Join-Path $commaRoot 'candidate.tgz') -NpmCwd $commaRoot } catch {",
+          "  if ($_.Exception.Message -notmatch 'without commas') { throw }",
+          "  $caught = $true",
+          "}",
+          "if (-not $caught) { throw 'comma archive policy was accepted' }",
+          "$script:NpmVersion = '11.16.0'",
+          "$legacy = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec (Join-Path $commaRoot 'candidate.tgz') -NpmCwd $commaRoot",
+          "if ($legacy -notmatch '^--allow-scripts=\\.[\\\\/]candidate\\.tgz$') { throw \"legacy=$legacy\" }",
+          "$script:NpmVersion = '12.0.0'",
           '$safeCwd = Join-Path $commaRoot "safe"',
-          '$candidate = Join-Path $commaRoot "candidate.tgz"',
+          '$candidate = Join-Path $commaRoot "candidate"',
           "$relative = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $candidate -NpmCwd $safeCwd",
-          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\\.\\.[\\\\/]candidate\\.tgz$') { throw \"relative=$relative\" }",
+          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\\.\\.[\\\\/]candidate$') { throw \"relative=$relative\" }",
           "foreach ($invalidVersion in @('invalid', 'npm 12.0.0 warning')) {",
           "  $script:NpmVersion = $invalidVersion",
           "  $caught = $false",
@@ -1104,18 +1164,22 @@ try {
       if (engine === powershell) {
         continue;
       }
-      for (const name of ["pnpm-source-bootstrap-lifecycle", "portable-git-layout"]) {
+      for (const name of [
+        "native-npm-stderr",
+        "pnpm-source-bootstrap-lifecycle",
+        "portable-git-layout",
+      ]) {
         const fixture = fixtures.find((entry) => entry.name === name);
         if (!fixture) {
           throw new Error(`Missing PowerShell fixture ${name}`);
         }
         const invocation = `$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} -Raw)))`;
-        const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
+        const engineResult = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
           encoding: "utf8",
         });
         batchedPowerShellResults.set(`${name}:${engine}`, {
-          ok: result.status === 0,
-          error: result.status === 0 ? "" : result.stdout + result.stderr,
+          ok: engineResult.status === 0,
+          error: engineResult.status === 0 ? "" : engineResult.stdout + engineResult.stderr,
         });
       }
     }
@@ -1244,6 +1308,21 @@ try {
   runIfPowerShell("applies the canonical npm lifecycle version policy", () => {
     expectBatchedPowerShellCase("npm-lifecycle-policy");
   });
+
+  runIfPowerShell(
+    "preserves native stderr and exit codes without softening PowerShell failures",
+    () => {
+      if (process.platform === "win32") {
+        expect(bootstrapShells).toContain("powershell");
+      }
+      expectBatchedPowerShellCase("native-npm-stderr");
+      for (const engine of bootstrapShells) {
+        if (engine !== powershell) {
+          expectBatchedPowerShellCase(`native-npm-stderr:${engine}`);
+        }
+      }
+    },
+  );
 
   runIfPowerShell("preserves explicit pnpm prefer-offline settings for Git installs", () => {
     expectBatchedPowerShellCase("pnpm-prefer-offline-policy");

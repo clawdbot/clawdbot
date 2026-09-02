@@ -1188,7 +1188,10 @@ session.`.
 runs.`.
 
 Snapshot storage is bounded by `maxSnapshotBytes` per run, the per-process
-suspended-run cap above, and `snapshotTtlSeconds`.
+suspended-run cap above, and `snapshotTtlSeconds`. The worker checks the snapshot
+size, including QuickJS metadata, before handing pending work to the Gateway.
+These limits and `memoryLimitBytes` bound guest state, not total Gateway memory;
+warm worker threads and TypeScript compilers also retain memory.
 
 ## QuickJS-WASI runtime
 
@@ -1200,6 +1203,8 @@ create one isolated VM per code-mode run or resume; register host callbacks
 by stable names; set memory and interrupt limits; evaluate JavaScript; drain
 pending jobs; snapshot suspended VM state; restore snapshots for `wait`;
 dispose VM handles and snapshots after terminal states.
+Snapshot buffers transfer directly between workers and the Gateway without
+copying the VM heap through a storage serialization format.
 
 The runtime executes in a Node.js worker thread, outside OpenClaw's main
 event loop. A guest infinite loop must not block the Gateway process

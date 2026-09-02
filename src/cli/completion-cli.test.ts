@@ -14,6 +14,7 @@ import {
   runGeneratedBashCompletion,
   runGeneratedFishCompletion,
 } from "./completion-cli.test-support.js";
+import { registerModelsCli } from "./models-cli.js";
 
 const powerShellCompletion = new PowerShellCompletionRunner();
 
@@ -85,6 +86,73 @@ describe("completion-cli", () => {
     );
     expect(script).not.toContain("John'\\''s");
   });
+
+  it.skipIf(process.platform === "win32").each(["built-in", "root", "nested"] as const)(
+    "keeps %s command descriptions literal through real zsh parsing",
+    (scope) => {
+      const program = new Command().name("openclaw");
+      let describedCommand: Command;
+      let completionFunction: string;
+      if (scope === "built-in") {
+        registerModelsCli(program);
+        const auth = program.commands
+          .find((command) => command.name() === "models")
+          ?.commands.find((command) => command.name() === "auth");
+        const logout = auth?.commands.find((command) => command.name() === "logout");
+        if (!logout) {
+          throw new Error("Models auth logout command is unavailable");
+        }
+        describedCommand = logout;
+        completionFunction = "_openclaw_models_auth";
+      } else {
+        const parent = scope === "nested" ? program.command("parent") : program;
+        describedCommand = parent
+          .command("inspect")
+          .alias("review")
+          .description(
+            'Show John\'s "literal" $OPENCLAW_COMPLETION_LITERAL with `models auth list`',
+          );
+        completionFunction = scope === "nested" ? "_openclaw_parent" : "_openclaw_root_completion";
+      }
+
+      const result = spawnSync(
+        "zsh",
+        [
+          "-fc",
+          `${getCompletionScript("zsh", program)}
+OPENCLAW_COMPLETION_LITERAL=expanded-value
+models() { printf '%s\\n' "OPENCLAW_COMPLETION_DESCRIPTION_EVALUATED:$*" >&2; }
+_arguments() {
+  local spec
+  for spec in "$@"; do
+    if [[ "$spec" == "1: :"* ]]; then
+      local -a action
+      eval "action=( \${spec#1: :} )"
+      printf '%s\\0' "\${action[@]}"
+    fi
+  done
+}
+${completionFunction}
+`,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      if (result.error) {
+        if ("code" in result.error && result.error.code === "ENOENT") {
+          return;
+        }
+        throw result.error;
+      }
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const action = result.stdout.split("\0").filter(Boolean);
+      expect(action.slice(0, 2)).toEqual(["_values", "command"]);
+      for (const name of [describedCommand.name(), ...describedCommand.aliases()]) {
+        expect(action).toContain(`${name}[${describedCommand.description()}]`);
+      }
+    },
+  );
 
   it("marks zsh option arguments and completes validated shell choices", () => {
     const script = getCompletionScript("zsh", createDocumentedCompletionProgram());

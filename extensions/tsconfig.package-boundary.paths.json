@@ -897,6 +897,9 @@
       ],
       "openclaw/plugin-sdk/model-catalog-pricing": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/model-catalog-pricing.d.ts"
+      ],
+      "openclaw/plugin-sdk/blob-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/blob-runtime.d.ts"
       ]
     }
   }

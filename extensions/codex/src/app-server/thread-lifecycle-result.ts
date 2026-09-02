@@ -77,6 +77,10 @@ export function buildStartedCodexThreadBinding(input: {
     pluginAppPolicyContext: input.pluginThreadConfig?.policyContext,
     contextEngine: context.contextEngineBinding,
     environmentSelectionFingerprint: context.environmentSelectionFingerprint,
+    // Restricted ephemeral threads also need creation policy for fenced warm reuse.
+    ...(startParams.ephemeral
+      ? { liveThreadEphemeralPolicy: startParams.developerInstructions }
+      : {}),
     // Transient starts do not own the persisted binding, so their native
     // subscriptions must be released instead of entering the warm cache.
     ...(!context.preserveExistingBinding

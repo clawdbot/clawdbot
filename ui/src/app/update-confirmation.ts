@@ -14,6 +14,45 @@ export type UpdateProgress = {
   failure: string | null;
 };
 
+// Keep the lazy confirmation entry independent of the application context.
+type UpdateProgressSources = {
+  gateway: {
+    snapshot: { phase: string };
+    subscribe: (listener: () => void) => () => void;
+  };
+  overlays: {
+    snapshot: {
+      updateRunning: boolean;
+      updateReconciliationPending: boolean;
+      updateStatusBanner: { tone: string; text: string } | null;
+    };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
+export function createUpdateProgressWatcher(
+  context: UpdateProgressSources,
+): (listener: (progress: UpdateProgress) => void) => () => void {
+  return (listener) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
+}
+
 export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;

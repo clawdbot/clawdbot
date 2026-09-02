@@ -1,5 +1,6 @@
 import { html, noChange, nothing } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
+import { Directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import { until } from "lit/directives/until.js";
@@ -13,6 +14,7 @@ import {
 } from "../../../lib/open-external-url.ts";
 import { showToast } from "../../../lib/toast.ts";
 import {
+  isManagedOutgoingMediaSource,
   resolveAssistantAttachmentAvailability,
   resolveManagedOutgoingMediaSessionKey,
 } from "./chat-message-attachment-availability.ts";
@@ -47,15 +49,13 @@ type ManagedImageVariant = "full" | "thumbnail";
 
 type RetainedInlineImage = {
   status: "retaining";
-  source: string;
   previewUrl: string;
-  preparation?: {
-    url: string;
-    image: HTMLImageElement;
-    decoded: boolean;
-    cancel: () => void;
-  };
+  timeout?: ReturnType<typeof setTimeout>;
 };
+
+function isInlineImageSource(source: string): boolean {
+  return source.startsWith("data:image/") || source.startsWith("blob:");
+}
 
 class MessageImageResourceDirective extends AsyncDirective {
   private image: ImageBlock | undefined;
@@ -89,19 +89,24 @@ class MessageImageResourceDirective extends AsyncDirective {
     const previous = this.image;
     if (previous?.url !== image.url || previous?.artifactId !== image.artifactId) {
       this.releaseRetainedImage();
-      // Bind once, only from an actually displayed inline image to its exact
-      // persisted slot. A later source replacement cannot borrow that preview.
+      // The gallery binds the exact submission/slot. Retain only pixels this
+      // mounted IMG has loaded, never another pane's cached preview.
       this.retained =
-        options?.canonicalMessageKey &&
         image.factIndex !== undefined &&
-        previous?.url.startsWith("data:image/") &&
+        previous &&
+        isInlineImageSource(previous.url) &&
         previous.artifactId === image.artifactId &&
         isCanonicalInboundMediaSource(image.url) &&
         this.element?.getAttribute("src") === previous.url &&
         this.element.naturalWidth > 0
-          ? { status: "retaining", source: image.url, previewUrl: previous.url }
+          ? { status: "retaining", previewUrl: previous.url }
           : undefined;
-      if (!this.retained) {
+      const inlineReplacement =
+        options?.localSubmission &&
+        previous &&
+        isInlineImageSource(previous.url) &&
+        isInlineImageSource(image.url);
+      if (!this.retained && !inlineReplacement) {
         this.element = undefined;
         this.presentationKey = Symbol("image-presentation");
       }
@@ -163,13 +168,17 @@ class MessageImageResourceDirective extends AsyncDirective {
       availability.mediaTicket,
     );
     const renderable = { ...image, displayUrl };
-    if (!isManagedOutgoingImageSource(displayUrl)) {
+    if (!isManagedOutgoingMediaSource(displayUrl)) {
       const retained = this.retained;
-      const previewUrl =
-        retained?.status === "retaining" && !this.prepareRetainedImage(retained, displayUrl).decoded
-          ? retained.previewUrl
-          : displayUrl;
-      return this.present(this.renderImageElement(renderable, previewUrl, options));
+      if (retained?.status === "retaining" && retained.timeout === undefined) {
+        // IMG keeps its current decoded request while the new src loads. One
+        // native load/error boundary replaces the detached decode preloader.
+        retained.timeout = setTimeout(
+          () => this.failRetainedImage(),
+          CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS,
+        );
+      }
+      return this.present(this.renderImageElement(renderable, displayUrl, options));
     }
     // Keep this render's callbacks when the image resolves, not later directive options.
     const preview = resolveManagedOutgoingImageBlobUrl(
@@ -188,7 +197,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     opts: ImageRenderOptions | undefined,
   ) {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
-    const managed = isManagedOutgoingImageSource(img.displayUrl);
+    const managed = isManagedOutgoingMediaSource(img.displayUrl);
     // Upscale genuinely tiny sources enough to read and operate without
     // stretching every transcript image into a fixed-size tile.
     const imageClass =
@@ -221,49 +230,6 @@ class MessageImageResourceDirective extends AsyncDirective {
     `;
   }
 
-  private prepareRetainedImage(retained: RetainedInlineImage, url: string) {
-    if (retained.preparation?.url === url) {
-      return retained.preparation;
-    }
-    retained.preparation?.cancel();
-    const image = new Image();
-    const preparation = {
-      url,
-      image,
-      decoded: false,
-      cancel: () => {
-        clearTimeout(timeout);
-        image.removeAttribute("src");
-      },
-    };
-    const finish = (decoded: boolean) => {
-      if (
-        !this.isConnected ||
-        this.retained !== retained ||
-        retained.preparation !== preparation ||
-        this.image?.url !== retained.source
-      ) {
-        return;
-      }
-      if (!decoded) {
-        this.failRetainedImage();
-        return;
-      }
-      preparation.decoded = true;
-      this.refreshImage();
-    };
-    // Metadata proves access, not decoded pixels. Keep this preloader alive
-    // through the displayed IMG's load; the deadline bounds both requests.
-    const timeout = setTimeout(() => finish(false), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
-    retained.preparation = preparation;
-    image.src = url;
-    void image.decode().then(
-      () => finish(true),
-      () => finish(false),
-    );
-    return preparation;
-  }
-
   private releaseRetainedImage() {
     const retained = this.retained;
     this.retained = undefined;
@@ -271,7 +237,7 @@ class MessageImageResourceDirective extends AsyncDirective {
       this.element = undefined;
     }
     if (retained?.status === "retaining") {
-      retained.preparation?.cancel();
+      clearTimeout(retained.timeout);
     }
   }
 
@@ -313,7 +279,7 @@ function openMessageImage(
 ) {
   const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
   const requestVersion = opts?.onRequestOpenImage?.();
-  if (!isManagedOutgoingImageSource(img.displayUrl)) {
+  if (!isManagedOutgoingMediaSource(img.displayUrl)) {
     openResolvedImage(opts?.onOpenImage, previewUrl, title, undefined, requestVersion);
     return;
   }
@@ -365,52 +331,77 @@ function openMessageImage(
     .catch(() => showToast({ message: t("chat.imageLightbox.loadFailed") }));
 }
 
-export function renderMessageImages(images: ImageBlock[], opts?: ImageRenderOptions) {
-  if (images.length === 0) {
-    return nothing;
-  }
+class MessageImagesDirective extends Directive {
+  private slots: { image: ImageBlock; key: symbol }[] = [];
+  private scope = "";
+  private canonicalMessageKey: string | undefined;
+  private localSubmission = false;
 
-  const layoutClasses = [
-    "chat-message-images",
-    images.length === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
-    images.length === 2 || images.length === 4 ? "chat-message-images--two-column" : "",
-    images.length === 5 ? "chat-message-images--five" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const scope = JSON.stringify([
-    opts?.connectionEpoch,
-    opts?.authToken?.trim(),
-    opts?.resourceBasePath,
-  ]);
-  return html`<div class=${layoutClasses}>
-    ${repeat(
-      images,
-      // Canonical identity scopes persisted slots, not unchanged initial-send
-      // images: adopting their message ID must not remount their inline pixels.
-      (img, index) =>
-        `${scope}:${img.factIndex === undefined ? `image:${index}` : `${opts?.canonicalMessageKey}:fact:${img.factIndex}`}`,
-      // The template owns the directive so repeat removal disconnects it.
-      (img) => html`${renderMessageImageResource(img, opts)}`,
-    )}
-  </div>`;
-}
-
-function isManagedOutgoingImageSource(source: string): boolean {
-  const trimmed = source.trim();
-  if (trimmed.startsWith("/api/chat/media/outgoing/")) {
-    return true;
-  }
-  try {
-    const parsed = new URL(trimmed, window.location.origin);
-    return (
-      parsed.origin === window.location.origin &&
-      parsed.pathname.startsWith("/api/chat/media/outgoing/")
+  override render(images: ImageBlock[], opts?: ImageRenderOptions) {
+    const scope = JSON.stringify([
+      opts?.connectionEpoch,
+      opts?.authToken?.trim(),
+      opts?.resourceBasePath,
+    ]);
+    // Custody keeps local ownership; imported history must end it even when
+    // the outer row reuses the same submission key.
+    const continuing =
+      this.scope === scope &&
+      (!this.localSubmission || opts?.localSubmission !== false) &&
+      (this.canonicalMessageKey === opts?.canonicalMessageKey ||
+        (this.localSubmission && !this.canonicalMessageKey));
+    const localSubmission = continuing ? this.localSubmission : opts?.localSubmission === true;
+    // Fact positions preserve selected image order, even when hooks reorder
+    // content blocks. Partial/ambiguous receipts cannot borrow pixels.
+    const adoptingSlots =
+      continuing &&
+      localSubmission &&
+      images.length === this.slots.length &&
+      this.slots.every(({ image }) => isInlineImageSource(image.url)) &&
+      images.every((image) => image.factIndex !== undefined);
+    const previousImages = adoptingSlots
+      ? images.toSorted((left, right) => (left.factIndex ?? 0) - (right.factIndex ?? 0))
+      : this.slots.map(({ image }) => image);
+    const previousSlots = new Map(
+      previousImages.map((image, index) => [image.factIndex, this.slots[index]?.key]),
     );
-  } catch {
-    return false;
+    this.slots = images.map((image, index) => {
+      const slot = this.slots[index];
+      const previous =
+        image.factIndex !== undefined
+          ? previousSlots.get(image.factIndex)
+          : slot?.image.factIndex === undefined
+            ? slot?.key
+            : undefined;
+      return { image, key: (continuing && previous) || Symbol("image-slot") };
+    });
+    this.scope = scope;
+    this.canonicalMessageKey = opts?.canonicalMessageKey;
+    this.localSubmission =
+      localSubmission &&
+      !(opts?.canonicalMessageKey && images.every((image) => image.factIndex !== undefined));
+    if (!images.length) {
+      return nothing;
+    }
+    const layoutClasses = [
+      "chat-message-images",
+      images.length === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
+      images.length === 2 || images.length === 4 ? "chat-message-images--two-column" : "",
+      images.length === 5 ? "chat-message-images--five" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return html`<div class=${layoutClasses}>
+      ${repeat(
+        this.slots,
+        ({ key }) => key,
+        ({ image }) => html`${renderMessageImageResource(image, opts)}`,
+      )}
+    </div>`;
   }
 }
+
+export const renderMessageImages = directive(MessageImagesDirective);
 
 function resolveManagedOutgoingImageBlobUrlCacheKey(
   source: string,

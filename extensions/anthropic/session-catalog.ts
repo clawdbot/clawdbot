@@ -11,6 +11,7 @@ import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalo
 import { continueClaudeSession } from "./session-catalog-continue.js";
 import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
   assertClaudeLocalAccess,
   listClaudeSessionCatalog,
@@ -19,11 +20,7 @@ import {
 } from "./session-catalog-listing.js";
 import { MAX_TRANSCRIPT_LIMIT, readTranscriptParams } from "./session-catalog-parsing.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
-import {
-  configuredClaudeConfigDir,
-  currentHomeDir,
-  gatewayClaudeScanOptions,
-} from "./session-catalog-scan.js";
+import { configuredClaudeConfigDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
 import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
 import { collectTranscriptText, type ClaudeTranscriptItem } from "./session-catalog-transcript.js";
@@ -265,7 +262,7 @@ export function createClaudeSessionCatalogRuntime(
         ...request,
         listClaudeSessions: () =>
           listClaudeSessions(
-            currentHomeDir(),
+            resolveClaudeCatalogHomeDir(),
             gatewayClaudeScanOptions(request.allowProcessHomeFallback),
           ),
         resolveNodeClaudeRecord,

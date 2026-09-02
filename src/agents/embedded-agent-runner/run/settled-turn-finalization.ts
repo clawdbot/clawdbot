@@ -14,6 +14,7 @@ import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { log } from "../logger.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
@@ -26,7 +27,7 @@ import {
   runEmbeddedSettledTurnFinalizationWithBackend,
 } from "./backend.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
-import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
+import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
@@ -36,6 +37,9 @@ import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js"
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
+type CreateAttemptControls = ReturnType<
+  typeof createEmbeddedRunLaneController
+>["createAttemptControls"];
 const MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS = 2;
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
@@ -71,7 +75,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       typeof resolveSettledTurnFinalizationRequest
     >[0]["executionContract"];
     hasTerminalToolPresentation: boolean;
-    noteLaneTaskProgress: () => void;
+    createAttemptControls: CreateAttemptControls;
+    abortSignal: AbortSignal;
   };
 }) {
   const initial = input.initial;
@@ -141,7 +146,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         settledAttempt: initial.attempt,
         harness: input.finalization.harness,
         prompt,
-        noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
+        createAttemptControls: input.finalization.createAttemptControls,
+        abortSignal: input.finalization.abortSignal,
       });
       attempt = finalization.attempt;
       mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
@@ -168,7 +174,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       );
     }
   } catch (error) {
-    if (input.finalization.preparedAttempt.abortSignal?.aborted) {
+    if (input.finalization.abortSignal.aborted) {
       log.warn(
         `settled-turn finalization was cancelled: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — preserving cancellation`,
@@ -186,7 +192,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     );
   }
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
-    if (input.finalization.preparedAttempt.abortSignal?.aborted) {
+    if (input.finalization.abortSignal.aborted) {
       log.warn(
         `settled-turn fallback was cancelled before transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
@@ -200,10 +206,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     }
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       attempt: input.finalization.preparedAttempt,
+      abortSignal: input.finalization.abortSignal,
       sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
       sessionTarget: committedSessionTarget,
     });
-    if (input.finalization.preparedAttempt.abortSignal?.aborted) {
+    if (input.finalization.abortSignal.aborted) {
       log.warn(
         `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
@@ -318,12 +325,28 @@ async function runPreparedSettledTurnFinalization(input: {
   settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   harness: AgentHarness;
   prompt: string;
-  noteLaneTaskProgress: () => void;
+  createAttemptControls: CreateAttemptControls;
+  abortSignal: AbortSignal;
 }): Promise<{ outcome: "answered" | "empty"; attempt: EmbeddedRunAttemptWithReceiptEvidence }> {
-  return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
+  // The original attempt is closed. Each tool-free retry owns its own deadline
+  // and Stop callbacks, while queue cancellation remains authoritative throughout.
+  const controls = input.createAttemptControls({
+    admittedRunContext: input.attempt.admittedRunContext,
+    abortSignal: input.abortSignal,
+    initialTimeoutMs: resolveAgentTimeoutMs({
+      cfg: input.attempt.config,
+      overrideMs: input.attempt.timeoutMs,
+    }),
+  });
+  try {
     const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
+        abortSignal: controls.abortSignal,
+        onAttemptDeadlineChanged: controls.onAttemptDeadlineChanged,
+        onAttemptTimeout: controls.onAttemptTimeout,
+        onAttemptAbort: controls.onAttemptAbort,
+        onAttemptTimeoutArmed: undefined,
         operation: "settled-tool-finalization",
         prompt: input.prompt,
         disableTools: true,
@@ -345,7 +368,9 @@ async function runPreparedSettledTurnFinalization(input: {
         runtimePlan: input.attempt.runtimePlan,
       }),
     };
-  });
+  } finally {
+    controls.close();
+  }
 }
 
 function buildSettledTurnFinalizationAttemptResult(input: {
@@ -447,6 +472,7 @@ function buildSettledToolFallbackAttemptResult(input: {
 
 async function persistSettledToolFallbackTranscript(input: {
   attempt: EmbeddedRunAttemptParams;
+  abortSignal: AbortSignal;
   sessionId: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<string | undefined> {
@@ -477,7 +503,7 @@ async function persistSettledToolFallbackTranscript(input: {
         : {}),
       config: input.attempt.config,
       idempotencyKey,
-      signal: input.attempt.abortSignal,
+      signal: input.abortSignal,
       text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
     });
     if (!result.ok) {

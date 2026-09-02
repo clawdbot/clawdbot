@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
@@ -491,9 +492,23 @@ vi.mock("../version.js", async () => ({
   resolveIsNixMode: vi.fn(() => false),
 }));
 
+vi.mock("../commands/doctor/shared/config-flow-steps.js", () => ({
+  restoreDoctorConfigEnvRefs: (cfg: OpenClawConfig) => cfg,
+}));
+
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
-  replaceConfigFile: mocks.replaceConfigFile,
+  transformConfigFile: async ({
+    transform,
+    ...options
+  }: Parameters<typeof import("../config/config.js").transformConfigFile>[0]) => {
+    const { nextConfig } = await transform(
+      {},
+      { snapshot: createDoctorConfigSnapshot(), previousHash: null, attempt: 0 },
+      {},
+    );
+    return mocks.replaceConfigFile({ ...options, nextConfig });
+  },
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
@@ -3191,6 +3206,7 @@ describe("doctor health contributions", () => {
     expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       healthOk: false,
+      env: ctx.env,
     });
   });
 
@@ -4433,9 +4449,11 @@ describe("doctor health contributions", () => {
       );
     });
 
-    it("forwards explicit paths through later doctor repair writes", async () => {
+    it("consumes committed roster format while preserving later explicit edits", async () => {
       const ctx = buildWriteConfigCtx({});
-      ctx.configResult.explicitSetPaths = [["agents", "entries"]];
+      ctx.cfg.agents = { ownership: "explicit", entries: { default: {} } };
+      ctx.configResult.persistCanonicalAgentRoster = true;
+      ctx.configResult.explicitSetPaths = [["agents", "ownership"]];
 
       await writeConfigContribution.run(ctx);
 
@@ -4443,12 +4461,16 @@ describe("doctor health contributions", () => {
         1,
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            explicitSetPaths: [["agents", "entries"]],
+            persistCanonicalAgentRoster: true,
+            explicitSetPaths: [["agents", "ownership"]],
           }),
         }),
       );
 
-      ctx.cfg = { gateway: { mode: "remote" } };
+      expect(ctx.configResultWriteCommitted).toBe(true);
+      expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
+
+      ctx.cfg = { ...ctx.cfg, gateway: { mode: "remote" } };
       await writeConfigContribution.run(ctx);
 
       expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
@@ -4456,7 +4478,8 @@ describe("doctor health contributions", () => {
         2,
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            explicitSetPaths: [["agents", "entries"]],
+            persistCanonicalAgentRoster: undefined,
+            explicitSetPaths: [["agents", "ownership"]],
           }),
         }),
       );

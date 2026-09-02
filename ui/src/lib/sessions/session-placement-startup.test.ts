@@ -435,7 +435,7 @@ describe("session placement startup", () => {
     });
   });
 
-  it("aborts and reclaims when cancellation lands while the first turn is in flight", async () => {
+  it("reclaims when cancellation lands while the first turn is in flight", async () => {
     let current = true;
     const request = vi
       .fn()
@@ -446,7 +446,6 @@ describe("session placement startup", () => {
         current = false;
         return { runId: "run-1" };
       })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
       .mockResolvedValueOnce({ ok: true });
 
     await expect(
@@ -454,11 +453,8 @@ describe("session placement startup", () => {
     ).resolves.toEqual({
       status: "cancelled",
     });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.abort", {
-      key: params.key,
-      agentId: params.agentId,
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "sessions.reclaim", {
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
       key: params.key,
       agentId: params.agentId,
     });
@@ -475,7 +471,6 @@ describe("session placement startup", () => {
         current = false;
         return { runId: "run-1", requestParams };
       })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
       .mockRejectedValueOnce(new Error("cleanup unavailable"));
 
     const outcome = await startSessionPlacementInitialTurn(

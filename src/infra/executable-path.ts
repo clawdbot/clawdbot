@@ -45,13 +45,7 @@ function resolveWindowsExecutableExtensions(
   if (path.extname(executable).length > 0) {
     return [""];
   }
-  const extensions = (
-    resolveEnvironmentValue(env, "PATHEXT") ??
-    resolveEnvironmentValue(process.env, "PATHEXT") ??
-    ".EXE;.CMD;.BAT;.COM"
-  )
-    .split(";")
-    .map((ext) => normalizeLowercaseStringOrEmpty(ext));
+  const extensions = [...resolveWindowsExecutableExtSet(env)];
   return includeExtensionless ? ["", ...extensions] : extensions;
 }
 

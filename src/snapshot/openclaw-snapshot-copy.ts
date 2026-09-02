@@ -1,3 +1,4 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   createVerifiedSqliteSnapshot,
   type SqliteSnapshotValidator,
@@ -9,7 +10,6 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
-import { containsAsciiControlCharacter } from "./manifest.js";
 import type { SnapshotDatabaseIdentity, SnapshotDatabaseRef } from "./snapshot-provider.js";
 
 export function normalizeSnapshotIdentity(

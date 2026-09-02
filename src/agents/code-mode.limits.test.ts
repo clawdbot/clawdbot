@@ -1,9 +1,10 @@
 /** Tests Code Mode runtime and output limits. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { QuickJS } from "quickjs-wasi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
-import * as runtimeLimits from "./code-mode-runtime.js";
 import { codeModeFailureCode } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools, resolveCodeModeConfig } from "./code-mode.js";
 import {
@@ -178,42 +179,58 @@ describe("Code Mode runtime and output limits", () => {
   );
 
   it.each(["exec", "wait"])(
-    "preserves accepted inline output after a later %s host failure",
+    "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
     async (mode) => {
       const { ctx, config, tools } = createCodeModeHarness();
-      const fixture = pluginTool("output_fixture", "Output fixture");
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
+      const pendingStarted = createDeferred<AbortSignal>();
+      const pending = pluginToolWithExecute(
+        "snapshot_pending",
+        "Pending snapshot fixture",
+        async (_toolCallId, _input, signal) => {
+          const pendingSignal = expectDefined(signal, "pending bridge signal");
+          pendingStarted.resolve(pendingSignal);
+          await new Promise<void>((resolve) => {
+            pendingSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { content: [], details: true };
+        },
+      );
+      const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
+        await pendingStarted.promise;
+        return { content: [], details: true };
+      });
+      const fresh = pluginTool("snapshot_fresh", "Fresh snapshot fixture");
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pending, fixture, fresh] });
       const exec = expectDefined(tools[0], "exec");
       const wait = expectDefined(tools[1], "wait");
       const input = {
-        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""} text("accepted first"); await output_fixture({}); text("accepted inline"); await yield_control();`,
+        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
+          void snapshot_pending({});
+          text("accepted first");
+          await output_fixture({});
+          const retained = new Uint8Array(16 * 1024 * 1024);
+          retained[0] = 7;
+          text("accepted inline");
+          await snapshot_fresh({});
+          return retained[0];`,
       };
       const first = mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
       if (first) {
-        expect(first.output).toEqual([{ type: "text", text: "delivered" }]);
-      }
-      const enforce = runtimeLimits.enforceSnapshotPayloadLimits;
-      let validations = 0;
-      const fault = vi
-        .spyOn(runtimeLimits, "enforceSnapshotPayloadLimits")
-        .mockImplementation((params) => {
-          if (++validations === 2) {
-            throw new Error("host snapshot check failed");
-          }
-          enforce(params);
+        expect(first).toMatchObject({
+          status: "waiting",
+          output: [{ type: "text", text: "delivered" }],
         });
-      let result;
-      try {
-        result = resultDetails(
-          await (first
-            ? wait.execute("resume", { runId: first.runId })
-            : exec.execute("inline", input)),
-        );
-      } finally {
-        fault.mockRestore();
       }
-      expect(result).toMatchObject({ status: "failed", error: "host snapshot check failed" });
+      const result = resultDetails(
+        await (first
+          ? wait.execute("resume", { runId: first.runId })
+          : exec.execute("inline", input)),
+      );
+      expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
+      expect(pending.execute).toHaveBeenCalledOnce();
       expect(fixture.execute).toHaveBeenCalledOnce();
+      expect(fresh.execute).not.toHaveBeenCalled();
+      expect((await pendingStarted.promise).aborted).toBe(true);
       expect(result.output).toEqual([
         { type: "text", text: "accepted first" },
         { type: "text", text: "accepted inline" },
@@ -335,23 +352,28 @@ describe("Code Mode runtime and output limits", () => {
     expect(details.bridgeDispatchStarted).toBe(false);
   });
 
-  it("classifies snapshot limit failures", async () => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
-    } as never);
+  it("enforces the exact encoded snapshot byte limit", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const execute = (maxSnapshotBytes = config.maxSnapshotBytes) =>
+      testing.runCodeModeWorker(
+        {
+          kind: "exec",
+          source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
+          config: { ...config, maxSnapshotBytes },
+          catalog: [],
+        },
+        5_000,
+      );
+    const probe = await execute();
+    expect(probe.status).toBe("waiting");
+    if (probe.status !== "waiting") {
+      throw new Error("expected a suspended guest to measure its snapshot");
+    }
+    const encodedBytes = QuickJS.serializeSnapshot(probe.snapshot).byteLength;
 
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
-        config,
-        catalog: [],
-      },
-      5000,
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
+    expect(await execute(encodedBytes)).toMatchObject({ status: "waiting" });
+    expect(await execute(encodedBytes - 1)).toMatchObject({
+      status: "failed",
       code: "snapshot_limit_exceeded",
       error: "code mode snapshot limit exceeded",
     });

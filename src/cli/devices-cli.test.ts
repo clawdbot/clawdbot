@@ -684,44 +684,33 @@ describe("devices cli clear", () => {
 });
 
 describe("devices cli tokens", () => {
-  it.each([
-    {
-      label: "rotates a token for a device role",
-      argv: [
-        "rotate",
-        "--device",
-        "device-1",
-        "--role",
-        "main",
-        "--scope",
-        "messages:send",
-        "--scope",
-        "messages:read",
-      ],
-      expectedCall: {
-        method: "device.token.rotate",
+  describe.each(["rotate", "revoke"])("%s", (command) => {
+    it.each([
+      { role: "node", scopes: ["operator.admin"] },
+      { role: "custom-role", scopes: ["operator.admin"] },
+      { role: "operator", scopes: undefined },
+    ])("selects connection scopes for the $role role", async ({ role, scopes }) => {
+      const argv = [command, "--device", " device-1 ", "--role", ` ${role} `];
+      const tokenScopes = [`${role}.read`, `${role}.write`] as const;
+      if (command === "rotate") {
+        argv.push("--scope", tokenScopes[0], "--scope", tokenScopes[1]);
+      }
+      callGateway.mockResolvedValueOnce({ ok: true });
+
+      await runDevicesCommand(argv);
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      expectGatewayCall(0, {
+        method: `device.token.${command}`,
         params: {
           deviceId: "device-1",
-          role: "main",
-          scopes: ["messages:send", "messages:read"],
+          role,
+          ...(command === "rotate" ? { scopes: tokenScopes } : {}),
         },
-      },
-    },
-    {
-      label: "revokes a token for a device role",
-      argv: ["revoke", "--device", "device-1", "--role", "main"],
-      expectedCall: {
-        method: "device.token.revoke",
-        params: {
-          deviceId: "device-1",
-          role: "main",
-        },
-      },
-    },
-  ])("$label", async ({ argv, expectedCall }) => {
-    callGateway.mockResolvedValueOnce({ ok: true });
-    await runDevicesCommand(argv);
-    expectGatewayCall(0, expectedCall);
+        scopes,
+      });
+      expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true });
+    });
   });
 
   it("rejects blank device or role values", async () => {

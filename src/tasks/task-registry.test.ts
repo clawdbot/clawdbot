@@ -802,6 +802,77 @@ describe("task-registry", () => {
     });
   });
 
+  it.each([
+    {
+      name: "the beginning of a final line longer than the retained suffix",
+      text: `Earlier\r\n  First\t words ${"x".repeat(8_000)}\r\n \t\r\n`,
+      expected: `First words ${"x".repeat(188)}`,
+    },
+    {
+      name: "CR, LF, and CRLF lines with Unicode whitespace",
+      text: "Earlier\rDiscarded\nDiscarded too\r\n \u00a0Last\u2028line\u2029here\t\r\n\u3000",
+      expected: "Last line here",
+    },
+    {
+      name: "a surrogate pair across the 200-unit boundary",
+      text: `${"x".repeat(199)}🦞after`,
+      expected: "x".repeat(199),
+    },
+    {
+      name: "a surrogate pair ending at the boundary",
+      text: `${"x".repeat(198)}🦞after`,
+      expected: `${"x".repeat(198)}🦞`,
+    },
+    {
+      name: "collapsed whitespace at the boundary",
+      text: `${"x".repeat(199)}\t  after`,
+      expected: `${"x".repeat(199)} `,
+    },
+  ])("preserves live activity from $name", async ({ text, expected }) => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:activity-boundary",
+        runId: "run-activity-boundary",
+        task: "Display the current output line",
+      });
+      emitAgentEvent({ runId: task.runId!, stream: "assistant", data: { text } });
+      expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe(expected);
+    });
+  });
+
+  it("preserves snapshot replacement, delta suffixes, and sticky assistant precedence", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:activity-streams",
+        runId: "run-activity-streams",
+        task: "Display replacing and incremental output",
+      });
+      const emitActivity = (
+        stream: "assistant" | "thinking",
+        data: Record<string, unknown>,
+        expected: string,
+      ) => {
+        emitAgentEvent({ runId: task.runId!, stream, data });
+        expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe(expected);
+      };
+      emitActivity("thinking", { text: "Planning" }, "Planning");
+      emitActivity("assistant", { text: " \r\n\t" }, "Planning");
+      emitActivity("thinking", { delta: " next" }, "Planning next");
+      emitActivity(
+        "assistant",
+        { text: `Beginning ${"x".repeat(8_000)}` },
+        `Beginning ${"x".repeat(190)}`,
+      );
+      emitActivity("assistant", { delta: " more" }, "x".repeat(200));
+      emitActivity("assistant", { text: "Short", delta: "ignored" }, "Short");
+      emitActivity("assistant", { text: "", delta: "ignored" }, "Short");
+      emitActivity("thinking", { text: "Never replaces assistant output" }, "Short");
+      emitActivity("assistant", { delta: "Fresh" }, "Fresh");
+      emitActivity("assistant", { text: " \r\n\t" }, "Fresh");
+      emitActivity("assistant", { delta: "Next" }, "Next");
+    });
+  });
+
   it("fills terminal lastEventAt from endedAt when a finalize omits the progress timestamp", async () => {
     await withTaskRegistryTempDir(async () => {
       createTaskFixture("subagent", {

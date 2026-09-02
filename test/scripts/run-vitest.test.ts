@@ -2,8 +2,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import nodePath from "node:path";
+import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -44,13 +44,19 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
-  it("ends argument failures with the stable failure trailer", () => {
-    const result = spawnSync(process.execPath, [nodePath.resolve("scripts/run-vitest.mjs")], {
-      encoding: "utf8",
-    });
+  it.each(["mjs", "mts"])("ends %s argument failures with one final trailer", (extension) => {
+    const result = spawnSync(
+      process.execPath,
+      [nodePath.resolve(`scripts/run-vitest.${extension}`)],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+    const trailer = `[${extension === "mjs" ? "test" : "vitest"}] FAILED (exit 1)`;
+    expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([trailer]);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
   });
 
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
@@ -613,6 +619,27 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it.each([
+    [
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"],
+      "test/vitest/vitest.ui-browser.config.ts",
+    ],
+    [["ui/src/components/form-controls.browser.test.ts"], "test/vitest/vitest.ui.config.ts"],
+    [
+      [
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+        "ui/src/components/form-controls.browser.test.ts",
+      ],
+      null,
+    ],
+    [["ui/src/**/*.browser.test.ts"], null],
+    [["ui/src/components", "ui/src/pages/chat/chat-message-markdown.browser.test.ts"], null],
+  ])("preserves browser ownership for implicit targets %j", (targets, config) => {
+    expect(resolveImplicitVitestArgs(["run", ...targets])).toEqual(
+      config ? ["run", "--config", config, ...targets] : ["run", ...targets],
+    );
+  });
+
   it("allows opting back into Maglev explicitly", () => {
     expect(
       resolveVitestNodeArgs({
@@ -928,14 +955,10 @@ describe("scripts/run-vitest", () => {
   });
 
   posixIt("stops residual process-group descendants before completing", async () => {
-    const descendantPidPath = nodePath.join(
-      os.tmpdir(),
-      `openclaw-run-vitest-residual-${process.pid}-${Date.now()}.pid`,
-    );
     const watchedEnv = {
-      OPENCLAW_RESIDUAL_PID_PATH: descendantPidPath,
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
     };
+    let noOutputTimedOut = false;
     const watched = spawnWatchedVitestProcess({
       pnpmArgs: [
         "exec",
@@ -943,16 +966,15 @@ describe("scripts/run-vitest", () => {
         "-e",
         [
           'const { spawn } = require("node:child_process");',
-          'const fs = require("node:fs");',
-          'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {',
-          '  stdio: "ignore",',
+          'process.once("SIGTERM", () => process.exit(0));',
+          'const descendant = spawn(process.execPath, ["-e",',
+          '  "setInterval(() => {}, 1000); process.send(process.pid);",',
+          '], { stdio: ["ignore", "ignore", "ignore", "ipc"] });',
+          'descendant.once("message", (pid) => {',
+          "  descendant.disconnect();",
+          "  process.stdout.write(`${pid}\\n`);",
           "});",
           "descendant.unref();",
-          'process.once("SIGTERM", () => process.exit(0));',
-          "const pidPath = process.env.OPENCLAW_RESIDUAL_PID_PATH;",
-          "const pendingPath = `${pidPath}.${process.pid}.tmp`;",
-          "fs.writeFileSync(pendingPath, String(descendant.pid));",
-          "fs.renameSync(pendingPath, pidPath);",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       ],
@@ -962,18 +984,32 @@ describe("scripts/run-vitest", () => {
         stdio: ["ignore", "pipe", "pipe"],
       },
       env: watchedEnv,
+      onNoOutputTimeout: () => {
+        noOutputTimedOut = true;
+      },
     });
     let descendantPid = 0;
+    const lines = createInterface({ input: watched.child.stdout! });
+    const ready = new Promise<void>((resolve, reject) => {
+      lines.once("line", (line) => {
+        try {
+          // The descendant acknowledges its running loop on the watched pipe. Check
+          // and signal in this notification, before a delayed poll can outlive it.
+          descendantPid = Number(line);
+          expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
+          expect(isProcessAlive(descendantPid)).toBe(true);
+          process.kill(watched.child.pid!, "SIGTERM");
+          resolve();
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+      lines.once("close", () => reject(new Error("fixture closed before reporting readiness")));
+    });
 
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-      expect(Number.isInteger(descendantPid)).toBe(true);
-      expect(isProcessAlive(descendantPid)).toBe(true);
-
-      process.kill(watched.child.pid!, "SIGTERM");
       const snapshot = await Promise.race([
-        watched.completion.then((result) => {
+        Promise.all([ready, watched.completion]).then(([, result]) => {
           const psArgs =
             process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
           const stateResult = spawnSync("ps", psArgs, {
@@ -992,7 +1028,7 @@ describe("scripts/run-vitest", () => {
             rows
               .filter((row) => Number(row?.[1]) === watched.child.pid)
               .every((row) => /^[ZX]/.test(row?.[2] ?? ""));
-          return { groupStopped, result };
+          return { groupStopped, noOutputTimedOut, result };
         }),
         delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
           throw new Error("timed out waiting for watched Vitest completion");
@@ -1001,15 +1037,17 @@ describe("scripts/run-vitest", () => {
 
       expect(snapshot).toEqual({
         groupStopped: true,
+        noOutputTimedOut: false,
         result: { code: 0, signal: null },
       });
     } finally {
+      lines.close();
       watched.teardown();
       forceKillVitestProcessGroup(watched.child);
       if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
-      fs.rmSync(descendantPidPath, { force: true });
+      await watched.completion;
     }
   });
 
@@ -1292,16 +1330,6 @@ describe("scripts/run-vitest", () => {
     ).toBeNull();
   });
 });
-
-async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
-    }
-    await delay(5);
-  }
-}
 
 async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
   return await Promise.race([

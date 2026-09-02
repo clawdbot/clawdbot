@@ -12,6 +12,7 @@ import {
   resetDiagnosticStabilityRecorderForTest,
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { queuePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -430,6 +431,69 @@ describe("plugin service replacement", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["fulfilled", "rejected", "pending"] as const)(
+    "does not repeat %s cleanup when startup fails after replacement settles",
+    async (cleanupState) => {
+      vi.useFakeTimers();
+      const startup = createDeferredCore();
+      const cleanup = createDeferredCore();
+      const order: string[] = [];
+      const stop = vi.fn(() => {
+        order.push("stop");
+        if (cleanupState === "rejected") {
+          throw new Error("cleanup rejected");
+        }
+        return cleanupState === "pending" ? cleanup.promise : undefined;
+      });
+      let lifecycleHandle!: PluginServicesHandle;
+      const starting = startPluginServices({
+        registry: createRegistry([
+          {
+            id: "interrupted-startup",
+            start: () => {
+              order.push("start");
+              return startup.promise;
+            },
+            stop,
+          },
+        ]),
+        config: createServiceConfig(),
+        onHandle: (handle) => {
+          lifecycleHandle = handle;
+        },
+      });
+      const stopping = lifecycleHandle.stop({
+        strict: true,
+        deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+      });
+      const stopped = stopping.catch((error: unknown) => error);
+
+      try {
+        await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+        const failure = await stopped;
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect((failure as AggregateError).errors[0]).toMatchObject({
+          message: expect.stringContaining("plugin service startup settlement timed out"),
+        });
+        order.push("replacement-settled");
+        startup.reject(new Error("startup failed after replacement"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(stop).toHaveBeenCalledOnce();
+        expect(order).toEqual(["start", "stop", "replacement-settled"]);
+        cleanup.resolve();
+        await starting;
+        expect(lifecycleHandle.stop()).toBe(stopping);
+      } finally {
+        startup.reject(new Error("startup test cleanup"));
+        cleanup.resolve();
+        await starting;
+        await stopped;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("revokes trusted diagnostics listeners, emitters, bridges, and exporter health with their service", async () => {
     const listener = vi.fn();

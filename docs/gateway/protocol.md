@@ -632,7 +632,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call. Clients that negotiate `gateway-control-v1` keep WebRTC media direct but move the provider control channel and tool lifecycle to the Gateway.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
-    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get `runId`, `agentId`, and canonical `agentSessionKey` and wait for normal chat lifecycle events before submitting the provider-specific tool result. Use the returned target for `chat.abort` and `chat.history`; keep the original key for voice-session requests. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
     - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
@@ -706,6 +706,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `chat.send`, `sessions.send`, and initial-turn `sessions.create` acknowledgments report admission separately from transcript persistence. Optional `messageSeq` is the one-based position from an actual committed user-turn receipt; it is absent while the input exists only in pending custody. `status: "started"` and `runStarted: true` alone do not establish a transcript row. Reconcile provisional input by its submission identity against accepted custody or canonical transcript identity, never a predicted position or matching content.
 
     - `sessions.create.fastMode` accepts `true`, `false`, or `"auto"` and persists that speed override before the initial turn starts.
+    - `sessions.title.prepare` (`{ agentId, message, model?, catalogId?, incognito? }`, `operator.write`, rate-limited as a control-plane write) returns `{ title }` from the selected agent's utility model only, without creating or renaming a session; it returns `title: null` for incognito, empty, slash-command, or unavailable-utility input and never falls back to the primary model. A client passes a ready result as `sessions.create.displayName`: a presentation title stored like a generated first-message title, so it is not unique, never claims `label`, and is ignored when adopting an existing key.
 
   </Accordion>
 
@@ -824,6 +825,17 @@ count.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set
   `replace=true` and use `deltaText` as the replacement text.
+  Failed runs (`state: "error"`) may include `errorDetail` alongside the coarse
+  `errorKind` and human-readable `errorMessage`. This closed object has seven
+  optional fields: `provider`, `model`, `failoverReason`,
+  `providerRuntimeFailureKind`, `providerErrorType`, `httpStatus`, and
+  `providerErrorMessagePreview`. Strings are capped at 300 characters; `httpStatus`
+  is an integer from 100 through 599. Details come from the failed attempt's
+  sanitized provider observation, not from reparsing the user-facing message.
+  The preview is credential-redacted and may be shorter than the protocol cap.
+  Raw bodies, raw previews, and diagnostic hashes are never included in
+  `errorDetail`. Runs without provider observations omit it; successful and
+  canceled events do not carry it. This is an additive protocol-v4 field.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an
