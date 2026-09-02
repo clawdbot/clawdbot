@@ -5,6 +5,7 @@ import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-ru
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { normalizeE164 } from "../text-runtime.js";
 import { buildWhatsAppInboundAdmission, type WhatsAppInboundAdmission } from "./admission.js";
 
 type BlockedInboundAccessControlResult = {
@@ -34,6 +35,15 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
     return;
   }
   defaultRuntime.log(message);
+}
+
+// ponytail: plain E.164/wildcard match; accessGroup: entries stay allowlist-only for now.
+function matchesIngestFrom(entries: string[], senderE164: string | null): boolean {
+  const sender = senderE164 ? normalizeE164(senderE164) : "";
+  if (!sender) {
+    return false;
+  }
+  return entries.some((entry) => entry.trim() === "*" || normalizeE164(entry) === sender);
 }
 
 function blockedInboundAccess(
@@ -109,6 +119,33 @@ export async function checkInboundAccessControl(params: {
   const access = await resolveChannelIngress();
   const { senderAccess } = access;
   if (params.group && senderAccess.decision !== "allow") {
+    // Ingest-only senders are admitted with the "skip" runtime action: group
+    // gating records them for context/hooks and never starts an agent turn.
+    const ingestFrom =
+      senderAccess.reasonCode === "group_policy_disabled"
+        ? []
+        : policy.resolveConversationIngestFrom(conversationId);
+    if (matchesIngestFrom(ingestFrom, params.senderE164)) {
+      logWhatsAppVerbose(
+        params.verbose,
+        `Ingesting group message from ${params.senderE164 ?? "unknown sender"} without agent turn (groupIngestFrom)`,
+      );
+      return {
+        allowed: true,
+        shouldMarkRead: true,
+        isSelfChat: policy.isSelfChat,
+        resolvedAccountId: policy.account.accountId,
+        admission: buildWhatsAppInboundAdmission({
+          policy,
+          access: { ...access, ingress: { ...access.ingress, admission: "skip" } },
+          channelIngress: access,
+          resolveChannelIngress,
+          isGroup: true,
+          conversationId,
+          senderId: admissionSenderId,
+        }),
+      };
+    }
     if (senderAccess.reasonCode === "group_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked group message (groupPolicy: disabled)");
     } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {

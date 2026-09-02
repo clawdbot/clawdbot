@@ -10,9 +10,13 @@ import {
 } from "./zod-schema.channel-messaging-common.js";
 import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 
-const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
-  omit: ["skills", "enabled", "allowFrom"],
-}).optional();
+const WhatsAppGroupEntrySchema = buildGroupEntrySchema(
+  {
+    ingest: z.boolean().optional(),
+    ingestFrom: z.array(z.string()).optional(),
+  },
+  { omit: ["skills", "enabled", "allowFrom"] },
+).optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
 
@@ -42,6 +46,7 @@ const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
 
 const WhatsAppCommonShape = {
   ...accountShape,
+  groupIngestFrom: z.array(z.string()).optional(),
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
   groups: WhatsAppGroupsSchema,

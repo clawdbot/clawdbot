@@ -154,6 +154,41 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
+  it("accepts groupIngestFrom and per-group ingest overrides", () => {
+    const config = {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550001111"],
+      groupIngestFrom: ["*"],
+      groups: {
+        "123@g.us": {
+          ingest: true,
+          ingestFrom: ["+15550002222"],
+        },
+      },
+      accounts: {
+        work: {
+          groupIngestFrom: ["+15550003333"],
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.groupIngestFrom).toEqual(["*"]);
+      expect(result.data.groups?.["123@g.us"]?.ingest).toBe(true);
+      expect(result.data.groups?.["123@g.us"]?.ingestFrom).toEqual(["+15550002222"]);
+      expect(result.data.accounts?.work?.groupIngestFrom).toEqual(["+15550003333"]);
+    }
+  });
+
+  it("rejects unknown per-group ingest keys", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      groups: { "123@g.us": { ingestPolicy: "open" } },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts account-level pluginHooks.messageReceived: false", () => {
     const config = {
       accounts: {
