@@ -104,6 +104,13 @@ function makeSettledChild(overrides: SettledChildOverrides): SubagentRunRecord {
   };
 }
 
+const singleUndeliveredChild = (): SubagentRunRecord =>
+  makeSettledChild({
+    runId: "run-b",
+    delivery: { status: "suspended", suspendedAt: 4_000 },
+    completion: { required: true, resultText: "orphaned findings" },
+  });
+
 const transitionBatchSpy = vi.fn();
 const completeBatchSpy = vi.fn();
 
@@ -546,13 +553,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("wakes for a single required completion whose announce never delivered", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        delivery: { status: "suspended", suspendedAt: 4_000 },
-        completion: { required: true, resultText: "orphaned findings" },
-      }),
-    ]);
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([singleUndeliveredChild()]);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
@@ -561,13 +562,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("carries a single undelivered completion as a trusted direct-fallback event", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        delivery: { status: "suspended", suspendedAt: 4_000 },
-        completion: { required: true, resultText: "orphaned findings" },
-      }),
-    ]);
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([singleUndeliveredChild()]);
 
     await expect(maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).resolves.toBe(true);
 
