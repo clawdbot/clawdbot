@@ -125,7 +125,9 @@ const GATEWAY_SCENARIOS = {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-empty-reply",
     toolsProfile: "minimal",
-    replyText: "[[reply_to_current]]",
+    // Nonempty runtime output reaches late reply filtering without triggering
+    // the embedded empty-response retry, unlike a directive-only response.
+    replyText: "HEARTBEAT_OK",
     holdFirstResponse: false,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
@@ -214,6 +216,8 @@ async function writeResponsesSse(
   const events = [
     {
       type: "response.output_item.added",
+      output_index: 0,
+      sequence_number: 0,
       item: { type: "message", id, role: "assistant", content: [], status: "in_progress" },
     },
     {
@@ -221,6 +225,8 @@ async function writeResponsesSse(
       item_id: id,
       output_index: 0,
       content_index: 0,
+      sequence_number: 1,
+      logprobs: [],
       delta: text,
     },
     {
@@ -228,10 +234,14 @@ async function writeResponsesSse(
       item_id: id,
       output_index: 0,
       content_index: 0,
+      sequence_number: 2,
+      logprobs: [],
       text,
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
+      sequence_number: 3,
       item: {
         type: "message",
         id,
@@ -242,6 +252,7 @@ async function writeResponsesSse(
     },
     {
       type: "response.completed",
+      sequence_number: 4,
       response: {
         id: "resp_tui_pty_local",
         status: "completed",
@@ -290,11 +301,13 @@ function writeInvalidEditCallSse(res: ServerResponse, requestIndex: number) {
     {
       type: "response.output_item.added",
       output_index: 0,
+      sequence_number: 0,
       item: { ...item, status: "in_progress" },
     },
-    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.output_item.done", output_index: 0, sequence_number: 1, item },
     {
       type: "response.completed",
+      sequence_number: 2,
       response: {
         id: `resp_tui_validation_${requestIndex}`,
         status: "completed",
@@ -2382,6 +2395,8 @@ export default {
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
+      const failureText =
+        "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
       const chatEvents: unknown[] = [];
       fixture.controlClient.onEvent = ({ event, payload }) => {
         if (event === "chat") {
@@ -2411,12 +2426,12 @@ export default {
             ),
         });
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.visibleOutput()).not.toContain("[[reply_to_current]]");
+        // Final filtering does not erase text already streamed into the PTY history.
         expect(chatEvents).toContainEqual(
           expect.objectContaining({
             sessionKey: fixture.sessionKey,
             state: "error",
-            errorMessage: expect.stringContaining("did not produce a visible reply"),
+            errorMessage: failureText,
           }),
         );
 
@@ -2430,6 +2445,10 @@ export default {
             ),
         });
         await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        expect(fixture.mockModel.requests()).toHaveLength(2);
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "turn after empty reply",
+        );
       } finally {
         await fixture.cleanup();
       }
