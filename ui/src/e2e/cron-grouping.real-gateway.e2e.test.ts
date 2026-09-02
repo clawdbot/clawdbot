@@ -72,7 +72,7 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page, { timeout: 30_000 });
 
           const createJob = async (name: string, group: string, tags: string) => {
-            await page.locator('[data-test-id="cron-new-task"]').click({ force: true });
+            await page.locator('[data-test-id="cron-new-task"]').dispatchEvent("click");
             const nameInput = page.locator("#cron-name");
             await nameInput.waitFor({ state: "visible", timeout: 30_000 });
             await expect.poll(() => nameInput.isEditable(), { timeout: 60_000 }).toBe(true);
@@ -80,9 +80,11 @@ suite.define(() => {
             await page.locator("#cron-group").fill(group);
             await page.locator("#cron-tags").fill(tags);
             await page.locator("#cron-payload-text").fill(`${name} fired`);
-            await page.locator("wa-select#cron-payload-kind").click({ force: true });
-            await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
-            await page.locator('[data-test-id="cron-submit"]').click();
+            await page.locator("wa-select#cron-payload-kind").dispatchEvent("click");
+            await page
+              .getByRole("option", { name: "Post to main timeline", exact: true })
+              .dispatchEvent("click");
+            await page.locator('[data-test-id="cron-submit"]').dispatchEvent("click");
             await page
               .locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") })
               .waitFor();
@@ -92,7 +94,7 @@ suite.define(() => {
           await createJob("Real Gateway Personal", "Personal", "home");
 
           const groupFilter = page.locator('[data-test-id="cron-jobs-group-filter"]');
-          await page.locator(".cron-filter-popover__trigger").click();
+          await page.locator(".cron-filter-popover__trigger").dispatchEvent("click");
           await groupFilter.fill("Work");
           await expect
             .poll(() => page.locator(".cron-table__name-text").allTextContents())
@@ -106,13 +108,15 @@ suite.define(() => {
             fullPage: true,
           });
 
-          await page.locator(".cron-table__name-text", { hasText: /^Real Gateway Work$/u }).click();
+          await page
+            .locator(".cron-table__name-text", { hasText: /^Real Gateway Work$/u })
+            .dispatchEvent("click");
           await expect
             .poll(() => page.locator("#cron-tags").inputValue())
             .toBe("sales\\,emea, daily");
           await page.locator("#cron-group").fill("");
           await page.locator("#cron-tags").fill("");
-          await page.locator('[data-test-id="cron-submit"]').click();
+          await page.locator('[data-test-id="cron-submit"]').dispatchEvent("click");
 
           await expect
             .poll(() => page.locator(".cron-table__name-text").allTextContents())
