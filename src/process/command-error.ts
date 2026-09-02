@@ -18,64 +18,19 @@ export function formatCommandOutput(output: string | Buffer, maxChars = 800): st
   return `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, Math.max(0, tail.length - maxChars))}`;
 }
 
-function fitCommandOutput(output: string, maxLength: number): string {
-  if (output.length <= maxLength) {
-    return output;
-  }
-  if (maxLength <= 0) {
-    return "";
-  }
-  if (maxLength === 1) {
-    return "…";
-  }
-  const source = output.startsWith("…\n") ? output.slice(2) : output;
-  return `…\n${sliceUtf16Safe(source, Math.max(0, source.length - (maxLength - 2)))}`;
-}
-
 /** Use an operation label, never argv that may contain credentials. */
-export function formatCommandResult(
-  command: string,
-  result: SpawnResult,
-  options: { maxLength?: number } = {},
-): string {
+export function formatCommandResult(command: string, result: SpawnResult): string {
   const label = truncateUtf16Safe(sanitizeForLog(command.replace(/[\r\n]+/g, " ")), 256);
   const termination = result.outputLimitExceeded ? "output-limit" : result.termination;
   const signal = result.signal ? `, signal=${result.signal}` : "";
   const killed = result.killed ? ", killed=true" : "";
   const status = result.code === 0 ? "exited" : "failed";
-  const header = `${label} ${status} (code=${result.code}, termination=${termination}${signal}${killed})`;
-  const streams = (["stderr", "stdout"] as const).flatMap((stream) => {
-    const output = formatCommandOutput(result[stream]);
-    return output ? [{ stream, output }] : [];
-  });
-  const maxLength = options.maxLength;
-  if (maxLength === undefined) {
-    return [header, ...streams.map(({ stream, output }) => `${stream}: ${output}`)].join("\n");
-  }
-  const boundedLength = Math.max(0, Math.floor(maxLength));
-  const fixedLength =
-    header.length + streams.reduce((total, { stream }) => total + 1 + `${stream}: `.length, 0);
-  if (streams.length === 0 || fixedLength >= boundedLength) {
-    return truncateUtf16Safe(header, boundedLength);
-  }
-  const outputBudget = boundedLength - fixedLength;
-  const lengths = streams.map(({ output }) => output.length);
-  const allocations =
-    streams.length === 2
-      ? (() => {
-          const first = Math.min(
-            lengths[0] ?? 0,
-            Math.max(Math.ceil(outputBudget / 2), outputBudget - (lengths[1] ?? 0)),
-          );
-          return [first, Math.min(lengths[1] ?? 0, outputBudget - first)];
-        })()
-      : [Math.min(lengths[0] ?? 0, outputBudget)];
   return [
-    header,
-    ...streams.map(
-      ({ stream, output }, index) =>
-        `${stream}: ${fitCommandOutput(output, allocations[index] ?? 0)}`,
-    ),
+    `${label} ${status} (code=${result.code}, termination=${termination}${signal}${killed})`,
+    ...(["stderr", "stdout"] as const).flatMap((stream) => {
+      const output = formatCommandOutput(result[stream]);
+      return output ? [`${stream}: ${output}`] : [];
+    }),
   ].join("\n");
 }
 

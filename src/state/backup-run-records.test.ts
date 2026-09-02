@@ -100,7 +100,6 @@ describe("backup run records", () => {
 
     const persisted = readBackupFreshness(env).latest?.error;
     expect(persisted).toBe("x".repeat(1_199));
-    expect(Buffer.from(persisted ?? "", "utf8").toString("utf8")).toBe(persisted);
   });
 
   it("treats an older same-version database without backup_runs as no recorded backups", async () => {

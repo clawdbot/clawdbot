@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
-import { backupGitCreateCommand } from "../commands/backup-git.js";
+import { backupGitCreateCommand, backupGitLogCommand } from "../commands/backup-git.js";
 import { readBackupFreshness } from "../commands/backup-health.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
@@ -22,8 +22,7 @@ import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-c
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 
 const mocks = vi.hoisted(() => ({
-  logDiagnostic: undefined as string | undefined,
-  logCalls: 0,
+  logDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
   pushDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
   snapshotRepositoryError: undefined as Error | undefined,
 }));
@@ -46,11 +45,9 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
         };
       }
       if (args[1][0] === "log" && mocks.logDiagnostic) {
-        mocks.logCalls += 1;
         return {
           code: 1,
-          stdout: "",
-          stderr: mocks.logDiagnostic,
+          ...mocks.logDiagnostic,
           signal: null,
           killed: false,
           termination: "exit",
@@ -87,7 +84,6 @@ async function tempRoot(): Promise<string> {
 
 afterEach(async () => {
   mocks.logDiagnostic = undefined;
-  mocks.logCalls = 0;
   mocks.pushDiagnostic = undefined;
   mocks.snapshotRepositoryError = undefined;
   vi.restoreAllMocks();
@@ -543,17 +539,25 @@ describe("Git-backed SQLite snapshots", () => {
     const repositoryPath = path.join(root, "push-repository");
     const username = ["synthetic", "user"].join("-");
     const password = ["synthetic", "password"].join("-");
-    const remote = `https://${username}:${password}@example.invalid/repository`;
+    const querySecret = ["synthetic", "query", "secret"].join("-");
+    const remote = `https://${username}:${password}@example.invalid/repository?access_token=${querySecret}`;
     mocks.pushDiagnostic = {
-      stderr: `${"x".repeat(1_400)} fatal: unable to access '${remote}' stderr-tail-🦞`,
-      stdout: `${"y".repeat(1_400)} remote: rejected '${remote}' stdout-tail-🐚`,
+      stderr: [
+        ...Array.from({ length: 20 }, (_, index) => `stderr-old-${index} '${remote}'`),
+        `stderr-tail-🦞 fatal: unable to access '${remote}'`,
+      ].join("\n"),
+      stdout: [
+        ...Array.from({ length: 20 }, (_, index) => `stdout-old-${index} '${remote}'`),
+        `stdout-tail-🐚 remote: rejected '${remote}'`,
+      ].join("\n"),
     };
     await initializeGitBackupRepository({ repositoryPath, stateDir, remote });
     await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
     await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const result = await backupGitCreateCommand(createTestRuntime(), {
+      const runtime = createTestRuntime();
+      const result = await backupGitCreateCommand(runtime, {
         repository: repositoryPath,
         global: true,
         push: true,
@@ -562,23 +566,30 @@ describe("Git-backed SQLite snapshots", () => {
 
       expect(result.pushWarning).toContain("stderr:");
       expect(result.pushWarning).toContain("stdout:");
-      expect(result.pushWarning).toContain("https://***@example.invalid/repository");
+      expect(result.pushWarning).toContain(
+        "https://***:***@example.invalid/repository?access_token=***",
+      );
       expect(result.pushWarning).not.toContain(username);
       expect(result.pushWarning).not.toContain(password);
+      expect(result.pushWarning).not.toContain(querySecret);
       expect(result.pushWarning).toContain("stderr-tail-🦞");
       expect(result.pushWarning).toContain("stdout-tail-🐚");
       expect(Buffer.from(result.pushWarning ?? "", "utf8").toString("utf8")).toBe(
         result.pushWarning,
       );
       expect(result.pushWarning).toHaveLength(1_200);
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: Git backup committed, but push failed: ${result.pushWarning}`,
+      );
 
       const persisted = readBackupFreshness(process.env).latest?.error;
       expect(persisted).toBe(result.pushWarning);
       expect(persisted).toContain("stderr:");
       expect(persisted).toContain("stdout:");
-      expect(persisted).toContain("https://***@example.invalid/repository");
+      expect(persisted).toContain("https://***:***@example.invalid/repository?access_token=***");
       expect(persisted).not.toContain(username);
       expect(persisted).not.toContain(password);
+      expect(persisted).not.toContain(querySecret);
       expect(persisted).toContain("stderr-tail-🦞");
       expect(persisted).toContain("stdout-tail-🐚");
     });
@@ -588,10 +599,72 @@ describe("Git-backed SQLite snapshots", () => {
     const root = await tempRoot();
     const repositoryPath = path.join(root, "empty-repository");
     await requireGit(root, ["init", repositoryPath]);
-    mocks.logDiagnostic = "fatal: el historial no contiene confirmaciones";
+    mocks.logDiagnostic = {
+      stdout: "",
+      stderr: "fatal: el historial no contiene confirmaciones",
+    };
+    const runtime = createTestRuntime();
 
-    await expect(readGitBackupLog({ repositoryPath, limit: 10 })).resolves.toEqual([]);
-    expect(mocks.logCalls).toBe(0);
+    await expect(
+      backupGitLogCommand(runtime, { repository: repositoryPath, limit: 10 }),
+    ).resolves.toEqual([]);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/No Git backup commits in .*\/empty-repository\.$/u),
+    );
+  });
+
+  it("returns bounded redacted diagnostics from both failed history streams", async () => {
+    const root = await tempRoot();
+    const repositoryPath = path.join(root, "failed-history-repository");
+    const username = ["synthetic", "history", "user"].join("-");
+    const password = ["synthetic", "history", "password"].join("-");
+    const querySecret = ["synthetic", "history", "query"].join("-");
+    const remote = `https://${username}:${password}@example.invalid/history?token=${querySecret}`;
+    await requireGit(root, ["init", repositoryPath]);
+    await requireGit(repositoryPath, [
+      "-c",
+      "user.name=OpenClaw Backup Test",
+      "-c",
+      "user.email=backup@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "openclaw backup fixture",
+    ]);
+    await requireGit(repositoryPath, ["checkout", "--detach", "HEAD"]);
+    mocks.logDiagnostic = {
+      stderr: [
+        ...Array.from({ length: 20 }, (_, index) => `stderr-old-${index} '${remote}'`),
+        `stderr-tail-🦞 fatal: unable to read '${remote}'`,
+      ].join("\n"),
+      stdout: [
+        ...Array.from({ length: 20 }, (_, index) => `stdout-old-${index} '${remote}'`),
+        `stdout-tail-🐚 retry with '${remote}'`,
+      ].join("\n"),
+    };
+
+    const error = await backupGitLogCommand(createTestRuntime(), {
+      repository: repositoryPath,
+      limit: 10,
+    }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected failed Git history error");
+    }
+    const output = formatCliOperatorError(error, { argv: ["backup", "git", "log"], env: {} });
+
+    expect(error.message.length).toBeLessThanOrEqual(1_200);
+    expect(output).toContain("git log failed (code=1, termination=exit)");
+    expect(output).toContain("stderr:");
+    expect(output).toContain("stdout:");
+    expect(output).toContain("stderr-tail-🦞");
+    expect(output).toContain("stdout-tail-🐚");
+    expect(output).toContain("https://***:***@example.invalid/history?token=***");
+    expect(output).not.toContain(username);
+    expect(output).not.toContain(password);
+    expect(output).not.toContain(querySecret);
+    expect(output).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(output).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
   });
 
   it("does not treat a symbolic HEAD with a missing object as an empty log", async () => {
@@ -690,7 +763,7 @@ describe("Git-backed SQLite snapshots", () => {
       remote: "https://example.invalid/second",
     });
     await expect(conflict).rejects.toThrow(
-      "Git backup repository already has a different origin: https://***@example.invalid/first",
+      "Git backup repository already has a different origin: https://***:***@example.invalid/first",
     );
     await expect(conflict).rejects.not.toThrow(username);
     await expect(conflict).rejects.not.toThrow(password);
