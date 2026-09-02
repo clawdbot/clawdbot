@@ -437,6 +437,14 @@ vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
     agent: { runCommandFromIngress: agentCommandMock },
     mediaUnderstanding: {
+      resolveAudioInputBudget: async ({
+        cfg,
+      }: {
+        cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+      }) =>
+        cfg.tools?.media?.audio?.enabled === false
+          ? { enabled: false }
+          : { enabled: true, maxBytes: cfg.tools?.media?.audio?.maxBytes ?? 20 * 1024 * 1024 },
       transcribeAudioFile: transcribeAudioFileMock,
     },
     tts: {
