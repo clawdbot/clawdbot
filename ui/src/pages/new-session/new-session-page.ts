@@ -76,6 +76,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly dictation: NewSessionDictationControl;
   private readonly subscriptions: SubscriptionsController;
   private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
+  private readonly setImageLightbox = (item: ImageLightboxItem | null) => {
+    this.imageLightbox = item;
+  };
 
   constructor() {
     super();
@@ -609,9 +612,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
               }
             : undefined,
           onInput: (message) => this.setMessageFromUser(message),
-          onOpenImage: (item) => {
-            this.imageLightbox = item;
-          },
+          onOpenImage: this.setImageLightbox,
           onVisibilityChange: (visibility) => {
             if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
               this.submission.setVisibility(visibility);
@@ -694,9 +695,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           pendingMessage,
           submitting: this.submission.submitting,
           renderDraft: () => this.renderWelcome(),
-          onOpenImage: (item) => {
-            this.imageLightbox = item;
-          },
+          onOpenImage: this.setImageLightbox,
         })}
         ${renderConnectMachineDialog({
           open: this.connectMachine.open && this.place.isAdmin(),
@@ -713,9 +712,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             this.context?.navigate("devices");
           },
         })}
-        ${renderChatImageLightbox(this.imageLightbox, () => {
-          this.imageLightbox = null;
-        })}
+        ${renderChatImageLightbox(this.imageLightbox, () => this.setImageLightbox(null))}
       </div>
     `;
   }
