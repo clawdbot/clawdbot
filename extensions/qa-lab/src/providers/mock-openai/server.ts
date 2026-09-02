@@ -1,6 +1,8 @@
 // QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { format as formatUrl } from "node:url";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -2944,10 +2946,7 @@ export async function startQaMockOpenAiServer(params?: {
     dispatch: dispatchResponses,
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params?.port ?? 0, host, () => resolve());
-  });
+  await once(server.listen(params?.port ?? 0, host), "listening");
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -2955,7 +2954,7 @@ export async function startQaMockOpenAiServer(params?: {
   }
 
   return {
-    baseUrl: `http://${host}:${address.port}`,
+    baseUrl: formatUrl({ protocol: "http", hostname: host, port: address.port }),
     async stop() {
       await responsesWebSocket.close();
       await closeQaHttpServer(server);

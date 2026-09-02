@@ -1260,6 +1260,11 @@ The baseline list should stay broad enough to cover:
   protocol, fixture, record/replay, and chaos coverage. It is additive and
   does not replace the `mock-openai` scenario dispatcher.
 
+For an IPv6 loopback server, run `pnpm openclaw qa mock-openai --host ::1`.
+The printed URL includes brackets, such as `http://[::1]:<port>`; use that URL
+when configuring a client. QA Lab also brackets IPv6 hosts in its listen and
+advertised URLs. Pass the bare address to `--host`.
+
 Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
 Each provider owns its defaults, local server startup, gateway model config,
 auth-profile staging needs, and live/mock capability flags. Shared suite and
