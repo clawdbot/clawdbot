@@ -1,6 +1,5 @@
 /** Gateway-side service that owns the runtime task-lane registry. */
 
-import { buildRuntimeTaskLaneRegistry, type PluginTaskLaneRegistry } from "../plugin/registry.js";
 import {
   createTaskLaneRegistry,
   loadTaskLaneSnapshot,
@@ -11,7 +10,6 @@ import type { TaskLaneProvider, TaskLaneSnapshot } from "../types.js";
 
 export type TaskLaneGatewayService = {
   addProvider(provider: TaskLaneProvider): void;
-  rebuildFromPlugins(pluginRegistry: PluginTaskLaneRegistry): void;
   snapshot(options?: {
     providerId?: string;
     limit?: number;
@@ -21,13 +19,10 @@ export type TaskLaneGatewayService = {
 };
 
 export function createTaskLaneGatewayService(): TaskLaneGatewayService {
-  let registry: TaskLaneRegistry = createTaskLaneRegistry();
+  const registry: TaskLaneRegistry = createTaskLaneRegistry();
   return {
     addProvider(provider) {
       registerTaskLaneProvider(registry, provider);
-    },
-    rebuildFromPlugins(pluginRegistry) {
-      registry = buildRuntimeTaskLaneRegistry(pluginRegistry);
     },
     snapshot(options) {
       return loadTaskLaneSnapshot(registry, options);

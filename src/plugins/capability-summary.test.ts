@@ -146,7 +146,6 @@ describe("plugin capability summaries", () => {
       usageProviders: ["usage"],
       migrationProviders: ["migration"],
       gatewayMethodDispatch: ["gateway-method"],
-      taskLaneProviders: ["task-lane"],
       tools: ["tool"],
     } satisfies Required<PluginManifestContracts>;
 
