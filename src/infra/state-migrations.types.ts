@@ -178,3 +178,55 @@ export type MigrationMessages = {
   warnings: string[];
   notices?: string[];
 };
+
+export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
+  "openclaw.legacyStateMigrationPlan.v1" as const;
+
+export type LegacyStateMigrationMode = "automatic" | "doctor";
+
+export type LegacyStateMigrationEndpoint =
+  | { kind: "path"; path: string }
+  | { kind: "sqlite"; path: string }
+  | { kind: "owner"; id: string };
+
+export type LegacyStateMigrationStepPlan = {
+  id: string;
+  phase: "shared" | "final";
+  source: LegacyStateMigrationEndpoint[];
+  target: LegacyStateMigrationEndpoint[];
+  requiredness: "required" | "conditional" | "not-required";
+  reversibility: "checkpoint-required" | "not-applicable";
+  outcome: "planned" | "skipped" | "deferred";
+  refusal?: { code: string; message: string };
+};
+
+export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  outcome: "completed" | "skipped" | "warning" | "refused";
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+  refusal?: { code: string; message: string };
+};
+
+export type LegacyStateMigrationPlan = {
+  schemaVersion: typeof LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION;
+  mutationAllowed: false;
+  outcome: "planned" | "refused";
+  warnings: string[];
+  refusal?: { code: string; message: string };
+  mode: LegacyStateMigrationMode;
+  candidate: {
+    root: string;
+    version: string;
+    digest: string;
+  };
+  snapshot: {
+    homeDir: string;
+    configPath: string;
+    configDigest: string;
+    stateDir: string;
+    stateDigest: string;
+  };
+  steps: LegacyStateMigrationStepPlan[];
+  planIntegrity: string;
+};

@@ -172,6 +172,64 @@ describe("update process state", () => {
     expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
   });
 
+  it("plans Doctor migrations against a copied snapshot without creating state", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    const execPath = path.join(stateDir, "exec-approvals.json");
+    const tuiPath = path.join(stateDir, "tui", "last-session.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(path.dirname(tuiPath), { recursive: true });
+    await fs.writeFile(configPath, '{ "plugins": { "entries": { "candidate": {} } } }\n');
+    await fs.writeFile(
+      execPath,
+      '{ "version": 1, "defaults": { "security": "allowlist", "ask": "on-miss" } }\n',
+    );
+    await fs.writeFile(
+      tuiPath,
+      '{ "terminal": { "sessionKey": "agent:main:tui:plan", "updatedAt": 1 } }\n',
+    );
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "migration-plan",
+      "--snapshot-home",
+      root,
+      "--snapshot-config",
+      configPath,
+      "--config-digest",
+      `sha256:${await sha256File(configPath)}`,
+      "--snapshot-state",
+      stateDir,
+      "--state-digest",
+      "sha256:copied-state",
+      "--candidate-digest",
+      "sha256:candidate-runtime",
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const plan = JSON.parse(result.stdout) as {
+      mutationAllowed: boolean;
+      candidate: { root: string; digest: string };
+      steps: Array<{ id: string; outcome: string }>;
+    };
+    expect(plan).toMatchObject({
+      mutationAllowed: false,
+      candidate: { root: path.resolve("."), digest: "sha256:candidate-runtime" },
+    });
+    expect(plan.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "exec-approvals", outcome: "planned" }),
+        expect.objectContaining({ id: "tui-last-session", outcome: "planned" }),
+        expect.objectContaining({ id: "plugin-doctor-state", outcome: "deferred" }),
+      ]),
+    );
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
   it.each(["update", "repair"])(
     "keeps rejected %s arguments from touching legacy state",
     async (command) => {
