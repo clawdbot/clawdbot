@@ -141,7 +141,9 @@ jobs:
           fetch-depth: 1
           filter: blob:none
           persist-credentials: false
-          sparse-checkout: scripts
+          sparse-checkout: |
+            .github/actions/git-owner
+            scripts
 
       - &validate_npm_source
         name: Validate npm package source metadata
@@ -172,16 +174,18 @@ jobs:
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
+      - name: Establish source ancestry with main
+        env:
+          RELEASE_ANCESTRY_MODE: merge-base
+          RELEASE_ANCESTRY_TARGET_REF: refs/heads/main
+        run: |
+          exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
+            --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
-        run: |
-          set -euo pipefail
-          # Ratchets compare against the real main merge base; fetch those two
-          # histories without collecting every remote branch or release tag.
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$(git rev-parse HEAD)" "+refs/heads/main:refs/remotes/origin/main"
-          pnpm check --include-test-types --include-architecture
+        run: pnpm check --include-test-types --include-architecture
 
       - name: Seal source-check evidence
         id: source_evidence
@@ -209,6 +213,7 @@ jobs:
       - *validate_npm_ref
       - *forbid_npm_promotion
       - *checkout_npm_source
+      - *checkout_npm_harness
       - name: Validate Tideclaw alpha preflight target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
         env:
@@ -224,15 +229,16 @@ jobs:
             echo "Tideclaw alpha preflight runs must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
             exit 1
           fi
-          alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$(git rev-parse HEAD)" "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-            echo "Alpha preflight target must be reachable from ${alpha_branch}." >&2
-            exit 1
-          fi
 
-      - *checkout_npm_harness
+      - name: Establish Tideclaw alpha ancestry
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        env:
+          RELEASE_ANCESTRY_MODE: ancestor
+          RELEASE_ANCESTRY_TARGET_REF: ${{ github.ref }}
+        run: |
+          exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
+            --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
       - *validate_npm_source
       - name: Setup Node environment
         id: setup-node-env

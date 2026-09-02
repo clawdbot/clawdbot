@@ -5,21 +5,36 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
 
 /** Return dotted config paths whose values differ between two config snapshots. */
-export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
+export function diffConfigPaths(
+  prev: unknown,
+  next: unknown,
+  prefix = "",
+  refinementPrefixes: readonly string[] = [],
+): string[] {
   if (prev === next) {
     return [];
   }
-  if (isPlainObject(prev) && isPlainObject(next)) {
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  const hasNestedRefinement = refinementPrefixes.some((entry) =>
+    prefix ? entry.startsWith(`${prefix}.`) : true,
+  );
+  // A missing parent normally collapses to one path. Registered boundaries must
+  // survive that collapse so a narrow owner rule can still outrank its fallback.
+  if (
+    (isPlainObject(prev) && isPlainObject(next)) ||
+    (hasNestedRefinement && (isPlainObject(prev) || isPlainObject(next)))
+  ) {
+    const prevRecord = isPlainObject(prev) ? prev : {};
+    const nextRecord = isPlainObject(next) ? next : {};
+    const keys = new Set([...Object.keys(prevRecord), ...Object.keys(nextRecord)]);
     const paths: string[] = [];
     for (const key of keys) {
-      const prevValue = prev[key];
-      const nextValue = next[key];
+      const prevValue = prevRecord[key];
+      const nextValue = nextRecord[key];
       if (prevValue === undefined && nextValue === undefined) {
         continue;
       }
       const childPrefix = prefix ? `${prefix}.${key}` : key;
-      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix);
+      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix, refinementPrefixes);
       if (childPaths.length > 0) {
         paths.push(...childPaths);
       }
@@ -62,8 +77,9 @@ function projectGatewayReloadBoundaries(config: OpenClawConfig) {
 export function diffGatewayReloadPaths(
   prevConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
+  reloadPrefixes: Iterable<string>,
 ): string[] {
-  const changedPaths = diffConfigPaths(prevConfig, nextConfig);
+  const changedPaths = diffConfigPaths(prevConfig, nextConfig, "", [...reloadPrefixes]);
   const boundaryPaths = diffConfigPaths(
     projectGatewayReloadBoundaries(prevConfig),
     projectGatewayReloadBoundaries(nextConfig),

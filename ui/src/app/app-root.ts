@@ -30,6 +30,7 @@ import {
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
+import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
@@ -240,6 +241,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   private renderFocusEscape(label: string) {
+    if (isNativeWebChromeHost()) {
+      return nothing;
+    }
     return html`<button
       class="btn btn--ghost"
       type="button"
@@ -425,7 +429,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
         .sessionKey=${route.data.sessionKey}
-        .onDocumentClose=${() => this.closeDocument(this.context?.basePath ?? "")}
+        .onDocumentClose=${isNativeWebChromeHost()
+          ? null
+          : () => this.closeDocument(this.context?.basePath ?? "")}
       ></openclaw-board-document>
       ${!gatewayConnected && gatewaySnapshot.lastError === null
         ? renderConnectingSplash(gatewayStartupStatus)
