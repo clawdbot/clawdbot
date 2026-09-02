@@ -118,9 +118,16 @@ internal data class ChatAgentSessionSelectionOwner(
   val agentId: String,
 )
 
+// Reference identity distinguishes a new explicit choice of the same key.
+internal class RememberedChatSession(
+  val key: String,
+  var observedSessionId: String?,
+)
+
 internal data class ChatAgentSessionSelection(
   val gatewayScope: ChatCacheScope?,
-  val rememberedSessionKey: String?,
+  val rememberedSession: RememberedChatSession?,
+  val rememberedSessionId: String?,
   val targetSessionKey: String?,
 )
 
@@ -388,7 +395,7 @@ class ChatController internal constructor(
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
-  private val lastSelectedChatSessionByOwner = mutableMapOf<ChatAgentSessionSelectionOwner, String>()
+  private val lastSelectedChatSessionByOwner = mutableMapOf<ChatAgentSessionSelectionOwner, RememberedChatSession>()
 
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
@@ -1258,18 +1265,34 @@ class ChatController internal constructor(
         }
       if (archived == true) {
         val defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
-        val selection =
+        val rememberedOwner = capturedOwnerAgentId?.let { ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, it) }
+        val (selection, remembered) =
           synchronized(gatewayScopeApplyLock) {
-            currentSessionActionSnapshot(sessionKey)?.takeIf {
-              it.gatewayScope == requestCacheScope &&
-                it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
-                _sessionId.value == lifecycleSessionId
-            }
+            val active =
+              currentSessionActionSnapshot(sessionKey)?.takeIf {
+                it.gatewayScope == requestCacheScope &&
+                  it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
+                  _sessionId.value == lifecycleSessionId
+              }
+            val remembered =
+              rememberedOwner
+                ?.let { lastSelectedChatSessionByOwner[it] }
+                ?.takeIf { it.key == sessionKey && (it.observedSessionId == null || it.observedSessionId == lifecycleSessionId) }
+            active to remembered
           }
         val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
         lease.request("sessions.patch", params.toString(), 10 * 60_000L)
         lease.commitIfCurrent {
           synchronized(gatewayScopeApplyLock) {
+            // ACK retirement belongs to the captured choice, even after an agent switch.
+            // A newer explicit choice or a history-observed successor keeps its intent.
+            if (
+              requestCacheScope == currentCacheScope() &&
+              rememberedOwner != null && remembered != null &&
+              (remembered.observedSessionId == null || remembered.observedSessionId == lifecycleSessionId)
+            ) {
+              lastSelectedChatSessionByOwner.remove(rememberedOwner, remembered)
+            }
             // Same-key history and default-owner changes need not move selection generation.
             // Only the selection captured at entry may navigate after the archive completes.
             if (
@@ -2950,26 +2973,31 @@ class ChatController internal constructor(
     owner: ChatAgentSessionSelectionOwner,
     mainSessionKey: String,
   ): ChatAgentSessionSelection? {
-    val requestScope = currentCacheScope()
-    val remembered = synchronized(gatewayScopeApplyLock) { lastSelectedChatSessionByOwner[owner] }
+    val (requestScope, remembered, rememberedSessionId) =
+      synchronized(gatewayScopeApplyLock) {
+        val choice = lastSelectedChatSessionByOwner[owner]
+        // History may update this choice during discovery; compare its entry-time identity.
+        Triple(currentCacheScope(), choice, choice?.observedSessionId)
+      }
+    val rememberedKey = remembered?.key
     val target =
       try {
         val candidates = fetchSessionSelectionCandidates(owner.agentId) ?: return null
-        val candidate = selectChatAgentSessionKey(candidates, owner.agentId, remembered, mainSessionKey)
-        if (remembered == null || candidate == remembered) {
+        val candidate = selectChatAgentSessionKey(candidates, owner.agentId, rememberedKey, mainSessionKey)
+        if (rememberedKey == null || candidate == rememberedKey) {
           candidate
         } else {
           // Recent pages and offline caches cannot prove absence. Only an exact, owned
           // description may retire a remembered chat that is missing from discovery.
           check(requestScope != null && requestScope.gatewayId == owner.gatewayStableId)
-          check(resolveAgentIdFromMainSessionKey(remembered) == owner.agentId)
-          val description = fetchSessionDescription(requestScope.gatewayId, remembered)
+          check(resolveAgentIdFromMainSessionKey(rememberedKey) == owner.agentId)
+          val description = fetchSessionDescription(requestScope.gatewayId, rememberedKey)
           // Gateway lookup also returns null for unavailable stores; null is not deletion proof.
           val entry = parseSessionEntry(description) ?: error("session description unavailable")
-          check(entry.key == remembered && (entry.ownerAgentId == null || entry.ownerAgentId == owner.agentId))
+          check(entry.key == rememberedKey && (entry.ownerAgentId == null || entry.ownerAgentId == owner.agentId))
           when (entry.archived) {
             true -> candidate
-            false -> remembered
+            false -> rememberedKey
             null -> error("session description has no archive state")
           }
         }
@@ -2978,7 +3006,7 @@ class ChatController internal constructor(
       } catch (_: Throwable) {
         null
       }
-    return ChatAgentSessionSelection(requestScope, remembered, target)
+    return ChatAgentSessionSelection(requestScope, remembered, rememberedSessionId, target)
   }
 
   internal fun restoreSessionSelection(
@@ -2989,7 +3017,8 @@ class ChatController internal constructor(
     synchronized(gatewayScopeApplyLock) {
       if (
         selection.gatewayScope != currentCacheScope() ||
-        lastSelectedChatSessionByOwner[owner] != selection.rememberedSessionKey
+        lastSelectedChatSessionByOwner[owner] !== selection.rememberedSession ||
+        selection.rememberedSession?.observedSessionId != selection.rememberedSessionId
       ) {
         return
       }
@@ -2998,8 +3027,8 @@ class ChatController internal constructor(
         updateLocalizedErrorText(nativeText("Could not restore the last chat. Select a chat from the sidebar."))
         return
       }
-      if (selection.rememberedSessionKey != null && target != selection.rememberedSessionKey) {
-        lastSelectedChatSessionByOwner.remove(owner, selection.rememberedSessionKey)
+      if (selection.rememberedSession != null && target != selection.rememberedSession.key) {
+        lastSelectedChatSessionByOwner.remove(owner, selection.rememberedSession)
       }
       if (target != mainSessionKey) switchSession(target, owner.agentId, rememberSelection = false)
     }
@@ -3031,7 +3060,8 @@ class ChatController internal constructor(
     ownerAgentId: String?,
   ) {
     val agentId = ownerAgentId ?: effectiveDefaultAgentId() ?: return
-    lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(currentCacheScope()?.gatewayId, agentId)] = key
+    val sessionId = _sessionId.value.takeIf { key == _sessionKey.value && agentId == resolveAgentIdForSessionKey(key) }
+    lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(currentCacheScope()?.gatewayId, agentId)] = RememberedChatSession(key, sessionId)
   }
 
   private fun prepareSessionSelection(key: String) {
@@ -3061,7 +3091,6 @@ class ChatController internal constructor(
         if (changed) chatSelectionGeneration.update { it + 1 }
         _sessionKey.value = key
         _sessionOwnerAgentId.value = owner
-        if (rememberSelection) rememberSelectedChatSession(key, owner)
         retireSessionSettingsLanes { settingsKey, lane ->
           lane.reconciliation?.pending?.isCompleted == true &&
             (settingsKey.gatewayScope != currentCacheScope() || settingsKey.ownerAgentId != resolveAgentIdForSessionKey(key))
@@ -3105,6 +3134,7 @@ class ChatController internal constructor(
         clearPendingRuns()
         clearLiveRunUi()
         _sessionId.value = null
+        if (rememberSelection) rememberSelectedChatSession(key, owner)
         _historyLoading.value = markLoading
         restorePendingRunProjectionsForCurrentOwner()
         generation to changed
@@ -4728,6 +4758,11 @@ class ChatController internal constructor(
                 if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
             )
           _sessionId.value = history.sessionId
+          history.sessionId?.let { sessionId ->
+            lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, requestAgentId)]
+              ?.takeIf { it.key == sessionKey }
+              ?.observedSessionId = sessionId
+          }
           markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
           _historyLoading.value = false
           if (historyLoadErrorGeneration == generation) {
@@ -6515,10 +6550,8 @@ class ChatController internal constructor(
     val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
     if (entry?.archived == true && eventOwner != null) {
       synchronized(gatewayScopeApplyLock) {
-        lastSelectedChatSessionByOwner.remove(
-          ChatAgentSessionSelectionOwner(currentCacheScope()?.gatewayId, eventOwner),
-          entry.key,
-        )
+        val owner = ChatAgentSessionSelectionOwner(currentCacheScope()?.gatewayId, eventOwner)
+        if (lastSelectedChatSessionByOwner[owner]?.key == entry.key) lastSelectedChatSessionByOwner.remove(owner)
       }
     }
     val metadataMutation = isSessionSettingsMutation(payload)
@@ -7969,7 +8002,8 @@ class ChatController internal constructor(
     cacheScope: ChatCacheScope?,
   ) {
     synchronized(gatewayScopeApplyLock) {
-      lastSelectedChatSessionByOwner.remove(ChatAgentSessionSelectionOwner(cacheScope?.gatewayId, ownerAgentId), sessionKey)
+      val owner = ChatAgentSessionSelectionOwner(cacheScope?.gatewayId, ownerAgentId)
+      if (lastSelectedChatSessionByOwner[owner]?.key == sessionKey) lastSelectedChatSessionByOwner.remove(owner)
     }
     if (cacheScope == null) return
     onSessionDeleted(

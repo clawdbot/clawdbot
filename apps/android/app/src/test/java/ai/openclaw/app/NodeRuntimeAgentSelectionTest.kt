@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
@@ -34,6 +35,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
@@ -292,6 +294,24 @@ class NodeRuntimeAgentSelectionTest {
   fun inactiveOwnerArchiveRetiresRememberedSelectionBeforeReturn() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedEvent)
 
   @Test
+  fun successfulArchiveAckRetiresRememberedSelectionWithoutAnArchiveEvent() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedAck)
+
+  @Test
+  fun archiveAckRetiresInactiveOwnerSelectionWithoutNavigating() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedAck, ArchiveAckOrder.AfterAgentSwitch)
+
+  @Test
+  fun archiveAckPreservesLaterExplicitSameKeySelection() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedAck, ArchiveAckOrder.AfterSameKeyReselection)
+
+  @Test
+  fun archiveAckPreservesHistoryObservedSuccessorAfterAgentSwitch() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedAck, ArchiveAckOrder.AfterNewSessionIdentity)
+
+  @Test
+  fun archiveAckCannotAcquireOwnershipOfALaterMatchingSessionIdentity() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedAck, ArchiveAckOrder.AfterDifferentArchivedIdentity)
+
+  @Test
+  fun retiredPhysicalLeaseCannotForgetRememberedSelection() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedAck, ArchiveAckOrder.AfterLeaseRetirement)
+
+  @Test
   fun sessionDeletionInvalidatesLateAgentSessionLookup() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -334,167 +354,268 @@ class NodeRuntimeAgentSelectionTest {
     NullResponse,
     Archived,
     ArchivedEvent,
+    ArchivedAck,
     Unavailable,
   }
 
-  private fun assertOffPageRememberedSessionSelection(describedState: RememberedSessionState) =
-    runBlocking {
-      val runtime = createConnectedRuntime()
-      val chosenKey = "agent:scout:chosen"
-      val chosenSession = ChatSessionEntry(key = chosenKey, updatedAtMs = 10, ownerAgentId = "scout")
-      val sessions = AtomicReference(listOf(chosenSession))
-      val description = AtomicReference(RememberedSessionState.Active)
-      val lookupStarted = AtomicReference<CompletableDeferred<Job>?>(null)
-      var exactDescriptions = 0
-      try {
-        val requestGateway: suspend (String, String?) -> String = { method, params ->
-          val request = Json.parseToJsonElement(params ?: "{}").jsonObject
-          when (method) {
-            "sessions.list" -> {
-              val limit = request["limit"]?.jsonPrimitive?.content?.toInt() ?: 50
-              val rows =
-                if (request["agentId"]?.jsonPrimitive?.content == "scout") {
-                  sessions
-                    .get()
-                    .filter { row ->
-                      row.key != chosenKey || description.get() !in setOf(RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent)
-                    }.sortedByDescending { it.updatedAtMs }
-                } else {
-                  emptyList()
-                }
-              val page = rows.take(limit)
-              // Bootstrap also lists sessions; only the 200-row selection lookup owns this rendezvous.
-              if (limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
-              page.joinToString(
-                prefix = """{"sessions":[""",
-                postfix = """],"totalCount":${rows.size},"hasMore":${page.size < rows.size}}""",
-              ) { row ->
-                """{"key":"${row.key}","sessionId":"session-${row.key}","agentId":"scout","updatedAt":${row.updatedAtMs},"archived":false}"""
-              }
-            }
+  private enum class ArchiveAckOrder {
+    Active,
+    AfterAgentSwitch,
+    AfterSameKeyReselection,
+    AfterNewSessionIdentity,
+    AfterDifferentArchivedIdentity,
+    AfterLeaseRetirement,
+  }
 
-            "sessions.describe" -> {
-              check(request.keys.all { it in setOf("key", "includeDerivedTitles", "includeLastMessage") })
-              val key = request.getValue("key").jsonPrimitive.content
-              if (key == chosenKey) {
-                exactDescriptions += 1
-                lookupStarted.get()?.complete(currentCoroutineContext().job)
-                when (description.get()) {
-                  RememberedSessionState.NullResponse, RememberedSessionState.ArchivedEvent -> {
-                    """{"session":null}"""
-                  }
+  private fun assertOffPageRememberedSessionSelection(
+    describedState: RememberedSessionState,
+    archiveAckOrder: ArchiveAckOrder = ArchiveAckOrder.Active,
+  ) = runBlocking {
+    val runtime = createConnectedRuntime()
+    val chosenKey = "agent:scout:chosen"
+    val chosenSession = ChatSessionEntry(key = chosenKey, updatedAtMs = 10, ownerAgentId = "scout")
+    val sessions = AtomicReference(listOf(chosenSession))
+    val description = AtomicReference(RememberedSessionState.Active)
+    val chosenSessionId = AtomicReference("session-$chosenKey")
+    val leaseGeneration = AtomicInteger()
+    val archiveRequested = CompletableDeferred<Unit>()
+    val releaseArchive = CompletableDeferred<Unit>()
+    val lookupStarted = AtomicReference<CompletableDeferred<Job>?>(null)
+    val preservesChoice = archiveAckOrder !in setOf(ArchiveAckOrder.Active, ArchiveAckOrder.AfterAgentSwitch)
+    val archiveSessionId = if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) "replacement-$chosenKey" else "session-$chosenKey"
+    var exactDescriptions = 0
 
-                  RememberedSessionState.Unavailable -> {
-                    error("Session lookup temporarily unavailable")
-                  }
-
-                  else -> {
-                    val archived = description.get() == RememberedSessionState.Archived
-                    """{"session":{"key":"$key","sessionId":"session-$key","agentId":"scout","updatedAt":10,"archived":$archived}}"""
-                  }
-                }
+    fun sessionId(key: String): String = if (key == chosenKey) chosenSessionId.get() else "session-$key"
+    try {
+      drainWithMainLooper {
+        ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
+      }
+      val requestGateway: suspend (String, String?) -> String = { method, params ->
+        val request = Json.parseToJsonElement(params ?: "{}").jsonObject
+        when (method) {
+          "sessions.list" -> {
+            val limit = request["limit"]?.jsonPrimitive?.content?.toInt() ?: 50
+            val rows =
+              if (request["agentId"]?.jsonPrimitive?.content == "scout") {
+                sessions
+                  .get()
+                  .filter { row ->
+                    row.key != chosenKey || description.get() !in setOf(RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck)
+                  }.sortedByDescending { it.updatedAtMs }
               } else {
-                val agentId = requireNotNull(resolveAgentIdFromMainSessionKey(key))
-                """{"session":{"key":"$key","sessionId":"session-$key","agentId":"$agentId","label":"App","archived":false}}"""
+                emptyList()
               }
+            val page = rows.take(limit)
+            // Bootstrap also lists sessions; only the 200-row selection lookup owns this rendezvous.
+            if (limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
+            page.joinToString(
+              prefix = """{"sessions":[""",
+              postfix = """],"totalCount":${rows.size},"hasMore":${page.size < rows.size}}""",
+            ) { row ->
+              """{"key":"${row.key}","sessionId":"${sessionId(row.key)}","agentId":"scout","updatedAt":${row.updatedAtMs},"archived":false}"""
+            }
+          }
+
+          "sessions.patch" -> {
+            check(describedState == RememberedSessionState.ArchivedAck)
+            check(request.keys == setOf("key", "agentId", "expectedSessionId", "archived"))
+            assertEquals(JsonPrimitive(chosenKey), request["key"])
+            assertEquals(JsonPrimitive("scout"), request["agentId"])
+            assertEquals(JsonPrimitive(archiveSessionId), request["expectedSessionId"])
+            assertEquals(JsonPrimitive(true), request["archived"])
+            description.set(RememberedSessionState.ArchivedAck)
+            archiveRequested.complete(Unit)
+            releaseArchive.await()
+            // Return the saved ACK without an event, even if a new selection or
+            // physical lease took over while the response was pending.
+            """{"ok":true,"key":"$chosenKey","entry":{"sessionId":"$archiveSessionId","updatedAt":200,"archivedAt":200}}"""
+          }
+
+          "sessions.describe" -> {
+            check(request.keys.all { it in setOf("key", "includeDerivedTitles", "includeLastMessage") })
+            val key = request.getValue("key").jsonPrimitive.content
+            if (key == chosenKey) {
+              exactDescriptions += 1
+              lookupStarted.get()?.complete(currentCoroutineContext().job)
+              when (description.get()) {
+                RememberedSessionState.NullResponse, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck -> {
+                  """{"session":null}"""
+                }
+
+                RememberedSessionState.Unavailable -> {
+                  error("Session lookup temporarily unavailable")
+                }
+
+                else -> {
+                  val archived = description.get() == RememberedSessionState.Archived
+                  """{"session":{"key":"$key","sessionId":"${sessionId(key)}","agentId":"scout","updatedAt":10,"archived":$archived}}"""
+                }
+              }
+            } else {
+              val agentId = requireNotNull(resolveAgentIdFromMainSessionKey(key))
+              """{"session":{"key":"$key","sessionId":"session-$key","agentId":"$agentId","label":"App","archived":false}}"""
+            }
+          }
+
+          "chat.history" -> {
+            val key = request.getValue("sessionKey").jsonPrimitive.content
+            // Identity comes from live history, not a sessionInfo/list-row shortcut.
+            """{"sessionId":"${sessionId(key)}","messages":[]}"""
+          }
+
+          "health" -> {
+            """{"ok":true}"""
+          }
+
+          "chat.metadata" -> {
+            "{}"
+          }
+
+          "question.list" -> {
+            """{"questions":[]}"""
+          }
+
+          "progressCard.get" -> {
+            """{"card":null}"""
+          }
+
+          else -> {
+            error("Unexpected gateway request: $method")
+          }
+        }
+      }
+      installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
+
+      suspend fun selectAgentAndWait(agentId: String) {
+        val started = CompletableDeferred<Job>()
+        lookupStarted.set(started)
+        runtime.selectChatAgent(agentId)
+        withTimeout(2_000) {
+          started.await().join()
+          runtime.chatSessionId.first { it != null }
+          runtime.chatHistoryLoading.first { !it }
+        }
+        lookupStarted.compareAndSet(started, null)
+      }
+
+      selectAgentAndWait("scout")
+      assertEquals(chosenKey, runtime.chatSessionKey.value)
+
+      runtime.switchChatSession(chosenKey, "scout")
+      // More than one full page is newer; absence remains non-authoritative in every outcome.
+      val newerSessions =
+        (1..201).map { index ->
+          ChatSessionEntry(key = "agent:scout:recent-$index", updatedAtMs = 100L + index, ownerAgentId = "scout")
+        }
+      val newestKey = newerSessions.last().key
+      sessions.set(newerSessions + chosenSession)
+      if (describedState == RememberedSessionState.ArchivedAck) {
+        val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) chosenSessionId.set(archiveSessionId)
+        val archive =
+          async {
+            chat.patchSession(
+              key = chosenKey,
+              ownerAgentId = "scout",
+              expectedSessionId = archiveSessionId,
+              archived = true,
+            )
+          }
+        withTimeout(2_000) { archiveRequested.await() }
+        if (preservesChoice) {
+          // The old archive has committed; an intervening restore/recreation is
+          // visible without requiring its best-effort notification to arrive.
+          description.set(RememberedSessionState.Active)
+          when (archiveAckOrder) {
+            ArchiveAckOrder.AfterSameKeyReselection -> {
+              runtime.switchChatSession(chosenKey, "scout")
             }
 
-            "chat.history" -> {
-              val key = request.getValue("sessionKey").jsonPrimitive.content
-              """{"sessionId":"session-$key","messages":[]}"""
+            ArchiveAckOrder.AfterNewSessionIdentity, ArchiveAckOrder.AfterDifferentArchivedIdentity -> {
+              val selectionGeneration = chat.selectionGeneration.value
+              chosenSessionId.set("replacement-$chosenKey")
+              chat.refresh()
+              withTimeout(2_000) {
+                runtime.chatSessionId.first { it == chosenSessionId.get() }
+                runtime.chatHistoryLoading.first { !it }
+              }
+              assertEquals(selectionGeneration, chat.selectionGeneration.value)
             }
 
-            "health" -> {
-              """{"ok":true}"""
-            }
-
-            "chat.metadata" -> {
-              "{}"
-            }
-
-            "question.list" -> {
-              """{"questions":[]}"""
-            }
-
-            "progressCard.get" -> {
-              """{"card":null}"""
+            ArchiveAckOrder.AfterLeaseRetirement -> {
+              leaseGeneration.incrementAndGet()
             }
 
             else -> {
-              error("Unexpected gateway request: $method")
+              error("Expected a newer selection or a retired lease")
             }
           }
         }
-        installChatGateway(runtime, requestGateway)
+        if (archiveAckOrder != ArchiveAckOrder.Active) selectAgentAndWait("writer")
+        val selectedBeforeAck = runtime.chatSessionKey.value
+        releaseArchive.complete(Unit)
+        assertTrue(withTimeout(2_000) { archive.await() })
+        if (archiveAckOrder == ArchiveAckOrder.Active) {
+          assertEquals("The acknowledged active archive must navigate away", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+        } else {
+          assertEquals("Retiring an old owner's memory must not navigate", selectedBeforeAck, runtime.chatSessionKey.value)
+        }
+      } else {
+        description.set(describedState)
+      }
+      if (resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value) != "writer") selectAgentAndWait("writer")
+      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value))
+      if (describedState == RememberedSessionState.ArchivedEvent) {
+        val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        chat.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"$chosenKey","agentId":"scout","reason":"archive","sessionId":"session-$chosenKey","archived":true,"archivedAt":200,"permissionMode":null,"permissionModePending":false}""",
+        )
+      }
+      selectAgentAndWait("scout")
 
-        suspend fun selectAgentAndWait(agentId: String) {
-          val started = CompletableDeferred<Job>()
-          lookupStarted.set(started)
-          runtime.selectChatAgent(agentId)
-          withTimeout(2_000) {
-            started.await().join()
-            runtime.chatSessionId.first { it != null }
-            runtime.chatHistoryLoading.first { !it }
-          }
-          lookupStarted.compareAndSet(started, null)
+      when (describedState) {
+        RememberedSessionState.Active -> {
+          assertEquals("Explicitly selecting the already-visible chat must be remembered", chosenKey, runtime.chatSessionKey.value)
         }
 
-        selectAgentAndWait("scout")
-        assertEquals(chosenKey, runtime.chatSessionKey.value)
+        RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent -> {
+          assertEquals("An archived session must not be restored", newestKey, runtime.chatSessionKey.value)
+        }
 
-        runtime.switchChatSession(chosenKey, "scout")
-        // More than one full page is newer; absence remains non-authoritative in every outcome.
-        val newerSessions =
-          (1..201).map { index ->
-            ChatSessionEntry(key = "agent:scout:recent-$index", updatedAtMs = 100L + index, ownerAgentId = "scout")
-          }
-        val newestKey = newerSessions.last().key
-        sessions.set(newerSessions + chosenSession)
-        description.set(describedState)
-        selectAgentAndWait("writer")
-        assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value))
-        if (describedState == RememberedSessionState.ArchivedEvent) {
-          val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
-          chat.handleGatewayEvent(
-            "sessions.changed",
-            """{"sessionKey":"$chosenKey","agentId":"scout","reason":"archive","sessionId":"session-$chosenKey","archived":true,"archivedAt":200,"permissionMode":null,"permissionModePending":false}""",
+        RememberedSessionState.ArchivedAck -> {
+          val expectedKey = if (preservesChoice) chosenKey else newestKey
+          assertEquals("The archive ACK may retire only its own remembered occurrence", expectedKey, runtime.chatSessionKey.value)
+          if (preservesChoice) assertEquals(chosenSessionId.get(), runtime.chatSessionId.value)
+        }
+
+        RememberedSessionState.NullResponse, RememberedSessionState.Unavailable -> {
+          assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+          assertEquals(
+            "An unresolved selection must show an action hint",
+            "Could not restore the last chat. Select a chat from the sidebar.",
+            runtime.chatError.value,
           )
         }
-        selectAgentAndWait("scout")
-
-        when (describedState) {
-          RememberedSessionState.Active -> {
-            assertEquals("Explicitly selecting the already-visible chat must be remembered", chosenKey, runtime.chatSessionKey.value)
-          }
-
-          RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent -> {
-            assertEquals("An archived session must not be restored", newestKey, runtime.chatSessionKey.value)
-          }
-
-          RememberedSessionState.NullResponse, RememberedSessionState.Unavailable -> {
-            assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
-            assertEquals(
-              "An unresolved selection must show an action hint",
-              "Could not restore the last chat. Select a chat from the sidebar.",
-              runtime.chatError.value,
-            )
-          }
-        }
-        if (describedState == RememberedSessionState.ArchivedEvent) assertEquals(0, exactDescriptions)
-        if (describedState != RememberedSessionState.Active) {
-          description.set(RememberedSessionState.Active)
-          selectAgentAndWait("writer")
-          selectAgentAndWait("scout")
-          if (describedState in setOf(RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent)) {
-            assertEquals("A retired preference must not return when its old session reappears", newestKey, runtime.chatSessionKey.value)
-          } else {
-            assertEquals("A later agent return must retry the remembered session", chosenKey, runtime.chatSessionKey.value)
-          }
-        }
-      } finally {
-        closeNodeRuntimeTestFixture(runtime)
       }
+      if (describedState == RememberedSessionState.ArchivedEvent || (describedState == RememberedSessionState.ArchivedAck && !preservesChoice)) {
+        assertEquals("An acknowledged retirement must not depend on another exact lookup", 0, exactDescriptions)
+      }
+      if (describedState != RememberedSessionState.Active) {
+        description.set(RememberedSessionState.Active)
+        selectAgentAndWait("writer")
+        selectAgentAndWait("scout")
+        if (describedState in setOf(RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck) && !preservesChoice) {
+          assertEquals("A retired preference must not return when its old session reappears", newestKey, runtime.chatSessionKey.value)
+        } else {
+          assertEquals("A later agent return must retry the remembered session", chosenKey, runtime.chatSessionKey.value)
+        }
+      }
+    } finally {
+      releaseArchive.complete(Unit)
+      closeNodeRuntimeTestFixture(runtime)
     }
+  }
 
   private fun assertCurrentSessionSelectionWinsAtPublication(catalogContinuation: Boolean) =
     runBlocking {
@@ -788,6 +909,7 @@ class NodeRuntimeAgentSelectionTest {
   private fun installChatGateway(
     runtime: NodeRuntime,
     requestGateway: suspend (String, String?) -> String,
+    requestLeaseGeneration: () -> Int = { 0 },
   ) {
     val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->
       requestGateway(method, params)
@@ -796,7 +918,11 @@ class NodeRuntimeAgentSelectionTest {
     ReflectionHelpers.setField(chat, "requestGateway", requestGateway)
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", requestGatewayForGateway)
     val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
-      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
+      val generation = requestLeaseGeneration()
+      GatewaySession.RequestLease(
+        endpointStableId = gatewayScope?.gatewayId.orEmpty(),
+        isCurrentImpl = { generation == requestLeaseGeneration() },
+      ) { method, paramsJson, _, withEnqueue ->
         withEnqueue {}
         if (gatewayScope == null) {
           requestGateway(method, paramsJson)
