@@ -33,12 +33,8 @@ type QrCliOptions = {
   voiceNode?: boolean;
 };
 
-function formatPlaintextTransportWarning(accessDowngraded: boolean): string {
-  const accessNotice = accessDowngraded
-    ? "This Gateway URL uses plaintext ws://, so the setup code was limited for safety."
-    : "This Gateway URL uses plaintext ws://.";
-  return `${accessNotice} The first connection stays pending until an existing owner approves it. Run openclaw devices list, then openclaw devices approve <requestId>. Use wss:// or Tailscale Serve, then generate a new code for automatic setup and full access.`;
-}
+const LIMITED_TRANSPORT_WARNING =
+  "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
 function renderQrAscii(data: string): Promise<string> {
   return renderQrTerminal(data, { small: true });
@@ -241,10 +237,8 @@ export function registerQrCli(program: Command) {
         const setupCode = encodePairingSetupCode(resolved.payload);
 
         if (opts.setupCodeOnly) {
-          if (resolved.requiresOwnerApproval) {
-            defaultRuntime.error(
-              theme.warn(formatPlaintextTransportWarning(resolved.accessDowngraded)),
-            );
+          if (resolved.accessDowngraded) {
+            defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
           }
           defaultRuntime.log(setupCode);
           return;
@@ -259,7 +253,6 @@ export function registerQrCli(program: Command) {
             urlSource: resolved.urlSource,
             access: resolved.access,
             ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
-            ...(resolved.requiresOwnerApproval ? { requiresOwnerApproval: true } : {}),
           });
           return;
         }
@@ -282,9 +275,7 @@ export function registerQrCli(program: Command) {
             []),
           `${theme.muted("Auth:")} ${resolved.authLabel}`,
           `${theme.muted("Access:")} ${resolved.access}`,
-          ...(resolved.requiresOwnerApproval
-            ? [theme.warn(formatPlaintextTransportWarning(resolved.accessDowngraded))]
-            : []),
+          ...(resolved.accessDowngraded ? [theme.warn(LIMITED_TRANSPORT_WARNING)] : []),
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
           "Approve after scan with:",

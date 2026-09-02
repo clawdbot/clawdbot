@@ -33,11 +33,6 @@ vi.mock("./api.js", () => ({
     roles: ["node", "operator"],
     scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
   },
-  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE: {
-    roles: ["node", "operator"],
-    scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
-    purpose: "mobile-lan",
-  },
   approveDevicePairing: vi.fn(),
   clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
   definePluginEntry: vi.fn((entry) => entry),
@@ -87,12 +82,6 @@ const LIMITED_SETUP_REQUEST = {
   profile: {
     roles: ["node", "operator"],
     scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
-  },
-};
-const PLAINTEXT_LAN_SETUP_REQUEST = {
-  profile: {
-    ...LIMITED_SETUP_REQUEST.profile,
-    purpose: "mobile-lan",
   },
 };
 const FULL_SETUP_REQUEST = {
@@ -605,36 +594,10 @@ describe("device-pair /pair default setup code", () => {
         { gatewayClientScopes: ["operator.admin"] },
       ),
     );
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(
-      PLAINTEXT_LAN_SETUP_REQUEST,
-    );
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(LIMITED_SETUP_REQUEST);
     expect(text).toContain("Gateway: ws://192.168.1.20:18789");
     expect(text).toContain("Access: limited");
     expect(text).toContain("Plaintext ws:// was limited for safety");
-    expect(text).toContain(
-      "The first connection stays pending until an existing owner approves it",
-    );
-    expect(text).toContain("/pair pending");
-    expect(text).toContain("/pair approve <requestId>");
-  });
-
-  it("keeps loopback cleartext setup on the current limited profile", async () => {
-    await runDefaultSetup({ pluginConfig: { publicUrl: "ws://127.0.0.1:18789" } });
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(LIMITED_SETUP_REQUEST);
-  });
-
-  it("explains approval for already-limited plaintext setup", async () => {
-    const text = requireText(
-      await runDefaultSetup({ pluginConfig: { publicUrl: "ws://192.168.1.20:18789" } }),
-    );
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(
-      PLAINTEXT_LAN_SETUP_REQUEST,
-    );
-    expect(text).toContain(
-      "The first connection stays pending until an existing owner approves it",
-    );
-    expect(text).toContain("/pair pending");
-    expect(text).toContain("/pair approve <requestId>");
   });
 
   it("uses the advertised LAN helper for bind-derived setup urls", async () => {

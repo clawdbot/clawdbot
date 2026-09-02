@@ -184,8 +184,6 @@ export async function resolvePairingApprovalPlan(params: {
   const setupCodeHandoffBootstrapProfile = allowSetupCodeHandoffBootstrapPairing
     ? boundBootstrapProfile
     : null;
-  const requiresSetupCodeOwnerApproval =
-    allowSetupCodeHandoffBootstrapPairing && boundBootstrapProfile?.purpose === "mobile-lan";
   const allowControlUiOwnerBootstrapPairing =
     reason === "scope-upgrade" &&
     isControlUiOwnerBootstrapProfile({
@@ -204,9 +202,9 @@ export async function resolvePairingApprovalPlan(params: {
     : null;
   // This is the native QR/setup-code onboarding seam. Mobile clients
   // must prove their canonical client id and platform/family metadata
-  // agree before the Gateway can hand off the selected operator profile.
-  // Plaintext-LAN profiles keep that handoff only after owner approval;
-  // secure full/limited setup may still complete silently.
+  // agree before the Gateway can skip owner approval and hand off the
+  // selected operator profile below. Full mobile setup includes admin;
+  // limited setup retains the previous bounded operator scope set.
   const bootstrapPairingRoles = setupCodeHandoffBootstrapProfile
     ? uniqueStrings([role, ...setupCodeHandoffBootstrapProfile.roles])
     : controlUiOperatorBootstrapProfile
@@ -232,11 +230,10 @@ export async function resolvePairingApprovalPlan(params: {
     // stay a durable cap while owner-credentialed local clients widen
     // without a prompt they could bypass with a fresh identity anyway.
     silent:
-      !requiresSetupCodeOwnerApproval &&
-      (allowSilentLocalPairing ||
-        allowSilentTrustedCidrsNodePairing ||
-        allowSetupCodeHandoffBootstrapPairing ||
-        allowControlUiOperatorBootstrapPairing),
+      allowSilentLocalPairing ||
+      allowSilentTrustedCidrsNodePairing ||
+      allowSetupCodeHandoffBootstrapPairing ||
+      allowControlUiOperatorBootstrapPairing,
     allowSilentLocalPairing,
     trustedProxyAutoApproveScopes,
     trustedProxyUser,

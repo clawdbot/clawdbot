@@ -1,5 +1,4 @@
 import { expect, test } from "vitest";
-import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
 import {
   createOperatorIdentityFixture,
   REMOTE_BOOTSTRAP_HEADERS,
@@ -33,7 +32,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
       deviceFamily: string;
     };
     limited?: boolean;
-    bootstrapProfile?: DeviceBootstrapProfile;
     identityFixture?: Awaited<ReturnType<typeof createOperatorIdentityFixture>>;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
@@ -47,11 +45,9 @@ export function registerControlUiMobileBootstrapSuite(): void {
       const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       try {
         const issued = await issueDeviceBootstrapToken({
-          profile:
-            params.bootstrapProfile ??
-            (params.limited
-              ? PAIRING_SETUP_BOOTSTRAP_PROFILE
-              : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE),
+          profile: params.limited
+            ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+            : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         });
         const initial = await connectReq(wsBootstrap, {
           skipDefaultAuth: true,
@@ -61,7 +57,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
           client: params.client,
           deviceIdentityPath: identityPath,
         });
-        return { identity, identityPath, issued, initial };
+        return { identity, initial };
       } finally {
         wsBootstrap.close();
       }
@@ -461,109 +457,6 @@ export function registerControlUiMobileBootstrapSuite(): void {
         scopes: ["operator.pairing"],
       }),
     ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
-  });
-
-  test("plaintext LAN mobile setup requires owner approval before token handoff", async () => {
-    const { mutateConfigFile } = await import("../config/config.js");
-    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
-    const { listDevicePairing } = await import("../infra/device-pairing.js");
-    const { PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
-      await import("../shared/device-bootstrap-profile.js");
-    const client = {
-      id: "openclaw-ios",
-      version: "2026.9.1",
-      platform: "iOS 26.3.1",
-      mode: "node" as const,
-      deviceFamily: "iPhone",
-    };
-    await mutateConfigFile({
-      mutate(config) {
-        config.gateway = {
-          ...config.gateway,
-          nodes: { pairing: { autoApproveCidrs: ["10.0.0.14/32"] } },
-        };
-      },
-      afterWrite: { mode: "auto" },
-    });
-    const { identity, identityPath, issued, initial } = await connectSetupCodeBootstrapNode({
-      identityPrefix: "openclaw-bootstrap-plaintext-lan-node-",
-      client,
-      bootstrapProfile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-
-    expect(initial.ok).toBe(false);
-    expect(initial.error?.message ?? "").toContain("pairing required");
-    expect(initial.error?.details).toMatchObject({
-      code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      recommendedNextStep: "wait_then_retry",
-      retryable: true,
-      pauseReconnect: false,
-    });
-    expect(initial.payload).toBeUndefined();
-
-    const pending = (await listDevicePairing()).pending.find(
-      (entry) => entry.deviceId === identity.deviceId,
-    );
-    expect(pending).toMatchObject({
-      clientId: client.id,
-      clientMode: client.mode,
-      role: "node",
-      roles: ["node", "operator"],
-      scopes: [
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-      silent: false,
-    });
-    if (!pending) {
-      throw new Error("expected pending plaintext LAN mobile pairing");
-    }
-    await expect(
-      approveDevicePairing(pending.requestId, { callerScopes: ["operator.admin"] }),
-    ).resolves.toMatchObject({ status: "approved" });
-
-    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
-    try {
-      const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const retry = await connectReq(wsRetry, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "node",
-        scopes: [],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      expect(retry.ok).toBe(true);
-      // SAFETY: a successful connect response is the public hello-ok payload asserted below.
-      const payload = retry.payload as
-        | {
-            auth?: {
-              deviceToken?: string;
-              deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
-            };
-          }
-        | undefined;
-      expect(payload?.auth?.deviceToken).toBeTruthy();
-      expect(payload?.auth?.deviceTokens?.find((entry) => entry.role === "operator")).toMatchObject(
-        {
-          deviceToken: expect.any(String),
-          scopes: [
-            "operator.approvals",
-            "operator.questions",
-            "operator.read",
-            "operator.talk.secrets",
-            "operator.write",
-          ],
-        },
-      );
-      wsRetry.close();
-    } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
   });
 
   test("full qr setup upgrades an existing limited mobile pairing", async () => {

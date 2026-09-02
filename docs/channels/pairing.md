@@ -185,10 +185,7 @@ That bootstrap token carries the built-in pairing bootstrap profile:
 - Control UI **Limited access** and `openclaw qr --limited` omit
   `operator.admin` while keeping the other operator scopes
 - plaintext LAN `ws://` setup automatically uses the same limited profile;
-  it remains pending until an existing owner approves the device, then the
-  mobile app retries and receives the limited token handoff
-- configure `wss://` or Tailscale Serve and generate a new code to retain
-  automatic setup and get full access
+  configure `wss://` or Tailscale Serve and generate a new code for full access
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 

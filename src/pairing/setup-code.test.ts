@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -94,10 +93,9 @@ describe("pairing setup code", () => {
     },
   } as const;
   const limitedPlaintextAccess = {
-    bootstrapProfile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
     access: "limited" as const,
     accessDowngraded: true,
-    requiresOwnerApproval: true,
   };
   const gatewayPasswordSecretRef: SecretInput = {
     source: "env",
@@ -181,7 +179,6 @@ describe("pairing setup code", () => {
       bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
       access?: "full" | "limited" | "node";
       accessDowngraded?: boolean;
-      requiresOwnerApproval?: boolean;
     },
   ) {
     expect(resolved.ok).toBe(true);
@@ -220,7 +217,6 @@ describe("pairing setup code", () => {
     }
     expect(resolved.access).toBe(params.access ?? "full");
     expect(resolved.accessDowngraded).toBe(params.accessDowngraded ?? false);
-    expect(resolved.requiresOwnerApproval).toBe(params.requiresOwnerApproval ?? false);
   }
 
   function expectResolvedSetupError(resolved: ResolvedSetup, snippet: string) {
@@ -242,7 +238,6 @@ describe("pairing setup code", () => {
       bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
       access?: "full" | "limited" | "node";
       accessDowngraded?: boolean;
-      requiresOwnerApproval?: boolean;
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
     expectedRunCommandCalls?: number;
@@ -395,37 +390,6 @@ describe("pairing setup code", () => {
         urlSource: "plugins.entries.device-pair.config.publicUrl",
         bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         access: "limited",
-      },
-    });
-  });
-
-  it.each([
-    {
-      name: "keeps explicit limited access on TLS",
-      publicUrl: "wss://gateway.example.test:18789",
-      expectedProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      requiresOwnerApproval: false,
-    },
-    {
-      name: "requires approval for explicit limited access on plaintext LAN",
-      publicUrl: "ws://192.168.1.20:18789",
-      expectedProfile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      requiresOwnerApproval: true,
-    },
-  ])("$name", async ({ publicUrl, expectedProfile, requiresOwnerApproval }) => {
-    await expectResolvedSetupSuccessCase({
-      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
-      options: {
-        publicUrl,
-        bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      },
-      expected: {
-        authLabel: "token",
-        url: publicUrl,
-        urlSource: "plugins.entries.device-pair.config.publicUrl",
-        bootstrapProfile: expectedProfile,
-        access: "limited",
-        requiresOwnerApproval,
       },
     });
   });

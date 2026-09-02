@@ -4,7 +4,6 @@ export {
   clearDeviceBootstrapTokens,
   issueDeviceBootstrapToken,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   listDevicePairing,
   revokeDeviceBootstrapToken,
   type DeviceBootstrapProfile,

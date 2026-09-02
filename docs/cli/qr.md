@@ -40,7 +40,7 @@ openclaw devices approve <requestId>
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
 - `--setup-code-only`: print only the setup code
 - `--no-ascii`: skip ASCII QR rendering
-- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, optional `requiresOwnerApproval`, `urlSource`)
+- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
 `--token` and `--password` are mutually exclusive. `--limited` and `--voice-node` are mutually exclusive.
 
@@ -57,10 +57,8 @@ Use `--voice-node` for an embedded or room voice client. It keeps the node token
 
 Plaintext LAN `ws://` setup remains available, but OpenClaw automatically uses
 the limited profile because a network observer could capture and race the bearer
-bootstrap token. The first connection stays pending until an existing owner
-approves it with `openclaw devices approve <requestId>`; the mobile app retries
-and receives its tokens only after that approval. Configure `wss://` or Tailscale
-Serve, then generate a new code to retain automatic setup and get full access.
+bootstrap token. Configure `wss://` or Tailscale Serve, then generate a new code
+to get full access.
 
 ## Gateway URL resolution
 

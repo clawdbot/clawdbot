@@ -8,7 +8,6 @@ import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   isMobilePairingSetupBootstrapProfile,
   isNodePairingSetupBootstrapProfile,
@@ -212,9 +211,6 @@ describe("device bootstrap profile", () => {
 
   test("recognizes only the supported mobile setup profiles", () => {
     expect(isMobilePairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
-    expect(
-      isMobilePairingSetupBootstrapProfile(PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE),
-    ).toBe(true);
     expect(isMobilePairingSetupBootstrapProfile(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
       true,
     );

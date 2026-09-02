@@ -39,7 +39,6 @@ type SetupPayload = {
   expiresAtMs: number;
   access: "full" | "limited";
   accessDowngraded?: true;
-  requiresOwnerApproval: boolean;
 };
 
 type ResolveUrlResult = {
@@ -632,11 +631,6 @@ function buildAccessLines(payload: SetupPayload, markdown = false): string[] {
           `${prefix}Plaintext ws:// was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.`,
         ]
       : []),
-    ...(payload.requiresOwnerApproval
-      ? [
-          `${prefix}The first connection stays pending until an existing owner approves it. Run /pair pending, then /pair approve <requestId>.`,
-        ]
-      : []),
   ];
 }
 
@@ -645,11 +639,8 @@ async function issueSetupPayload(params: {
   urls?: string[];
   allowFullAccess: boolean;
 }): Promise<SetupPayload> {
-  const {
-    issueDeviceBootstrapToken,
-    PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  } = await loadDevicePairApiModule();
+  const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+    await loadDevicePairApiModule();
   const hasPlaintextRoute = [...new Set([params.url, ...(params.urls ?? [])])].some(
     (url) => !isFullAccessMobilePairingUrl(url),
   );
@@ -658,15 +649,13 @@ async function issueSetupPayload(params: {
   const fullAccess = params.allowFullAccess && !hasPlaintextRoute;
   const accessDowngraded = params.allowFullAccess && hasPlaintextRoute;
   const issuedBootstrap = await issueDeviceBootstrapToken({
-    profile: hasPlaintextRoute
-      ? PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE
-      : fullAccess
-        ? {
-            roles: [...PAIRING_SETUP_BOOTSTRAP_PROFILE.roles],
-            scopes: ["operator.admin", ...PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes],
-            purpose: "mobile-full",
-          }
-        : PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    profile: fullAccess
+      ? {
+          roles: [...PAIRING_SETUP_BOOTSTRAP_PROFILE.roles],
+          scopes: ["operator.admin", ...PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes],
+          purpose: "mobile-full",
+        }
+      : PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
   return {
     url: params.url,
@@ -675,7 +664,6 @@ async function issueSetupPayload(params: {
     expiresAtMs: issuedBootstrap.expiresAtMs,
     access: fullAccess ? "full" : "limited",
     ...(accessDowngraded ? { accessDowngraded: true } : {}),
-    requiresOwnerApproval: hasPlaintextRoute,
   };
 }
 

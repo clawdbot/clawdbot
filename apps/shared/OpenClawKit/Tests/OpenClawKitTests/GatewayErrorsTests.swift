@@ -252,24 +252,6 @@ struct GatewayErrorsTests {
         #expect(problem?.actionCommand == "openclaw devices approve req-123")
     }
 
-    @Test func `retryable pairing problem keeps reconnect active`() throws {
-        let error = GatewayConnectAuthError(
-            message: "pairing required",
-            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
-            canRetryWithDeviceToken: false,
-            recommendedNextStep: "wait_then_retry",
-            requestId: "req-mobile-lan",
-            retryableOverride: true,
-            pauseReconnectOverride: false)
-
-        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
-
-        #expect(problem.needsPairingApproval)
-        #expect(problem.retryable)
-        #expect(!problem.pauseReconnect)
-        #expect(problem.technicalDetails?.contains("next=wait_then_retry") == true)
-    }
-
     @Test func `scope mismatch maps to pairing or repair problem`() {
         let error = GatewayConnectAuthError(
             message: "device token scope mismatch",
