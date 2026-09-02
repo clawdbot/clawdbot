@@ -233,14 +233,11 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       continue;
     }
     const distNodeModules = path.join(distPluginDir, "node_modules");
-    // Metadata cleanup must never traverse a previous source-dependency link.
-    if (
-      buildEntry.isolated &&
-      fs.lstatSync(distNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()
-    ) {
+    // Cleanup must not traverse an old source-dependency link, even when
+    // switching from an isolated build to a unified profile.
+    if (fs.lstatSync(distNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()) {
       fs.unlinkSync(distNodeModules);
     }
-
 
     sourcePluginDirs.add(dirent.name);
 
