@@ -122,9 +122,9 @@ flow:
             expr: "emptyOutbound.every((message) => !String(message.text ?? '').includes(config.metadataSentinel) && !String(message.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT') && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
               expr: "`empty completion leaked silence or internal metadata; outbound=${recentOutboundSummary(state)}`"
-        - set: preRestartOutbound
+        - set: postCompletionRequestCursor
           value:
-            expr: "emptyOutbound.map((message) => ({ id: message.id, text: String(message.text ?? '') }))"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: restartPatch
           value:
             expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } } })"
@@ -153,12 +153,15 @@ flow:
         - set: postRestartOutbound
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversationId).map((message) => ({ id: message.id, text: String(message.text ?? '') }))"
+        - set: postRestartRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${postCompletionRequestCursor}`) : []"
         - assert:
             expr: "restoredTask?.taskId === emptyTask.taskId && restoredTask?.status === 'completed' && restoredTask?.terminalOutcome === 'succeeded' && restoredTask?.deliveryStatus === 'not_applicable'"
             message:
               expr: "`empty completion lost its terminal state after restart: ${JSON.stringify({ expectedTaskId: emptyTask.taskId, taskId: restoredTask?.taskId, status: restoredTask?.status, terminalOutcome: restoredTask?.terminalOutcome, deliveryStatus: restoredTask?.deliveryStatus })}`"
         - assert:
-            expr: "JSON.stringify(postRestartOutbound.map((message) => message.id).sort()) === JSON.stringify(preRestartOutbound.map((message) => message.id).sort()) && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
+            expr: "postRestartRequests.length === 0 && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
-              expr: "`Gateway restart created new or invalid empty-completion output: before=${JSON.stringify(preRestartOutbound)} after=${JSON.stringify(postRestartOutbound)}`"
-      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutbound.map((message) => String(message.text ?? '')), postRestartUnexpectedPayloadCount: postRestartOutbound.length - preRestartOutbound.length, providerMode: env.providerMode, pass: true }, null, 2)"
+              expr: "`Gateway restart retried or exposed empty completion: requests=${JSON.stringify(postRestartRequests)} outbound=${JSON.stringify(postRestartOutbound)}`"
+      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutbound.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"
