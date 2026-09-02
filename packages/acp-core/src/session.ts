@@ -30,6 +30,13 @@ type AcpSessionStoreOptions = {
   maxSessions?: number;
   idleTtlMs?: number;
   now?: () => number;
+  /**
+   * Invoked for every session that leaves the store, whichever path removes it:
+   * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
+   * mirror session identity elsewhere use this to stay in step with the store,
+   * since eviction and reaping produce no ACP request a peer could observe.
+   */
+  onSessionRemoved?: (sessionId: string) => void;
 };
 
 const DEFAULT_MAX_SESSIONS = 5_000;
@@ -42,6 +49,7 @@ export function createInMemorySessionStore(
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
   const now = options.now ?? Date.now;
+  const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
   const runIdToSessionId = new Map<string, string>();
 
@@ -59,6 +67,7 @@ export function createInMemorySessionStore(
     }
     session.abortController?.abort();
     sessions.delete(sessionId);
+    onSessionRemoved?.(sessionId);
     return true;
   };
 
@@ -200,8 +209,12 @@ export function createInMemorySessionStore(
     for (const session of sessions.values()) {
       session.abortController?.abort();
     }
+    const removed = [...sessions.keys()];
     sessions.clear();
     runIdToSessionId.clear();
+    for (const sessionId of removed) {
+      onSessionRemoved?.(sessionId);
+    }
   };
 
   return {

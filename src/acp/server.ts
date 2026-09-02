@@ -9,6 +9,7 @@ import {
   ndJsonStream,
   type AnyMessage,
 } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -107,6 +108,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   });
 
   let agent: AcpGatewayAgent | null = null;
+  let sessionStore: ReturnType<typeof createInMemorySessionStore> | null = null;
   let onClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     onClosed = resolve;
@@ -205,6 +207,10 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     const activeAgent = agent;
     agent = null;
     await activeAgent?.shutdown();
+    // Injected stores stay caller-owned, so this one is released here rather than
+    // by the agent.
+    sessionStore?.dispose();
+    sessionStore = null;
     const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
       console.warn(`acp: gateway stop failed during shutdown: ${formatErrorMessage(err)}`);
     });
@@ -247,6 +253,14 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const output = Writable.toWeb(process.stdout);
   const stream = ndJsonStream(output, bufferedInput);
   const sessionNewOrdering = new AcpSessionNewOrdering();
+  // The ordering boundary mirrors session identity so it can tell an established
+  // session from a pending one. Idle reaping and capacity eviction remove sessions
+  // without any ACP request the boundary could observe, so the store reports every
+  // removal back to it; the boundary stays in step with the store's own lifecycle
+  // rather than only with the close requests a client chooses to send.
+  sessionStore = createInMemorySessionStore({
+    onSessionRemoved: (sessionId) => sessionNewOrdering.forget(sessionId),
+  });
   const readable = stream.readable.pipeThrough(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
@@ -274,7 +288,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
 
   const connection = new AgentSideConnection(
     (conn: AgentSideConnection) => {
-      agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
+      agent = new AcpGatewayAgent(conn, gateway, {
+        ...opts,
+        eventLedger,
+        sessionStore: sessionStore ?? undefined,
+      });
       agent.start();
       return agent;
     },

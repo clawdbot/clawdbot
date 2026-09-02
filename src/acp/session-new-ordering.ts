@@ -9,16 +9,18 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 const SESSION_ESTABLISHING_METHODS = new Set(["session/load", "session/resume"]);
 
 /**
- * Every collection here is filled by the peer, so every one is bounded, and every
- * bound fails open by writing updates through in arrival order. Dropping an update
- * loses session content permanently, while emitting one early only restores the
- * ordering that existed before this boundary.
+ * The one bound in this file. It caps how much of a single session's initial burst
+ * is held, and fails open by writing the update through in arrival order: dropping
+ * an update loses session content permanently, while emitting one early only
+ * restores the ordering that existed before this boundary.
+ *
+ * Nothing else is capped, deliberately. The number of sessions with queued updates
+ * is the number of accepted creations still outstanding, and the identifier sets
+ * track work the bridge has already admitted. Every earlier cap on those sat below
+ * what the bridge accepts, so ordinary traffic overflowed it and silently lost the
+ * guarantee — a rate limit bounds arrivals, not concurrency, so no fixed number is
+ * safe there.
  */
-// Sized to sit above what the agent itself admits — its default window allows well
-// over a hundred creations — so ordinary accepted traffic can never overflow this
-// and silently fall back to unordered delivery. A peer reaching it has paid for that
-// many real session creations, and the per-session bound below still applies.
-const MAX_QUEUED_SESSIONS = 512;
 const MAX_QUEUED_UPDATES_PER_SESSION = 256;
 
 type QueuedUpdate = { sessionId: string; message: AnyMessage };
@@ -40,7 +42,8 @@ export class AcpSessionNewOrdering {
    * Session IDs the protocol established, either by client assertion or by a
    * `session/new` result.
    *
-   * Uncapped, and released by `session/close`. Every entry corresponds to a session
+   * Uncapped, and released by `forget` — on `session/close` and whenever the session
+   * store removes the session itself. Every entry corresponds to a session
    * that is live on the Gateway side, which costs orders of magnitude more than the
    * ID string held here, so this can never be the binding constraint. Capping it
    * would mean a bridge that reaches the cap stops being able to tell an established
@@ -95,12 +98,20 @@ export class AcpSessionNewOrdering {
     }
 
     if (method === "session/close") {
-      // Releasing the ID is what keeps this set bounded across a long-lived bridge,
-      // and it frees capacity so later sessions can be tracked again. Anything still
-      // queued for the session is released by the ordinary drain once no creation is
-      // outstanding, so nothing needs to be special-cased here.
-      this.establishedSessionIds.delete(sessionId);
+      this.forget(sessionId);
     }
+  }
+
+  /**
+   * Stops recognizing a session. Called for `session/close`, and by the session
+   * store for every removal it performs on its own — idle reaping and capacity
+   * eviction produce no ACP request, so without this hook a long-lived bridge
+   * would keep recognizing sessions the store had already discarded. Anything
+   * still queued for the session is released by the ordinary drain once no
+   * creation is outstanding, so nothing needs to be special-cased here.
+   */
+  forget(sessionId: string): void {
+    this.establishedSessionIds.delete(sessionId);
   }
 
   transformOutbound(
@@ -154,16 +165,12 @@ export class AcpSessionNewOrdering {
 
   /** @returns false when a bound is reached and the caller must write the update through. */
   private enqueue(sessionId: string, message: AnyMessage): boolean {
-    const queued = this.queuedPerSession.get(sessionId);
-    if (queued === undefined) {
-      if (this.queuedPerSession.size >= MAX_QUEUED_SESSIONS) {
-        return false;
-      }
-    } else if (queued >= MAX_QUEUED_UPDATES_PER_SESSION) {
+    const queued = this.queuedPerSession.get(sessionId) ?? 0;
+    if (queued >= MAX_QUEUED_UPDATES_PER_SESSION) {
       return false;
     }
     this.queue.push({ sessionId, message });
-    this.queuedPerSession.set(sessionId, (queued ?? 0) + 1);
+    this.queuedPerSession.set(sessionId, queued + 1);
     return true;
   }
 
@@ -181,8 +188,7 @@ export class AcpSessionNewOrdering {
     }
     const nothingOutstanding = this.pendingNewSessionRequestIds.size === 0;
     let released = 0;
-    while (released < this.queue.length) {
-      const entry = this.queue[released];
+    for (const entry of this.queue) {
       if (!nothingOutstanding && !this.establishedSessionIds.has(entry.sessionId)) {
         break;
       }

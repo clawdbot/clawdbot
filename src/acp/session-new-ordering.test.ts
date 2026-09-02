@@ -29,6 +29,12 @@ async function runSteps(ordering: AcpSessionNewOrdering, steps: Step[]): Promise
   const writer = stream.writable.getWriter();
   for (const step of steps) {
     if ("inbound" in step) {
+      const inbound = step.inbound as { method?: string; params?: { sessionId?: string } };
+      if (inbound.method === "__forget__") {
+        // Stands in for the session store reporting a removal it performed itself.
+        ordering.forget("evicted-session");
+        continue;
+      }
       ordering.observeInbound(step.inbound);
       continue;
     }
@@ -261,10 +267,12 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([failA, failB, a1, b1, a2]);
   });
 
-  it("keeps ordering through a burst larger than any internal cap", async () => {
+  it("keeps ordering through a burst larger than any cap this file ever carried", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
-    const BURST = 130;
+    // Past the 512 distinct-session cap this used to carry. A rate limit bounds
+    // arrivals, not concurrency, so a slow backend can hold more than that.
+    const BURST = 600;
     for (let id = 1; id <= BURST; id += 1) {
       steps.push({ inbound: newSessionRequest(id) });
     }
@@ -311,6 +319,25 @@ describe("AcpSessionNewOrdering", () => {
     const output = await runSteps(ordering, steps);
 
     expect(output.slice(-2)).toEqual([created, update]);
+  });
+
+  it("stops recognizing a session the store removed without a close request", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const created = newSessionResponse(2, "evicted-session");
+    const afterEviction = sessionUpdate("evicted-session", "after eviction");
+    const other = newSessionResponse(3, "other-session");
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(2) },
+      { outbound: created },
+      // The store reaped or evicted the session; no ACP close was ever sent.
+      { inbound: { jsonrpc: "2.0", method: "__forget__", params: {} } as AnyMessage },
+      { inbound: newSessionRequest(3) },
+      { outbound: afterEviction },
+      { outbound: other },
+    ]);
+
+    expect(output).toEqual([created, other, afterEviction]);
   });
 
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
