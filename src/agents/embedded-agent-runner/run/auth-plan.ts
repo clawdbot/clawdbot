@@ -1,5 +1,5 @@
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
-import type { AuthProfileStore } from "../../auth-profiles.js";
+import { loadAuthProfileStoreForRuntime, type AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
@@ -26,18 +26,24 @@ function loadEmbeddedRunAuthProfileStore(params: {
   agentDir: string;
   config: RunEmbeddedAgentParams["config"];
   externalCliProviderIds: Iterable<string>;
+  usesOpenAIAuthRouting?: boolean;
 }): AuthProfileStore {
-  // Provider pins own ambient overlays at this loader seam. Genuinely stored profiles and
-  // explicit bindings remain available for the cross-class contracts in prepare-auth.test.ts.
-  return ensureAuthProfileStore(params.agentDir, {
+  const options = {
     config: params.config,
     externalCliProviderIds: params.externalCliProviderIds,
     allowKeychainPrompt: false,
-  });
+  };
+  if (params.usesOpenAIAuthRouting === false) {
+    return ensureAuthProfileStore(params.agentDir, options);
+  }
+  // A gateway can retain a process-local snapshot from before OpenAI OAuth was added.
+  // Read the durable store for each OpenAI run while preserving provider pins
+  // through the config-aware external-auth overlay.
+  return loadAuthProfileStoreForRuntime(params.agentDir, { ...options, readOnly: true });
 }
 
-// Test-only seam access mirrors external-auth.ts; the config-threading regression
-// must stay provable without composing a full embedded runner.
+// Test-only seam access mirrors external-auth.ts; both durable reload and config
+// pin behavior must stay provable without composing a full embedded runner.
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
     { loadEmbeddedRunAuthProfileStore };
@@ -113,6 +119,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
         agentDir: params.agentDir,
         config: runParams.config,
         externalCliProviderIds: [OPENAI_PROVIDER_ID],
+        usesOpenAIAuthRouting,
       })
     : initialPluginHarnessOwnsTransport
       ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
@@ -123,6 +130,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
             agentDir: params.agentDir,
             config: runParams.config,
             externalCliProviderIds: externalCliAuthScope.providerIds,
+            usesOpenAIAuthRouting,
           })
         : (noExternalAuthStore ??
           ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {

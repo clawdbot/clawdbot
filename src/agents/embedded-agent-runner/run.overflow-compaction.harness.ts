@@ -824,6 +824,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: mockedIsProfileInCooldown,
+    loadAuthProfileStoreForRuntime: mockedEnsureAuthProfileStore,
     markAuthProfileFailure: mockedMarkAuthProfileFailure,
     markAuthProfileSuccess: mockedMarkAuthProfileSuccess,
     resolveAuthProfileEligibility: vi.fn(() => ({ eligible: true, reasonCode: "ok" })),
