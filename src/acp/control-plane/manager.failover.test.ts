@@ -7,8 +7,10 @@ import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
+  expectRecordFields,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockCallArg,
   readySessionMeta,
 } from "./manager.test-helpers.js";
 
@@ -184,6 +186,57 @@ describe("AcpSessionManager backend failover", () => {
       }),
     );
     expect(harness.fallbackRuntime.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not transfer oneshot session ownership from the primary to the fallback", async () => {
+    const harness = setupFailoverBackends();
+    harness.primaryRuntime.ensureSession.mockImplementation(async (input) => ({
+      sessionKey: input.sessionKey,
+      backend: "primary-backend",
+      runtimeSessionName: "primary-runtime",
+      backendSessionId: "primary-session",
+      agentSessionId: "primary-agent-session",
+    }));
+    harness.fallbackRuntime.ensureSession.mockImplementation(async (input) => ({
+      sessionKey: input.sessionKey,
+      backend: "fallback-backend",
+      runtimeSessionName: "fallback-runtime",
+      backendSessionId: "fallback-session",
+      agentSessionId: "fallback-agent-session",
+    }));
+    harness.primaryRuntime.runTurn.mockImplementation(async function* () {
+      throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
+    });
+    const manager = new AcpSessionManager();
+
+    await manager.initializeSession({
+      cfg: harness.cfg,
+      sessionKey: harness.sessionKey,
+      agent: "codex",
+      mode: "oneshot",
+    });
+    await manager.runTurn({
+      provenance: "system",
+      cfg: harness.cfg,
+      sessionKey: harness.sessionKey,
+      text: "use fallback",
+      mode: "prompt",
+      requestId: "r-oneshot-fallback",
+    });
+
+    expect(harness.primaryRuntime.ensureSession).toHaveBeenCalledOnce();
+    expect(harness.fallbackRuntime.ensureSession).toHaveBeenCalledOnce();
+    expect(mockCallArg(harness.fallbackRuntime.ensureSession).resumeSessionId).toBeUndefined();
+    expectRecordFields(mockCallArg(harness.primaryRuntime.close), {
+      reason: "oneshot-complete",
+    });
+    expectRecordFields(mockCallArg(harness.fallbackRuntime.close), {
+      reason: "oneshot-complete",
+    });
+    expect(harness.currentMeta.backend).toBe("fallback-backend");
+    expectRecordFields(harness.currentMeta.identity, { state: "pending" });
+    expect(harness.currentMeta.identity?.acpxSessionId).toBeUndefined();
+    expect(harness.currentMeta.identity?.agentSessionId).toBeUndefined();
   });
 
   it("fails over when the primary backend is registered but unavailable", async () => {

@@ -100,7 +100,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
       return false;
     }
   }
-  const cleared = await clearPersistedRuntimeResumeState({
+  const cleared = await clearPersistedManagerRuntimeIdentity({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -116,7 +116,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
   return true;
 }
 
-async function clearPersistedRuntimeResumeState(params: {
+export async function clearPersistedManagerRuntimeIdentity(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;

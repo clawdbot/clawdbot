@@ -117,7 +117,7 @@ export async function cleanupTimedOutTurn(params: {
   activeTurn: ActiveTurnState;
   mode: AcpRuntimeSessionMode;
   clearCachedRuntimeStateIfHandleMatches: (activeTurn: ActiveTurnState) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   params.activeTurn.abortController.abort();
   if (!params.activeTurn.cancelPromise) {
     params.activeTurn.cancelPromise = params.activeTurn.runtime.cancel({
@@ -125,13 +125,13 @@ export async function cleanupTimedOutTurn(params: {
       reason: ACP_TURN_TIMEOUT_REASON,
     });
   }
-  const cancelFinished = await awaitCleanupWithGrace({
+  await awaitCleanupWithGrace({
     sessionKey: params.sessionKey,
     label: "cancel",
     promise: params.activeTurn.cancelPromise,
   });
   if (params.mode !== "oneshot") {
-    return;
+    return false;
   }
   const closePromise = params.activeTurn.runtime.close({
     handle: params.activeTurn.handle,
@@ -142,13 +142,14 @@ export async function cleanupTimedOutTurn(params: {
     label: "close",
     promise: closePromise,
   });
-  if (cancelFinished && closeFinished) {
+  if (closeFinished) {
     params.clearCachedRuntimeStateIfHandleMatches(params.activeTurn);
-    return;
+    return true;
   }
   void Promise.allSettled([params.activeTurn.cancelPromise, closePromise]).then(() => {
     params.clearCachedRuntimeStateIfHandleMatches(params.activeTurn);
   });
+  return false;
 }
 
 async function awaitCleanupWithGrace(params: {
@@ -199,6 +200,7 @@ async function awaitCleanupWithGrace(params: {
       logVerbose(
         `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
       );
+      return false;
     }
     return true;
   } finally {
