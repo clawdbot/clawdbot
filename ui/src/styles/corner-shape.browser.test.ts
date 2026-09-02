@@ -262,7 +262,9 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
             const style = getComputedStyle(element);
             const radius =
               corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
-            return [selector, { radius, shape: style.getPropertyValue("corner-shape") }];
+            const shape = style.getPropertyValue("corner-shape");
+            // CSS defines round as superellipse(1); Chromium builds serialize both forms.
+            return [selector, { radius, shape: shape === "superellipse(1)" ? "round" : shape }];
           }),
         );
       },

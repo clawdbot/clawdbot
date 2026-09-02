@@ -1,13 +1,11 @@
 import { spawn } from "node:child_process";
 // Process coverage for one-shot Gateway CLI output followed by clean exit.
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadOriginDeviceTokenReadOnly,
   storeOriginDeviceToken,
@@ -21,166 +19,23 @@ import {
 import { getFreePort } from "../test-utils/ports.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
-  closeActiveGatewayServers,
+  prepareUnreachableGatewayCliFixture,
+  runIsolatedGatewayCli,
+  snapshotDirectoryContents,
+  snapshotSharedStateArtifacts,
+  tempDirs,
+} from "./gateway-backed-exit.process.test-support.js";
+import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
   startCronListGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
-  startRateLimitedGateway,
 } from "./gateway-backed-exit.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const UNREACHABLE_GATEWAY_URL = "ws://127.0.0.1:9";
 // A one-shot command must release its Gateway socket once its output is complete.
 // The clock starts at the complete payload, so cold startup never enters this budget.
 const ONE_SHOT_EXIT_BUDGET_MS = 5_000;
-afterEach(async () => {
-  await closeActiveGatewayServers();
-});
-
-async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
-  const snapshot: Record<string, string> = {};
-  const visit = async (directory: string): Promise<void> => {
-    for (const name of (await fs.readdir(directory)).toSorted()) {
-      const absolutePath = path.join(directory, name);
-      const relativePath = path.relative(root, absolutePath);
-      const stat = await fs.lstat(absolutePath);
-      if (stat.isDirectory()) {
-        snapshot[relativePath] = "directory";
-        await visit(absolutePath);
-      } else if (stat.isSymbolicLink()) {
-        snapshot[relativePath] = `symlink:${await fs.readlink(absolutePath)}`;
-      } else {
-        snapshot[relativePath] = `file:${createHash("sha256")
-          .update(await fs.readFile(absolutePath))
-          .digest("hex")}`;
-      }
-    }
-  };
-  await visit(root);
-  return snapshot;
-}
-
-async function snapshotSharedStateArtifacts(stateDir: string): Promise<Record<string, string>> {
-  const sharedStateDir = path.join(stateDir, "state");
-  try {
-    return await snapshotDirectoryContents(sharedStateDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw error;
-  }
-}
-
-async function prepareUnreachableGatewayCliFixture(params: {
-  label: string;
-  seeded: boolean;
-}): Promise<{ root: string; stateDir: string; configPath: string }> {
-  const root = tempDirs.make(`openclaw-${params.label}-${params.seeded ? "seeded" : "absent"}-`);
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(stateDir, "openclaw.json");
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      gateway: {
-        mode: "remote",
-        auth: { mode: "none" },
-        remote: { url: UNREACHABLE_GATEWAY_URL },
-      },
-    }),
-  );
-  if (params.seeded) {
-    const stateEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(UNREACHABLE_GATEWAY_URL),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: "stored-device-token",
-      scopes: ["operator.admin"],
-      env: stateEnv,
-    });
-    closeOpenClawStateDatabaseForTest();
-  }
-  return { root, stateDir, configPath };
-}
-
-function expectUnreachableGatewayTransportFailure(
-  result: Awaited<ReturnType<typeof runIsolatedGatewayCli>>,
-  output: "json" | "text",
-): void {
-  expect(result).toMatchObject({ code: 1, signal: null });
-  if (output === "json") {
-    expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      ok: false,
-      error: {
-        type: "gateway_transport_error",
-        kind: "closed",
-        message: expect.stringContaining("Gateway not reachable"),
-      },
-      gateway: { url: UNREACHABLE_GATEWAY_URL },
-    });
-    return;
-  }
-  expect(result.stderr).toContain("Gateway not reachable");
-  expect(result.stderr).toContain(UNREACHABLE_GATEWAY_URL);
-  expect(result.stderr).not.toContain("gateway timeout");
-}
-
-async function runIsolatedGatewayCli(params: {
-  args: string[];
-  root: string;
-  stateDir: string;
-  configPath: string;
-  env?: NodeJS.ProcessEnv;
-  onStdout?: (stdout: string) => void;
-}): Promise<{
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-}> {
-  return await runCliProcessChild({
-    nodeArgs: ["--import", "tsx", "src/entry.ts", ...params.args],
-    env: {
-      ...process.env,
-      HOME: params.root,
-      USERPROFILE: params.root,
-      // CI shard runners export NODE_COMPILE_CACHE; in a source checkout entry.ts
-      // then respawns a detached grandchild that shares this child's stdio pipes,
-      // so a SIGKILLed parent leaves an orphan holding them open. Keep these
-      // children single-process; entry.compile-cache owns that respawn contract.
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      NODE_ENV: undefined,
-      NODE_OPTIONS: undefined,
-      OPENCLAW_CONFIG_PATH: params.configPath,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_URL: undefined,
-      OPENCLAW_HOME: params.root,
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_STATE_DIR: params.stateDir,
-      DISCORD_BOT_TOKEN: undefined,
-      TWILIO_ACCOUNT_SID: undefined,
-      TWILIO_AUTH_TOKEN: undefined,
-      TWILIO_FROM_NUMBER: undefined,
-      VITEST: undefined,
-      ...params.env,
-    },
-    onStdout: params.onStdout,
-  });
-}
 
 describe("gateway-backed CLI process exit", () => {
   it.each([
@@ -216,63 +71,6 @@ describe("gateway-backed CLI process exit", () => {
       result: { payloads: [{ text }] },
     });
   });
-
-  // One child per case: the deadlock guard is sized against a single cold CLI start.
-  it.each(
-    [
-      {
-        label: "root-health-json",
-        args: ["health", "--json", "--timeout", "250"],
-        output: "json" as const,
-      },
-      {
-        label: "gateway-health-text",
-        args: ["gateway", "health", "--timeout", "250"],
-        output: "text" as const,
-      },
-      {
-        label: "gateway-health-json",
-        args: ["gateway", "health", "--json", "--timeout", "250"],
-        output: "json" as const,
-      },
-      {
-        label: "gateway-suspend-json",
-        args: ["gateway", "suspend", "--json", "--timeout", "250"],
-        output: "json" as const,
-      },
-      {
-        label: "gateway-resume-json",
-        args: ["gateway", "resume", "suspension-1", "--json", "--timeout", "250"],
-        output: "json" as const,
-      },
-    ].flatMap((command) =>
-      [
-        { stateLabel: "absent", seeded: false },
-        { stateLabel: "seeded", seeded: true },
-      ].map((state) => ({
-        args: command.args,
-        label: command.label,
-        output: command.output,
-        seeded: state.seeded,
-        stateLabel: state.stateLabel,
-      })),
-    ),
-  )(
-    "leaves $stateLabel shared state byte-identical after unreachable $label",
-    async ({ label, args, output, seeded, stateLabel }) => {
-      const fixture = await prepareUnreachableGatewayCliFixture({
-        label: `${label}-${stateLabel}`,
-        seeded,
-      });
-      const before = await snapshotSharedStateArtifacts(fixture.stateDir);
-      expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
-
-      const result = await runIsolatedGatewayCli({ ...fixture, args });
-
-      expectUnreachableGatewayTransportFailure(result, output);
-      expect(await snapshotSharedStateArtifacts(fixture.stateDir)).toEqual(before);
-    },
-  );
 
   it.each([
     { label: "empty", timeout: "", valid: false },
@@ -928,31 +726,6 @@ describe("gateway-backed CLI process exit", () => {
     expect(exitedAt - (completeOutputAt ?? 0)).toBeLessThanOrEqual(ONE_SHOT_EXIT_BUDGET_MS);
   });
 
-  it("keeps gateway auth failures machine-readable through the real health entry point", async () => {
-    const root = tempDirs.make("openclaw-gateway-auth-json-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const port = await getFreePort();
-    await fs.mkdir(stateDir, { recursive: true });
-
-    const result = await runIsolatedGatewayCli({
-      args: ["health", "--json", "--timeout", "250"],
-      root,
-      stateDir,
-      configPath,
-      env: { OPENCLAW_GATEWAY_PORT: String(port) },
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      ok: false,
-      error: {
-        type: "gateway_credentials_required",
-        message: expect.stringContaining("requires"),
-      },
-    });
-  });
-
   it.each([
     {
       label: "device list",
@@ -1075,45 +848,5 @@ describe("gateway-backed CLI process exit", () => {
     } else {
       expect(result.stderr).toContain("Invalid --timeout");
     }
-  });
-
-  it("preserves pre-hello rate-limit details through the real health entry point", async () => {
-    const root = tempDirs.make("openclaw-gateway-rate-limit-json-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const gateway = await startRateLimitedGateway();
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: {
-          mode: "remote",
-          remote: { url: gateway.url, token: "test-token" },
-        },
-      }),
-    );
-
-    const result = await runIsolatedGatewayCli({
-      args: ["health", "--json", "--timeout", "2000"],
-      root,
-      stateDir,
-      configPath,
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      ok: false,
-      error: {
-        type: "gateway_request_error",
-        code: "AUTH_RATE_LIMITED",
-        message:
-          "Gateway authentication is temporarily rate-limited. Wait for the temporary lockout to expire, then retry.",
-        retryable: true,
-        retryAfterMs: 60_000,
-      },
-      gateway: { reachable: true },
-    });
-    expect(result.stdout).not.toContain("gateway.remote.token");
-    expect(result.stdout).not.toContain("devices rotate");
   });
 });

@@ -12,6 +12,9 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js"
  */
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+const SETUP_CODE_REJECTED_MESSAGE =
+  "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review `openclaw devices list`)";
+
 /** Formats a client-specific auth failure message without exposing secret values. */
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
@@ -60,7 +63,7 @@ export function formatGatewayAuthFailureMessage(params: {
     case "password_missing_config":
       return "unauthorized: gateway password not configured on gateway (set gateway.auth.password)";
     case "bootstrap_token_invalid":
-      return "unauthorized: bootstrap token invalid or expired (scan a fresh setup code)";
+      return SETUP_CODE_REJECTED_MESSAGE;
     case "tailscale_user_missing":
       return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
     case "tailscale_proxy_missing":
@@ -88,7 +91,7 @@ export function formatGatewayAuthFailureMessage(params: {
     return "unauthorized: device token rejected (pair/repair this device, or provide gateway token)";
   }
   if (authProvided === "bootstrap-token") {
-    return "unauthorized: bootstrap token invalid or expired (scan a fresh setup code)";
+    return SETUP_CODE_REJECTED_MESSAGE;
   }
   if (authMode === "password" && authProvided === "none") {
     return `unauthorized: gateway password missing (${passwordHint})`;
