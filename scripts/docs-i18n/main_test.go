@@ -220,6 +220,46 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	}
 }
 
+func TestProcessFileAcceptsYamlDocumentEndFrontMatter(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "guide.md")
+	writeFile(t, sourcePath, stringsJoin(
+		"---",
+		"title: Gateway",
+		"...",
+		"",
+		"# Gateway",
+	))
+
+	skip, outputPath, err := processFile(
+		context.Background(),
+		fakeDocsTranslator{},
+		&TranslationMemory{entries: map[string]TMEntry{}},
+		docsRoot,
+		sourcePath,
+		"en",
+		"zh-CN",
+	)
+	if err != nil {
+		t.Fatalf("processFile failed: %v", err)
+	}
+	if skip {
+		t.Fatal("processFile unexpectedly skipped translation")
+	}
+
+	got := mustReadFile(t, outputPath)
+	titleIndex := strings.Index(got, "title: Gateway")
+	metadataIndex := strings.Index(got, "x-i18n:")
+	if titleIndex < 0 || metadataIndex < 0 || titleIndex > metadataIndex {
+		t.Fatalf("expected YAML document-end front matter to be preserved as metadata:\n%s", got)
+	}
+	if strings.Contains(got, "\n...\n") {
+		t.Fatalf("front matter document-end marker leaked into translated body:\n%s", got)
+	}
+}
+
 func TestRunDocsI18NDoesNotSkipOutputAfterPostprocessFailure(t *testing.T) {
 	t.Parallel()
 

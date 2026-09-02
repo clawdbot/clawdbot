@@ -104,7 +104,7 @@ func splitFrontMatter(content string) (string, string) {
 	}
 	endIndex := -1
 	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) == "---" {
+		if isFrontMatterTerminator(lines[i]) {
 			endIndex = i
 			break
 		}
@@ -116,6 +116,25 @@ func splitFrontMatter(content string) (string, string) {
 	body := strings.Join(lines[endIndex+1:], "\n")
 	body = strings.TrimPrefix(body, "\n")
 	return front, body
+}
+
+// Match the source docs front matter contract, including YAML's document-end marker.
+// Reject lookalikes so a marker-like value in front matter cannot truncate the metadata.
+func isFrontMatterTerminator(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	for _, marker := range []string{"---", "..."} {
+		if trimmed == marker {
+			return true
+		}
+		suffix := strings.TrimPrefix(trimmed, marker)
+		if suffix == trimmed || (!strings.HasPrefix(suffix, " ") && !strings.HasPrefix(suffix, "\t")) {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(suffix), "#") {
+			return true
+		}
+	}
+	return false
 }
 
 func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) (string, error) {
