@@ -735,7 +735,16 @@ export function requestHeartbeatRaw(opts: HeartbeatRequestOptions) {
 
 /** Canonical scheduler-facing heartbeat entry point. */
 export function requestHeartbeat(opts: Parameters<typeof requestHeartbeatRaw>[0]) {
-  requestHeartbeatRaw(opts);
+  requestHeartbeatRaw({
+    source: opts.source,
+    intent: opts.intent,
+    reason: opts.reason,
+    coalesceMs: opts.coalesceMs,
+    agentId: opts.agentId,
+    sessionKey: opts.sessionKey,
+    parentRunId: opts.parentRunId,
+    heartbeat: opts.heartbeat,
+  });
 }
 
 /** Requests a coalesced wake and resolves when that shared turn reaches a terminal result. */

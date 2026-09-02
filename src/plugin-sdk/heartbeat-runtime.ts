@@ -1,17 +1,8 @@
 // Heartbeat event and visibility helpers without the broad infra-runtime barrel.
-import { requestHeartbeatRaw as requestHeartbeatInternal } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 
-type RequestHeartbeatOptions = Parameters<typeof requestHeartbeatInternal>[0];
+type RequestHeartbeatOptions = Parameters<typeof requestHeartbeat>[0];
 
 export function requestPluginHeartbeat(opts: RequestHeartbeatOptions): void {
-  requestHeartbeatInternal({
-    source: opts.source,
-    intent: opts.intent,
-    reason: opts.reason,
-    coalesceMs: opts.coalesceMs,
-    agentId: opts.agentId,
-    sessionKey: opts.sessionKey,
-    parentRunId: opts.parentRunId,
-    heartbeat: opts.heartbeat,
-  });
+  requestHeartbeat(opts);
 }
