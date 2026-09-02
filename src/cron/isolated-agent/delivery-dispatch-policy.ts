@@ -90,7 +90,6 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
-  /outbound not configured for channel/i,
 ];
 
 const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
