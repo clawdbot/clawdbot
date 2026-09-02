@@ -298,16 +298,16 @@ that owns the config and state directory to `[Service]`:
 ```ini
 [Service]
 User=<user>
-Group=<user>
-Environment=HOME=/home/<user>
 ```
 
 Do not run the Gateway as root. A system unit without `User=` runs as root, so
 every command the agent executes runs as root too, and with no `HOME` the
 Gateway looks for its config under `/root/.openclaw`, exits with code `78`
-(`Missing config`), and `RestartPreventExitStatus=78` keeps it stopped. Set
-`OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` in the unit instead when the
-state lives outside that home. On a single-user host, `loginctl enable-linger`
+(`Missing config`), and `RestartPreventExitStatus=78` keeps it stopped. With
+`User=` set, systemd supplies that account's primary group and home directory,
+so the Gateway finds `~/.openclaw` for that account; set `OPENCLAW_STATE_DIR`
+and `OPENCLAW_CONFIG_PATH` in the unit instead when the state lives outside
+that home. On a single-user host, `loginctl enable-linger`
 plus the user unit above is the supported way to keep the Gateway running
 without a login session.
 
