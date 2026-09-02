@@ -5,6 +5,7 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -132,10 +133,10 @@ export async function promoteAuthProfileInOrder(params: {
   profileId: string;
   createIfMissing?: boolean;
   createFromOrder?: string[];
-}): Promise<AuthProfileStore | null> {
+}): Promise<Result<AuthProfileStore, "lock-contention">> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   const effectiveStore = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
-  return await updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     saveOptions: { preserveOrderProfileIds: [params.profileId, ...(params.createFromOrder ?? [])] },
     updater: (store) => {
@@ -177,6 +178,7 @@ export async function promoteAuthProfileInOrder(params: {
       return true;
     },
   });
+  return updated === null ? err("lock-contention") : ok(updated);
 }
 
 /** Upserts an auth profile immediately into the local store. */

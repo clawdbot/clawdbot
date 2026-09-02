@@ -452,14 +452,14 @@ async function persistProviderAuthResult(params: {
       throw error;
     }
     persistedProfiles.push(profile);
-    const promoted = await promoteAuthProfileInOrder({
+    const promotion = await promoteAuthProfileInOrder({
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
       createIfMissing: configuredSelection.createIfMissing,
       ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
-    if (promoted === null) {
+    if (!promotion.ok) {
       throw new Error(
         "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
       );

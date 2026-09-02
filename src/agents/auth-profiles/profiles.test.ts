@@ -1354,7 +1354,10 @@ describe("promoteAuthProfileInOrder", () => {
         createIfMissing: true,
       });
 
-      expect(updated?.order?.["openai"]).toEqual([newProfileId, staleProfileId]);
+      expect(updated).toMatchObject({
+        ok: true,
+        value: { order: { openai: [newProfileId, staleProfileId] } },
+      });
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
         newProfileId,
         staleProfileId,
@@ -1414,7 +1417,10 @@ describe("promoteAuthProfileInOrder", () => {
         createFromOrder: [backupProfileId, primaryProfileId],
       });
 
-      expect(updated?.order?.["openai"]).toEqual([newProfileId, backupProfileId, primaryProfileId]);
+      expect(updated).toMatchObject({
+        ok: true,
+        value: { order: { openai: [newProfileId, backupProfileId, primaryProfileId] } },
+      });
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
         newProfileId,
         backupProfileId,
@@ -1500,7 +1506,8 @@ describe("promoteAuthProfileInOrder", () => {
         profileId: newProfileId,
       });
 
-      expect(updated?.order?.["openai"]).toBeUndefined();
+      expect(updated).toMatchObject({ ok: true });
+      expect(updated.ok && updated.value.order?.["openai"]).toBeUndefined();
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toBeUndefined();
     });
   });
