@@ -36,7 +36,9 @@ import {
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
+  bindWorkerSessionToolOperationPlacement,
   clearWorkerTurnToolState,
+  type WorkerDelegatedSpawnOperation,
 } from "./placement-session-tool-operations.js";
 import {
   canTransitionWorkerSessionPlacement,
@@ -282,6 +284,7 @@ export function createWorkerSessionPlacementStore(
       to: WorkerSessionPlacementState;
       expectedGeneration: number;
       patch?: WorkerSessionPlacementTransitionPatch;
+      delegatedSpawnOperation?: WorkerDelegatedSpawnOperation;
     }): WorkerSessionPlacementRecord {
       if (!canTransitionWorkerSessionPlacement(input.from, input.to)) {
         throw new Error(
@@ -305,7 +308,32 @@ export function createWorkerSessionPlacementStore(
         if (current.turnClaim) {
           throw new Error(`Cannot transition session ${sessionId} during an active turn`);
         }
-        return updateTransition(db, current, input.to, input.patch ?? {}, now());
+        const updatedAtMs = now();
+        const placement = updateTransition(db, current, input.to, input.patch ?? {}, updatedAtMs);
+        if (input.delegatedSpawnOperation) {
+          if (
+            input.from !== "requested" ||
+            input.to !== "provisioning" ||
+            placement.state !== "provisioning" ||
+            !placement.environmentId
+          ) {
+            throw new Error("Worker child placement binding requires provisioning transition");
+          }
+          // Provisioning is the first provider-effect boundary. Bind its stable environment
+          // identity in the same commit so restart cannot fence a later child incarnation.
+          bindWorkerSessionToolOperationPlacement({
+            db,
+            instanceId: runtime.instanceId,
+            updatedAtMs,
+            operation: input.delegatedSpawnOperation,
+            placement: {
+              sessionId: placement.sessionId,
+              sessionKey: placement.sessionKey,
+              environmentId: placement.environmentId,
+            },
+          });
+        }
+        return placement;
       });
     },
 

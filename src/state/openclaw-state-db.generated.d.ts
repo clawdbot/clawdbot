@@ -1566,6 +1566,7 @@ export interface WorkerSessionPlacements {
 }
 
 export interface WorkerSessionToolOperations {
+  child_placement_identity_json: string | null;
   child_session_key: string | null;
   created_at_ms: number;
   gateway_instance_id: string;

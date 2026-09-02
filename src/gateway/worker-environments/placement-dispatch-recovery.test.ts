@@ -287,7 +287,7 @@ describe("worker placement restart recovery", () => {
       now: () => 1_000,
     });
     const harness = createHarness(placements, {
-      isInterruptedDelegatedChild: (sessionKey) => sessionKey === REQUEST.sessionKey,
+      isInterruptedDelegatedChild: (placement) => placement.sessionKey === REQUEST.sessionKey,
     });
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
@@ -305,6 +305,63 @@ describe("worker placement restart recovery", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
+
+  it.each(["session", "environment"] as const)(
+    "does not fence a replacement child with the same key but a new %s identity",
+    async (changedIdentity) => {
+      const placements = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => 1_000,
+      });
+      let interrupted = {
+        sessionId: "",
+        sessionKey: REQUEST.sessionKey,
+        environmentId: "",
+      };
+      const harness = createHarness(placements, {
+        isInterruptedDelegatedChild: (placement: unknown) => {
+          if (typeof placement === "string") {
+            return placement === REQUEST.sessionKey;
+          }
+          if (!placement || typeof placement !== "object") {
+            return false;
+          }
+          const candidate = placement as typeof interrupted;
+          return (
+            candidate.sessionId === interrupted.sessionId &&
+            candidate.sessionKey === interrupted.sessionKey &&
+            candidate.environmentId === interrupted.environmentId
+          );
+        },
+      });
+      interrupted = {
+        sessionId:
+          changedIdentity === "session" ? `${REQUEST.sessionId}-previous` : REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        environmentId:
+          changedIdentity === "environment"
+            ? `${harness.ready.environmentId}-previous`
+            : harness.ready.environmentId,
+      };
+      await harness.environments.attachSession({
+        environmentId: harness.ready.environmentId,
+        ownerEpoch: harness.ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch);
+      harness.placements.seedActive(harness.attached.ownerEpoch, "remote-exec");
+
+      await harness.service.reconcileActive(harness.ready.environmentId);
+
+      expect(harness.placements.current()).toMatchObject({
+        state: "active",
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        environmentId: harness.ready.environmentId,
+      });
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["startup", "active"] as const)(
     "fences a destroy-requested attachment during %s recovery even when physical cleanup fails",
@@ -582,7 +639,8 @@ describe("worker placement restart recovery", () => {
     });
     let interrupted = false;
     const harness = createHarness(placements, {
-      isInterruptedDelegatedChild: (sessionKey) => sessionKey === REQUEST.sessionKey && interrupted,
+      isInterruptedDelegatedChild: (placement) =>
+        placement.sessionKey === REQUEST.sessionKey && interrupted,
     });
     const provisioning = harness.placements.seedProvisioning();
     if (provisioning.state !== "provisioning") {
@@ -612,7 +670,7 @@ describe("worker placement restart recovery", () => {
       now: () => 1_000,
     });
     const harness = createHarness(placements, {
-      isInterruptedDelegatedChild: (sessionKey) => sessionKey === REQUEST.sessionKey,
+      isInterruptedDelegatedChild: (placement) => placement.sessionKey === REQUEST.sessionKey,
     });
     const provisioning = harness.placements.seedProvisioning();
     if (provisioning.state !== "provisioning") {
@@ -1010,7 +1068,7 @@ describe("worker placement restart recovery", () => {
     });
     const publishAcceptedWorkspace = vi.fn(async () => {});
     const restartedHarness = createHarness(restartedStore, {
-      isInterruptedDelegatedChild: (sessionKey) => sessionKey === REQUEST.sessionKey,
+      isInterruptedDelegatedChild: (placement) => placement.sessionKey === REQUEST.sessionKey,
       publishAcceptedWorkspace,
     });
     restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);

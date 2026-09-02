@@ -64,7 +64,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       await failure.failActive(placement, error, { forceClaimFence: true });
       return;
     }
-    if (deps.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+    if (deps.isInterruptedDelegatedChild?.(placement)) {
       await failure.failActive(
         placement,
         new Error("Delegated child placement lost its initiating worker turn during restart"),
@@ -127,7 +127,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     if (mode === "startup") {
       // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
       for (const placement of placements.listForReconcile()) {
-        if (deps.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+        if (deps.isInterruptedDelegatedChild?.(placement)) {
           continue;
         }
         const { environmentId, state } = placement;
@@ -156,7 +156,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       if (
         placement.state !== "active" &&
         placement.state !== "failed" &&
-        deps.isInterruptedDelegatedChild?.(placement.sessionKey)
+        deps.isInterruptedDelegatedChild?.(placement)
       ) {
         const environment = placement.environmentId
           ? environments.get(placement.environmentId)

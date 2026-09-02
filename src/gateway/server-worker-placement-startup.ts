@@ -48,6 +48,7 @@ import { createWorkerPlacementDispatchService } from "./worker-environments/plac
 import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-idle-sweep.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
+import type { InterruptedDelegatedChildPlacement } from "./worker-environments/placement-session-tool-operations.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
@@ -73,7 +74,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
-  interruptedDelegatedChildSessionKeys?: ReadonlySet<string>;
+  interruptedDelegatedChildPlacements?: readonly InterruptedDelegatedChildPlacement[];
   persistAbandonedPartial?: (request: {
     sessionId: string;
     sessionKey: string;
@@ -243,8 +244,13 @@ export function createGatewayWorkerPlacementRuntime(
           (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
         );
       },
-      isInterruptedDelegatedChild: (sessionKey) =>
-        params.interruptedDelegatedChildSessionKeys?.has(sessionKey) === true,
+      isInterruptedDelegatedChild: (placement) =>
+        params.interruptedDelegatedChildPlacements?.some(
+          (interrupted) =>
+            interrupted.sessionId === placement.sessionId &&
+            interrupted.sessionKey === placement.sessionKey &&
+            interrupted.environmentId === placement.environmentId,
+        ) === true,
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({

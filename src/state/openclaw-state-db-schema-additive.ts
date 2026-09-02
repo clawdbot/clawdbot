@@ -284,6 +284,7 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
       operation_seed TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'unknown')),
       child_session_key TEXT,
+      child_placement_identity_json TEXT,
       result_json TEXT,
       gateway_instance_id TEXT NOT NULL,
       created_at_ms INTEGER NOT NULL,
@@ -407,6 +408,10 @@ export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: Databas
   } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
+}
+
+export function ensureWorkerSessionToolOperationPlacementIdentityColumn(db: DatabaseSync): void {
+  ensureColumn(db, "worker_session_tool_operations", "child_placement_identity_json TEXT");
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {

@@ -81,7 +81,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
     resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
     isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-    isInterruptedDelegatedChild?: (sessionKey: string) => boolean;
+    isInterruptedDelegatedChild?: (placement: WorkerDispatchPlacement) => boolean;
   };
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
@@ -184,6 +184,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         to: "provisioning",
         expectedGeneration: placement.generation,
         patch: { environmentId: expectedEnvironmentId },
+        ...(request.delegatedSpawnOperation
+          ? { delegatedSpawnOperation: request.delegatedSpawnOperation }
+          : {}),
       });
       reportPlacementTransition(onTransition, placement);
       const environment = request.inheritedProfile

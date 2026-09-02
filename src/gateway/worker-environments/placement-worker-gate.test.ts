@@ -508,7 +508,7 @@ describe("worker session placement gate", () => {
     const restarted = createWorkerSessionPlacementStore({ database });
     expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
       count: 1,
-      interruptedChildSessionKeys: [],
+      interruptedChildPlacements: [],
     });
     expect(
       restarted.beginWorkerSessionToolOperation({
@@ -525,6 +525,11 @@ describe("worker session placement gate", () => {
     const claim = preclaim("run-worker-child-crash-recovery");
     const binding = bindingFor(claim);
     const childSessionKey = "agent:main:subagent:interrupted-child";
+    const childSessionId = "session-interrupted-child";
+    const childEnvironmentId = "environment-interrupted-child";
+    database.db.exec(
+      "ALTER TABLE worker_session_tool_operations DROP COLUMN child_placement_identity_json",
+    );
     store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
     expect(
       store.beginWorkerSessionToolOperation({
@@ -535,16 +540,140 @@ describe("worker session placement gate", () => {
         childSessionKey,
       }),
     ).toMatchObject({ kind: "execute" });
+    const childRequested = store.startDispatch({
+      sessionId: childSessionId,
+      sessionKey: childSessionKey,
+      agentId: "main",
+      executionMode: "worker-turn",
+    });
+    store.transition({
+      sessionId: childSessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: childRequested.generation,
+      patch: { environmentId: childEnvironmentId },
+      delegatedSpawnOperation: {
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "spawn-before-crash",
+        requestDigest: "spawn-before-crash-digest",
+      },
+    });
+    const interruptedChildPlacement = {
+      sessionId: childSessionId,
+      sessionKey: childSessionKey,
+      environmentId: childEnvironmentId,
+    };
+    expect(
+      database.db
+        .prepare(
+          "SELECT child_placement_identity_json FROM worker_session_tool_operations WHERE tool_call_id = ?",
+        )
+        .get("spawn-before-crash"),
+    ).toEqual({ child_placement_identity_json: JSON.stringify(interruptedChildPlacement) });
+    // Simulate a same-version row written before exact placement identity shipped.
+    database.db
+      .prepare(
+        "UPDATE worker_session_tool_operations SET child_placement_identity_json = NULL WHERE tool_call_id = ?",
+      )
+      .run("spawn-before-crash");
 
     const firstRestart = createWorkerSessionPlacementStore({ database });
     expect(firstRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
       count: 1,
-      interruptedChildSessionKeys: [childSessionKey],
+      interruptedChildPlacements: [interruptedChildPlacement],
+    });
+    expect(
+      database.db
+        .prepare(
+          "SELECT child_placement_identity_json FROM worker_session_tool_operations WHERE tool_call_id = ?",
+        )
+        .get("spawn-before-crash"),
+    ).toEqual({ child_placement_identity_json: JSON.stringify(interruptedChildPlacement) });
+    const secondRestart = createWorkerSessionPlacementStore({ database });
+    expect(secondRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 0,
+      interruptedChildPlacements: [interruptedChildPlacement],
+    });
+  });
+
+  it("does not create a child placement fence before provisioning starts", () => {
+    const claim = preclaim("run-worker-child-before-provisioning");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "spawn-before-provisioning",
+        requestDigest: "spawn-before-provisioning-digest",
+        childSessionKey: "agent:main:subagent:not-provisioning",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    const restarted = createWorkerSessionPlacementStore({ database });
+    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 1,
+      interruptedChildPlacements: [],
+    });
+  });
+
+  it("fences every effect-owning placement for an ambiguous legacy child key", () => {
+    const claim = preclaim("run-worker-legacy-child-recovery");
+    const binding = bindingFor(claim);
+    const childSessionKey = "agent:main:subagent:legacy-child";
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "legacy-spawn-before-crash",
+        requestDigest: "legacy-spawn-before-crash-digest",
+        childSessionKey,
+      }),
+    ).toMatchObject({ kind: "execute" });
+    const interruptedChildPlacements = [
+      {
+        sessionId: "session-legacy-child-one",
+        sessionKey: childSessionKey,
+        environmentId: "environment-legacy-child-one",
+      },
+      {
+        sessionId: "session-legacy-child-two",
+        sessionKey: childSessionKey,
+        environmentId: "environment-legacy-child-two",
+      },
+      {
+        sessionId: "session-legacy-child-three",
+        sessionKey: childSessionKey,
+        environmentId: "environment-legacy-child-three",
+      },
+    ];
+    for (const child of interruptedChildPlacements) {
+      const requested = store.startDispatch({
+        sessionId: child.sessionId,
+        sessionKey: child.sessionKey,
+        agentId: "main",
+        executionMode: "worker-turn",
+      });
+      store.transition({
+        sessionId: child.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId: child.environmentId },
+      });
+    }
+
+    const firstRestart = createWorkerSessionPlacementStore({ database });
+    expect(firstRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+      count: 1,
+      interruptedChildPlacements,
     });
     const secondRestart = createWorkerSessionPlacementStore({ database });
     expect(secondRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
       count: 0,
-      interruptedChildSessionKeys: [childSessionKey],
+      interruptedChildPlacements,
     });
   });
 });

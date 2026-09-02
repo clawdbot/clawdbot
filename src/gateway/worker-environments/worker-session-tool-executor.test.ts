@@ -185,6 +185,12 @@ describe("worker session tool topology", () => {
             providerId: "fake",
             profileSnapshot: { install: "bundle", settings: { region: "source" } },
           },
+          delegatedSpawnOperation: {
+            sourceSessionId: SOURCE.sessionId,
+            sourceClaimId: expect.any(String),
+            toolCallId: "spawn-cloud-child",
+            requestDigest: expect.any(String),
+          },
         },
         undefined,
         expect.any(Function),

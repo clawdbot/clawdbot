@@ -32,6 +32,7 @@ import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from 
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
 import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
+import type { InterruptedDelegatedChildPlacement } from "./worker-environments/placement-session-tool-operations.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -69,7 +70,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
-  interruptedDelegatedChildSessionKeys?: ReadonlySet<string>;
+  interruptedDelegatedChildPlacements?: readonly InterruptedDelegatedChildPlacement[];
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
   handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
@@ -173,7 +174,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // The Gateway state-directory lock proves that executors from the previous
   // process are gone. Resolve their ambiguous effects before placement
   // reconciliation attempts to release the owning worker claims.
-  const { interruptedChildSessionKeys } =
+  const { interruptedChildPlacements } =
     params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
@@ -535,7 +536,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
     nodeWorkerBundleRetention,
-    interruptedDelegatedChildSessionKeys: new Set(interruptedChildSessionKeys),
+    interruptedDelegatedChildPlacements: interruptedChildPlacements,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },

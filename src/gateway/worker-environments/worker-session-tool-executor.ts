@@ -180,6 +180,7 @@ export function createWorkerSessionToolExecutor(params: {
       source: ExactSource;
       identity: WorkerConnectionIdentity;
       request: WorkerSessionsSpawnParams;
+      requestDigest: string;
       operationSeed: string;
       childSessionKey: string;
       signal?: AbortSignal;
@@ -329,6 +330,12 @@ export function createWorkerSessionToolExecutor(params: {
                 inheritedProfile: {
                   providerId: sourceEnvironment.providerId,
                   profileSnapshot: sourceEnvironment.profileSnapshot,
+                },
+                delegatedSpawnOperation: {
+                  sourceSessionId: operation.source.sessionId,
+                  sourceClaimId: operation.source.turnClaim.claimId,
+                  toolCallId: operation.request.toolCallId,
+                  requestDigest: operation.requestDigest,
                 },
               },
               undefined,
@@ -594,6 +601,7 @@ export function createWorkerSessionToolExecutor(params: {
                     source,
                     identity: operationRequest.identity,
                     request: operationRequest.request,
+                    requestDigest,
                     operationSeed: started.operationSeed,
                     childSessionKey: childKey!,
                     ...(operationRequest.signal ? { signal: operationRequest.signal } : {}),

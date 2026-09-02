@@ -105,7 +105,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-  isInterruptedDelegatedChild?: (sessionKey: string) => boolean;
+  isInterruptedDelegatedChild?: (placement: WorkerDispatchPlacement) => boolean;
   reportTransition: (
     observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
     placement: WorkerDispatchPlacement,
@@ -452,7 +452,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       report(failed);
       return failed;
     };
-    if (options.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+    if (options.isInterruptedDelegatedChild?.(placement)) {
       return await handleRecoveryFailure(
         new Error("Delegated child placement lost its initiating worker turn during restart"),
       );
@@ -476,14 +476,17 @@ export function createWorkerPlacementDispatchStartup(options: {
               signal?.throwIfAborted();
               const assertRecoveryCurrent = () => {
                 signal?.throwIfAborted();
-                if (options.isInterruptedDelegatedChild?.(placement.sessionKey)) {
+                const current = placements.get(placement.sessionId);
+                if (!current) {
+                  throw new Error("Worker placement authority disappeared during recovery");
+                }
+                if (options.isInterruptedDelegatedChild?.(current)) {
                   throw new Error(
                     "Delegated child placement lost its initiating worker turn during restart",
                   );
                 }
-                const current = placements.get(placement.sessionId);
                 if (
-                  current?.state !== recoveryOwnedPlacement.state ||
+                  current.state !== recoveryOwnedPlacement.state ||
                   current.generation !== recoveryOwnedPlacement.generation ||
                   current.environmentId !== environmentId ||
                   current.sessionKey !== placement.sessionKey ||

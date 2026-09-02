@@ -29,6 +29,11 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
     tableName: "worker_workspace_pending_results",
   },
   {
+    columnName: "child_placement_identity_json",
+    dataType: "TEXT",
+    tableName: "worker_session_tool_operations",
+  },
+  {
     columnName: "abandon_source",
     dataType: "INTEGER",
     tableName: "worker_session_placement_moves",
@@ -58,6 +63,8 @@ function isFirstUseAdditiveStateColumn({
       columnName === "repository_workspace_id") ||
     (tableName === "worker_session_placement_moves" &&
       (columnName === "abandon_source" || columnName === "target_machine_class")) ||
+    (tableName === "worker_session_tool_operations" &&
+      columnName === "child_placement_identity_json") ||
     (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree")) ||
     (tableName === "web_push_subscriptions" &&
       (columnName === "device_id" ||
