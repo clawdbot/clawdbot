@@ -6,12 +6,19 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 
 const resolveMattermostAccount = vi.hoisted(() => vi.fn());
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
 const hasConfiguredSecretInput = vi.hoisted(() => vi.fn((value: unknown) => Boolean(value)));
+const previousLocale = vi.hoisted(() => {
+  // Wizard copy is localized at module evaluation time; pin English before
+  // imports so prompt assertions do not depend on the developer machine's locale.
+  const previousLocaleLocal = process.env.OPENCLAW_LOCALE;
+  process.env.OPENCLAW_LOCALE = "en";
+  return previousLocaleLocal;
+});
 
 vi.mock("./setup.accounts.runtime.js", () => {
   const resolveAccount = (params: Parameters<typeof resolveMattermostAccount>[0]) => {
@@ -105,6 +112,14 @@ describe("mattermost setup", () => {
     vi.unstubAllEnvs();
   });
 
+  afterAll(() => {
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
+  });
+
   it("reports configuration only when token and base url are both present", () => {
     expect(
       isMattermostConfigured({
@@ -129,6 +144,11 @@ describe("mattermost setup", () => {
         config: {},
       } as never),
     ).toBe(false);
+  });
+
+  it("exposes config-promotion declarations on the setup adapter", () => {
+    expect(mattermostSetupAdapter.singleAccountKeysToMove).toContain("botToken");
+    expect(mattermostSetupAdapter.singleAccountKeysToMove).toContain("baseUrl");
   });
 
   it("inspects accounts without resolving secret refs", () => {

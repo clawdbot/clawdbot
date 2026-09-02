@@ -15,16 +15,22 @@ import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { probeLineBot } from "./probe.js";
 import { setLineRuntime } from "./runtime.js";
+import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
+const { getBotInfoMock, MessagingApiClientMock, previousLocale } = vi.hoisted(() => {
   const getBotInfoMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
     return { getBotInfo: getBotInfoMockLocal };
   });
+  // Wizard copy is localized at module evaluation time; pin English before
+  // imports so prompt assertions do not depend on the developer machine's locale.
+  const previousLocaleLocal = process.env.OPENCLAW_LOCALE;
+  process.env.OPENCLAW_LOCALE = "en";
   return {
     getBotInfoMock: getBotInfoMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
+    previousLocale: previousLocaleLocal,
   };
 });
 
@@ -35,11 +41,23 @@ vi.mock("@line/bot-sdk", () => ({
 afterAll(() => {
   vi.doUnmock("@line/bot-sdk");
   vi.resetModules();
+  if (previousLocale === undefined) {
+    delete process.env.OPENCLAW_LOCALE;
+  } else {
+    process.env.OPENCLAW_LOCALE = previousLocale;
+  }
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 
 describe("line setup wizard", () => {
+  it("exposes config-promotion declarations on the setup adapter", () => {
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("channelAccessToken");
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("channelSecret");
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("tokenFile");
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("secretFile");
+  });
+
   it("configures token and secret for the default account", async () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
