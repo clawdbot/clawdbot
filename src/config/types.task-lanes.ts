@@ -1,6 +1,6 @@
 // Task-lane config types: operator-configured JSON-file lane providers.
 
-export type TaskLaneJsonFileProviderConfig = {
+type TaskLaneJsonFileProviderConfig = {
   /** Provider id; must match the task-lane provider id pattern. */
   id: string;
   /** Containment root; the resolved filePath must live inside it. */

@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { TaskLaneSnapshotPayload } from "../../../../packages/gateway-protocol/src/index.js";
-import { renderTaskLanesPanel, sortTaskLaneSnapshot } from "./view-task-lanes.ts";
+import { renderTaskLanesPanel } from "./view-task-lanes.ts";
 
 type PanelProps = Parameters<typeof renderTaskLanesPanel>[0];
 
@@ -112,26 +112,5 @@ describe("task lanes panel", () => {
     const container = renderPanel({ taskLanesError: "gateway unavailable" });
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("gateway unavailable");
-  });
-
-  it("sorts the snapshot deterministically", () => {
-    const sorted = sortTaskLaneSnapshot(
-      snapshot({
-        lanes: [
-          snapshot().lanes[1]!,
-          {
-            id: "lane-b",
-            label: "Lane B",
-            items: [
-              { id: "i1", title: "no time", state: "pending" },
-              { id: "i2", title: "older", state: "pending", startedAtMs: 5 },
-              { id: "i3", title: "newer", state: "pending", startedAtMs: 9 },
-            ],
-          },
-        ],
-      }),
-    );
-    expect(sorted.lanes.map((lane) => lane.id)).toEqual(["lane-a", "lane-b"]);
-    expect(sorted.lanes[1]?.items.map((item) => item.id)).toEqual(["i3", "i2", "i1"]);
   });
 });

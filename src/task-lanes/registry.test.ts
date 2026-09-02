@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   createTaskLaneRegistry,
-  listTaskLaneProviderIds,
   loadTaskLaneSnapshot,
   registerTaskLaneProvider,
 } from "./registry.js";
@@ -29,7 +28,7 @@ describe("task-lane registry", () => {
     expect(() => registerTaskLaneProvider(registry, provider("cron"))).toThrow(
       /already registered/,
     );
-    expect(listTaskLaneProviderIds(registry)).toEqual(["cron"]);
+    expect([...registry.providers.keys()]).toEqual(["cron"]);
   });
 
   it("loads lanes from all providers sorted by id with ok diagnostics", async () => {
@@ -100,10 +99,9 @@ describe("task-lane registry", () => {
       expect(entry.id).toBe("work");
       expect(entry.items.map((item) => item.id)).toHaveLength(1);
     }
-    expect(snapshot.lanes.flatMap((entry) => entry.items.map((item) => item.id)).sort()).toEqual([
-      "a1",
-      "b1",
-    ]);
+    expect(
+      snapshot.lanes.flatMap((entry) => entry.items.map((item) => item.id)).toSorted(),
+    ).toEqual(["a1", "b1"]);
   });
 
   it("pages the newest-first flat item list and normalizes states", async () => {

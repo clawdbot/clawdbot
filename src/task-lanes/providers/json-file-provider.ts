@@ -21,6 +21,7 @@
 import { promises as fs } from "node:fs";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   TASK_LANE_MAX_FILE_BYTES,
   TASK_LANE_MAX_ITEMS_PER_LANE,
@@ -28,17 +29,18 @@ import {
   TASK_LANE_MAX_OUTCOME_CHARS,
   TASK_LANE_MAX_TITLE_CHARS,
   TASK_LANE_SCHEMA_VERSION,
+  normalizeTaskLaneItemState,
+  truncateTaskLaneText,
   type TaskLane,
   type TaskLaneItem,
   type TaskLaneItemState,
   type TaskLaneProvider,
 } from "../types.js";
-import { normalizeTaskLaneItemState, truncateTaskLaneText } from "../types.js";
 
 const ALLOWED_URL_SCHEMES = new Set(["http:", "https:"]);
 
-/** Public hook so tests can stub the file reader. */
-export type JsonFileReader = (filePath: string) => Promise<Buffer>;
+/** Injectable file reader so tests can stub the filesystem. */
+type JsonFileReader = (filePath: string) => Promise<Buffer>;
 
 const defaultReader: JsonFileReader = (filePath) => fs.readFile(filePath);
 
@@ -51,8 +53,15 @@ function isPathInside(parent: string, child: string): boolean {
   return rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
-function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+/** C0 controls plus DEL are unusable inside URLs and whitespace-bearing text. */
+function hasControlChar(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function sanitizeArtifactUrl(value: unknown): string | undefined {
@@ -60,7 +69,7 @@ function sanitizeArtifactUrl(value: unknown): string | undefined {
     return undefined;
   }
   const trimmed = value.trim();
-  if (trimmed.length === 0 || /[\s\u0000-\u001f]/.test(trimmed)) {
+  if (trimmed.length === 0 || hasControlChar(trimmed)) {
     return undefined;
   }
   if (trimmed.includes("..")) {
@@ -81,6 +90,7 @@ function normalizeLaneItem(value: unknown): TaskLaneItem | null {
   if (!value || typeof value !== "object") {
     return null;
   }
+  // SAFETY: caller checked `value` is a non-null object before casting.
   const record = value as Record<string, unknown>;
   if (typeof record.id !== "string" || record.id.length === 0) {
     return null;
@@ -111,6 +121,7 @@ function normalizeLane(value: unknown): TaskLane | null {
   if (!value || typeof value !== "object") {
     return null;
   }
+  // SAFETY: caller checked `value` is a non-null object before casting.
   const record = value as Record<string, unknown>;
   if (typeof record.id !== "string" || record.id.length === 0) {
     return null;
@@ -154,6 +165,7 @@ export type JsonFileProviderOptions = {
  * because node embeds the absolute path it failed on.
  */
 function fsErrorCode(error: unknown): string {
+  // SAFETY: fs errors may be arbitrary throwables; optional chain + typeof guard tolerate that.
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return typeof code === "string" ? code : "read failed";
 }
@@ -162,14 +174,16 @@ function fsErrorCode(error: unknown): string {
  * Loads a versioned JSON file and converts it to a lane set, enforcing
  * realpath/size/bounds safety. Throws when the file cannot be trusted.
  */
-export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Promise<{
+async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Promise<{
   lanes: TaskLane[];
 }> {
   let rootRealpath: string;
   try {
     rootRealpath = await (options.resolveRealpath ?? realpath)(path.resolve(options.rootDir));
   } catch (error) {
-    throw new Error(`task lane root directory is unavailable (${fsErrorCode(error)})`);
+    throw new Error(`task lane root directory is unavailable (${fsErrorCode(error)})`, {
+      cause: error,
+    });
   }
   const candidate = path.isAbsolute(options.filePath)
     ? options.filePath
@@ -178,7 +192,7 @@ export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions
   try {
     real = await (options.resolveRealpath ?? realpath)(candidate);
   } catch (error) {
-    throw new Error(`task lane file is unavailable (${fsErrorCode(error)})`);
+    throw new Error(`task lane file is unavailable (${fsErrorCode(error)})`, { cause: error });
   }
   if (!isPathInside(rootRealpath, real)) {
     throw new Error("task lane file escapes root");
@@ -187,7 +201,7 @@ export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions
   try {
     buffer = await (options.reader ?? defaultReader)(real);
   } catch (error) {
-    throw new Error(`task lane file could not be read (${fsErrorCode(error)})`);
+    throw new Error(`task lane file could not be read (${fsErrorCode(error)})`, { cause: error });
   }
   if (buffer.byteLength > TASK_LANE_MAX_FILE_BYTES) {
     throw new Error(`task lane file too large: ${buffer.byteLength} > ${TASK_LANE_MAX_FILE_BYTES}`);
@@ -202,6 +216,7 @@ export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("task lane file root is not an object");
   }
+  // SAFETY: caller checked `parsed` is a non-null non-array object before casting.
   const root = parsed as Record<string, unknown>;
   if (root.schemaVersion !== TASK_LANE_SCHEMA_VERSION) {
     // Diagnostics are RPC-visible; the file's schemaVersion value is untrusted

@@ -34,16 +34,9 @@ export function registerTaskLaneProvider(
   registry.providers.set(id, provider);
 }
 
-export function getTaskLaneProvider(
-  registry: TaskLaneRegistry,
-  providerId: string,
-): TaskLaneProvider | undefined {
-  return registry.providers.get(providerId);
-}
-
 /** Sorted provider ids keep snapshot ordering deterministic. */
-export function listTaskLaneProviderIds(registry: TaskLaneRegistry): string[] {
-  return [...registry.providers.keys()].sort();
+function listTaskLaneProviderIds(registry: TaskLaneRegistry): string[] {
+  return [...registry.providers.keys()].toSorted();
 }
 
 function laneItemSortKey(item: TaskLaneItem): number {
@@ -65,7 +58,7 @@ export async function loadTaskLaneSnapshot(
     : listTaskLaneProviderIds(registry);
   const lanes: Array<TaskLane & { providerId: string }> = [];
   const diagnostics: TaskLaneProviderDiagnostic[] = [];
-  const flat: Array<TaskLaneItem & { laneId: string; laneProviderId: string }> = [];
+  const flat: Array<{ item: TaskLaneItem; laneId: string; laneProviderId: string }> = [];
   for (const providerId of providerIds) {
     const provider = registry.providers.get(providerId);
     if (!provider) {
@@ -81,13 +74,9 @@ export async function loadTaskLaneSnapshot(
         // would cross-assign items.
         lanes.push({ ...lane, providerId });
         itemCount += lane.items.length;
-        flat.push(
-          ...lane.items.map((item) => ({
-            ...item,
-            laneId: lane.id,
-            laneProviderId: providerId,
-          })),
-        );
+        for (const item of lane.items) {
+          flat.push({ item, laneId: lane.id, laneProviderId: providerId });
+        }
       }
       diagnostics.push({
         providerId,
@@ -104,17 +93,22 @@ export async function loadTaskLaneSnapshot(
     }
   }
   lanes.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-  flat.sort((left, right) => laneItemSortKey(right) - laneItemSortKey(left));
-  const paged = flat.slice(offset, offset + limit).map((item) => ({
-    ...item,
-    state: normalizeTaskLaneItemState(item.state),
-  }));
+  flat.sort((left, right) => laneItemSortKey(right.item) - laneItemSortKey(left.item));
+  const itemsByLane = new Map<string, TaskLaneItem[]>();
+  for (const { item, laneId, laneProviderId } of flat.slice(offset, offset + limit)) {
+    const key = `${laneProviderId} ${laneId}`;
+    let laneItems = itemsByLane.get(key);
+    if (!laneItems) {
+      laneItems = [];
+      itemsByLane.set(key, laneItems);
+    }
+    laneItems.push({ ...item, state: normalizeTaskLaneItemState(item.state) });
+  }
   return {
-    lanes: lanes.map(({ providerId, ...lane }) => ({
-      ...lane,
-      items: paged
-        .filter((item) => item.laneProviderId === providerId && item.laneId === lane.id)
-        .map(({ laneProviderId, ...item }) => item),
+    lanes: lanes.map(({ providerId, id, label }) => ({
+      id,
+      label,
+      items: itemsByLane.get(`${providerId} ${id}`) ?? [],
     })),
     diagnostics,
   };

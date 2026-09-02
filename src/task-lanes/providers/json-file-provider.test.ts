@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { TASK_LANE_MAX_FILE_BYTES } from "../types.js";
-import { createJsonFileProvider, loadJsonFileProviderLanes } from "./json-file-provider.js";
+import { createJsonFileProvider, type JsonFileProviderOptions } from "./json-file-provider.js";
+
+/** Exercises the module's internal loader through the exported provider wrapper. */
+const loadJsonFileProviderLanes = async (options: JsonFileProviderOptions) =>
+  createJsonFileProvider("json-file", options).load();
 
 const VALID_DOC = {
   schemaVersion: 1,

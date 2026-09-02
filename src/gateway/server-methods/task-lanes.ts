@@ -12,6 +12,7 @@ export const taskLanesHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateTaskLaneListParams, "taskLanes.list", respond)) {
       return;
     }
+    // SAFETY: validated against TaskLaneListParamsSchema above.
     const p = params as TaskLaneListParams;
     const snapshot = await context.taskLanes.snapshot({
       providerId: p.providerId,

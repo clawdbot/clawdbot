@@ -18,15 +18,16 @@ type TaskLaneItem = TaskLane["items"][number];
 type TaskLaneDiagnostic = TaskLaneSnapshotPayload["diagnostics"][number];
 
 /** Lanes sort by id; items render newest-first (startedAtMs desc, missing last). */
-export function sortTaskLaneSnapshot(snapshot: TaskLaneSnapshotPayload): TaskLaneSnapshotPayload {
+function sortTaskLaneSnapshot(snapshot: TaskLaneSnapshotPayload): TaskLaneSnapshotPayload {
   return {
-    lanes: [...snapshot.lanes]
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    lanes: snapshot.lanes
+      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .map((lane) => ({
-        ...lane,
-        items: [...lane.items].sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0)),
+        id: lane.id,
+        label: lane.label,
+        items: lane.items.toSorted((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0)),
       })),
-    diagnostics: [...snapshot.diagnostics].sort((a, b) =>
+    diagnostics: snapshot.diagnostics.toSorted((a, b) =>
       a.providerId < b.providerId ? -1 : a.providerId > b.providerId ? 1 : 0,
     ),
   };
