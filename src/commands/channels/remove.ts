@@ -90,6 +90,10 @@ export async function channelsRemoveCommand(
   const rawChannel = normalizeOptionalString(opts.channel) ?? "";
   let lookupChannel = rawChannel;
   let channel: ChatChannel | null = normalizeChannelId(rawChannel);
+  // normalizeAccountId maps blank to the default account; only an omitted --account may.
+  if (opts.account !== undefined && !opts.account.trim()) {
+    throw new Error("--account must not be blank");
+  }
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 

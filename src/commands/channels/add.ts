@@ -173,6 +173,11 @@ async function channelsAddCommandImpl(
     return;
   }
 
+  // Catalog install below runs before account resolution, so a blank selector must
+  // fail here; letting it through would install and then write the default account.
+  if (opts.account !== undefined && !opts.account.trim()) {
+    throw new Error("--account must not be blank");
+  }
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
   let preparedWorkspaceDir: string | undefined;

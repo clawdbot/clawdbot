@@ -154,6 +154,14 @@ async function resolveChannelPluginForMode(
   };
 }
 
+function assertAccountSelector(opts: ChannelAuthOptions): void {
+  // Channel resolution can install a plugin and persist config, so a blank
+  // selector must fail before it runs; only an omitted --account selects the default.
+  if (opts.account !== undefined && !opts.account.trim()) {
+    throw new Error("--account must not be blank");
+  }
+}
+
 function resolveAccountContext(
   plugin: ChannelPlugin,
   opts: ChannelAuthOptions,
@@ -269,6 +277,7 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  assertAccountSelector(opts);
   const resolvedChannel = await resolveChannelPluginForMode(opts, "login", runtime);
   if (!resolvedChannel) {
     return;
@@ -307,6 +316,7 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  assertAccountSelector(opts);
   const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", runtime);
   if (!resolvedChannel) {
     return;

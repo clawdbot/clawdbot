@@ -887,4 +887,46 @@ describe("channel-auth", () => {
       'Channel "whatsapp" does not support logout. Run `openclaw channels status --channel whatsapp` to inspect supported actions.',
     );
   });
+
+  it.each(
+    [
+      { account: "", label: "empty" },
+      { account: "   ", label: "whitespace" },
+    ].flatMap((accountCase) => [
+      { ...accountCase, mode: "login" as const },
+      { ...accountCase, mode: "logout" as const },
+    ]),
+  )("rejects a $label --account before $mode resolves the channel", async ({ account, mode }) => {
+    // Auto-enable changes make channel resolution persist config, so a late guard is visible.
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } },
+      changes: ["whatsapp"],
+    });
+    const run = mode === "login" ? runChannelLogin : runChannelLogout;
+    const action = mode === "login" ? mocks.login : mocks.logoutAccount;
+
+    await expect(run({ channel: "whatsapp", account }, runtime)).rejects.toThrow(
+      "--account must not be blank",
+    );
+
+    expect(mocks.commitConfigWithPendingPluginInstalls).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["login", runChannelLogin, mocks.login],
+    ["logout", runChannelLogout, mocks.logoutAccount],
+  ] as const)(
+    "still resolves an omitted --account to the plugin default for %s",
+    async (_mode, run, action) => {
+      mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
+      await run({ channel: "whatsapp" }, runtime);
+
+      expect(mocks.resolveChannelDefaultAccountId).toHaveBeenCalledTimes(1);
+      expectFields(readFirstCallArg(action), { accountId: "default-account" });
+    },
+  );
 });
