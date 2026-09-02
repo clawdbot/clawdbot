@@ -14,8 +14,9 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
@@ -52,7 +53,6 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   resetIdentityDraft,
   saveIdentityDraft,
@@ -105,6 +105,7 @@ class AgentsPage
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  readonly agentFileWriteRevisions = new Map<string, number>();
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
@@ -131,6 +132,7 @@ class AgentsPage
     agentId: string;
   } | null = null;
   private normalizedLocation = "";
+  private githubProfileId: string | null = null;
   private readonly githubIdentity = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
     runExternalMutation: (task, options) =>
@@ -251,6 +253,10 @@ class AgentsPage
     return this.context.sessions;
   }
 
+  get agents() {
+    return this.context.agents;
+  }
+
   get client() {
     return this.gateway.client;
   }
@@ -332,7 +338,6 @@ class AgentsPage
       return;
     }
     this.agentFilesList = status.list;
-    this.agentFilesError = status.error;
     void this.selectDefaultAgentFile(agentId);
   }
 
@@ -560,13 +565,24 @@ class AgentsPage
 
   private syncGitHubIdentity(agentId: string | null) {
     const snapshot = this.context.gateway.snapshot;
+    const profileId = snapshot.selfUser?.id ?? null;
+    if (profileId !== this.githubProfileId) {
+      this.githubIdentity.dispose();
+      this.githubProfileId = profileId;
+    }
     const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
       canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
     this.githubIdentity.sync({
       client: this.client,
       connected: this.connected,
-      agentId,
-      config: currentConfigObject(this.context.runtimeConfig.state),
+      target: agentId
+        ? {
+            kind: "shared",
+            scope: "agent",
+            agentId,
+            config: currentConfigObject(this.context.runtimeConfig.state),
+          }
+        : null,
       statusReadable: hasScope("tools.github.status", "operator.read"),
       configurable: hasScope("tools.github.configure", "operator.admin"),
       authorizable: [
@@ -585,7 +601,7 @@ class AgentsPage
       return;
     }
     if (!options.refresh) {
-      const cached = peekChatMetadata(client, agentId);
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
         this.chatModelCatalogAgentId = agentId;
@@ -611,8 +627,8 @@ class AgentsPage
     // Chat metadata carries the selected agent's already-prepared startup models
     // without initiating the live discovery reserved for explicit picker use.
     const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, agentId)
-      : loadChatMetadata(client, agentId);
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
     void metadataRequest
       .then((result) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
@@ -671,7 +687,6 @@ class AgentsPage
         return;
       }
       this.agentFilesList = list ?? agents.files(agentId).list;
-      this.agentFilesError = agents.files(agentId).error;
     } finally {
       if (this.isCurrentRequest(client, generation, agentId, { agents })) {
         this.agentFilesLoading = false;
@@ -745,6 +760,7 @@ class AgentsPage
     this.agentFileActive = null;
     this.agentFileContents = {};
     this.agentFileDrafts = {};
+    this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentSkillsReport = null;
@@ -858,17 +874,7 @@ class AgentsPage
     if (!this.canCall("agents.files.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
-    void saveAgentFile(this, agentId, name, content).then((saved) => {
-      if (saved && this.isCurrentRequest(client, generation, agentId, { agents })) {
-        void this.loadAgentFiles(agentId, true);
-      }
-    });
+    void saveAgentFile(this, agentId, name, content);
   }
 
   private reloadConfig() {
@@ -933,7 +939,7 @@ class AgentsPage
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -974,7 +980,7 @@ class AgentsPage
           agentFiles: {
             list: this.agentFilesList,
             loading: this.agentFilesLoading,
-            error: this.agentFilesError,
+            error: this.agentFilesError ?? this.context.agents.files(selectedAgentId).error,
             active: this.agentFileActive,
             contents: this.agentFileContents,
             drafts: this.agentFileDrafts,
@@ -1004,6 +1010,8 @@ class AgentsPage
             result: this.toolsEffectiveResult,
           },
           githubIdentity: this.githubIdentity,
+          onOpenGitHubConnections: () =>
+            this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,

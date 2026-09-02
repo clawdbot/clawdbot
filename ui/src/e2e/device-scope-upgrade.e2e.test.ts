@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,7 +15,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("device-scope-upgrade", artifactRoot)
+    : undefined;
+});
 
 const LIMITED_SCOPES = ["operator.read", "operator.write"];
 const FULL_SCOPES = [
@@ -44,11 +50,19 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+async function gatewayPhase(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+    };
+    return app.runtime?.context.gateway.snapshot.phase;
+  });
+}
+
 async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
 }
 
@@ -134,7 +148,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   it("moves limited access into the Inbox and persists its dismissal", async () => {
     const desktopContext = await createContext();
     const desktop = await desktopContext.newPage();
-    await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
+    const gateway = await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
     await desktop.goto(`${server.baseUrl}activity`);
 
     expect(await desktop.locator(".scope-upgrade-status-trigger").count()).toBe(0);
@@ -150,6 +164,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
     await desktopPanel.getByRole("tab", { name: "System", exact: true }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access-dismissed.png");
+
+    await gateway.setOnline(false);
+    await expect.poll(() => gatewayPhase(desktop)).toBe("reconnecting");
+    await gateway.setOnline(true);
+    await expect.poll(() => gatewayPhase(desktop)).toBe("connected");
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
 
     await desktop.reload();
     await desktop.locator("openclaw-app-shell").waitFor();
@@ -230,10 +250,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "desktop-inbox-upgrade-pending.png");
 
     await closeInbox(page);
-    await page
-      .locator(".shell-chrome-controls")
-      .getByRole("button", { name: "Collapse sidebar" })
-      .click();
+    await page.locator(".sidebar-brand__collapse").click();
     const collapsedItem = await openLimitedAccessItem(await openInbox(page));
     await waitForPendingUpgradeItem(collapsedItem);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
@@ -276,6 +293,90 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await expect.poll(() => page.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
     await expect.poll(() => page.locator(".sidebar-issues-button__count").count()).toBe(0);
   });
+
+  it("shows an administrator access request error once", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      operatorScopes: LIMITED_SCOPES,
+      methodResponses: {
+        "device.scopes.requestUpgrade": {
+          __mockError: { code: "INVALID_REQUEST", message: "missing scope: operator.read" },
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}activity`);
+
+    const item = await openLimitedAccessItem(await openInbox(page));
+    await item.getByRole("button", { name: "Request admin" }).click();
+    const message = "Administrator access request failed: missing scope: operator.read";
+    await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
+
+    expect(await item.getByText(message, { exact: true }).count()).toBe(1);
+    await captureProof(page, "desktop-inbox-upgrade-error.png");
+  });
+
+  it.each(SCOPE_UPGRADE_METHODS)(
+    "keeps role denials non-retryable at %s while transient errors can retry",
+    async (method) => {
+      const context = await createContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        deferredMethods: [method],
+        operatorScopes: LIMITED_SCOPES,
+        methodResponses: {
+          "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
+        },
+      });
+      await page.goto(`${server.baseUrl}activity`);
+      const item = await openLimitedAccessItem(await openInbox(page));
+      await item.getByRole("button", { name: "Request admin" }).click();
+      await gateway.waitForRequest(method);
+      const denial =
+        "Requested scopes exceed your assigned operator role; ask a gateway administrator to change your role.";
+      // Role denials omit retryable on the wire; the request-error contract defaults it to false.
+      await gateway.rejectDeferred(method, { code: "INVALID_REQUEST", message: denial });
+      await item
+        .locator(".sidebar-issues-panel__body")
+        .getByText(denial, { exact: false })
+        .waitFor();
+      await captureProof(page, `${method}-role-denied.png`);
+      expect(await item.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
+
+      await item.getByRole("button", { name: "Cancel", exact: true }).click();
+      await gateway.deferNext(method);
+      await item.getByRole("button", { name: "Request admin" }).click();
+      await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+      await gateway.rejectDeferred(method, {
+        code: "UNAVAILABLE",
+        message: "Device scope upgrade is temporarily unavailable.",
+        retryable: true,
+      });
+      await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
+      await gateway.deferNext("device.scopes.waitUpgrade");
+      await item.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
+        .toBe(3);
+      await waitForPendingUpgradeItem(item);
+      await captureProof(page, `${method}-retry-pending.png`);
+      for (const status of ["rejected", "expired"] as const) {
+        const requestCount = (await gateway.getRequests("device.scopes.requestUpgrade")).length;
+        await gateway.resolveDeferred("device.scopes.waitUpgrade", {
+          status,
+          requestId: "upgrade-1",
+        });
+        await item.locator(".sidebar-issues-panel__body").getByText(new RegExp(status)).waitFor();
+        await gateway.deferNext("device.scopes.waitUpgrade");
+        await item.getByRole("button", { name: "Retry", exact: true }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("device.scopes.requestUpgrade")).length)
+          .toBe(requestCount + 1);
+        await waitForPendingUpgradeItem(item);
+      }
+    },
+  );
 
   it.each(SCOPE_UPGRADE_METHODS)(
     "shows manual repair guidance in Inbox when %s is not advertised",

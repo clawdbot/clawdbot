@@ -10,6 +10,7 @@ import {
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { createOpenAiResponsesTextBlock } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 describe("reasoning block delivery", () => {
   function createReasoningBlockReplyHarness(params: { thinkingLevel?: "off" | "medium" } = {}) {
@@ -217,6 +218,166 @@ describe("subscribeEmbeddedAgentSession", () => {
     ]);
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "streamed", eventType: "text_delta", secondText: "Second." },
+    { name: "snapshot-only", eventType: "text_end", secondText: "Second." },
+    { name: "equal snapshot-only", eventType: "text_end", secondText: "First." },
+  ] as const)("keeps $name commentary item identity through tool handoff", async (scenario) => {
+    const onAgentEvent = vi.fn();
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onAgentEvent,
+      onBlockReply,
+      onPartialReply,
+    });
+    const first = createOpenAiResponsesTextBlock({
+      id: "first",
+      phase: "commentary",
+      text: "First.",
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-responses",
+      content: [first],
+    } as AssistantMessage;
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: first.text },
+    });
+    const completed = {
+      ...message,
+      content: [
+        first,
+        createOpenAiResponsesTextBlock({
+          id: "second",
+          phase: "commentary",
+          text: scenario.secondText,
+        }),
+      ],
+    } as AssistantMessage;
+    emit({
+      type: "message_update",
+      message: completed,
+      assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: completed },
+    });
+    emit({
+      type: "message_update",
+      message: completed,
+      assistantMessageEvent: {
+        type: scenario.eventType,
+        contentIndex: 1,
+        ...(scenario.eventType === "text_delta"
+          ? { delta: scenario.secondText }
+          : { content: scenario.secondText }),
+        partial: completed,
+      },
+    });
+    const withTool = {
+      ...completed,
+      content: [
+        ...completed.content,
+        { type: "toolCall", id: "call", name: "read", arguments: {} },
+      ],
+    } as AssistantMessage;
+    emit({
+      type: "message_update",
+      message: withTool,
+      assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: withTool },
+    });
+    emit({ type: "message_end", message: withTool });
+    await subscription.waitForPendingEvents();
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      { stream: "item", data: { kind: "preamble", itemId: "first", progressText: "First." } },
+      {
+        stream: "item",
+        data: { kind: "preamble", itemId: "second", progressText: scenario.secondText },
+      },
+    ]);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(subscription.assistantTexts).toEqual([]);
+  });
+
+  it("preserves aggregate commentary for providers without Responses item boundaries", async () => {
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
+    const message = {
+      role: "assistant",
+      api: "anthropic-messages",
+      phase: "commentary",
+      content: [
+        { type: "text", text: "First." },
+        { type: "text", text: "Second." },
+      ],
+    } as AssistantMessageWithPhase;
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: message },
+    });
+    emit({ type: "message_end", message });
+    await subscription.waitForPendingEvents();
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          title: "Preamble",
+          phase: "update",
+          progressText: "First. Second.",
+        },
+      },
+    ]);
+  });
+
+  it("carries a generic commentary signature into preamble delivery", async () => {
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
+    const message = {
+      role: "assistant",
+      api: "anthropic-messages",
+      content: [
+        {
+          type: "text",
+          text: "Checking the workspace.",
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "generic-commentary-item",
+            phase: "commentary",
+          }),
+        },
+        { type: "toolCall", id: "call", name: "read", arguments: {} },
+      ],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: message },
+    });
+    emit({ type: "message_end", message });
+    await subscription.waitForPendingEvents();
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toContainEqual({
+      stream: "item",
+      data: {
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking the workspace.",
+        itemId: "generic-commentary-item",
+      },
+    });
   });
 
   it("suppresses commentary-phase assistant messages before tool use", () => {

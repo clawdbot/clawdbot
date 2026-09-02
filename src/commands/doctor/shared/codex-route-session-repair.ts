@@ -11,6 +11,7 @@ import {
   loadPersistedSharedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
+import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
@@ -32,7 +33,6 @@ import {
   isBlockedLegacyCodexModelPair,
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
-  isLegacyCodexProviderId,
   isProviderlessModelRef,
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
@@ -433,7 +433,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const sqliteEntryCount = params.shouldRepair
       ? scanDoctorSessionEntriesStrict(sessionScope, scanEntry)
       : scanDoctorSessionEntriesTolerant(sessionScope, scanEntry);
-    const hasLegacyStore = fs.existsSync(target.storePath);
+    const hasLegacyStore = !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath);
     return sqliteEntryCount > 0 || hasLegacyStore
       ? [
           {

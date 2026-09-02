@@ -3,15 +3,15 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  hasBundledChannelConfiguredState,
-  listBundledChannelIdsWithConfiguredState,
-} from "./configured-state.js";
+  hasBundledChannelPackageState,
+  listBundledChannelIdsForPackageState,
+} from "./package-state-probes.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
 describe("bundled channel configured-state metadata", () => {
   it("lists the shipped metadata-first configured-state channels", () => {
-    expect(listBundledChannelIdsWithConfiguredState()).toEqual([
+    expect(listBundledChannelIdsForPackageState("configuredState")).toEqual([
       "buzz",
       "clickclack",
       "discord",
@@ -37,28 +37,32 @@ describe("bundled channel configured-state metadata", () => {
 
   it("resolves Discord, Slack, Telegram, and IRC env probes without full plugin loads", () => {
     expect(
-      hasBundledChannelConfiguredState({
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
         channelId: "discord",
         cfg: {},
         env: { DISCORD_BOT_TOKEN: "token" },
       }),
     ).toBe(true);
     expect(
-      hasBundledChannelConfiguredState({
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
         channelId: "slack",
         cfg: {},
         env: { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" },
       }),
     ).toBe(true);
     expect(
-      hasBundledChannelConfiguredState({
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
         channelId: "telegram",
         cfg: {},
         env: { TELEGRAM_BOT_TOKEN: "token" },
       }),
     ).toBe(true);
     expect(
-      hasBundledChannelConfiguredState({
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
         channelId: "irc",
         cfg: {},
         env: { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" },
@@ -79,7 +83,9 @@ describe("bundled channel configured-state metadata", () => {
     { channelId: "nextcloud-talk", env: { NEXTCLOUD_TALK_BOT_SECRET: "secret" } },
     { channelId: "zalo", env: { ZALO_WEBHOOK_SECRET: "secret" } },
   ])("rejects incomplete $channelId environment credentials", ({ channelId, env }) => {
-    expect(hasBundledChannelConfiguredState({ channelId, cfg: {}, env })).toBe(false);
+    expect(
+      hasBundledChannelPackageState({ metadataKey: "configuredState", channelId, cfg: {}, env }),
+    ).toBe(false);
   });
 
   it.each([
@@ -109,12 +115,15 @@ describe("bundled channel configured-state metadata", () => {
       env: { SYNOLOGY_CHAT_TOKEN: "token", SYNOLOGY_CHAT_INCOMING_URL: "https://example.test" },
     },
   ])("accepts complete $channelId environment credentials", ({ channelId, env }) => {
-    expect(hasBundledChannelConfiguredState({ channelId, cfg: {}, env })).toBe(true);
+    expect(
+      hasBundledChannelPackageState({ metadataKey: "configuredState", channelId, cfg: {}, env }),
+    ).toBe(true);
   });
 
   it("keeps explicit blank Teams credentials authoritative over ambient credentials", () => {
     expect(
-      hasBundledChannelConfiguredState({
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
         channelId: "msteams",
         cfg: { channels: { msteams: { appId: "", appPassword: "", tenantId: "" } } },
         env: {
@@ -168,7 +177,9 @@ describe("bundled channel configured-state metadata", () => {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
   }>)("accepts the owner-specific $name contract", ({ channelId, cfg, env }) => {
-    expect(hasBundledChannelConfiguredState({ channelId, cfg, env })).toBe(true);
+    expect(
+      hasBundledChannelPackageState({ metadataKey: "configuredState", channelId, cfg, env }),
+    ).toBe(true);
   });
 
   it("uses declarative env metadata without a TypeScript source require hook", () => {
@@ -176,7 +187,8 @@ describe("bundled channel configured-state metadata", () => {
     delete nodeRequire.extensions[".ts"];
     try {
       expect(
-        hasBundledChannelConfiguredState({
+        hasBundledChannelPackageState({
+          metadataKey: "configuredState",
           channelId: "discord",
           cfg: {},
           env: { DISCORD_BOT_TOKEN: "token" },

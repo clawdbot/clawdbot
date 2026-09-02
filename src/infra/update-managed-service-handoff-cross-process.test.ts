@@ -144,13 +144,12 @@ async function writeConcurrentHandoffParams(params: {
         parentExitTimeoutMs: 5_000,
         handoffId: params.owner,
         updateLeaseOwner: params.owner,
-        ...(params.stateDatabasePath === undefined
-          ? {}
-          : { stateDatabasePath: params.stateDatabasePath }),
-        ...(params.leaseDatabasePath === undefined
-          ? {}
-          : { updateLeaseDatabasePath: params.leaseDatabasePath }),
+        stateDatabasePath: params.stateDatabasePath ?? params.baseParams.stateDatabasePath,
+        updateLeaseDatabasePath:
+          params.leaseDatabasePath ?? params.baseParams.updateLeaseDatabasePath,
         commandArgv: params.commandArgv,
+        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
+        triageContextPath: path.join(params.tmpDir, `${params.name}-failure.json`),
         logPath: path.join(params.tmpDir, `${params.name}.log`),
         sensitivePaths: [],
       },
@@ -767,7 +766,7 @@ childProcess.spawnSync = function(command, args, options) {
         commandArgv: [
           process.execPath,
           "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(commandStartedPath)},"started")`,
+          `require("node:fs").writeFileSync(${JSON.stringify(commandStartedPath)},"started");process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}))`,
         ],
       });
 
@@ -842,7 +841,14 @@ childProcess.spawnSync = function(command, args, options) {
         commandArgv: [
           process.execPath,
           "-e",
-          `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(orphanPidPath)},String(process.pid));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseOrphanPath)})){clearInterval(timer);process.exit(0)}},10);`,
+          [
+            'const fs = require("node:fs");',
+            `const pidPath = ${JSON.stringify(orphanPidPath)};`,
+            // File existence signals readiness; never expose an empty PID as a dead updater.
+            'fs.writeFileSync(pidPath + ".tmp", String(process.pid));',
+            'fs.renameSync(pidPath + ".tmp", pidPath);',
+            `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseOrphanPath)})){clearInterval(timer);process.exit(0)}},10);`,
+          ].join("\n"),
         ],
       });
       const secondParamsPath = await writeConcurrentHandoffParams({
@@ -865,7 +871,7 @@ childProcess.spawnSync = function(command, args, options) {
         commandArgv: [
           process.execPath,
           "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(thirdStartedPath)},"started")`,
+          `require("node:fs").writeFileSync(${JSON.stringify(thirdStartedPath)},"started");process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}))`,
         ],
       });
 
@@ -885,8 +891,12 @@ childProcess.spawnSync = function(command, args, options) {
           },
           { interval: 10, timeout: 5_000 },
         );
-        orphanPid = Number(await fs.readFile(orphanPidPath, "utf8"));
-        expect(isPidAlive(orphanPid)).toBe(true);
+        const orphanPidContents = await fs.readFile(orphanPidPath, "utf8");
+        orphanPid = Number(orphanPidContents);
+        expect(
+          isPidAlive(orphanPid),
+          `updater PID bytes: ${JSON.stringify(orphanPidContents)}`,
+        ).toBe(true);
         first.kill("SIGKILL");
         await new Promise<void>((resolve) => {
           first.once("close", () => resolve());
@@ -951,7 +961,7 @@ childProcess.spawnSync = function(command, args, options) {
         commandArgv: [
           process.execPath,
           "-e",
-          `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(firstStartedPath)},"started");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFirstPath)})){clearInterval(timer);process.exit(0)}},10);`,
+          `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(firstStartedPath)},"started");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFirstPath)})){clearInterval(timer);process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}));process.exit(0)}},10);`,
         ],
       });
       const secondParamsPath = await writeConcurrentHandoffParams({
@@ -973,7 +983,7 @@ childProcess.spawnSync = function(command, args, options) {
         commandArgv: [
           process.execPath,
           "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(thirdStartedPath)},"started")`,
+          `require("node:fs").writeFileSync(${JSON.stringify(thirdStartedPath)},"started");process.stdout.write(JSON.stringify({status:"ok",root:${JSON.stringify(baseParams.updateLeaseKey)}}))`,
         ],
       });
 

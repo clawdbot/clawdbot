@@ -42,6 +42,7 @@ describe("chat transcript invalidation", () => {
       __openclaw: { id: `message-${index}` },
     }));
     const transcript = {
+      expandedAssistantMessages: new Map(),
       setContentReady: vi.fn(),
       syncMessageRows: vi.fn(),
     } as unknown as Parameters<typeof projectChatTranscript>[1];
@@ -289,7 +290,7 @@ describe("chat transcript invalidation", () => {
     expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(
-      container.querySelector(".chat-assistant-attachment-card__reason")?.textContent,
+      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
     ).toContain("Outside allowed folders");
 
     configPane.applyApplicationConfig({
@@ -302,14 +303,15 @@ describe("chat transcript invalidation", () => {
       "assistant-attachment",
       `::test-auth-token::${source}`,
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
+    const metadataCalls = fetchMock.mock.calls.filter(([input]) => input.includes("meta=1"));
+    expect(metadataCalls).toHaveLength(2);
+    expect(new Headers(metadataCalls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-auth-token",
     );
     expect(isChatMediaResourceCurrent(restoredResource)).toBe(true);
     expect(restoredResource.subscribers.size).toBe(1);
     expect(
-      container.querySelector(".chat-assistant-attachment-card__link")?.getAttribute("href"),
+      container.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
     ).toContain("mediaTicket=root-restored-ticket");
 
     releaseChatMediaResourceSubscriber(renderPane);

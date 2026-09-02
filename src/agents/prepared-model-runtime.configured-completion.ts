@@ -1,13 +1,12 @@
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   buildModelCatalogMergeKey,
-  parseModelCatalogRef,
+  type ModelCatalogRef,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
 
 export function completeConfiguredRuntimeModels(params: {
-  configuredModelRefs: readonly ConfiguredModelRef[];
+  configuredModelRefs: readonly ModelCatalogRef[];
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   resolveDynamicModel: (lookup: {
     provider: string;
@@ -22,20 +21,16 @@ export function completeConfiguredRuntimeModels(params: {
   );
   const completed: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
-  for (const { value } of params.configuredModelRefs) {
-    const parsed = parseModelCatalogRef(value);
-    if (!parsed) {
-      continue;
-    }
-    const key = buildModelCatalogMergeKey(parsed.provider, parsed.modelId);
+  for (const ref of params.configuredModelRefs) {
+    const key = buildModelCatalogMergeKey(ref.provider, ref.modelId);
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
     const prepared = existing.get(key);
-    const model = prepared?.model ?? params.resolveDynamicModel(parsed);
+    const model = prepared?.model ?? params.resolveDynamicModel(ref);
     if (model) {
-      completed.push({ provider: parsed.provider, modelId: parsed.modelId, model });
+      completed.push({ ...ref, model });
     }
   }
   return completed;

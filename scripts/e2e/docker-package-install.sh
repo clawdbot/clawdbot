@@ -25,32 +25,35 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" docker-package-install "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 
+# The bun smoke runs the shared openclaw-e2e-instance library (mock provider
+# servers included), so copy its whole script roots instead of a per-file list
+# that silently drifts when the library grows a dependency. The repo checkout
+# itself stays unmounted: the lane proves the packaged artifact, not sources.
 for harness_path in \
-  scripts/e2e/bun-global-install-smoke.sh \
-  scripts/e2e/lib/bun-global-install/assertions.mjs \
-  scripts/lib/docker-e2e-container.sh \
-  scripts/lib/docker-e2e-logs.sh \
-  scripts/lib/docker-e2e-package.sh \
-  scripts/lib/docker-e2e-resource-diagnostics.sh; do
+  packages/normalization-core/src \
+  scripts; do
   mkdir -p "$BUN_HARNESS_DIR/$(dirname "$harness_path")"
-  cp "$ROOT_DIR/$harness_path" "$BUN_HARNESS_DIR/$harness_path"
+  cp -R "$ROOT_DIR/$harness_path" "$BUN_HARNESS_DIR/$harness_path"
 done
 chmod -R a+rX "$BUN_HARNESS_DIR"
 
-echo "Installing the real OpenClaw package artifact with npm..."
+echo "Installing the real OpenClaw package artifact with npm as root..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$NPM_PROOF_CONTAINER" \
+  --user root \
   -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    npm install -g --prefix /tmp/openclaw-proof /tmp/openclaw-current.tgz --no-fund --no-audit
-    export PATH="/tmp/openclaw-proof/bin:$PATH"
-    package_root=/tmp/openclaw-proof/lib/node_modules/openclaw
-    test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"
-    openclaw --version > /tmp/openclaw-version
-    openclaw --help > /tmp/openclaw-help
+    npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
+    test "$(command -v openclaw)" = "/usr/local/bin/openclaw"
+    # Root installed the global package; a non-root user must still be able to
+    # run it. A same-user install can never catch an installed tree that ends
+    # up owner-only readable, which is how sudo-install breakage ships.
+    runuser -u appuser -- openclaw --version > /tmp/openclaw-version
+    runuser -u appuser -- openclaw --help > /tmp/openclaw-help
     test -s /tmp/openclaw-help
+    chmod 644 /tmp/openclaw-version /tmp/openclaw-help
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
   ' >/dev/null
@@ -63,20 +66,52 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   bash -lc '
     set -euo pipefail
     export PNPM_HOME=/tmp/pnpm-home
-    export PATH="$PNPM_HOME:$PATH"
-    corepack prepare pnpm@11.22.0 --activate
-    pnpm config set global-bin-dir "$PNPM_HOME"
-    pnpm config set global-dir /tmp/pnpm-global
-    pnpm add --global --allow-build=openclaw /tmp/openclaw-current.tgz
-    test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"
-    package_root="$(pnpm root --global)/openclaw"
+    # pnpm stores global executables in the bin subdirectory of PNPM_HOME.
+    export PATH="$PNPM_HOME/bin:$PATH"
+    corepack prepare "$1" --activate
+    pnpm add --global openclaw@file:/tmp/openclaw-current.tgz
+    test "$(command -v openclaw)" = "$PNPM_HOME/bin/openclaw"
+    pnpm list --global --json > /tmp/pnpm-packages.json
+    package_root="$(node -p "require(\"/tmp/pnpm-packages.json\")[0].dependencies.openclaw.path")"
+    test -f "$package_root/package.json"
+    # Tarball builds require their dependency path, relative to the install group.
+    artifact_build="$(node -p "const path = require(\"node:path\"); \"openclaw@file:\" + path.relative(path.resolve(process.argv[1], \"../..\"), \"/tmp/openclaw-current.tgz\")" "$package_root")"
+    pnpm approve-builds --global "$artifact_build"
     printf "%s\n" "$package_root" > /tmp/openclaw-package-root
     openclaw --version > /tmp/openclaw-version
     openclaw --help > /tmp/openclaw-help
     test -s /tmp/openclaw-help
+    # A source install must follow checkout rebuilds without rewriting its package files.
+    (
+      export PNPM_HOME=/tmp/pnpm-source-link-home
+      export PATH="$PNPM_HOME/bin:$PATH"
+      mkdir -p /tmp/pnpm-source-link
+      cd /tmp/pnpm-source-link
+      node - "$1" <<"SOURCE_LINK"
+const fs = require("node:fs");
+fs.writeFileSync("package.json", JSON.stringify({
+  name: "openclaw-source-link-fixture", version: "1.0.0", packageManager: process.argv[2],
+  bin: { "openclaw-source-link-fixture": "cli.cjs" },
+}));
+fs.writeFileSync("pnpm-workspace.yaml", "packages: []\n");
+fs.writeFileSync("pnpm-lock.yaml", "lockfileVersion: 9.0\n");
+fs.writeFileSync("cli.cjs", "#!/usr/bin/env node\nconsole.log(1);\n", { mode: 0o755 });
+SOURCE_LINK
+      pnpm install
+      for file in package.json pnpm-workspace.yaml pnpm-lock.yaml; do cp "$file" "$file.before"; done
+      pnpm add --global "openclaw-source-link-fixture@link:$PWD"
+      test "$(openclaw-source-link-fixture)" = 1
+      node <<"SOURCE_LINK"
+const fs = require("node:fs");
+fs.writeFileSync("cli-next.cjs", "#!/usr/bin/env node\nconsole.log(2);\n", { mode: 0o755 });
+fs.renameSync("cli-next.cjs", "cli.cjs");
+SOURCE_LINK
+      test "$(openclaw-source-link-fixture)" = 2
+      for file in package.json pnpm-workspace.yaml pnpm-lock.yaml; do cmp "$file" "$file.before"; done
+    )
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
-  ' >/dev/null
+  ' -- "$(node -p "require('$ROOT_DIR/package.json').packageManager")" >/dev/null
 
 echo "Installing the real OpenClaw package artifact with Bun..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
@@ -117,9 +152,10 @@ for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF
   wait_for_proof "$container_name"
 done
 
-NPM_PACKAGE_ROOT="/tmp/openclaw-proof/lib/node_modules/openclaw"
+NPM_PACKAGE_ROOT="/usr/local/lib/node_modules/openclaw"
 NPM_INSTALLED_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
 PNPM_PACKAGE_ROOT="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-package-root | tr -d '\r\n')"
+PNPM_PACKAGE_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" node -p "require('$PNPM_PACKAGE_ROOT/package.json').version")"
 PNPM_INSTALLED_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
 BUN_OPENCLAW_PATH="$(
   docker exec "$BUN_PROOF_CONTAINER" \
@@ -130,6 +166,7 @@ BUN_INSTALLED_VERSION="$(
     node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawVersion'
 )"
 PACKAGE_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" node -p "require('$NPM_PACKAGE_ROOT/package.json').version")"
+test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"
 for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BUN_INSTALLED_VERSION"; do
   if [[ "$installed_version" != *"$PACKAGE_VERSION"* ]]; then
     echo "installed CLI output $installed_version does not contain package version $PACKAGE_VERSION" >&2
@@ -148,12 +185,13 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "npm:installedPackageRoot=$NPM_PACKAGE_ROOT" \
   --detail "npm:installedPackageVersion=$PACKAGE_VERSION" \
   --detail "npm:openclawVersion=$NPM_INSTALLED_VERSION" \
-  --detail "npm:openclawPath=/tmp/openclaw-proof/bin/openclaw" \
+  --detail "npm:openclawPath=/usr/local/bin/openclaw" \
   --detail "npm:helpCommand=passed" \
+  --detail "npm:nonRootExecution=passed" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
-  --detail "pnpm:installedPackageVersion=$PACKAGE_VERSION" \
+  --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \
-  --detail "pnpm:openclawPath=/tmp/pnpm-home/openclaw" \
+  --detail "pnpm:openclawPath=/tmp/pnpm-home/bin/openclaw" \
   --detail "pnpm:helpCommand=passed" \
   --detail "bun:installedPackageVersion=$PACKAGE_VERSION" \
   --detail "bun:openclawVersion=$BUN_INSTALLED_VERSION" \

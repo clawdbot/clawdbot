@@ -7,6 +7,7 @@ const {
   cleanupTransportBeforeGatewayStop,
   createQaTransportAdapter,
   startQaGatewayChild,
+  gatewayStop,
   startQaLabServer,
   startQaProviderServer,
 } = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const {
   createQaTransportAdapter: vi.fn(),
   startQaLabServer: vi.fn(),
   startQaGatewayChild: vi.fn(),
+  gatewayStop: vi.fn(),
   startQaProviderServer: vi.fn(),
 }));
 
@@ -23,7 +25,10 @@ vi.mock("./lab-server.js", () => ({
 }));
 
 vi.mock("./gateway-child.js", () => ({
-  startQaGatewayChild,
+  createQaGatewayChild: () => ({
+    start: (params: unknown) => startQaGatewayChild(params),
+    stop: gatewayStop,
+  }),
 }));
 
 vi.mock("./providers/server-runtime.js", () => ({
@@ -38,7 +43,6 @@ import { runQaManualLane } from "./manual-lane.runtime.js";
 
 describe("runQaManualLane", () => {
   const gatewayCall = vi.fn();
-  const gatewayStop = vi.fn();
   const mockStop = vi.fn();
   const labStop = vi.fn();
   let outboundReply: string | null;
@@ -46,7 +50,7 @@ describe("runQaManualLane", () => {
   beforeEach(() => {
     outboundReply = "Protocol note: mock reply.";
     gatewayCall.mockReset();
-    gatewayStop.mockReset();
+    gatewayStop.mockReset().mockResolvedValue({ process: "confirmed-stopped", errors: [] });
     mockStop.mockReset();
     labStop.mockReset();
     cleanupTransportAfterGatewayStop.mockReset();
@@ -267,29 +271,44 @@ describe("runQaManualLane", () => {
     expect(result.reply).toBe("Protocol note: mock reply.");
   });
 
-  it("cleans up lab and mock provider when gateway startup fails", async () => {
-    startQaGatewayChild.mockRejectedValueOnce(new Error("gateway startup failed"));
-
-    await expect(
-      runQaManualLane({
+  it.each([
+    { process: "never-spawned", diagnostic: false },
+    { process: "confirmed-stopped", diagnostic: true },
+    { process: "unconfirmed", diagnostic: true },
+  ] as const)(
+    "retains startup failure and gates after-stop cleanup for $process",
+    async ({ process, diagnostic }) => {
+      const startupError = new Error("gateway startup failed");
+      const cleanupError = new Error("gateway cleanup diagnostic");
+      startQaGatewayChild.mockRejectedValueOnce(startupError);
+      gatewayStop.mockResolvedValue({ process, errors: diagnostic ? [cleanupError] : [] });
+      const failure = await runQaManualLane({
         repoRoot: "/tmp/openclaw-repo",
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         message: "check the kickoff file",
-        timeoutMs: 5_000,
         replySettleMs: 0,
-      }),
-    ).rejects.toThrow("gateway startup failed");
-
-    expect(gatewayStop).not.toHaveBeenCalled();
-    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(1);
-    expect(mockStop).toHaveBeenCalledTimes(1);
-    expect(labStop).toHaveBeenCalledTimes(1);
-  });
+      }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ cause: startupError });
+      if (diagnostic) {
+        expect(failure).toMatchObject({
+          errors: [startupError, expect.objectContaining({ errors: [cleanupError] })],
+        });
+      }
+      expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(
+        process === "unconfirmed" ? 0 : 1,
+      );
+      expect(mockStop).toHaveBeenCalledOnce();
+      expect(labStop).toHaveBeenCalledOnce();
+    },
+  );
 
   it("continues provider and lab teardown when gateway stop fails", async () => {
-    gatewayStop.mockRejectedValueOnce(new Error("gateway stop failed"));
+    gatewayStop.mockResolvedValueOnce({
+      process: "unconfirmed",
+      errors: [new Error("gateway stop failed")],
+    });
 
     await expect(
       runQaManualLane({

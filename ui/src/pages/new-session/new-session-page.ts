@@ -17,15 +17,17 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
+import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
-import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import { renderDraftError } from "./composer.ts";
 import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
+import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import * as drafts from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -167,7 +169,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
-      onClearError: (message) => this.submission.clearErrorIf(message),
+      onSubmit: () => void this.submission.submit(),
       requestUpdate: () => this.requestUpdate(),
     });
     this.subscriptions = new SubscriptionsController(this)
@@ -226,6 +228,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   handleEvent(event: Event) {
+    if (event instanceof KeyboardEvent) {
+      focusChatComposerFromPrintableKeydown(this, event);
+    }
     handleSessionPickerEvent(this, event);
   }
 
@@ -396,7 +401,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
       devicePlacement: this.place.devicePlacementRequirement(),
-      deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
+      deviceDisabledReason:
+        this.place.modelControl.devicePlacementUnsupportedReason() ??
+        this.gateway.deviceCatalogDisabledReason,
     });
     const projectState = resolveProjectChip({
       folder: this.place.folder,
@@ -424,6 +431,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
+      autoPlacementMode: this.place.modelControl.autoPlacementSelectionMode(),
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       cloudProfileDisabledReason: (profile) =>
@@ -478,7 +486,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       submitting,
       pendingPlacement,
       ...this.browser.popoverCallbacks("project"),
-      browserTarget: this.browser.browserTarget,
+      browserOpen: this.browser.browserOpen,
       browserListing: this.browser.browserListing,
       browserLoading: this.browser.browserLoading,
       browserError: this.browser.browserError,
@@ -489,15 +497,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
       onSelectProject: (projectId) => this.place.selectProjectId(projectId),
       onProjectQueryInput: (query) => this.browser.changeProjectQuery(query),
       onSelectRemoteProject: (project) => this.place.selectRemoteProject(project),
-      onApplyFolder: (folder) =>
-        this.place.applyFolder(folder, this.browser.browserListing?.path === folder),
+      onApplyFolder: (folder) => this.place.applyFolder(folder),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
-      onBrowse: (target) =>
-        this.browser.selectGatewayBrowser(
-          target.label,
-          this.place.folder.trim() || this.place.workspacePath(),
-        ),
+      onBrowse: () =>
+        this.browser.selectGatewayBrowser(this.place.folder.trim() || this.place.workspacePath()),
       onBrowserPathDraftChange: (value) => {
         this.browser.browserPathDraft = value;
       },
@@ -538,7 +542,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
     const capabilities = this.submission.capabilities;
     const voiceControl = this.dictation.render(this.routeOwnerKey());
-    const dictationLocked = this.dictation.locked;
+    const dictationLocked = this.dictation.active;
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
@@ -566,6 +570,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
           canSubmit: !this.submission.submitting && !dictationLocked && this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
+          dictationActive: this.dictation.active,
+          dictationPreview: this.dictation.previewDraft(),
+          dictationStatus: this.dictation.renderStatus(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           draftOwnerKey: this.routeOwnerKey(),
@@ -578,12 +585,12 @@ export class NewSessionPage extends OpenClawLightDomElement {
             ? undefined
             : renderChatPermissionPicker({
                 canSelectFull: this.place.isAdmin(),
+                defaultMode: this.place.selectedAgent()?.defaultPermissionMode,
                 disabled:
                   this.submission.submitting ||
                   Boolean(this.submission.pendingPlacement.sessionKey),
                 disabledReason: this.submission.submitting ? t("newSession.starting") : undefined,
                 mode: this.submission.permission.value,
-                sessionRoot: this.place.workspacePath(),
                 onSelect: (permissionMode) =>
                   this.submission.permission.set(permissionMode ?? undefined),
               }),
@@ -613,6 +620,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
             }
           },
           onSubmit: () => void this.submission.submit(),
+          onBackgroundSubmit:
+            this.submission.visibility === "draft"
+              ? undefined
+              : () => void this.submission.submit(undefined, true),
         })}
         ${renderNewSessionIncognitoNotice(this.submission.visibility === "incognito")}
       </div>
@@ -674,7 +685,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
           ? "new-session-page--incognito"
           : ""}"
       >
-        ${renderNewSessionIncognitoControl(this.submission)}
+        ${renderNewSessionIncognitoControl(
+          this.submission,
+          this.submission.capabilities.canStartAsDraft(this.context),
+        )}
         <div
           class="new-session-page__scroll"
           ?inert=${this.submission.submitting}

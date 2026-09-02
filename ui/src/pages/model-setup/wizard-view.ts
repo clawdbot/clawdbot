@@ -7,7 +7,7 @@ import type { ModelSetupWizardState } from "./state.ts";
 const WIZARD_TEXT_INPUT_ID = "model-setup-wizard-text-input";
 
 type WizardViewProps = {
-  mode: "auth" | "prepare";
+  mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
   value: unknown;
@@ -30,7 +30,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
       label=${t(
         props.mode === "prepare"
           ? "modelSetup.wizard.prepareDialogLabel"
-          : "modelSetup.wizard.dialogLabel",
+          : props.mode === "activate"
+            ? "modelSetup.heading"
+            : "modelSetup.wizard.dialogLabel",
       )}
       @modal-cancel=${canCancel ? props.onCancel : props.onClose}
     >
@@ -42,7 +44,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
               : t(
                   props.mode === "prepare"
                     ? "modelSetup.wizard.prepareTitle"
-                    : "modelSetup.wizard.title",
+                    : props.mode === "activate"
+                      ? "modelSetup.heading"
+                      : "modelSetup.wizard.title",
                 )}
           </h2>
         </div>
@@ -55,7 +59,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                 ${t(
                   props.mode === "prepare"
                     ? "modelSetup.wizard.prepareStarting"
-                    : "modelSetup.wizard.starting",
+                    : props.mode === "activate"
+                      ? "modelSetup.wizard.checking"
+                      : "modelSetup.wizard.starting",
                 )}
               </div>`
             : props.state.phase === "done"

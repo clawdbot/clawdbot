@@ -7,7 +7,13 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 // Decides whether an inbound turn may start, queue, or abort a reply run.
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import {
+  isRestartRecoveryTombstone,
+  SessionWorkStartChangedError,
+  resolveSessionWorkStartError,
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+} from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -40,6 +46,7 @@ import {
   waitForReplyRunFollowupAdmission,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
+import { isReplyRunWaitingForHumanInput } from "./reply-run-registry.state.js";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
@@ -82,9 +89,24 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
   return admission ? await admission.run(run) : await run();
 }
 
-function rejectLifecycleInvalidatedWork(params: { kind: ReplyTurnKind; message: string }): never {
+function rejectLifecycleInvalidatedWork(params: {
+  kind: ReplyTurnKind;
+  message: string;
+  restartRecoveryTombstone?: boolean;
+  transientSessionChange?: boolean;
+}): never {
   if (params.kind === "queued_followup") {
-    throw new QueuedFollowupLifecycleInvalidatedError(params.message);
+    const error = new QueuedFollowupLifecycleInvalidatedError(params.message);
+    if (params.restartRecoveryTombstone === true) {
+      Object.assign(error, { code: SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE });
+    }
+    throw error;
+  }
+  if (params.restartRecoveryTombstone === true) {
+    throw new SessionRestartRecoveryTombstoneError(params.message);
+  }
+  if (params.kind === "visible" && params.transientSessionChange === true) {
+    throw new SessionWorkStartChangedError(params.message);
   }
   throw new Error(params.message);
 }
@@ -108,7 +130,7 @@ function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boo
 }
 
 function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
-  if (!operation) {
+  if (!operation || isReplyRunWaitingForHumanInput(operation)) {
     return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
   }
   const ageMs = Date.now() - operation.lastActivityAtMs;
@@ -118,7 +140,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
   });
   const remainingMs = operation.result
     ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : resolveRunStaleThresholdMs(activity) - ageMs;
+    : resolveRunStaleThresholdMs(activity, ageMs) - ageMs;
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 
@@ -130,6 +152,8 @@ type ReplyTurnAdmissionParams = {
   storePath?: string;
   kind: ReplyTurnKind;
   resetTriggered: boolean;
+  allowRestartTombstoneParentFork?: boolean;
+  allowRestartTombstoneReset?: boolean;
   routeThreadId?: string | number;
   originatingLeafEntryId?: string | null;
   /**
@@ -206,6 +230,7 @@ export async function admitReplyTurn(
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
+                  transientSessionChange: true,
                 });
               }
               const registeredOperation = replyRunRegistry.get(params.sessionKey);
@@ -239,6 +264,7 @@ export async function admitReplyTurn(
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+                  transientSessionChange: true,
                 });
               }
               if (activeOperationRotatedExpectedSession) {
@@ -247,11 +273,17 @@ export async function admitReplyTurn(
               const archivedSessionError = resolveSessionWorkStartError(
                 params.sessionKey || sessionId,
                 currentEntry,
+                {
+                  allowRestartTombstoneReplacement:
+                    (params.resetTriggered && params.allowRestartTombstoneReset === true) ||
+                    params.allowRestartTombstoneParentFork === true,
+                },
               );
               if (archivedSessionError) {
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: archivedSessionError,
+                  restartRecoveryTombstone: isRestartRecoveryTombstone(currentEntry),
                 });
               }
               sessionId = currentEntry?.sessionId ?? sessionId;
@@ -265,6 +297,7 @@ export async function admitReplyTurn(
         if (
           storePath &&
           !params.resetTriggered &&
+          params.allowRestartTombstoneParentFork !== true &&
           admittedSessionEntry &&
           ((admittedSessionEntry.status === "running" &&
             (admittedSessionEntry.abortedLastRun === true ||
@@ -282,6 +315,7 @@ export async function admitReplyTurn(
             rejectLifecycleInvalidatedWork({
               kind: params.kind,
               message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+              transientSessionChange: true,
             });
           }
           recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
@@ -290,6 +324,7 @@ export async function admitReplyTurn(
           rejectLifecycleInvalidatedWork({
             kind: params.kind,
             message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+            transientSessionChange: true,
           });
         }
         if (params.adoptOperation) {

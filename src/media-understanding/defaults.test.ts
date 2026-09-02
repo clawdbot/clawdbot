@@ -1,6 +1,7 @@
 // Media-understanding defaults tests keep bundled provider metadata priorities,
 // default models, and native document support aligned with manifests.
 import { describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
 const mediaMetadataPlugins = vi.hoisted(() => [
   {
@@ -112,6 +113,43 @@ import {
 } from "./defaults.js";
 
 describe("resolveDefaultMediaModel", () => {
+  it.each<MediaUnderstandingCapability>(["image", "audio", "video"])(
+    "uses supplied %s registry defaults before configured models",
+    (capability) => {
+      const providerRegistry = new Map<string, MediaUnderstandingProvider>([
+        ["google", { id: "google", defaultModels: { [capability]: "  registry-model  " } }],
+        ["blank", { id: "blank", defaultModels: { [capability]: " \t " } }],
+      ]);
+      const models = [" GEMINI ", "blank", "missing"].map((providerId) =>
+        resolveDefaultMediaModel({
+          capability,
+          providerId,
+          providerRegistry,
+          cfg: {
+            models: {
+              providers: {
+                google: {
+                  baseUrl: "https://example.invalid",
+                  models: [
+                    {
+                      id: "configured-image",
+                      name: "configured",
+                      input: ["image"],
+                      reasoning: false,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      maxTokens: 1024,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(models).toEqual(["registry-model", undefined, undefined]);
+    },
+  );
+
   it("resolves bundled audio defaults from provider metadata", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
@@ -169,6 +207,42 @@ describe("resolveDefaultMediaModel", () => {
 });
 
 describe("resolveAutoMediaKeyProviders", () => {
+  it.each<MediaUnderstandingCapability>(["image", "audio", "video"])(
+    "orders %s priorities without conflating declared capabilities and runtime hooks",
+    (capability) => {
+      const hooks = {
+        describeImage: async () => ({ text: "image" }),
+        transcribeAudio: async () => ({ text: "audio" }),
+        describeVideo: async () => ({ text: "video" }),
+      };
+      const providers: MediaUnderstandingProvider[] = [
+        { id: "z-tie", capabilities: [capability], autoPriority: { [capability]: 2 } },
+        { id: "a-tie", capabilities: [capability], autoPriority: { [capability]: 2 } },
+        { id: "zero", capabilities: [capability], autoPriority: { [capability]: 0 } },
+        { id: "negative", capabilities: [capability], autoPriority: { [capability]: -2 } },
+        { id: "nan", capabilities: [capability], autoPriority: { [capability]: Number.NaN } },
+        { id: "infinity", capabilities: [capability], autoPriority: { [capability]: Infinity } },
+        { id: "declared-empty", capabilities: [], autoPriority: { [capability]: -10 }, ...hooks },
+        { id: "hook-only", autoPriority: { [capability]: 1 }, ...hooks },
+        { id: "no-hook", autoPriority: { [capability]: -20 } },
+        { id: "gemini", capabilities: [capability], autoPriority: { [capability]: 3 } },
+        { id: "google", capabilities: [capability], autoPriority: { [capability]: 4 } },
+      ];
+      const providerRegistry = new Map(providers.map((provider) => [provider.id, provider]));
+
+      expect(resolveAutoMediaKeyProviders({ capability, providerRegistry })).toEqual([
+        "negative",
+        "zero",
+        "hook-only",
+        "a-tie",
+        "z-tie",
+        "google",
+        "google",
+      ]);
+      expect([...providerRegistry.values()]).toEqual(providers);
+    },
+  );
+
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",

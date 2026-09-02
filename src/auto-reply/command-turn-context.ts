@@ -47,7 +47,7 @@ export type CommandTurnContextInput = {
   BotUsername?: unknown;
 };
 
-function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
+export function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
   if (typeof input.commandText === "string") {
     return input.commandText;
   }

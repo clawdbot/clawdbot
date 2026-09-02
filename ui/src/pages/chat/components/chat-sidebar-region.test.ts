@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
 import {
   openSlot,
+  setSidebarOpen,
   setSidebarDock,
   setSidebarExpanded,
   type SidebarLayout,
@@ -81,38 +82,23 @@ describe("chat sidebar region", () => {
     expect(root(region).querySelector('[data-panel="detail"]')).not.toBeNull();
   });
 
-  it("renders the active panel's supplied dropdown without hoisting its destructive action", async () => {
+  it("renders only the active panel's supplied header action", async () => {
     const onClear = vi.fn();
     const region = await createRegion(openSlot(openSlot({ columns: [] }, "detail"), "companion"));
-    // This representative action exercises the region contract; the app E2E
-    // separately verifies the production Side chat action's exact markup.
     region.panelActions = {
-      companion: html`<wa-dropdown
-        class="chat-session-rail__menu"
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-          if (event.detail.item.value === "clear") {
-            onClear();
-          }
-        }}
-      >
-        <button slot="trigger" type="button">More</button>
-        <wa-dropdown-item value="clear">Clear</wa-dropdown-item>
-      </wa-dropdown>`,
+      companion: html`<button class="chat-session-rail__clear" type="button" @click=${onClear}>
+        Clear
+      </button>`,
     };
     await region.updateComplete;
 
     const actions = root(region).querySelector(".side-panel__action-group--content");
-    const menu = actions?.querySelector("wa-dropdown.chat-session-rail__menu");
-    expect(menu).not.toBeNull();
-    // Nothing that destroys the thread sits in the always-visible row.
-    expect(actions?.querySelectorAll(":scope > button")).toHaveLength(0);
-
-    menu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: { value: "clear" } }, bubbles: false }),
-    );
+    const clear = actions?.querySelector<HTMLButtonElement>("button.chat-session-rail__clear");
+    expect(clear).not.toBeNull();
+    clear?.click();
     expect(onClear).toHaveBeenCalledOnce();
 
-    // Actions belong to the active panel only: the companion menu must not
+    // Actions belong to the active panel only: the Side chat action must not
     // survive a switch to a tab that owns no header action.
     const detail = region.layout.columns[0]!.panels[0]!;
     region.layout = {
@@ -120,7 +106,7 @@ describe("chat sidebar region", () => {
       columns: [{ ...region.layout.columns[0]!, activePanelId: detail.id }],
     };
     await region.updateComplete;
-    expect(root(region).querySelector("wa-dropdown.chat-session-rail__menu")).toBeNull();
+    expect(root(region).querySelector("button.chat-session-rail__clear")).toBeNull();
   });
 
   it("routes tab selection and individual close through the canonical callbacks", async () => {
@@ -219,7 +205,7 @@ describe("chat sidebar region", () => {
   });
 
   it("opens into a type selector instead of restoring a previous tab", async () => {
-    const region = await createRegion({ columns: [], open: true, expanded: false });
+    const region = await createRegion(setSidebarOpen({ columns: [], expanded: false }, true));
     const selector = root(region).querySelector(".side-panel-empty--selector");
 
     expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a tab");
@@ -321,8 +307,9 @@ describe("chat sidebar region", () => {
   });
 
   it("offers expand and minimize controls in the no-tabs selector", async () => {
-    const region = await createRegion({ columns: [], open: true });
+    const region = await createRegion(setSidebarOpen({ columns: [] }, true));
     expect(root(region).querySelector<HTMLElement>(".side-panel")?.style.width).toBe("480px");
+    expect(root(region).querySelector("resizable-divider")).not.toBeNull();
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);

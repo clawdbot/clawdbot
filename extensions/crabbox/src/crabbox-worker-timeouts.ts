@@ -16,13 +16,19 @@ export const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS =
   CRABBOX_WARMUP_ATTEMPTS *
   (CRABBOX_ACQUISITION_ENVELOPE_MS + CRABBOX_DESKTOP_BOOTSTRAP_TIMEOUT_MS);
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
+// Managed stop owns a five-minute completion deadline. Allow CLI startup/finalization
+// before process termination; SDK child settlement remains a separate outer allowance.
+const CRABBOX_MANAGED_STOP_TIMEOUT_MS = 5 * 60_000;
+const CRABBOX_STOP_EXIT_GRACE_MS = 10_000;
+export const CRABBOX_STOP_TIMEOUT_MS = CRABBOX_MANAGED_STOP_TIMEOUT_MS + CRABBOX_STOP_EXIT_GRACE_MS;
+// Process timeout begins termination; allow the SDK's 300ms grace and Windows'
+// 5s taskkill to settle before core reports the provider result.
+export const CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS = 10_000;
 // AWS coordinator heartbeat latency reached 107.6 seconds in production measurements.
 export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 
-// `providers --json` is a static compiled report: no network, no credentials,
-// measured well under a second. The picker awaits it, so cap it far below the
-// lifecycle budget — a hung binary must fall back to label-only choices
-// promptly instead of stalling the whole cloud picker.
+// `providers --json` is a static compiled report; bound picker latency for a hung binary.
+// Failed reads leave machine overrides unavailable until a later discovery request succeeds.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
 // Fixed-lease inspection can follow warmup's final read; allow four one-minute retries.
 const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
@@ -30,6 +36,7 @@ const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
 // Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
+export const CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
 
 // Leave one minute inside the lifecycle cap for process startup and cleanup handoff.
 export const CRABBOX_MACHINE0_READY_WAIT_TIMEOUT = "4m";
@@ -67,6 +74,9 @@ export function resolveCrabboxProvisionCallTimeoutMs(
     resolveCrabboxProvisionBaseTimeoutMs(profile) +
     countCrabboxProvisionSetupPhases(profile) * CRABBOX_SETUP_TIMEOUT_MS +
     CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
-    resolveCrabboxLifecycleTimeoutMs(profile.provider)
+    CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS +
+    CRABBOX_STOP_TIMEOUT_MS +
+    // Diagnostics and stop can each time out before their child/tree settles.
+    2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
   );
 }

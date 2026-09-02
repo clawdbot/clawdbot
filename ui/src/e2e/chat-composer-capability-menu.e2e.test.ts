@@ -2,7 +2,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI composer capability menu",
@@ -41,7 +41,7 @@ function sessionsList(
     path: "",
     sessions: [
       {
-        key: "main",
+        key: "agent:main:main",
         kind: "direct",
         model: model.id,
         modelProvider: model.provider,
@@ -212,10 +212,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      const pill = page.locator(".agent-chat__session-overrides-pill");
+      const attachTrigger = page.getByRole("button", { name: "Add attachment" });
       await expect
-        .poll(async () => (await pill.textContent())?.replace(/\s+/g, " ").trim())
-        .toBe("4 session overrides");
+        .poll(() => attachTrigger.getAttribute("class"))
+        .toContain("agent-chat__input-btn--has-overrides");
 
       let composer = await openMenu(page);
       const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
@@ -232,6 +232,8 @@ suite.define(() => {
             expect.stringContaining("Manage plugins"),
           ]),
         );
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 overrides/ });
+      await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
       await skillsRoot.focus();
@@ -260,9 +262,13 @@ suite.define(() => {
         .poll(() => page.locator(".agent-chat__file-input").getAttribute("data-proxied"))
         .toBe("true");
 
-      await pill.getByRole("button", { name: "Clear session overrides" }).click();
+      composer = await openMenu(page);
+      const reopenedMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await reopenedMenu.locator('wa-dropdown-item[value="clear-overrides"]').click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual(null);
-      await expect.poll(() => pill.count()).toBe(0);
+      await expect
+        .poll(() => attachTrigger.getAttribute("class"))
+        .not.toContain("agent-chat__input-btn--has-overrides");
 
       composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
@@ -392,7 +398,7 @@ suite.define(() => {
           { id: "gpt-5.6", provider: "openai" },
         ),
       );
-      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "main" });
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "agent:main:main" });
       await expect.poll(async () => (await gateway.getRequests("tools.effective")).length).toBe(2);
       await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
@@ -522,8 +528,12 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
-        deferredMethods: ["sessions.list", "tools.effective"],
+        deferredMethods: ["tools.effective"],
+        heldMethods: ["sessions.list"],
         methodResponses: {
+          // Keep the session projection unavailable until the held list arrives.
+          "chat.startup": { messages: [], sessionId: "session:agent:main:main" },
+          "sessions.describe": { session: null },
           "config.get": configResponse({
             github: { url: "https://mcp.example.test", enabled: true },
           }),
@@ -544,7 +554,7 @@ suite.define(() => {
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
       const listIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
       await expect.poll(() => listIssues.isDisabled()).toBe(true);
-      await expect.poll(() => listIssues.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => tooltipTitleText(listIssues)).toBe("Loading…");
       await listIssues.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -583,25 +593,30 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      const clear = composer.getByRole("button", { name: "Clear session overrides" });
+      const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');
       await expect.poll(() => clear.isDisabled()).toBe(true);
-      await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
+      await expect.poll(() => tooltipTitleText(clear)).toContain("operator.admin access");
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const docs = menu.getByRole("menuitem", { name: /^Docs/ });
       await expect.poll(() => docs.isDisabled()).toBe(true);
-      await expect.poll(() => docs.getAttribute("title")).toContain("operator.admin access");
+      await expect.poll(() => tooltipTitleText(docs)).toContain("operator.admin access");
+      // Leave disabled-row hints before the next click's hit test. Returning to
+      // the root can put Web search under the pointer that clicked Back.
+      await composer.locator("textarea").hover();
       await menu.getByRole("menuitem", { name: "Back" }).click();
+      await composer.locator("textarea").hover();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
         .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isDisabled())
         .toBe(true);
       const browse = menu.getByRole("menuitem", { name: "Browse connectors" });
       await expect.poll(() => browse.isDisabled()).toBe(true);
-      await expect.poll(() => browse.getAttribute("title")).toContain("Admin access");
+      await browse.hover();
+      await expect.poll(() => tooltipTitleText(browse)).toContain("Admin access");
       const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
       await expect.poll(() => addServer.isDisabled()).toBe(true);
-      await expect.poll(() => addServer.getAttribute("title")).toContain("Admin access");
+      await expect.poll(() => tooltipTitleText(addServer)).toContain("Admin access");
     });
   });
 
@@ -627,7 +642,7 @@ suite.define(() => {
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const webSearch = webSearchItem(menu);
       await expect.poll(() => webSearch.isDisabled()).toBe(true);
-      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => tooltipTitleText(webSearch)).toBe("Loading…");
       await webSearch.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -643,7 +658,7 @@ suite.define(() => {
         }),
       );
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
-      await expect.poll(() => webSearchItem(menu).getAttribute("title")).toBe("Loading…");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toBe("Loading…");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await gateway.resolveDeferred("config.get", configResponse({}, false));

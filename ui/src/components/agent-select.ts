@@ -74,16 +74,7 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) onSelect: (value: string) => void = () => {};
   @property({ attribute: false }) onCreateAgent: (() => void) | null = null;
 
-  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
-
-  override disconnectedCallback() {
-    this.avatarLoader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(this);
 
   protected override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("disabled") && this.disabled) {

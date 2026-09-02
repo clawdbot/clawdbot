@@ -2,7 +2,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
   feishuExternalToolResult as jsonResult,
@@ -209,12 +208,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
   if (!toolsCfg.wiki) {
     return;
   }

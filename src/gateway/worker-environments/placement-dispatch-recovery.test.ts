@@ -23,6 +23,47 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it.each(["startup", "active"] as const)(
+    "fences a destroy-requested attachment during %s recovery even when physical cleanup fails",
+    async (mode) => {
+      const placements = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+        now: () => 1_000,
+      });
+      const harness = createHarness(placements, { destroyFails: true });
+      await harness.environments.attachSession({
+        environmentId: harness.ready.environmentId,
+        ownerEpoch: harness.ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      const environment = {
+        ...harness.attached,
+        nodeDeviceId: "revoked-node",
+        destroyRequestedAtMs: 1_000,
+      };
+      vi.mocked(harness.environments.get).mockReturnValue(environment);
+      vi.mocked(harness.environments.stopTunnel).mockRejectedValue(
+        new Error("node role revoked before stop confirmation"),
+      );
+      harness.placements.seedActive(environment.ownerEpoch);
+
+      if (mode === "startup") {
+        await harness.service.reconcile("startup");
+      } else {
+        await harness.service.reconcileActive(environment.environmentId);
+      }
+
+      expect(harness.placements.current()).toMatchObject({
+        state: "failed",
+        environmentId: environment.environmentId,
+        activeOwnerEpoch: environment.ownerEpoch,
+        recoveryError: expect.stringContaining("node role revoked before stop confirmation"),
+      });
+      expect(harness.environments.destroy).toHaveBeenCalledWith(environment.environmentId);
+      expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       failure: "provider no longer supports the persisted execution mode",
@@ -648,6 +689,7 @@ describe("worker placement restart recovery", () => {
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
+        runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim("/gateway/workspace", begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),

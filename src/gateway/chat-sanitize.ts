@@ -45,15 +45,13 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
 
 // Text content blocks need role-aware stripping because user messages carry
 // inbound envelopes while assistant/tool content may carry internal metadata.
-function stripEnvelopeFromContentWithRole(
-  content: unknown[],
-  role: string,
-): { content: unknown[]; changed: boolean } {
+function stripEnvelopeFromContentWithRole(content: unknown[], role: string): unknown[] {
   const stripUserEnvelope = role === "user";
-  let changed = false;
-  const next = content.map((item) => {
+  let next: unknown[] | undefined;
+  for (let index = 0; index < content.length; index++) {
+    const item = content[index];
     if (!item || typeof item !== "object") {
-      return item;
+      continue;
     }
     const entry = item as Record<string, unknown>;
     const isRoleTextBlock =
@@ -61,21 +59,21 @@ function stripEnvelopeFromContentWithRole(
       (role === "user" && entry.type === "input_text") ||
       (role === "assistant" && (entry.type === "input_text" || entry.type === "output_text"));
     if (!isRoleTextBlock || typeof entry.text !== "string") {
-      return item;
+      continue;
     }
     const stripped = stripUserEnvelope
       ? stripUserEnvelopeForDisplay(entry.text)
       : stripInternalMetadataForDisplay(entry.text);
     if (stripped === entry.text) {
-      return item;
+      continue;
     }
-    changed = true;
-    return {
+    next ??= content.slice();
+    next[index] = {
       ...entry,
       text: stripped,
     };
-  });
-  return { content: next, changed };
+  }
+  return next ?? content;
 }
 
 /** Strips OpenClaw envelope metadata from one display message without mutating it. */
@@ -87,12 +85,11 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   const role = typeof entry.role === "string" ? normalizeLowercaseStringOrEmpty(entry.role) : "";
   const stripUserEnvelope = role === "user";
 
-  let changed = false;
-  const next: Record<string, unknown> = { ...entry };
+  let next: Record<string, unknown> | undefined;
+  // Labels come from the raw message before runtime-context and envelope removal.
   const senderLabel = stripUserEnvelope ? extractMessageSenderLabel(entry) : null;
   if (senderLabel && entry.senderLabel !== senderLabel) {
-    next.senderLabel = senderLabel;
-    changed = true;
+    next = { ...entry, senderLabel };
   }
 
   if (typeof entry.content === "string") {
@@ -100,40 +97,38 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       ? stripUserEnvelopeForDisplay(entry.content)
       : stripInternalMetadataForDisplay(entry.content);
     if (stripped !== entry.content) {
+      next ??= { ...entry };
       next.content = stripped;
-      changed = true;
     }
   } else if (Array.isArray(entry.content)) {
     const updated = stripEnvelopeFromContentWithRole(entry.content, role);
-    if (updated.changed) {
-      next.content = updated.content;
-      changed = true;
+    if (updated !== entry.content) {
+      next ??= { ...entry };
+      next.content = updated;
     }
   } else if (typeof entry.text === "string") {
     const stripped = stripUserEnvelope
       ? stripUserEnvelopeForDisplay(entry.text)
       : stripInternalMetadataForDisplay(entry.text);
     if (stripped !== entry.text) {
+      next ??= { ...entry };
       next.text = stripped;
-      changed = true;
     }
   }
 
-  return changed ? next : message;
+  return next ?? message;
 }
 
 /** Strips envelope metadata from a message array, preserving the original array when unchanged. */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const next = messages.map((message) => {
+  let next: unknown[] | undefined;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
     const stripped = stripEnvelopeFromMessage(message);
     if (stripped !== message) {
-      changed = true;
+      next ??= messages.slice();
+      next[index] = stripped;
     }
-    return stripped;
-  });
-  return changed ? next : messages;
+  }
+  return next ?? messages;
 }

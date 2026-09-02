@@ -369,6 +369,7 @@ enum ShellExecutor {
         }
 
         do {
+            try Task.checkCancellation()
             let outcome = if let timeout, timeout > 0 {
                 try await self.runTimedSubprocess(
                     configuration: configuration,

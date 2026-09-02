@@ -18,6 +18,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 - A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; `main` uses `min(16, max(8, available CPU parallelism))`, and `subagent` defaults to 8).
 - `runEmbeddedAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
 - Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agents.defaults.maxConcurrent`.
+- Embedded attempt preparation starts one stage per event-loop turn so concurrent starts leave room for Gateway requests. Asynchronous stage work can still overlap; this does not lower the run concurrency limit or change session serialization.
 - When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
 - Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while the run waits its turn.
 
@@ -128,6 +129,16 @@ before starting the newest message. The explicit `/steer <message>` command is
 not a local-mode command.
 
 ## Scope and guarantees
+
+Ordinary Control UI input sent to an existing session is stored in the per-agent database
+before the Gateway acknowledges it. In `collect` mode, appending the combined
+turn and marking its source inputs consumed happen in one transaction. A browser
+reconnect can reconcile those source inputs even if it missed their final events.
+
+This preserves input, not execution permissions. If the Gateway stops before a
+queued input reaches the transcript, it appears as interrupted input after
+restart and requires an explicit resend. The in-memory queue is not replayed.
+Host sleep that preserves the process can continue the existing queue normally.
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.

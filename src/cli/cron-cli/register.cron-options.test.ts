@@ -24,6 +24,33 @@ function createMutationProgram(): Command {
   return program;
 }
 
+const topicMutationCases = [
+  {
+    operation: "add",
+    method: "cron.add",
+    args: [
+      "add",
+      "--name",
+      "topic-proof",
+      "--every",
+      "1m",
+      "--agent",
+      "main",
+      "--message",
+      "hello",
+      "--channel",
+      "telegram",
+      "--to",
+      "group-123",
+    ],
+  },
+  {
+    operation: "edit",
+    method: "cron.update",
+    args: ["edit", "job-1", "--channel", "telegram", "--to", "group-123"],
+  },
+] as const;
+
 describe("shared automation mutation options", () => {
   beforeEach(() => {
     callGatewayFromCli.mockReset();
@@ -47,17 +74,98 @@ describe("shared automation mutation options", () => {
     [["--on-exit", "./watch.sh", "--every", "5m"], "Choose at most one schedule change"],
   ])("rejects invalid exit-triggered schedule options", async (args, message) => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
     try {
-      await createMutationProgram().parseAsync(["edit", "job-1", ...args], { from: "user" });
+      await expect(
+        createMutationProgram().parseAsync(["edit", "job-1", ...args], { from: "user" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(message));
-      expect(exitSpy).toHaveBeenCalledWith(1);
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      exitSpy.mockRestore();
     }
   });
+
+  it.each(
+    topicMutationCases.flatMap((mutation) =>
+      ["", "   "].map((threadId) => ({
+        operation: mutation.operation,
+        args: mutation.args,
+        threadId,
+      })),
+    ),
+  )(
+    "rejects blank thread id $threadId before automation $operation",
+    async ({ args, threadId }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        await expect(
+          createMutationProgram().parseAsync([...args, "--thread-id", threadId], {
+            from: "user",
+          }),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--thread-id must be a positive integer"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(topicMutationCases)(
+    "preserves omitted and maximum-safe topic ids on automation $operation",
+    async ({ operation, method, args }) => {
+      for (const threadId of [undefined, Number.MAX_SAFE_INTEGER]) {
+        callGatewayFromCli.mockClear();
+        await createMutationProgram().parseAsync(
+          [...args, ...(threadId === undefined ? [] : ["--thread-id", String(threadId)])],
+          { from: "user" },
+        );
+        const call = callGatewayFromCli.mock.calls.find(
+          ([calledMethod]) => calledMethod === method,
+        );
+        const request = call?.[2] as {
+          delivery?: { threadId?: number };
+          patch?: { delivery?: { threadId?: number } };
+        };
+        const delivery = operation === "add" ? request.delivery : request.patch?.delivery;
+        expect(delivery?.threadId).toBe(threadId);
+      }
+    },
+  );
+
+  it.each(["", "   ", "topic-42"])(
+    "rejects invalid thread id %j before loading an automation for a combined edit",
+    async (threadId) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              "edit",
+              "job-1",
+              "--pacing-min",
+              "30m",
+              "--channel",
+              "telegram",
+              "--to",
+              "group-123",
+              "--thread-id",
+              threadId,
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--thread-id must be a positive integer"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
 
   it("keeps creation defaults out of automation edit patches", () => {
     const program = createMutationProgram();

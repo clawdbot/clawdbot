@@ -114,6 +114,12 @@ function mount(
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
+      vi.fn(),
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -146,7 +152,9 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       [...container.querySelectorAll(".ts-axis-label")].map((label) => label.textContent),
     ).toEqual(expect.arrayContaining(["utc-time", "utc-time"]));
-    expect(container.querySelector(".ts-bar title")?.textContent).toContain("utc-date-time");
+    expect(container.querySelector(".ts-bar")?.getAttribute("data-tooltip")).toContain(
+      "utc-date-time",
+    );
   });
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {

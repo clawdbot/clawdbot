@@ -11,9 +11,11 @@ import {
 import { i18n, isSupportedLocale } from "../i18n/index.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
+import { hasOperatorWriteAccess } from "./operator-access.ts";
 import {
   applyServerUiPrefs,
   flushServerUiPrefs,
+  refreshProfileAppearancePrefs,
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
@@ -27,20 +29,10 @@ export type StoredOutboxScopeHost = {
   hello?: { snapshot?: unknown } | null;
 };
 
-export type OutboxStoreRuntime = {
-  summarizeStoredChatOutboxes: (state: StoredOutboxScopeHost) => {
-    countsByScope: ReadonlyMap<string, number>;
-    attentionCountsByScope: ReadonlyMap<string, number>;
-    draftScopes: ReadonlySet<string>;
-    total: number;
-  };
-  resolveStoredChatOutboxScope: (
-    state: StoredOutboxScopeHost,
-    sessionKey: string,
-  ) => { sessionKey: string; agentId?: string };
-  storedChatOutboxScopeKey: (scope: { sessionKey: string; agentId?: string }) => string;
-  subscribeStoredChatOutboxChanges: (listener: () => void) => () => void;
-};
+export type OutboxStoreRuntime = Pick<
+  typeof import("../lib/chat/outbox-store-projection.ts"),
+  "summarizeStoredChatOutboxes" | "subscribeStoredChatOutboxChanges"
+>;
 
 export interface ShellGatewayHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -87,17 +79,30 @@ function diffAgentRoster(
 }
 
 export class ShellGatewayOwner {
+  private runtimeConfigProfileId: string | null = null;
+  private profileAppearanceSource: {
+    client: GatewayBrowserClient;
+    profileId: string;
+  } | null = null;
+
   constructor(private readonly host: ShellGatewayHost) {}
 
   reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): void {
     const snapshot = runtimeConfig.state.configSnapshot;
     const context = this.host.context;
-    if (!snapshot?.config || !context || context.runtimeConfig !== runtimeConfig) {
+    if (
+      !snapshot?.config ||
+      !context ||
+      context.runtimeConfig !== runtimeConfig ||
+      // selfUser is cleared on close; retained config must not reclassify that as an identity swap.
+      context.gateway.snapshot.phase !== "connected"
+    ) {
       return;
     }
     const scope = context.gateway.connection.gatewayUrl;
     applyServerUiPrefs(snapshot.config, {
       scope,
+      profileId: context.gateway.snapshot?.selfUser?.id,
       onThemeChanged: (theme) => context.theme.recordServerSelection(theme, scope),
       onApplied: (patch) => {
         if (patch.sidebarEntries !== undefined) {
@@ -106,6 +111,7 @@ export class ShellGatewayOwner {
         context.theme.refresh();
       },
     });
+    void this.refreshProfileAppearancePrefs(context).catch(() => undefined);
     const localePref = resolveServerUiPrefState(snapshot.config, "locale", scope);
     const localePrefSignature = JSON.stringify([scope, localePref.overridden, localePref.value]);
     if (localePrefSignature === this.host.lastLocalePrefSignature) {
@@ -172,6 +178,22 @@ export class ShellGatewayOwner {
         void runtimeConfig.refresh();
       }
       this.scheduleAgentRosterRefresh();
+      return;
+    }
+    if (event.event === "users.prefs.changed") {
+      const context = this.host.context;
+      const profileId = context?.gateway.snapshot.selfUser?.id;
+      const payload = event.payload;
+      if (
+        context &&
+        profileId &&
+        payload &&
+        typeof payload === "object" &&
+        "profileId" in payload &&
+        payload.profileId === profileId
+      ) {
+        void this.refreshProfileAppearancePrefs(context, true).catch(() => undefined);
+      }
       return;
     }
     if (event.event !== "ui.command" || !event.payload) {
@@ -262,60 +284,75 @@ export class ShellGatewayOwner {
     const previousPhase = this.host.previousGatewayPhase;
     this.host.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
-    this.ensureAgentsList(snapshot);
-    this.ensureRuntimeConfig(snapshot);
+    const context = this.host.context;
+    if (snapshot.phase === "connected" && context) {
+      const connectionBootstrap = context.connectionBootstrap;
+      void connectionBootstrap.run("runtime-config", async () => {
+        await this.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+        return this.refreshProfileAppearancePrefs(context);
+      });
+      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
+        void connectionBootstrap.run("agents", () =>
+          this.ensureAgentsList(snapshot, context.agents),
+        );
+      }
+      void connectionBootstrap.run("outbox", () => this.host.outboxStoreImport.load());
+    }
     if (previousPhase !== "connected" && snapshot.phase === "connected") {
       i18n.retryPendingLocale();
     }
     this.host.syncSidebarWorkboard();
-    // Gateway-served chunks retry on reconnect after an earlier idle import failed.
-    if (snapshot.phase === "connected") {
-      void this.host.outboxStoreImport.load().catch(() => undefined);
-    }
   }
 
   ensureRuntimeConfig(
     snapshot: ApplicationContext["gateway"]["snapshot"],
     runtimeConfig = this.host.context?.runtimeConfig,
-  ): void {
+  ): Promise<void> {
     // Config-gated sidebar routes require the snapshot before any settings page opens.
     if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig) {
       this.host.runtimeConfigClient = null;
-      return;
+      this.runtimeConfigProfileId = null;
+      this.profileAppearanceSource = null;
+      return Promise.resolve();
     }
+    const profileId = snapshot.selfUser?.id ?? null;
     if (
       this.host.runtimeConfigClient === snapshot.client &&
-      this.host.runtimeConfigSource === runtimeConfig
+      this.host.runtimeConfigSource === runtimeConfig &&
+      this.runtimeConfigProfileId === profileId
     ) {
-      return;
+      return Promise.resolve();
     }
     this.host.runtimeConfigClient = snapshot.client;
     this.host.runtimeConfigSource = runtimeConfig;
+    this.runtimeConfigProfileId = profileId;
     flushServerUiPrefs(runtimeConfig, {
+      profileId,
+      canWrite: hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
       afterCommit: ({ needsRefresh, retainedLocal }) =>
         this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
     });
-    void runtimeConfig.ensureLoaded();
+    return runtimeConfig.ensureLoaded();
   }
 
   ensureAgentsList(
     snapshot: ApplicationContext["gateway"]["snapshot"],
     agents = this.host.context?.agents,
-  ): void {
+  ): Promise<void> {
     if (snapshot.phase !== "connected" || !snapshot.client) {
       this.host.agentsListClient = null;
-      return;
+      return Promise.resolve();
     }
     const routeId = this.host.routeState.routeId;
     if (!agents || !routeId || agents.state.agentsList) {
-      return;
+      return Promise.resolve();
     }
     if (this.host.agentsListClient === snapshot.client && this.host.agentsListSource === agents) {
-      return;
+      return Promise.resolve();
     }
     this.host.agentsListClient = snapshot.client;
     this.host.agentsListSource = agents;
-    void agents.ensureList();
+    return agents.ensureList().then(() => undefined);
   }
 
   updateGatewaySessionKey(snapshot: {
@@ -335,6 +372,60 @@ export class ShellGatewayOwner {
     }
   }
 
+  private refreshProfileAppearancePrefs(
+    context: ApplicationContext<RouteId>,
+    force = false,
+  ): Promise<void> {
+    const snapshot = context.gateway.snapshot;
+    const profileId = snapshot?.selfUser?.id;
+    if (!profileId) {
+      return Promise.resolve();
+    }
+    const client = snapshot.client;
+    const configObject = context.runtimeConfig.state.configSnapshot?.config;
+    if (snapshot.phase !== "connected" || !client || !configObject) {
+      return Promise.resolve();
+    }
+    const previous = this.profileAppearanceSource;
+    if (!force && previous?.client === client && previous.profileId === profileId) {
+      return Promise.resolve();
+    }
+    const source = { client, profileId };
+    this.profileAppearanceSource = source;
+    const scope = context.gateway.connection.gatewayUrl;
+    const remainsCurrent = () =>
+      this.host.context === context &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.selfUser?.id === profileId &&
+      this.profileAppearanceSource === source;
+    return refreshProfileAppearancePrefs({
+      client,
+      profileId,
+      configObject,
+      scope,
+      onApplied: () => {
+        if (remainsCurrent()) {
+          context.theme.refresh();
+        }
+      },
+      onThemeChanged: (theme) => {
+        if (remainsCurrent()) {
+          context.theme.recordServerSelection(theme, scope);
+        }
+      },
+    })
+      .then((applied) => {
+        if (!applied && remainsCurrent()) {
+          context.theme.refresh();
+        }
+      })
+      .catch((error: unknown) => {
+        if (remainsCurrent()) {
+          console.error("[gateway] profile appearance preference refresh failed:", error);
+        }
+      });
+  }
+
   reset(): void {
     void this.host.criticalNoticeRuntime?.then((runtime) => runtime.resetCriticalObserverTracker());
     this.host.agentsListClient = null;
@@ -342,6 +433,8 @@ export class ShellGatewayOwner {
     this.host.sessionKeyClient = null;
     this.host.runtimeConfigClient = null;
     this.host.runtimeConfigSource = null;
+    this.runtimeConfigProfileId = null;
+    this.profileAppearanceSource = null;
     this.host.previousGatewayPhase = null;
     if (this.host.agentRosterRefreshTimer !== null) {
       globalThis.clearTimeout(this.host.agentRosterRefreshTimer);

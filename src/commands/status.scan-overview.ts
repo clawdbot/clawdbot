@@ -3,9 +3,11 @@
 
 import type { BestEffortConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
+import { applyLoggingConfig } from "../logging/logger.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { StatusSummary } from "../status/types.js";
@@ -15,7 +17,6 @@ import {
   buildColdStartStatusSummary,
   createStatusScanCoreBootstrap,
 } from "./status.scan.bootstrap-shared.js";
-import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
 type StatusGatewayProbeTimeoutResolver = (cfg: OpenClawConfig) => number | undefined;
@@ -48,6 +49,7 @@ const commandSecretTargetsModuleLoader = createLazyImportLoader(
 
 async function resolveStatusChannelsStatus(params: {
   cfg: OpenClawConfig;
+  configPath: string;
   gatewayReachable: boolean;
   opts: { timeoutMs?: number; all?: boolean };
   gatewayCallOverrides?: GatewayProbeSnapshot["gatewayCallOverrides"];
@@ -60,6 +62,7 @@ async function resolveStatusChannelsStatus(params: {
   const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway({
     config: params.cfg,
+    configPath: params.configPath,
     method: "channels.status",
     params: {
       probe: false,
@@ -146,41 +149,39 @@ export async function collectStatusScanOverview(params: {
   if (params.labels?.loadingConfig) {
     params.progress?.setLabel(params.labels.loadingConfig);
   }
-  const {
-    coldStart,
-    sourceConfig,
-    resolvedConfig: cfg,
-    configDiagnostics,
-    secretDiagnostics,
-  } = await loadStatusScanCommandConfig({
-    env,
-    commandName: params.commandName,
-    allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readConfigSnapshot: async () => {
-      const { snapshot } = await (
-        await import("../cli/command-config-snapshot.js")
-      ).readCommandConfigSnapshot({ observe: false, skipPluginValidation: true });
-      return {
-        config: snapshot.runtimeConfig,
-        sourceConfig: snapshot.sourceConfig,
-        configDiagnostics: snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues },
-      };
-    },
-    resolveConfig: async (loadedConfig) =>
-      await (
-        await commandConfigResolutionModuleLoader.load()
-      ).resolveCommandConfigWithSecrets({
-        config: loadedConfig,
-        commandName: params.commandName,
-        targetIds: (await commandSecretTargetsModuleLoader.load()).getStatusCommandSecretTargetIds(
-          loadedConfig,
-          env,
-          { includeChannelTargets: params.includeChannelSecretTargets },
-        ),
-        mode: "read_only_status",
-        ...(params.runtime ? { runtime: params.runtime } : {}),
-      }),
-  });
+  const { snapshot } = await (
+    await import("../cli/command-config-snapshot.js")
+  ).readCommandConfigSnapshot({ observe: false, skipPluginValidation: true });
+  const testRuntime =
+    env.VITEST === "true" || env.VITEST_POOL_ID !== undefined || env.NODE_ENV === "test";
+  const coldStart = !snapshot.exists && !(params.allowMissingConfigFastPath && testRuntime);
+  const skipMissingConfig = coldStart && params.allowMissingConfigFastPath === true;
+  const sourceConfig = skipMissingConfig ? {} : snapshot.sourceConfig;
+  const loadedConfig = skipMissingConfig ? {} : snapshot.runtimeConfig;
+  const configDiagnostics =
+    skipMissingConfig || snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues };
+  const { resolvedConfig: cfg, diagnostics } = skipMissingConfig
+    ? { resolvedConfig: loadedConfig, diagnostics: [] }
+    : await commandConfigResolutionModuleLoader
+        .load()
+        .then(async ({ resolveCommandConfigWithSecrets }) =>
+          resolveCommandConfigWithSecrets({
+            config: loadedConfig,
+            commandName: params.commandName,
+            targetIds: (
+              await commandSecretTargetsModuleLoader.load()
+            ).getStatusCommandSecretTargetIds(loadedConfig, env, {
+              includeChannelTargets: params.includeChannelSecretTargets,
+            }),
+            mode: "read_only_status",
+            ...(params.runtime ? { runtime: params.runtime } : {}),
+          }),
+        );
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
+  const secretDiagnostics = tokenConflict
+    ? [...diagnostics, tokenConflict.diagnostic]
+    : diagnostics;
+  applyLoggingConfig(cfg.logging);
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
@@ -200,6 +201,8 @@ export async function collectStatusScanOverview(params: {
   >({
     coldStart,
     cfg,
+    configPath: snapshot.path,
+    env,
     hasConfiguredChannels,
     opts: params.opts,
     skipUpdateCheck: params.skipUpdateCheck,
@@ -250,6 +253,7 @@ export async function collectStatusScanOverview(params: {
     const status = await gatewayCallModuleLoader.load().then(({ callGateway }) =>
       callGateway<StatusSummary>({
         config: cfg,
+        configPath: snapshot.path,
         method: "status",
         params: { includeChannelSummary: false },
         timeoutMs: Math.min(5000, params.opts.timeoutMs ?? 10_000),
@@ -285,6 +289,7 @@ export async function collectStatusScanOverview(params: {
         const channelsStatusLocal = includeLiveChannelStatus
           ? await resolveStatusChannelsStatus({
               cfg,
+              configPath: snapshot.path,
               gatewayReachable: gatewaySnapshot.gatewayReachable,
               opts: params.opts,
               gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,

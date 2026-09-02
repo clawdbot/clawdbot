@@ -14,6 +14,7 @@ import type {
 } from "../plugins/types.node-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
@@ -195,6 +196,7 @@ describe("node host invoke", () => {
     expect(handle).toHaveBeenCalledWith("{}", undefined, {
       sendNodeEvent,
       sessionKey: "agent:main:canvas",
+      prepareExecAuthorization: expect.any(Function),
     });
   });
 
@@ -957,6 +959,50 @@ describe("node host invoke", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["system.run", "agent.cli.claude.run.v1"])(
+    "executes %s with omitted exec config and full/off host approvals",
+    async (command) => {
+      const state = await createOpenClawTestState({ label: "node-default-policy" });
+      try {
+        await state.writeConfig({});
+        saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
+        const executable = path.join(fs.realpathSync(state.root), "native-agent.cjs");
+        fs.writeFileSync(executable, `#!${process.execPath}\nprocess.stdout.write('ok');\n`, {
+          mode: 0o700,
+        });
+        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        await handleInvoke(
+          {
+            id: "default-policy",
+            nodeId: "node-1",
+            command,
+            paramsJSON: JSON.stringify(
+              command === "system.run"
+                ? { command: [process.execPath, "--version"] }
+                : { argv: ["-p"], timeoutMs: 5000, idleTimeoutMs: 1000 },
+            ),
+          },
+          {
+            request: async <T>(...args: Parameters<GatewayClient["request"]>) => {
+              await request(...args);
+              return {} as T;
+            },
+          },
+          { current: async () => [] },
+          undefined,
+          { claudePath: executable },
+        );
+        const result = request.mock.calls.find(
+          ([method]) => method === "node.invoke.result",
+        )?.[1] as InvokeResult;
+        expect(result).toMatchObject({ ok: true });
+        expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({ exitCode: 0 });
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
+
   it("includes effective exec policy in system.run.prepare responses", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
     const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -991,7 +1037,7 @@ describe("node host invoke", () => {
       execPolicy?: { security?: string; ask?: string };
       plan?: { policySnapshot?: unknown };
     };
-    expect(payload.execPolicy).toEqual({ security: "allowlist", ask: "on-miss" });
+    expect(payload.execPolicy).toEqual({ security: "full", ask: "off" });
     // The plan snapshot binds persisted approval state. Effective config-layer
     // policy is returned separately above and re-evaluated at execution.
     expect(payload.plan?.policySnapshot).toEqual({

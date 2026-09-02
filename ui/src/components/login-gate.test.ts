@@ -43,6 +43,32 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it.each([
+    "Authenticated profile verification is unavailable; retry the request.",
+    "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
+  ])(
+    "explains profile verification failures without credential or network recovery: %s",
+    async (error) => {
+      const element = await mountFailure(
+        error,
+        ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+      );
+      const failure = element.querySelector(".login-gate__failure");
+
+      expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
+      expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+        "Profile verification unavailable",
+      );
+      expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
+      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+        "Gateway administrator",
+      );
+      expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+      expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+    },
+  );
+
   it("renders every auth recovery command exactly once", async () => {
     const element = await mountFailure(
       "unauthorized: gateway token required",
@@ -201,7 +227,7 @@ describe("login gate failure recovery", () => {
       }
 
       await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
-      expect(button?.dataset.error).toBe("1");
+      expect(command?.querySelector('[role="status"]')?.textContent).toBe("Copy failed");
       expect(writeText).toHaveBeenCalledOnce();
       expect(writeText).toHaveBeenCalledWith("openclaw status");
       expect(execCommand).toHaveBeenCalledOnce();
@@ -222,18 +248,24 @@ describe("login gate failure recovery", () => {
     buttons[1]?.click();
 
     await vi.waitFor(() => {
-      expect(buttons[0]?.dataset.copied).toBe("1");
-      expect(buttons[1]?.dataset.copied).toBe("1");
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied!");
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
-    expect(buttons[2]?.dataset.copied).toBeUndefined();
+    expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
   });
 
   it("keeps the latest command-copy feedback until its own reset", async () => {
+    let finishCopy!: () => void;
     const writeText = vi
       .fn()
       .mockRejectedValueOnce(new DOMException("Clipboard access denied"))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCopy = resolve;
+          }),
+      );
     const execCommand = vi.fn(() => false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
@@ -250,13 +282,18 @@ describe("login gate failure recovery", () => {
     }
 
     command?.click();
+    expect(button?.disabled).toBe(true);
+    expect(button?.getAttribute("aria-label")).toBe("Copy command");
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
+    failedReset();
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
+    finishCopy();
     await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied!"));
-    expect(button?.dataset.error).toBeUndefined();
-    expect(button?.dataset.copied).toBe("1");
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(false);
 
     failedReset();
     expect(button?.getAttribute("aria-label")).toBe("Copied!");
-    expect(button?.dataset.copied).toBe("1");
+    expect(command?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
 
     const successfulReset = schedule.mock.calls.find(([, delay]) => delay === 1_500)?.[0];
     if (typeof successfulReset !== "function") {
@@ -265,7 +302,7 @@ describe("login gate failure recovery", () => {
     successfulReset();
 
     expect(button?.getAttribute("aria-label")).toBe("Copy command");
-    expect(button?.dataset.copied).toBeUndefined();
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
     expect(writeText).toHaveBeenCalledTimes(2);
     expect(execCommand).toHaveBeenCalledOnce();
   });

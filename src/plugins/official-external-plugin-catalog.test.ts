@@ -2051,11 +2051,11 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginInstall(wecomByChannel)?.npmSpec).toBe(
-      "@wecom/wecom-openclaw-plugin@2026.5.7",
+      "@wecom/wecom-openclaw-plugin@2026.7.2",
     );
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
-      "openclaw-plugin-yuanbao@2.15.0",
+      "openclaw-plugin-yuanbao@2.18.2",
     );
     expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
     expect(qqbotByPlugin).toBe(qqbotByChannel);
@@ -2656,7 +2656,7 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("lists Matrix as an official external ClawHub channel after cutover", () => {
+  it("lists Matrix as an official external npm-first channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -2670,7 +2670,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",
-      defaultChoice: "clawhub",
+      defaultChoice: "npm",
       minHostVersion: ">=2026.4.10",
       allowInvalidConfigRecovery: true,
     });

@@ -1,0 +1,158 @@
+/* Absolutely palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="absolutely"] {
+  /*
+   * Accent — terracotta clay on warm graphite
+   *
+   * WCAG 2.1 AA audit (bg = #1c1c1a, relative luminance ≈ 0.0115):
+   *   --accent #d97757  L ≈ 0.257  contrast ≈ 5.5:1  AA text ✓
+   *   --accent-hover #e68b6b  L ≈ 0.338  contrast ≈ 6.7:1  ✓
+   *   --primary-foreground #241f1b on #d97757 button: 5.2:1 AA ✓
+   *   --primary-foreground #241f1b on #e68b6b hover: 6.4:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   focus-ring at 75% opacity: ≈ 3.6:1 against bg ✓ (non-text 3:1 required)
+   *
+   * The surface ramp sits a step below the original #262624 launch palette,
+   * which was the lightest dark theme in the set by a wide margin. Every
+   * pairing improved: worst text 4.68 -> 5.42:1, accent on --card 4.47 ->
+   * 5.05:1 (AA where it previously was not). The accent still dims below AA on
+   * --bg-muted (4.3:1), so it stays a fill/indicator color there, not body copy.
+   */
+  --ring: #d97757;
+  --accent: #d97757;
+  --accent-hover: #e68b6b;
+  --accent-muted: #d97757;
+  --accent-subtle: rgba(217, 119, 87, 0.14);
+  --accent-glow: rgba(217, 119, 87, 0.22);
+  --primary: #d97757;
+  --primary-hover: #e68b6b;
+  --primary-foreground: #241f1b;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  /* Focus — clay ring */
+  --focus: rgba(217, 119, 87, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+
+  /* Surfaces — warm graphite, a shade off true neutral */
+  --bg: #1c1c1a;
+  --bg-accent: #232320;
+  --bg-elevated: #292825;
+  --bg-hover: #302f2b;
+  --bg-muted: #302f2b;
+
+  --card: #232320;
+  --card-foreground: #ede8dd;
+  --card-highlight: rgba(255, 246, 232, 0.04);
+  --popover: #292825;
+  --popover-foreground: #ede8dd;
+
+  --panel: #1c1c1a;
+  --panel-strong: #292825;
+  --panel-hover: #302f2b;
+  --chrome: rgba(28, 28, 26, 0.96);
+  --chrome-strong: rgba(28, 28, 26, 0.98);
+
+  --text: #e4dfd4;
+  --text-strong: #f5f1e8;
+  --chat-text: #e4dfd4;
+  --muted: #aba498;
+  --muted-strong: #b8b1a4;
+  --muted-foreground: #aba498;
+
+  --border: #2e2c27;
+  --border-strong: #3d3a33;
+  --border-hover: #514d44;
+  --input: #2e2c27;
+
+  --secondary: #232320;
+  --secondary-foreground: #ede8dd;
+  --accent-2: #b8926a;
+  --accent-2-muted: rgba(184, 146, 106, 0.7);
+  --accent-2-subtle: rgba(184, 146, 106, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(12, 10, 8, 0.35);
+  --shadow-md: 0 4px 16px rgba(12, 10, 8, 0.45);
+  --shadow-lg: 0 12px 32px rgba(12, 10, 8, 0.55);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(255, 246, 232, 0.03);
+  /* Typography is this theme's signature: a grotesque for chrome, a reading
+     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
+     system fallbacks so a failed font load degrades instead of blanking text. */
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: "Lora", Georgia, "Times New Roman", serif;
+}
+
+:root[data-theme="absolutely-light"] {
+  /*
+   * Accent — burnt clay on ivory paper
+   *
+   * WCAG 2.1 AA audit (bg = #faf9f5, relative luminance ≈ 0.934):
+   *   --accent #a8452a  L ≈ 0.126  contrast ≈ 5.6:1  AA text ✓
+   *   --accent-hover #8e3822  L ≈ 0.086  contrast ≈ 7.3:1  ✓
+   *   --primary-foreground #ffffff on #a8452a button: 5.9:1 AA ✓
+   *   focus-ring at 70% opacity: ≈ 3.2:1 against ivory bg ✓
+   */
+  --ring: #a8452a;
+  --accent: #a8452a;
+  --accent-hover: #8e3822;
+  --accent-muted: #a8452a;
+  --accent-subtle: rgba(168, 69, 42, 0.1);
+  --accent-glow: rgba(168, 69, 42, 0.14);
+  --primary: #a8452a;
+
+  /* Surfaces — ivory paper with a faint warm cast */
+  --bg: #faf9f5;
+  --bg-accent: #f3f1e9;
+  --bg-hover: #edeae0;
+  --bg-muted: #edeae0;
+  --bg-content: #f3f1e9;
+
+  --card-foreground: #1f1d1a;
+  --card-highlight: rgba(60, 50, 30, 0.02);
+  --popover-foreground: #1f1d1a;
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 50%,
+    var(--panel-strong) 50%
+  );
+
+  --panel: #faf9f5;
+  --panel-strong: #f3f1e9;
+  --panel-hover: #e6e2d6;
+  --chrome: rgba(250, 249, 245, 0.96);
+  --chrome-strong: rgba(250, 249, 245, 0.98);
+
+  --text: #3d3a33;
+  --text-strong: #1f1d1a;
+  --chat-text: #3d3a33;
+  --muted: #6b655b;
+  --muted-strong: #555047;
+  --muted-foreground: #6b655b;
+
+  --border: #e3dfd2;
+  --border-strong: #cdc7b6;
+  --border-hover: #ada694;
+  --input: #e3dfd2;
+
+  --secondary: #f3f1e9;
+  --secondary-foreground: #3d3a33;
+  --accent-2: #8a6a44;
+  --accent-2-muted: rgba(138, 106, 68, 0.75);
+  --accent-2-subtle: rgba(138, 106, 68, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(60, 50, 30, 0.05);
+  --shadow-md: 0 4px 12px rgba(60, 50, 30, 0.07);
+  --shadow-lg: 0 12px 28px rgba(60, 50, 30, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(60, 50, 30, 0.04);
+  /* Typography is this theme's signature: a grotesque for chrome, a reading
+     serif for chat prose (styles/fonts.css self-hosts both). The stacks keep
+     system fallbacks so a failed font load degrades instead of blanking text. */
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: "Lora", Georgia, "Times New Roman", serif;
+}

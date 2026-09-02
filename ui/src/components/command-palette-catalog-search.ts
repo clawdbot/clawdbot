@@ -32,6 +32,7 @@ type CommandPaletteCatalogItem = {
   icon: IconName;
   category: CommandPaletteCatalogCategory;
   routeId: RouteId;
+  agentId?: string;
   description?: string;
   searchText?: string;
 };
@@ -215,6 +216,7 @@ export function toCommandPaletteItems(
     icon: item.icon,
     category: item.category,
     action: `nav:${item.routeId}`,
+    agentId: item.agentId,
     description: item.description,
     searchText: item.searchText,
   }));
@@ -298,6 +300,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       icon: "bot" as const,
       category: "agents" as const,
       routeId: "agents" as const,
+      agentId: agent.id,
       description: agent.id,
       searchText: [agent.id, agent.workspace, agent.model?.primary, agent.identity?.theme]
         .filter(Boolean)
@@ -333,7 +336,8 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
     ...(models?.models ?? []).map((model) => ({
-      id: `model-${model.provider}-${model.id}`,
+      // Both IDs can contain separators; selection needs a lossless pair.
+      id: `model-${JSON.stringify([model.provider, model.id])}`,
       label: model.name || model.id,
       icon: "brain" as const,
       category: "models" as const,

@@ -14,13 +14,13 @@ import {
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
+import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import "../styles/sidebar-footer-update.css";
+import "../styles/sidebar-attention-floating.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
@@ -46,10 +46,7 @@ import {
   compareSidebarAttentionEntries,
 } from "./sidebar-attention-items.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
-import {
-  resolveSidebarUpdateAttention,
-  startSidebarUpdateAttention,
-} from "./sidebar-attention-update.ts";
+import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 import "./tooltip.ts";
 
@@ -71,6 +68,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   @state() private cronJobs: CronJob[] = [];
+  @state() private cronSchedulerEnabled: boolean | null = null;
   @state() private modelAuthStatus: ModelAuthStatusResult | null = null;
   @state() private dismissed: SidebarAttentionDismissals = {};
   @state() private panelOpen = false;
@@ -99,6 +97,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private panelTrigger: HTMLElement | null = null;
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
   private panelLoad: Promise<SidebarAttentionPanelRuntime> | null = null;
+  private panelGeneration = 0;
   private nativeUpdateDeclined = false;
 
   private readonly loadTask = new Task(this, {
@@ -118,9 +117,10 @@ class SidebarAttention extends OpenClawLightDomElement {
       const cron = createInitialCronState({ client, connected: true });
       cron.cronAgentId = agentScope.scopeId;
       const loads: Promise<unknown>[] = [
-        loadCronJobsPage(cron).then(() => {
+        Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]).then(() => {
           if (!signal.aborted) {
             this.cronJobs = cron.cronJobs;
+            this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
           }
         }),
       ];
@@ -232,6 +232,9 @@ class SidebarAttention extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.nativeUpdateDeclined = false;
+    // Dismissal belongs to the connected Inbox, including while its panel imports.
+    document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
+    document.addEventListener("keydown", this.handleOutsideInteraction, true);
     document.addEventListener("visibilitychange", this.refreshIfStale);
     globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     window.addEventListener(
@@ -243,6 +246,8 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    document.removeEventListener("pointerdown", this.handleOutsideInteraction, true);
+    document.removeEventListener("keydown", this.handleOutsideInteraction, true);
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
     window.removeEventListener(
@@ -250,7 +255,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       this.handleNativeUpdateAvailabilityChanged,
     );
     window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
-    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
+    this.closePanel(false);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
       this.idleRefreshTimer = null;
@@ -324,6 +329,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       this.loadedAgentScope = null;
       this.modelAuthAgentId = null;
       this.cronJobs = [];
+      this.cronSchedulerEnabled = null;
       this.modelAuthStatus = null;
       return;
     }
@@ -340,6 +346,10 @@ class SidebarAttention extends OpenClawLightDomElement {
       agentScope.scopeId === loadedAgentScope.scopeId
     ) {
       return;
+    }
+    if (loadedAgentScope && agentScope.selectedId !== loadedAgentScope.selectedId) {
+      this.modelAuthStatus = null;
+      this.modelAuthAgentId = null;
     }
     if (loadedAgentScope && agentScope.scopeId !== loadedAgentScope.scopeId) {
       this.cronJobs = [];
@@ -377,11 +387,15 @@ class SidebarAttention extends OpenClawLightDomElement {
     if (!this.dismissedScope || !this.context) {
       return;
     }
+    const snapshot = this.context.gateway.snapshot;
+    const scopes = snapshot.hello?.auth?.scopes;
     const entry = buildScopeUpgradeInboxEntry({
-      scopes: this.context.gateway.snapshot.hello?.auth?.scopes,
+      scopes,
       state: this.context.scopeUpgrade.state,
     });
-    if (!entry?.dismissal) {
+    // A disconnect makes access unresolved, not resolved. Keep the snooze until
+    // connected scope facts or an active request lifecycle authoritatively retire it.
+    if (snapshot.phase === "connected" && scopes !== undefined && !entry?.dismissal) {
       this.dismissed = clearSidebarAttentionDismissal(this.dismissedScope, "scopeUpgrade");
     }
   }
@@ -396,6 +410,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private buildAttentionEntries() {
     return buildSidebarAttentionEntries({
       cronJobs: this.cronJobs,
+      cronSchedulerEnabled: this.cronSchedulerEnabled,
       cronOwnerByJobId: this.cronOwnerByJobId(),
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,
@@ -454,27 +469,27 @@ class SidebarAttention extends OpenClawLightDomElement {
     );
   }
 
-  private readonly startUpdate = () => {
-    if (this.context) {
-      startSidebarUpdateAttention({
-        context: this.context,
-        nativeUpdateDeclined: this.nativeUpdateDeclined,
-        watchUpdateProgress: this.watchUpdateProgress,
-      });
+  private readonly handleOutsideInteraction = (event: PointerEvent | KeyboardEvent) => {
+    const dismiss =
+      event instanceof KeyboardEvent
+        ? event.key === "Escape" && !this.panelOpen && !event.defaultPrevented
+        : !event.composedPath().includes(this);
+    if (dismiss) {
+      if (event instanceof KeyboardEvent && this.panelTrigger) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      this.closePanel(false);
     }
-  };
-
-  private readonly closeOnOutsidePointer = (event: PointerEvent) => {
-    if (!this.panelOpen || event.composedPath().includes(this)) {
-      return;
-    }
-    this.closePanel(false);
   };
 
   private async openPanel(trigger: HTMLElement) {
+    const generation = ++this.panelGeneration;
+    // The pending open owns Escape before its lazy panel can handle keyboard events.
+    this.panelTrigger = trigger;
     this.panelLoad ??= import("./sidebar-attention-panel.runtime.ts");
     const panelRuntime = await this.panelLoad;
-    if (!this.isConnected) {
+    if (!this.isConnected || generation !== this.panelGeneration) {
       return;
     }
     this.context?.scopeUpgrade.activate(panelRuntime.ScopeUpgradeController);
@@ -482,7 +497,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
-    this.panelTrigger = trigger;
     this.panelRenderer = panelRuntime.renderSidebarAttentionPanel;
     this.panelPosition =
       rect.top < globalThis.innerHeight / 2
@@ -490,25 +504,33 @@ class SidebarAttention extends OpenClawLightDomElement {
         : { left, anchor: "bottom", bottom: Math.max(8, globalThis.innerHeight - rect.top + 8) };
     this.selectedTab = "all";
     this.panelOpen = true;
-    document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
-    void this.updateComplete.then(() => {
+    await this.updateComplete;
+    if (generation === this.panelGeneration) {
       this.querySelector<HTMLElement>(".sidebar-issues-panel__list")?.focus();
-    });
+    }
   }
 
   private closePanel(restoreFocus: boolean) {
-    if (!this.panelOpen) {
-      return;
-    }
-    const trigger = this.panelTrigger;
+    // Closing also cancels an open that is still waiting for its runtime or render.
+    const generation = ++this.panelGeneration;
+    const trigger = restoreFocus && this.panelOpen ? this.panelTrigger : null;
     this.panelOpen = false;
     this.overflowAbove = false;
     this.overflowBelow = false;
     this.panelTrigger = null;
-    document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
-    if (restoreFocus) {
-      void this.updateComplete.then(() => trigger?.focus());
+    if (trigger) {
+      void this.updateComplete.then(() => {
+        if (generation === this.panelGeneration) {
+          trigger.focus();
+        }
+      });
     }
+  }
+
+  dismissPanel(): boolean {
+    const wasOpen = this.panelOpen;
+    this.closePanel(false);
+    return wasOpen;
   }
 
   private readonly syncOverflowCue = () => {
@@ -606,9 +628,10 @@ class SidebarAttention extends OpenClawLightDomElement {
     const row = target.closest<HTMLElement>("[data-approval-id]");
     const rowFocus = row?.querySelector<HTMLElement>("[data-issue-row-focus]") ?? null;
     const rowIndex = rowFocus ? focusOrder.indexOf(rowFocus) : 0;
+    const generation = this.panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
     await this.updateComplete;
-    if (!this.panelOpen || target.isConnected) {
+    if (generation !== this.panelGeneration || target.isConnected) {
       return;
     }
     const remaining = Array.from(this.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
@@ -620,9 +643,6 @@ class SidebarAttention extends OpenClawLightDomElement {
       return nothing;
     }
     const entries = this.currentInboxEntries();
-    const updateEntry = entries.find((entry) => entry.type === "update");
-    const updateDismissal = updateEntry?.dismissal ?? null;
-    const updateState = resolveSidebarUpdateAttention(this.context);
     const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
@@ -655,38 +675,6 @@ class SidebarAttention extends OpenClawLightDomElement {
             >`
           : nothing}
       </button>
-      ${updateEntry
-        ? html`<span class="sidebar-footer-update-slot">
-            <button
-              type="button"
-              class="sidebar-footer-update"
-              aria-label=${t("updates.sidebar.availableTitle")}
-              ?disabled=${updateState.busy || !updateState.actionable || !updateState.canUpdate}
-              @click=${this.startUpdate}
-            >
-              <span class="sidebar-footer-update__icon" aria-hidden="true"
-                >${updateState.busy ? icons.refresh : icons.download}</span
-              >
-            </button>
-            ${updateDismissal
-              ? html`<openclaw-tooltip
-                  class="sidebar-hover-tooltip"
-                  .content=${t("updates.sidebar.dismissUntilRestartOrVersion")}
-                  .delay=${600}
-                  .closeDelay=${300}
-                >
-                  <button
-                    type="button"
-                    class="sidebar-footer-update__dismiss"
-                    aria-label=${t("updates.sidebar.dismissUntilRestartOrVersion")}
-                    @click=${() => this.dismiss(updateDismissal)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing}
-          </span>`
-        : nothing}
       ${this.panelOpen && this.panelRenderer
         ? this.panelRenderer({
             context: this.context,

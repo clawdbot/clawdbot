@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -59,6 +59,36 @@ afterEach(async () => {
   }
   await waitFor(() => [...activePids].every((pid) => !isAlive(pid))).catch(() => {});
   activePids.clear();
+});
+
+describe.skipIf(process.platform === "win32")("POSIX child invocation identity", () => {
+  it.each(["direct", "service-managed"] as const)(
+    "preserves caller-selected argv0 through the %s path",
+    async (mode) => {
+      if (mode === "service-managed") {
+        process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      }
+      const tempDir = tempDirs.make(`openclaw-${mode}-argv0-`);
+      const executableAlias = path.join(tempDir, "claude-shim");
+      await symlink(process.execPath, executableAlias);
+      const run = await createProcessSupervisor().spawn({
+        mode: "child",
+        argv: [process.execPath, "-e", "process.stdout.write(process.argv0)"],
+        argv0: executableAlias,
+        sessionId: `argv0-${mode}`,
+        backendId: "argv0-test",
+        stdinMode: "pipe-closed" as const,
+      });
+
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        stdout: executableAlias,
+      });
+      await run.waitForExtinction?.();
+    },
+  );
 });
 
 describe.skipIf(process.platform === "win32")("service-managed child lifecycle", () => {
@@ -510,30 +540,40 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     }
   });
 
-  it("keeps stdin and the secret descriptor distinct from lifecycle channels", async () => {
-    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const adapter = await createChildAdapter({
-      argv: [
-        "/bin/sh",
-        "-c",
-        'IFS= read -r secret <&3; IFS= read -r input; printf "%s:%s\\n" "${#secret}" "$input"',
-      ],
-      stdinMode: "pipe-open",
-      secretInput: {
-        fd: 3,
-        createData: () => Buffer.from("synthetic-secret\n", "utf8"),
-      },
-    });
-    let output = "";
-    adapter.onStdout((chunk) => {
-      output += chunk;
-    });
-    adapter.stdin?.write("ordinary-input\n");
-    adapter.stdin?.end();
+  it.each(["direct", "service", "owned-worker"] as const)(
+    "keeps reopenable secret input distinct from stdin and lifecycle channels (%s)",
+    async (mode) => {
+      if (mode === "service") {
+        process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      }
+      const adapter = await createChildAdapter({
+        argv: [
+          process.execPath,
+          "-e",
+          `const fs = require("node:fs");
+         const secret = fs.readFileSync(${JSON.stringify(process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3")}, "utf8").trimEnd();
+         const input = fs.readFileSync(0, "utf8");
+         process.stdout.write(secret.length + ":" + input);`,
+        ],
+        ownedWorker: mode === "owned-worker" ? true : undefined,
+        stdinMode: "pipe-open",
+        secretInput: {
+          fd: 3,
+          createData: () => Buffer.from("synthetic-secret\n", "utf8"),
+        },
+      });
+      let output = "";
+      adapter.onStdout((chunk) => {
+        output += chunk;
+      });
+      adapter.closeStartGate?.();
+      adapter.stdin?.write("ordinary-input\n");
+      adapter.stdin?.end();
 
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-    expect(output).toBe("16:ordinary-input\n");
-  });
+      await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      expect(output).toBe("16:ordinary-input\n");
+    },
+  );
 
   it("fails closed when the command drops its lineage descriptor early", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";

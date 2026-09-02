@@ -3,7 +3,6 @@
  */
 import type { Command } from "commander";
 import { vi } from "vitest";
-import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
 
@@ -46,7 +45,7 @@ const browserManageMocks = vi.hoisted(() => ({
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
   browserManageMocks.callBrowserRequest,
 );
-vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();

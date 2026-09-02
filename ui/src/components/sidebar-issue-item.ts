@@ -12,7 +12,6 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
 
@@ -41,40 +40,6 @@ function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
   >
     ${icons.x}
   </button>`;
-}
-
-export function renderSidebarAskOpenClawButton(params: {
-  count: number;
-  severity: "error" | "warning" | null;
-  snapshot: ApplicationContext["gateway"]["snapshot"] | undefined;
-}) {
-  if (!canCallGatewayMethod(params.snapshot, "openclaw.chat", "operator.admin")) {
-    return nothing;
-  }
-  const label = params.count
-    ? t(params.count === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
-        count: String(params.count),
-      })
-    : t("nav.askOpenClaw");
-  return html`<openclaw-tooltip .content=${label}>
-    <button
-      type="button"
-      class="sidebar-brand__icon sidebar-footer-bar__custodian sidebar-issues-panel__ask"
-      aria-label=${label}
-      @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-    >
-      <span class="sidebar-footer-bar__custodian-glyph">
-        ${icons.lobster}
-        ${params.count
-          ? html`<span
-              class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${params.severity ??
-              "warning"}"
-              aria-hidden="true"
-            ></span>`
-          : nothing}
-      </span>
-    </button>
-  </openclaw-tooltip>`;
 }
 
 export function renderSidebarApprovalItem(params: {
@@ -172,12 +137,6 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
   return state satisfies never;
 }
 
-function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return state.phase === "guidance" || state.phase === "available"
-    ? t("connection.scopeUpgrade.inboxState")
-    : scopeUpgradeText(state);
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: ScopeUpgradeState;
   onCancel: () => void;
@@ -189,8 +148,11 @@ export function renderSidebarScopeUpgradeItem(params: {
     return nothing;
   }
   const text = scopeUpgradeText(params.state);
-  const summary = scopeUpgradeSummaryText(params.state);
-  const retryable = ["pending", "rejected", "error"].includes(params.state.phase);
+  const summary = t("connection.scopeUpgrade.inboxState");
+  const retryable =
+    params.state.phase === "error"
+      ? params.state.retryable
+      : params.state.phase === "pending" || params.state.phase === "rejected";
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${params.state.phase ===
       "error" || params.state.phase === "rejected"
@@ -231,15 +193,17 @@ export function renderSidebarScopeUpgradeItem(params: {
                 ${t("connection.scopeUpgrade.requestingAction")}
               </button>
             </div>`
-          : retryable
+          : retryable || params.state.phase === "error"
             ? html`<div class="sidebar-issues-panel__actions">
-                <button
-                  type="button"
-                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                  @click=${params.onRetry}
-                >
-                  ${t("connection.scopeUpgrade.retry")}
-                </button>
+                ${retryable
+                  ? html`<button
+                      type="button"
+                      class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                      @click=${params.onRetry}
+                    >
+                      ${t("connection.scopeUpgrade.retry")}
+                    </button>`
+                  : nothing}
                 <button
                   type="button"
                   class="sidebar-issues-panel__action"

@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { performance } from "node:perf_hooks";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -12,6 +13,7 @@ import {
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
@@ -96,6 +98,7 @@ async function waitForHealthyGatewayChild(
 
 export async function runGatewayLoop(params: {
   start: (params?: {
+    processStartedAt?: number;
     startupStartedAt?: number;
     requestHotReloadRecovery?: GatewayRestartEmitter;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
@@ -114,6 +117,7 @@ export async function runGatewayLoop(params: {
     process.title = "openclaw-gateway";
   }
   let startupStartedAt: number;
+  const processStartedAt = performance.timeOrigin;
   // Eagerly resolve the lifecycle runtime module before installing signal
   // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
   // SIGTERM-with-intent, restart iteration hook, stability bundle writer)
@@ -175,6 +179,12 @@ export async function runGatewayLoop(params: {
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
+    await eagerLifecycleRuntime
+      .stopGatewayManagedProviderLocalServices()
+      .catch((error: unknown) => {
+        gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
+      });
+    flushDiagnosticsTimeline();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     const flushed = await Promise.race([
       flushLogger().then(() => true),
@@ -474,7 +484,11 @@ export async function runGatewayLoop(params: {
     }
     return reacquireAndResumeInProcessRestart();
   };
-  const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
+  // The managed unit grants this same budget to a graceful SIGTERM.  A plain
+  // supervisor restart does not carry a gateway restart intent, but it can
+  // still interrupt an embedded model/tool turn; leave enough time for that
+  // turn to settle before systemd resorts to SIGKILL.
+  const SUPERVISOR_STOP_TIMEOUT_MS = 330_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const clearPendingStartupForceExitTimer = () => {
     clearTimeout(pendingStartupForceExitTimer ?? undefined);
@@ -570,6 +584,7 @@ export async function runGatewayLoop(params: {
         | "restored-in-process"
         | "restart-after-exit"
         | undefined;
+      let shutdownFailed = false;
       const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs(restartIntent) : 0;
       const restartDrainDeadlineAt =
         isRestart && restartDrainTimeoutMs !== undefined
@@ -730,6 +745,7 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
+        shutdownFailed = true;
         gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         const handoffClosed =
@@ -739,7 +755,9 @@ export async function runGatewayLoop(params: {
         }
         if (isRestart) {
           try {
-            if (handoffClosed) {
+            if (shutdownFailed) {
+              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+            } else if (handoffClosed) {
               await handleRestartAfterServerClose(
                 managedUpdateOwner,
                 managedUpdateCancellation === "restored-in-process",
@@ -1002,6 +1020,9 @@ export async function runGatewayLoop(params: {
       // suspension admission callback and discards the coordinator entry.
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
+      // resetAllLanes installs the next admission generation. Keep the local
+      // mirror aligned so a restart queued during cleanup closes that generation.
+      restartDrainingMarked = false;
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
       // Rent: a failed startup has no server close handle, and restart hooks can
@@ -1019,9 +1040,6 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstIteration = true;
     for (;;) {
-      // The restart hook reopens admission before reloading durable state. Clear
-      // its local mirror first so a failed reload cannot skip the next drain.
-      restartDrainingMarked = false;
       let startupFailedBeforeServerHandle = false;
       const isRestartIteration = !isFirstIteration;
       isFirstIteration = false;
@@ -1032,6 +1050,7 @@ export async function runGatewayLoop(params: {
         startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
         const startedServer = await params.start({
+          ...(isRestartIteration ? {} : { processStartedAt }),
           startupStartedAt,
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
         });

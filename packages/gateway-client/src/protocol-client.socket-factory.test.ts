@@ -397,7 +397,7 @@ describe("GatewayClient socket factory recovery", () => {
       hostDeps: { beforeConnect },
     });
 
-    expect(() => client.start()).not.toThrow();
+    client.start();
     expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: expect.stringContaining(expectedMessage) }),
     );

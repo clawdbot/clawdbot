@@ -134,7 +134,7 @@ Accepted prompts appear in the transcript as regular user messages and start a n
 
 ## Dashboard capabilities
 
-Pinned widgets expose one ticket-bound host API. Calls that require declared capabilities work only after the operator reviews the declaration shown on the pending card:
+Pinned widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately; **Workspace** uses an AI reviewer and rejects anything it does not allow; **Guarded** shows an **Allow** / **Reject** card; **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
 
 - `openclaw.host.controlUiBaseUrl` exposes the Control UI origin plus its configured base path after the dashboard host initializes. It is `null` before initialization and outside the dashboard, so read it in the link's click handler rather than when the widget script first runs.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation; validation, focus checks, and rate limits still apply.
@@ -145,11 +145,11 @@ Pinned widgets expose one ticket-bound host API. Calls that require declared cap
 
 User-clicked links to `http` or `https` destinations are forwarded to the Control UI host, which opens a new tab with `noopener` and `noreferrer`. Forwarding covers a primary click on a `target="_blank"` link and a middle-button click on any link, matching how links behave elsewhere in the Control UI; a widget's own `preventDefault` still cancels the click. The widget sandbox never grants popup permission, and script-initiated `window.open` does not work.
 
-Network access is separate from host tools. Put exact HTTPS origins in `capabilities.netOrigins`; after approval, only those origins enter the widget's `connect-src`. Wildcards, credentials, paths, query strings, and undeclared origins remain blocked. A literal port is allowed only when it is part of the declared origin.
+Network access is separate from host tools. Put exact HTTPS origins in `capabilities.netOrigins`; once the session policy grants them, only those origins enter the widget's `connect-src`. Wildcards, credentials, paths, query strings, and undeclared origins remain blocked. A literal port is allowed only when it is part of the declared origin.
 
 ## Security and storage
 
-Widget documents use restrictive Content Security Policies. Inline style and script are allowed, while external resource loads remain blocked. Inline transcript widgets cannot fetch the network. A pinned dashboard widget can fetch only exact HTTPS origins that the agent declared and the operator granted.
+Widget documents use restrictive Content Security Policies. Inline style and script are allowed, while external resource loads remain blocked. Inline transcript widgets cannot fetch the network. A pinned dashboard widget can fetch only exact HTTPS origins that the agent declared and the session policy granted.
 
 The Control UI iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves widgets with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 

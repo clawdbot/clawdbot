@@ -243,6 +243,25 @@ describe("renderPaginationHint", () => {
 });
 
 describe("formatMessageCliText send results", () => {
+  it("prefers and trims a direct plugin payload message ID", () => {
+    const result = {
+      kind: "send",
+      action: "send",
+      channel: "directchat",
+      to: "room-1",
+      handledBy: "plugin",
+      payload: {
+        messageId: " direct-id ",
+        result: { messageId: "nested-id" },
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    expect(formatMessageCliText(result)).toEqual([
+      "✅ Sent via Direct Chat. Message ID: direct-id",
+    ]);
+  });
+
   it.each([
     {
       status: "suppressed" as const,
@@ -292,6 +311,109 @@ describe("formatMessageCliText send results", () => {
       }
     },
   );
+});
+
+describe("formatMessageCliText payload scalars", () => {
+  it("keeps alias reads lazy after the first nonempty string", () => {
+    const reads: string[] = [];
+    const message = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(message, {
+      id: {
+        enumerable: true,
+        get: () => {
+          reads.push("id");
+          return reads.length === 1 ? "first-id" : "second-id";
+        },
+      },
+      ts: {
+        enumerable: true,
+        get: () => {
+          reads.push("ts");
+          throw new Error("later alias must not be read");
+        },
+      },
+      authorTag: { enumerable: true, value: "alice" },
+      timestamp: { enumerable: true, value: "now" },
+      content: { enumerable: true, value: "hello" },
+    });
+
+    const output = textJoined(formatMessageCliText(readResultPayload({ messages: [message] })));
+    expect(output).toContain("second-id");
+    expect(output).not.toContain("first-id");
+    expect(reads).toEqual(["id", "id"]);
+  });
+
+  it("preserves generic object primitive summaries", () => {
+    const result = {
+      kind: "action",
+      channel: "directchat",
+      action: "channel-info",
+      handledBy: "plugin",
+      payload: {
+        undef: undefined,
+        nil: null,
+        array: [1, 2],
+        object: {},
+        function: () => undefined,
+        bigint: 42n,
+        symbol: Symbol("proof"),
+        string: "  keep  ",
+        number: -3,
+        boolean: false,
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+    for (const expected of [
+      "null",
+      "2 items",
+      "object",
+      "function",
+      "42",
+      "Symbol(proof)",
+      "keep",
+      "-3",
+      "false",
+    ]) {
+      expect(output).toContain(expected);
+    }
+  });
+});
+
+describe("formatMessageCliText provider-reported failures", () => {
+  it.each([
+    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, "disabled"],
+    [
+      "rejected added reaction",
+      "react",
+      { ok: false, warning: "Unavailable", added: "✅" },
+      "Unavailable",
+    ],
+    [
+      "rejected delete",
+      "delete",
+      { ok: false, deleted: false, warning: "Not deleted" },
+      "Not deleted",
+    ],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
+  ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
+    const result = {
+      kind: action === "send" || action === "poll" ? action : "action",
+      channel: "telegram",
+      action,
+      to: "123",
+      handledBy: "plugin",
+      payload,
+      dryRun: false,
+    } as MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain(expected);
+    expect(output).not.toContain("✅");
+  });
 });
 
 describe("formatMessageCliText poll results", () => {

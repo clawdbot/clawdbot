@@ -26,6 +26,15 @@ type OperatorApprovalSessionEventRuntime = {
   replay: (sessionKey: string, client: GatewayClient | null) => SessionApprovalReplay;
 };
 
+function resolveApprovalSourceStreamKeyForRecord(record: OperatorApprovalRecord): string | null {
+  return (
+    record.audienceSessionKeys[0] ??
+    (record.source.sessionKey
+      ? resolveApprovalSourceStreamKey(record.source.sessionKey, record.source.agentId)
+      : null)
+  );
+}
+
 /** Project durable approval truth to exact, explicitly opted-in session audiences. */
 export function createOperatorApprovalSessionEventRuntime(params: {
   clients: Iterable<ApprovalSessionClient>;
@@ -77,14 +86,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     // first entry; publish that exact form so parents can correlate the event
     // with a stream key they subscribed to. Raw source aliases (bare "global",
     // "main", unscoped child keys) never reach subscribers.
-    const sourceStreamKey =
-      event.record.audienceSessionKeys[0] ??
-      (event.record.source.sessionKey
-        ? resolveApprovalSourceStreamKey(
-            event.record.source.sessionKey,
-            event.record.source.agentId,
-          )
-        : null);
+    const sourceStreamKey = resolveApprovalSourceStreamKeyForRecord(event.record);
     for (const sessionKey of event.record.audienceSessionKeys) {
       const recipients = authorizedRecipients(sessionKey, event.record);
       if (recipients.size === 0) {
@@ -141,7 +143,11 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         }
         const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
         if (approval?.status === "pending") {
-          approvals.push(approval);
+          const sourceSessionKey = resolveApprovalSourceStreamKeyForRecord(record);
+          approvals.push({
+            ...approval,
+            ...(sourceSessionKey ? { sourceSessionKey } : {}),
+          });
         }
       }
       return { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated };

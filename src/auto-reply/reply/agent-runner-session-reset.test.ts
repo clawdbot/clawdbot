@@ -162,6 +162,11 @@ describe("resetReplyRunSession", () => {
         reason: "rate limit",
       },
       compactionCount: 4,
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "session",
+        maxBytes: 50_000,
+      },
       memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
       systemPromptReport: {
         source: "run",
@@ -214,6 +219,7 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
+    expect(activeSessionEntry?.transcriptByteCompactionLatch).toBeUndefined();
     expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);

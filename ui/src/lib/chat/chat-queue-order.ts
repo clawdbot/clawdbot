@@ -28,6 +28,7 @@ export function compareChatQueueOrder(left: ChatQueuePosition, right: ChatQueueP
 export function isMovableChatQueueItem(item: ChatQueueItem): boolean {
   return (
     !item.pendingRunId &&
+    !item.intent &&
     (item.sendState === undefined ||
       item.sendState === "waiting-idle" ||
       item.sendState === "waiting-reconnect" ||

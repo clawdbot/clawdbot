@@ -17,6 +17,8 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-pty-harness.e2e.test.ts",
   "src/tui/tui-session-identity-pty.e2e.test.ts",
   "src/tui/tui-reset-transition-pty.e2e.test.ts",
+  "src/tui/tui-task-suggestions-pty.e2e.test.ts",
+  "src/tui/tui-error-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 
@@ -94,6 +96,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-browser.config.ts",
       "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.utils.config.ts",
       "test/vitest/vitest.wizard.config.ts",

@@ -3,11 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import {
-  buildAllowedModelSetWithFallbacks,
-  isModelKeyAllowedBySet,
-} from "../../agents/model-selection-shared.js";
-import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
@@ -17,11 +14,12 @@ import {
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { isKnownModelSelectionProvider } from "./model-runtime-normalization.js";
 import {
   modelKey,
   resolveModelDirectiveSelection,
-  resolveModelRefFromDirectiveString,
   type ModelAliasIndex,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
@@ -32,16 +30,6 @@ type ResetModelResult = {
   selection?: ModelDirectiveSelection;
   cleanedBody?: string;
 };
-
-function splitBody(body: string) {
-  const tokens = body.split(/\s+/).filter(Boolean);
-  return {
-    tokens,
-    first: tokens[0],
-    second: tokens[1],
-    rest: tokens.slice(2),
-  };
-}
 
 async function loadResetModelCatalog(params: {
   cfg: OpenClawConfig;
@@ -57,67 +45,6 @@ async function loadResetModelCatalog(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     readOnly: true,
   });
-}
-
-async function resolveResetFallbackModels(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<string[]> {
-  if (params.agentId) {
-    const { resolveAgentModelFallbacksOverride } = await import("../../agents/agent-scope.js");
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
-  }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-async function buildResetAllowedModelKeys(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  fallbackModels: readonly string[];
-  agentId?: string;
-}): Promise<Set<string>> {
-  const allowed = buildAllowedModelSetWithFallbacks(params);
-  const defaultModel = params.defaultModel?.trim();
-  if (allowed.allowAny && defaultModel) {
-    allowed.allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
-  }
-  return allowed.allowedKeys;
-}
-
-function buildSelectionFromExplicit(params: {
-  raw: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-}): ModelDirectiveSelection | undefined {
-  const resolved = resolveModelRefFromDirectiveString({
-    raw: params.raw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  });
-  if (!resolved) {
-    return undefined;
-  }
-  const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (params.allowedModelKeys.size > 0 && !isModelKeyAllowedBySet(params.allowedModelKeys, key)) {
-    return undefined;
-  }
-  const isDefault =
-    resolved.ref.provider === params.defaultProvider && resolved.ref.model === params.defaultModel;
-  return {
-    provider: resolved.ref.provider,
-    model: resolved.ref.model,
-    isDefault,
-    ...(resolved.alias ? { alias: resolved.alias } : undefined),
-  };
 }
 
 async function applySelectionToSession(params: {
@@ -158,9 +85,13 @@ async function applySelectionToSession(params: {
       initialEntry: initialSessionEntry,
       entry: nextSessionEntry,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      requireModelSelectionUnlocked: true,
     });
     if (persistence.status === "lifecycle-invalidated") {
       throw new SessionWorkStartInvalidatedError(persistence.error);
+    }
+    if (persistence.status === "model-selection-locked") {
+      throw new ModelSelectionLockedError();
     }
     const persistedEntry = persistence.entry;
     appliedEntry = persistedEntry;
@@ -179,7 +110,6 @@ async function applySelectionToSession(params: {
   return selectionApplied;
 }
 
-/** Applies a model override embedded in a reset command body. */
 /** Applies a valid reset model override to session state and returns the cleaned body. */
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
@@ -208,7 +138,8 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const { tokens, first, second } = splitBody(rawBody);
+  const tokens = rawBody.split(/\s+/).filter(Boolean);
+  const [first, second] = tokens;
   if (!first) {
     return {};
   }
@@ -221,75 +152,72 @@ export async function applyResetModelOverride(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     }));
-  const allowedModelKeys = await buildResetAllowedModelKeys({
+  const modelPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
-    fallbackModels: await resolveResetFallbackModels({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
     agentId: params.agentId,
   });
-  if (allowedModelKeys.size === 0) {
-    return {};
-  }
-
-  const providers = new Set<string>();
-  for (const key of allowedModelKeys) {
-    const slash = key.indexOf("/");
-    if (slash <= 0) {
-      continue;
+  const allowedModelKeys = modelPolicy.allowedKeys;
+  const providers = new Set([...allowedModelKeys].map((key) => key.split("/", 1)[0]));
+  const resolveSelection = (raw: string, explicitRef = false) => {
+    const parsed = resolveModelRefFromString({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      raw,
+      defaultProvider: params.defaultProvider,
+      aliasIndex: params.aliasIndex,
+    });
+    if (!parsed) {
+      return undefined;
     }
-    providers.add(normalizeProviderId(key.slice(0, slash)));
-  }
-
-  const resolveSelection = (raw: string) =>
-    resolveModelDirectiveSelection({
+    const exact =
+      explicitRef ||
+      parsed.alias ||
+      allowedModelKeys.has(modelKey(parsed.ref.provider, parsed.ref.model));
+    if (
+      (exact && !modelPolicy.allows(parsed.ref)) ||
+      (!exact && !providers.has(normalizeProviderId(raw)) && raw.length < 6)
+    ) {
+      return undefined;
+    }
+    const resolved = resolveModelDirectiveSelection({
       raw,
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
+      modelPolicy,
       cfg: params.cfg,
       agentId: params.agentId,
-    });
+    }).selection;
+    // Bare text needs a finite hint match; explicit refs and configured aliases
+    // use policy independently of inventory. Neither can invent a provider.
+    return resolved &&
+      (exact || allowedModelKeys.has(modelKey(resolved.provider, resolved.model))) &&
+      isKnownModelSelectionProvider({ cfg: params.cfg, catalog, provider: resolved.provider })
+      ? resolved
+      : undefined;
+  };
 
   let selection: ModelDirectiveSelection | undefined;
   let consumed = 0;
 
   if (providers.has(normalizeProviderId(first)) && second) {
-    // Support reset bodies like `openai gpt-5.6-sol rest of prompt`.
+    // Inventory disambiguates `provider model prompt` from `provider prompt`.
+    // Uncataloged model ids remain explicit through provider/model syntax.
     const composite = `${normalizeProviderId(first)}/${second}`;
-    const resolved = resolveSelection(composite);
-    if (resolved.selection) {
-      selection = resolved.selection;
+    selection = resolveSelection(composite);
+    if (selection) {
       consumed = 2;
     }
   }
 
   if (!selection) {
-    selection = buildSelectionFromExplicit({
-      raw: first,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
-      aliasIndex: params.aliasIndex,
-      allowedModelKeys,
-    });
+    selection = resolveSelection(first, first.includes("/"));
     if (selection) {
       consumed = 1;
-    }
-  }
-
-  if (!selection) {
-    const resolved = resolveSelection(first);
-    const allowFuzzy = providers.has(normalizeProviderId(first)) || first.trim().length >= 6;
-    if (allowFuzzy) {
-      selection = resolved.selection;
-      if (selection) {
-        consumed = 1;
-      }
     }
   }
 

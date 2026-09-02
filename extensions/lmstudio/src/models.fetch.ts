@@ -66,12 +66,6 @@ type DiscoverLmstudioModelsParams = {
   fetchImpl?: typeof fetch;
 };
 
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 async function fetchLmstudioEndpoint(params: {
   url: string;
   init?: RequestInit;
@@ -105,7 +99,10 @@ async function fetchLmstudioEndpoint(params: {
   return {
     response,
     release: async () => {
-      await cancelUnreadResponseBody(response);
+      // A capture tee must not delay the guard's bounded dispatcher release.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     },
   };

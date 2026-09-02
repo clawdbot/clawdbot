@@ -27,6 +27,7 @@ function removeStaleProxyDirs(parentDir: string): void {
 
 /** Starts the process-local proxy and registers it as the current Gateway owner. */
 export async function startGatewaySecretEgressProxy(params: {
+  allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
 }): Promise<SecretEgressProxyHandle> {
   const parentDir = path.join(resolveStateDir(), "secret-egress-proxy");
@@ -39,6 +40,7 @@ export async function startGatewaySecretEgressProxy(params: {
   try {
     proxy = await startSecretEgressProxyServer({
       caDir: proxyDir,
+      ...(params.allowedHosts !== undefined ? { allowedHosts: params.allowedHosts } : {}),
       ...(params.bypassHosts ? { bypassHosts: params.bypassHosts } : {}),
       onAudit: (event) => log.info("secret egress request", event),
     });

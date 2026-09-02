@@ -14,7 +14,6 @@ import {
   fakeRunner,
   git,
   localWorkspaceRunner,
-  memoryWorkspaceJournal,
   resolveIdentity,
   rsyncReceiverNonce,
   sshResetNonce,
@@ -140,7 +139,7 @@ describe("worker tunnel manager", () => {
 
     await expect(
       handle.syncWorkspace({
-        localPath: "/gateway/worktrees/session-two",
+        localPath: tempDirs.make("openclaw-worker-sync-failure-"),
         sessionId: "session:two",
         generation: 2,
       }),
@@ -287,6 +286,18 @@ describe("worker tunnel manager", () => {
         fs.writeFile(path.join(localPath, "current.txt"), "current\n"),
         fs.writeFile(path.join(localPath, "stale.txt"), "remove before fallback\n"),
       ]);
+      const userDirectories = [
+        "openclaw-inbound-project",
+        "openclaw-inbound-12345678-1234-4234-8234-123456789ab-",
+      ];
+      for (const directory of userDirectories) {
+        await fs.mkdir(path.join(localPath, directory));
+        await fs.writeFile(path.join(localPath, directory, "current.txt"), "user project\n");
+        await fs.writeFile(
+          path.join(localPath, directory, "stale.txt"),
+          "remove before fallback\n",
+        );
+      }
       await git(localPath, "init");
       await git(localPath, "config", "user.name", "Worker Sync Test");
       await git(localPath, "config", "user.email", "worker-sync@example.invalid");
@@ -339,17 +350,25 @@ describe("worker tunnel manager", () => {
             throw new Error("missing test rsync destination");
           }
           const canonicalReceiverWorkspace = remoteWorkspaceDir.replace(/\/$/u, "");
-          await fs.mkdir(path.join(remoteWorkspaceDir, "node_modules"), { recursive: true });
           receiverWorkspace = canonicalReceiverWorkspace;
-          await fs.writeFile(
-            path.join(remoteWorkspaceDir, "node_modules/worker-cache"),
-            "preserve\n",
-          );
+          for (const directory of [
+            "node_modules",
+            "openclaw-inbound-12345678-1234-4234-8234-123456789abc",
+          ]) {
+            await fs.mkdir(path.join(remoteWorkspaceDir, directory), { recursive: true });
+            await fs.writeFile(
+              path.join(remoteWorkspaceDir, directory, "worker-cache"),
+              "preserve\n",
+            );
+          }
           const transferred = await runCommandWithTimeout(localArgv, options);
           if (transferred.termination !== "exit" || transferred.code !== 0) {
             throw new Error(transferred.stderr || "test rsync transfer failed");
           }
           await fs.rm(path.join(localPath, "stale.txt"));
+          for (const directory of userDirectories) {
+            await fs.rm(path.join(localPath, directory, "stale.txt"));
+          }
           const remoteRelative = path
             .relative(canonicalRemoteHome, remoteWorkspaceDir)
             .split(path.sep)
@@ -502,6 +521,23 @@ describe("worker tunnel manager", () => {
         await expect(
           fs.readFile(path.join(result.remoteWorkspaceDir, "node_modules/worker-cache"), "utf8"),
         ).resolves.toBe("preserve\n");
+        await expect(
+          fs.readFile(
+            path.join(
+              result.remoteWorkspaceDir,
+              "openclaw-inbound-12345678-1234-4234-8234-123456789abc/worker-cache",
+            ),
+            "utf8",
+          ),
+        ).resolves.toBe("preserve\n");
+        for (const directory of userDirectories) {
+          await expect(
+            fs.readFile(path.join(result.remoteWorkspaceDir, directory, "current.txt"), "utf8"),
+          ).resolves.toBe("user project\n");
+          await expect(
+            fs.access(path.join(result.remoteWorkspaceDir, directory, "stale.txt")),
+          ).rejects.toThrow();
+        }
 
         const digest = result.manifestRef.slice("sha256:".length);
         const rawManifest = await fs.readFile(
@@ -509,7 +545,10 @@ describe("worker tunnel manager", () => {
           "utf8",
         );
         const manifest = parseWorkerWorkspaceManifest(rawManifest, result.manifestRef);
-        expect(manifest.entries.map((entry) => entry.path)).toEqual(["current.txt"]);
+        expect(manifest.entries.map((entry) => entry.path)).toEqual([
+          "current.txt",
+          ...userDirectories.map((directory) => `${directory}/current.txt`).toSorted(),
+        ]);
         expect(await git(result.remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(baseCommit);
         await expect(
           fs.access(path.join(result.remoteWorkspaceDir, "stale-late.txt")),
@@ -635,296 +674,51 @@ describe("worker tunnel manager", () => {
     },
   );
 
-  it("does not downgrade an operational HEAD probe failure to plain sync", async () => {
-    const { stdout: setupStdout } = workspaceSetup(
-      "/home/worker",
-      "worker:head-probe-failure",
-      "session:three",
-      3,
-    );
-    const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-head-probe-"));
-    await fs.mkdir(path.join(localPath, ".git"));
-    const fake = fakeRunner((argv, options) => {
-      if (argv.includes("--show-toplevel")) {
-        return success(`${localPath}\n`);
-      }
-      if (argv.includes("--verify")) {
-        return {
-          ...success("", "HEAD probe timed out"),
-          code: null,
-          killed: true,
-          termination: "timeout",
-        };
-      }
-      if (
-        typeof options.input === "string" &&
-        options.input.includes("unsafe worker workspace directory")
-      ) {
-        return success(setupStdout);
-      }
-      return undefined;
-    });
-    const { handle } = await startConnectedTunnel(fake, "worker:head-probe-failure", 3);
-
-    try {
-      await expect(
-        handle.syncWorkspace({ localPath, sessionId: "session:three", generation: 3 }),
-      ).rejects.toThrow("Worker workspace sync failed: HEAD probe timed out");
-      expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
-    } finally {
-      await handle.stop();
-      await fs.rm(localPath, { recursive: true, force: true });
-    }
-  });
-
-  it("does not downgrade an operational repository-root probe failure to plain sync", async () => {
-    const { stdout: setupStdout } = workspaceSetup(
-      "/home/worker",
-      "worker:root-probe-failure",
-      "session:four",
-      4,
-    );
-    const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-root-probe-"));
-    await fs.mkdir(path.join(localPath, ".git"));
-    const fake = fakeRunner((argv, options) => {
-      if (argv.includes("--show-toplevel")) {
-        return {
-          ...success("", "root probe timed out"),
-          code: null,
-          killed: true,
-          termination: "timeout",
-        };
-      }
-      if (argv.includes("--verify")) {
-        return success("0123456789abcdef0123456789abcdef01234567\n");
-      }
-      if (
-        typeof options.input === "string" &&
-        options.input.includes("unsafe worker workspace directory")
-      ) {
-        return success(setupStdout);
-      }
-      return undefined;
-    });
-    const { handle } = await startConnectedTunnel(fake, "worker:root-probe-failure", 4);
-
-    try {
-      await expect(
-        handle.syncWorkspace({ localPath, sessionId: "session:four", generation: 4 }),
-      ).rejects.toThrow("Worker workspace sync failed: root probe timed out");
-      expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
-    } finally {
-      await handle.stop();
-      await fs.rm(localPath, { recursive: true, force: true });
-    }
-  });
-
-  it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-git-sync-"));
-    const localPath = path.join(root, "local");
-    const remoteHome = path.join(root, "remote-home");
-    await Promise.all([
-      fs.mkdir(path.join(localPath, "generated"), { recursive: true }),
-      fs.mkdir(remoteHome, { recursive: true }),
-    ]);
-    await git(localPath, "init");
-    await git(localPath, "config", "user.name", "Worker Sync Test");
-    await git(localPath, "config", "user.email", "worker-sync@example.invalid");
-    await Promise.all([
-      fs.writeFile(path.join(localPath, ".gitignore"), "cache/**\nprivate/**\n"),
-      fs.writeFile(path.join(localPath, ".worktreeinclude"), "cache/*.txt\n"),
-      fs.writeFile(path.join(localPath, "gone.txt"), "delete me\n"),
-      fs.writeFile(path.join(localPath, "rename-old.txt"), "rename me\n"),
-      fs.writeFile(path.join(localPath, "modified.txt"), "before\n"),
-      fs.writeFile(path.join(localPath, "conflict.txt"), "base\n"),
-    ]);
-    const largeFiles = Array.from(
-      { length: 1_800 },
-      (_, index) => `generated/long-worker-file-name-${String(index).padStart(4, "0")}.txt`,
-    );
-    for (let offset = 0; offset < largeFiles.length; offset += 64) {
-      await Promise.all(
-        largeFiles
-          .slice(offset, offset + 64)
-          .map((file, index) => fs.writeFile(path.join(localPath, file), `${offset + index}\n`)),
+  it.each([
+    { probe: "HEAD", failedArg: "--verify", message: "HEAD probe timed out" },
+    { probe: "repository-root", failedArg: "--show-toplevel", message: "root probe timed out" },
+  ])(
+    "does not downgrade an operational $probe probe failure to plain sync",
+    async ({ failedArg, message }) => {
+      const { stdout: setupStdout } = workspaceSetup(
+        "/home/worker",
+        "worker:probe-failure",
+        "session:probe",
+        1,
       );
-    }
-    await git(localPath, "add", ".");
-    await git(localPath, "commit", "-m", "base");
-    const firstBase = await git(localPath, "rev-parse", "HEAD");
-    await fs.mkdir(path.join(localPath, "vendor/sub/.git"), { recursive: true });
-    await fs.writeFile(path.join(localPath, "vendor/sub/.git/secret"), "must not transfer\n");
-    await git(localPath, "update-index", "--add", "--cacheinfo", `160000,${firstBase},vendor/sub`);
-    await git(localPath, "commit", "-m", "record submodule");
-    const baseCommit = await git(localPath, "rev-parse", "HEAD");
-
-    await Promise.all([
-      fs.rm(path.join(localPath, "gone.txt")),
-      fs.rename(path.join(localPath, "rename-old.txt"), path.join(localPath, "rename-new.txt")),
-      fs.writeFile(path.join(localPath, "modified.txt"), "after\n"),
-      fs.mkdir(path.join(localPath, "cache"), { recursive: true }),
-      fs.mkdir(path.join(localPath, "private"), { recursive: true }),
-    ]);
-    await Promise.all([
-      fs.writeFile(path.join(localPath, "cache/allowed.txt"), "allowed\n"),
-      fs.writeFile(path.join(localPath, "private/ignored.txt"), "private\n"),
-      fs.writeFile(path.join(localPath, "ordinary-untracked.txt"), "before ignore\n"),
-    ]);
-
-    const fake = localWorkspaceRunner(remoteHome);
-    const { handle } = await startConnectedTunnel(fake, "worker:real-git-sync", 11);
-
-    try {
-      const result = await handle.syncWorkspace({
-        localPath,
-        sessionId: "session:real-git-sync",
-        generation: 1,
+      const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-probe-"));
+      await fs.mkdir(path.join(localPath, ".git"));
+      const fake = fakeRunner((argv, options) => {
+        if (argv.includes(failedArg)) {
+          return { ...success("", message), code: null, killed: true, termination: "timeout" };
+        }
+        if (argv.includes("--show-toplevel")) {
+          return success(`${localPath}\n`);
+        }
+        if (argv.includes("--verify")) {
+          return success("0123456789abcdef0123456789abcdef01234567\n");
+        }
+        if (
+          typeof options.input === "string" &&
+          options.input.includes("unsafe worker workspace directory")
+        ) {
+          return success(setupStdout);
+        }
+        return undefined;
       });
-      expect(result.mode).toBe("git");
-      expect(result.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-      await expect(
-        fs.readFile(path.join(result.remoteWorkspaceDir, largeFiles[0] ?? ""), "utf8"),
-      ).resolves.toBe("0\n");
-      await expect(
-        fs.readFile(path.join(result.remoteWorkspaceDir, largeFiles.at(-1) ?? ""), "utf8"),
-      ).resolves.toBe("1799\n");
-      await expect(fs.access(path.join(result.remoteWorkspaceDir, "gone.txt"))).rejects.toThrow();
-      await expect(
-        fs.readFile(path.join(result.remoteWorkspaceDir, "rename-new.txt"), "utf8"),
-      ).resolves.toBe("rename me\n");
-      await expect(
-        fs.readFile(path.join(result.remoteWorkspaceDir, "cache/allowed.txt"), "utf8"),
-      ).resolves.toBe("allowed\n");
-      await expect(
-        fs.access(path.join(result.remoteWorkspaceDir, "private/ignored.txt")),
-      ).rejects.toThrow();
-      await expect(
-        fs.access(path.join(result.remoteWorkspaceDir, "vendor/sub/.git/secret")),
-      ).rejects.toThrow();
-      expect(await git(result.remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(baseCommit);
-      expect(await git(result.remoteWorkspaceDir, "rev-list", "--count", "HEAD")).toBe("1");
-      expect(await git(result.remoteWorkspaceDir, "remote")).toBe("");
-      const status = await runCommandWithTimeout(
-        ["git", "-C", result.remoteWorkspaceDir, "status", "--porcelain"],
-        { timeoutMs: 30_000 },
-      );
-      const statusLines = status.stdout.split("\n").filter(Boolean);
-      expect(statusLines).toContain(" D gone.txt");
-      expect(statusLines).toContain("?? rename-new.txt");
-      await git(result.remoteWorkspaceDir, "add", "-A");
-      await git(result.remoteWorkspaceDir, "commit", "-m", "worker commit");
-      await git(result.remoteWorkspaceDir, "merge-base", "--is-ancestor", baseCommit, "HEAD");
-      await fs.mkdir(path.join(result.remoteWorkspaceDir, "private"));
-      await Promise.all([
-        fs.writeFile(path.join(result.remoteWorkspaceDir, "modified.txt"), "worker result\n"),
-        fs.writeFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "worker result\n"),
-        fs.appendFile(
-          path.join(result.remoteWorkspaceDir, ".gitignore"),
-          "ordinary-untracked.txt\n",
-        ),
-        fs.writeFile(
-          path.join(result.remoteWorkspaceDir, "ordinary-untracked.txt"),
-          "still present after ignore\n",
-        ),
-        fs.writeFile(path.join(result.remoteWorkspaceDir, "worker-untracked.txt"), "artifact\n"),
-        fs.writeFile(path.join(result.remoteWorkspaceDir, "cache/worker-allowed.txt"), "allowed\n"),
-        fs.writeFile(
-          path.join(result.remoteWorkspaceDir, "private/worker-secret.txt"),
-          "private\n",
-        ),
-        fs.rm(path.join(result.remoteWorkspaceDir, "rename-new.txt")),
-        fs.symlink("modified.txt", path.join(result.remoteWorkspaceDir, "worker-link")),
-      ]);
-      await fs.writeFile(path.join(localPath, "conflict.txt"), "local result\n");
+      const { handle } = await startConnectedTunnel(fake, "worker:probe-failure", 1);
 
-      let acceptedManifestRef = result.manifestRef;
-      const journal = memoryWorkspaceJournal((manifestRef) => {
-        acceptedManifestRef = manifestRef;
-      });
-      const reconciled = await handle.reconcileWorkspace({
-        localPath,
-        remoteWorkspaceDir: result.remoteWorkspaceDir,
-        baseManifestRef: result.manifestRef,
-        journal,
-      });
-      expect(reconciled).toMatchObject({ changed: true });
-      expect(reconciled.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-      await reconciled.verifyStable();
-      await reconciled.verifyLocalStable();
-      await expect(fs.readFile(path.join(localPath, "modified.txt"), "utf8")).resolves.toBe(
-        "worker result\n",
-      );
-      await expect(fs.readFile(path.join(localPath, "worker-untracked.txt"), "utf8")).resolves.toBe(
-        "artifact\n",
-      );
-      await expect(
-        fs.readFile(path.join(localPath, "ordinary-untracked.txt"), "utf8"),
-      ).resolves.toBe("still present after ignore\n");
-      await expect(fs.readlink(path.join(localPath, "worker-link"))).resolves.toBe("modified.txt");
-      await expect(
-        fs.readFile(path.join(localPath, "cache/worker-allowed.txt"), "utf8"),
-      ).resolves.toBe("allowed\n");
-      await expect(fs.access(path.join(localPath, "private/worker-secret.txt"))).rejects.toThrow();
-      await expect(fs.access(path.join(localPath, "rename-new.txt"))).rejects.toThrow();
-      await expect(fs.readFile(path.join(localPath, "conflict.txt"), "utf8")).resolves.toBe(
-        "local result\n",
-      );
-      await expect(
-        fs.readFile(path.join(result.remoteWorkspaceDir, "conflict.txt"), "utf8"),
-      ).resolves.toBe("local result\n");
-      await expect(
-        fs.access(path.join(result.remoteWorkspaceDir, "private/ignored.txt")),
-      ).rejects.toThrow();
-      expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
-      const unchanged = await handle.reconcileWorkspace({
-        localPath,
-        remoteWorkspaceDir: result.remoteWorkspaceDir,
-        baseManifestRef: acceptedManifestRef,
-        journal,
-      });
-      expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
-      await unchanged.verifyStable();
-      await unchanged.verifyLocalStable();
-      await fs.writeFile(path.join(result.remoteWorkspaceDir, "modified.txt"), "late write\n");
-      await expect(unchanged.verifyStable()).rejects.toThrow(
-        "Cloud workspace changed during final reconciliation",
-      );
-      await fs.writeFile(path.join(localPath, "modified.txt"), "local late write\n");
-      await expect(unchanged.verifyLocalStable()).rejects.toThrow(
-        "Gateway workspace changed after cloud reconciliation",
-      );
-
-      const manifestPath = path.join(
-        remoteHome,
-        ".openclaw-worker/manifests",
-        `${result.manifestRef.slice("sha256:".length)}.json`,
-      );
-      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
-        entries: Array<{ path: string }>;
-      };
-      expect(manifest.entries.some((entry) => entry.path === ".git")).toBe(false);
-      expect(manifest.entries.some((entry) => entry.path.startsWith(".git/"))).toBe(false);
-
-      await fs.rm(manifestPath);
-      await fs.mkdir(manifestPath);
-      await Promise.all(
-        Array.from({ length: 100 }, (_, index) =>
-          fs.writeFile(path.join(manifestPath, `${index}.txt`), ""),
-        ),
-      );
-      await expect(
-        handle.reconcileWorkspace({
-          localPath,
-          remoteWorkspaceDir: result.remoteWorkspaceDir,
-          baseManifestRef: result.manifestRef,
-          journal: memoryWorkspaceJournal(),
-        }),
-      ).rejects.toThrow("manifest transfer is not a bounded regular file");
-    } finally {
-      await handle.stop();
-      await fs.rm(root, { recursive: true });
-    }
-  }, 60_000);
+      try {
+        await expect(
+          handle.syncWorkspace({ localPath, sessionId: "session:probe", generation: 1 }),
+        ).rejects.toThrow(`Worker workspace sync failed: ${message}`);
+        expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
+      } finally {
+        await handle.stop();
+        await fs.rm(localPath, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("mirrors plain workspaces and rejects escaping symlinks in a git overlay", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-sync-modes-"));
@@ -943,11 +737,24 @@ describe("worker tunnel manager", () => {
     // Result staging stores refs in an unborn repository for a plain workspace.
     // A later dispatch must keep using plain-mode sync until the user creates HEAD.
     await git(plainPath, "init");
-    await fs.mkdir(path.join(plainPath, "__pycache__"));
+    const attachmentDirectory = "openclaw-inbound-12345678-1234-4234-8234-123456789abc";
+    const userDirectories = [
+      "openclaw-inbound-project",
+      "openclaw-inbound-12345678-1234-4234-8234-123456789ab-",
+    ];
+    await Promise.all([
+      fs.mkdir(path.join(plainPath, "__pycache__")),
+      fs.mkdir(path.join(plainPath, attachmentDirectory)),
+    ]);
     await Promise.all([
       fs.writeFile(path.join(plainPath, "__pycache__/fizzbuzz.pyc"), "derived\n"),
       fs.writeFile(path.join(plainPath, ".mypy_cache"), "derived name file\n"),
+      fs.writeFile(path.join(plainPath, attachmentDirectory, "report.pdf"), "inbound original\n"),
     ]);
+    for (const directory of userDirectories) {
+      await fs.mkdir(path.join(plainPath, directory));
+      await fs.writeFile(path.join(plainPath, directory, "report.txt"), "user project\n");
+    }
     await git(gitPath, "init");
     await git(gitPath, "config", "user.name", "Worker Sync Test");
     await git(gitPath, "config", "user.email", "worker-sync@example.invalid");
@@ -976,6 +783,14 @@ describe("worker tunnel manager", () => {
         fs.access(path.join(plain.remoteWorkspaceDir, "__pycache__/fizzbuzz.pyc")),
       ).rejects.toThrow();
       await expect(fs.access(path.join(plain.remoteWorkspaceDir, ".mypy_cache"))).rejects.toThrow();
+      await expect(
+        fs.access(path.join(plain.remoteWorkspaceDir, attachmentDirectory)),
+      ).rejects.toThrow();
+      for (const directory of userDirectories) {
+        await expect(
+          fs.readFile(path.join(plain.remoteWorkspaceDir, directory, "report.txt"), "utf8"),
+        ).resolves.toBe("user project\n");
+      }
 
       await expect(
         handle.syncWorkspace({

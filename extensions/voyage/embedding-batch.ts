@@ -7,9 +7,9 @@ import {
   extractBatchErrorMessage,
   formatBatchErrorDetail,
   formatUnavailableBatchError,
-  normalizeBatchBaseUrl,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
+  resolveEmbeddingEndpointUrl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
@@ -60,9 +60,8 @@ function buildVoyageBatchRequest<T>(params: {
   signal?: AbortSignal;
   onResponse: (res: Response) => Promise<T>;
 }) {
-  const baseUrl = normalizeBatchBaseUrl(params.client);
   return {
-    url: `${baseUrl}/${params.path}`,
+    url: resolveEmbeddingEndpointUrl(params.client.baseUrl, params.path),
     ssrfPolicy: params.client.ssrfPolicy,
     signal: params.signal,
     init: {
@@ -77,7 +76,6 @@ async function submitVoyageBatch(params: {
   requests: VoyageBatchRequest[];
   agentId: string;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = normalizeBatchBaseUrl(params.client);
   const inputFileId = await uploadBatchJsonlFile({
     client: params.client,
     requests: params.requests,
@@ -86,7 +84,7 @@ async function submitVoyageBatch(params: {
 
   // 2. Create batch job using Voyage Batches API
   return await postJsonWithRetry<VoyageBatchStatus>({
-    url: `${baseUrl}/batches`,
+    url: resolveEmbeddingEndpointUrl(params.client.baseUrl, "batches"),
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
     body: {
@@ -294,12 +292,14 @@ export async function runVoyageEmbeddingBatches(
           }),
       });
 
-      const baseUrl = normalizeBatchBaseUrl(params.client);
       const errors: string[] = [];
       const remaining = new Set(group.map((request) => request.custom_id));
 
       await withRemoteHttpResponse({
-        url: `${baseUrl}/files/${completed.outputFileId}/content`,
+        url: resolveEmbeddingEndpointUrl(
+          params.client.baseUrl,
+          `files/${completed.outputFileId}/content`,
+        ),
         ssrfPolicy: params.client.ssrfPolicy,
         init: {
           headers: buildBatchHeaders(params.client, { json: true }),

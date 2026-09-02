@@ -2,9 +2,11 @@
 summary: "iOS node app: connect to the Gateway, pairing, device capabilities, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
+  - Using voice input and spoken replies on Apple Watch
   - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
   - Debugging gateway discovery or iOS node commands
+  - Choosing colors for native chat sessions
 title: "iOS app"
 ---
 
@@ -20,8 +22,30 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
+- Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - **Settings -> OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
+
+## Session colors
+
+Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.
+
+A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
+
+## Diagrams in chat
+
+Use a fenced `mermaid` block to display a diagram. A diagram renders when its
+closing fence arrives or the response finishes; an incomplete streaming fence
+stays readable as code. Ordinary code fences keep their usual presentation.
+
+Tap the diagram to open a full-screen preview with pinch-to-zoom. The corner menu
+lets you switch between the diagram and its source, and the copy button copies
+the complete source. If rendering fails, the source remains available; temporary
+failures offer **Retry diagram**.
+
+Local source builds generate the bundled renderer during `pnpm ios:gen`. Run
+`pnpm install` from the repository root before generating the Xcode project so
+the pinned renderer dependencies are available.
 
 ## Requirements
 
@@ -118,10 +142,53 @@ calendar day. iOS device consent and explicit Gateway command authorization are
 independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
 setup, invocation, payload fields, privacy behavior, and troubleshooting.
 
-By default, the Apple Watch companion keeps using the existing iPhone relay and
-does not need a separate Gateway pairing. Pair the Watch with the iPhone in
-Apple's Watch app, install OpenClaw from **Watch app -> My Watch -> Available
-Apps**, then open OpenClaw once on both devices.
+## Apple Watch voice and chat
+
+The Watch companion supports one voice turn at a time: watchOS dictation
+produces text, the paired iPhone sends that text to Gateway chat, and the Watch
+reads the matching reply aloud with the system voice. It does not stream
+microphone audio, run a realtime Talk session, or run an agent on the Watch.
+The Watch Talk controls operate Talk on the paired iPhone.
+
+Pair the Watch with the iPhone in Apple's Watch app, install OpenClaw from
+**Watch app -> My Watch -> Available Apps**, then open OpenClaw once on both
+devices. The companion uses the iPhone relay and does not need separate
+Gateway pairing.
+
+1. Connect the iPhone to your Gateway and select the chat you want to use.
+2. On the Watch, open **Talk to Claw**, then tap the voice button beside
+   **Message OpenClaw**.
+3. Use the native input sheet to dictate and submit your message. Keep Chat
+   open on the Watch to hear the reply. The message pill also opens native
+   input, but does not request a spoken reply.
+
+The iPhone must remain available to relay messages. If its Gateway connection
+is asleep, Watch messages use the same bounded background reconnect as Watch
+quick replies, respecting the iPhone's auto-connect setting. A queued message
+is not confirmation that the Gateway has processed it; open OpenClaw on the
+iPhone if delivery stalls.
+
+Only the reply belonging to the submitted turn is read aloud. Switching the
+Gateway or chat on iPhone retires the pending spoken reply and clears the old
+Watch preview. Leaving Watch Chat or backgrounding the app stops playback;
+a reply received while away can be read on return if its wait has not expired.
+
+The spoken-reply wait expires after 90 seconds. Cancelling that wait or stopping
+speech does **not** cancel the Gateway chat run or remove a queued message.
+If no reply is spoken, refresh Chat or check the conversation on iPhone before
+resending. Long runs and interrupted return delivery can still require this
+manual readback. Keep the Gateway updated for reliable reply attribution when
+messages are collected into a later run.
+
+On multi-agent Gateways, use an agent-qualified session. The Watch relays the
+session key but not the iPhone's separate agent selection, so a shared `main`
+or `global` session can resolve to another owner or be rejected. Use iPhone
+Chat for those shared-session cases.
+
+[Direct Watch node mode](/platforms/ios#optional-direct-apple-watch-node) does not remove the
+iPhone requirement for chat or voice. It only exposes the device and
+notification commands listed below. For continuous voice on a supported
+client, see [Talk mode](/nodes/talk).
 
 ## Review command approvals
 
@@ -318,6 +385,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- Voice wake sends recognized commands to the active session and shows Gateway delivery failures in Settings; use talk mode for spoken assistant replies.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.
@@ -326,6 +394,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
+- `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Pair device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
   Watch in Apple's Watch app. If installation is false, install the companion

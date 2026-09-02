@@ -412,7 +412,7 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       (scenario) =>
         isRecord(scenario) && (scenario.status === "pass" || scenario.status === "fail"),
     ) === true ||
-    ((scenarios?.length ?? 0) === 0 && (passedCount ?? 0) > 0);
+    (scenarios === undefined && (passedCount ?? 0) > 0);
   const gatewayLogSentinels = collectGatewayLogSentinels(payload);
   if (gatewayLogSentinels.length > 0) {
     const allEnvironmentBlocked = gatewayLogSentinels.every(

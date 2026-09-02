@@ -6,6 +6,10 @@ This plugin lets OpenClaw use OpenShell-managed local or remote sandboxes with
 SSH command execution. Choose `mirror` mode for a synchronized local workspace
 or `remote` mode for a remote-canonical workspace.
 
+Mirror operations sharing a workspace run sequentially so concurrent agent
+turns cannot overwrite one another. Outbound attachments resolve against the
+configured remote workspace, which defaults to `/sandbox`.
+
 Configuring an OpenShell workspace requires OpenShell `v0.0.88` or newer. The
 plugin supports OpenShell control-plane workspaces through
 `plugins.entries.openshell.config.workspace`; this is separate from OpenClaw's

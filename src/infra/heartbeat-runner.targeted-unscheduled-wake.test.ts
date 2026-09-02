@@ -11,8 +11,6 @@ import { requestHeartbeat } from "./heartbeat-wake.js";
 describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
-  const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
-
   function useFakeHeartbeatTime() {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
@@ -51,7 +49,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     const runner = startHeartbeatRunner({
       cfg: params.cfg,
       runOnce: params.runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat(params.wake);
@@ -80,7 +77,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
           agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
         } as OpenClawConfig,
         runOnce: runSpy,
-        stableSchedulerSeed: TEST_SCHEDULER_SEED,
       });
       const enqueueSystemEvent = vi.fn();
       const state = {
@@ -143,7 +139,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
         agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
       } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
@@ -168,7 +163,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
         agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
       } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
@@ -272,13 +266,74 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     runner.stop();
   });
 
+  it("runs one targeted restart-sentinel wake when heartbeat cadence is disabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+      },
+    });
+    runner.stop();
+  });
+
+  it.each([
+    {
+      name: "without a session target",
+      wake: { agentId: "main", sessionKey: undefined },
+    },
+    {
+      name: "with event intent",
+      wake: { agentId: "main", sessionKey: "agent:main:main", intent: "event" as const },
+    },
+    {
+      name: "with a non-wake reason",
+      wake: { agentId: "main", sessionKey: "agent:main:main", reason: "manual" },
+    },
+  ])("rejects an unscheduled restart-sentinel wake $name", async ({ wake }) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      ...wake,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
   it("rejects targeted hook wakes for unconfigured agents", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
       cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({

@@ -1,7 +1,9 @@
 // File Transfer plugin module implements path errors behavior.
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, resolveAbsolutePathForRead } from "openclaw/plugin-sdk/security-runtime";
+import { fileIdentity, readPathBinding, type FileIdentity } from "../shared/path-binding.js";
 
 type InvalidPathResult = {
   ok: false;
@@ -41,6 +43,18 @@ export function readAbsolutePath(input: unknown): string | InvalidPathResult {
     return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
   }
   return input;
+}
+
+export function rejectCanonicalPathChange(expected: unknown, actual: string) {
+  if (typeof expected !== "string" || expected === actual) {
+    return undefined;
+  }
+  return {
+    ok: false as const,
+    code: "CANONICAL_PATH_CHANGED" as const,
+    message: "canonical path differs from the authorized target",
+    canonicalPath: actual,
+  };
 }
 
 function canonicalPathFromFsSafeError(err: unknown): string | undefined {
@@ -85,11 +99,12 @@ export async function statRequiredDirectory<Code extends string>(
   canonicalPath: string,
   classifyError: (err: unknown) => Code,
 ): Promise<
-  { ok: true } | { ok: false; code: Code | "IS_FILE"; message: string; canonicalPath: string }
+  | { ok: true; identity: FileIdentity }
+  | { ok: false; code: Code | "IS_FILE"; message: string; canonicalPath: string }
 > {
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  let stats: BigIntStats;
   try {
-    stats = await fs.stat(canonicalPath);
+    stats = await fs.stat(canonicalPath, { bigint: true });
   } catch (err) {
     const code = classifyError(err);
     return {
@@ -108,5 +123,50 @@ export async function statRequiredDirectory<Code extends string>(
       canonicalPath,
     };
   }
-  return { ok: true };
+  return { ok: true, identity: fileIdentity(stats) };
+}
+
+export async function resolveBoundReadDirectory<Code extends string>(input: {
+  requestedPath: string;
+  followSymlinks: boolean;
+  classifyError: (err: unknown) => Code;
+  notFoundMessage: string;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
+}): Promise<
+  | { ok: true; canonicalPath: string; identity: FileIdentity }
+  | {
+      ok: false;
+      code: Code | "IS_FILE" | "CANONICAL_PATH_CHANGED";
+      message: string;
+      canonicalPath?: string;
+    }
+> {
+  const canonicalPath = await resolveCanonicalReadPath(input);
+  if (typeof canonicalPath !== "string") {
+    return canonicalPath;
+  }
+  const canonicalPathChange = rejectCanonicalPathChange(input.expectedCanonicalPath, canonicalPath);
+  if (canonicalPathChange) {
+    return canonicalPathChange;
+  }
+  const directory = await statRequiredDirectory(canonicalPath, input.classifyError);
+  if (!directory.ok) {
+    return directory;
+  }
+  const expectedBinding = readPathBinding(input.expectedBinding);
+  if (
+    input.expectedBinding !== undefined &&
+    (expectedBinding?.kind !== "existing" ||
+      expectedBinding.device !== directory.identity.device ||
+      expectedBinding.inode !== directory.identity.inode)
+  ) {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath,
+    };
+  }
+  return { ...directory, canonicalPath };
 }

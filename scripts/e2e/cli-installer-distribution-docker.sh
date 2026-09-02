@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-cli-installer-distribution:local")"
@@ -13,7 +14,7 @@ HOSTED_PROOF_CONTAINER="openclaw-hosted-installer-proof-$$"
 SOURCE_PROOF_CONTAINER="openclaw-source-installer-proof-$$"
 SOURCE_BUNDLE="$(mktemp "${TMPDIR:-/tmp}/openclaw-source.XXXXXX.bundle")"
 SOURCE_PROOF_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/openclaw-source-proof.XXXXXX.sh")"
-SOURCE_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+SOURCE_SHA="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
 SOURCE_MEMORY="${OPENCLAW_CLI_INSTALLER_SOURCE_MEMORY:-16g}"
 
 cleanup() {
@@ -25,7 +26,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git -C "$ROOT_DIR" bundle create "$SOURCE_BUNDLE" HEAD
+git -C "$SOURCE_ROOT" bundle create "$SOURCE_BUNDLE" HEAD
 cat >"$SOURCE_PROOF_SCRIPT" <<'SOURCE_PROOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -86,7 +87,7 @@ docker_e2e_docker_run_cmd run -d \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e OPENCLAW_NO_PROMPT=1 \
   -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
-  -v "$ROOT_DIR/scripts/install.sh:/tmp/install.sh:ro" \
+  -v "$SOURCE_ROOT/scripts/install.sh:/tmp/install.sh:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail

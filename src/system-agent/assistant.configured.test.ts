@@ -1,6 +1,8 @@
 // Configured OpenClaw assistant tests cover route-owned, tool-free planning.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planSystemAgentCommandWithConfiguredModel } from "./assistant.js";
@@ -404,7 +406,7 @@ describe("OpenClaw configured-model planner", () => {
     );
   });
 
-  it("carries the verified child runtime artifact into planning", async () => {
+  it("keeps the verified child runtime while parsing a JSON plan", async () => {
     const config = {
       agents: {
         list: [
@@ -420,11 +422,11 @@ describe("OpenClaw configured-model planner", () => {
     } satisfies OpenClawConfig;
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
     useFastVerifiedInference(binding);
-    const runEmbeddedAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
     }));
 
-    await planSystemAgentCommandWithConfiguredModel({
+    const result = await planSystemAgentCommandWithConfiguredModel({
       input: "is the gateway healthy",
       overview: overview("openai/gpt-5.5"),
       verifiedInference: binding,
@@ -437,6 +439,14 @@ describe("OpenClaw configured-model planner", () => {
       },
     });
 
+    expect(result).toEqual({
+      reply: "Ready.",
+      command: "gateway status",
+      modelLabel: "openai/gpt-5.5",
+    });
+    expect(
+      resolveRequestStreamTransportOverrides(runEmbeddedAgent.mock.calls[0]?.[0]?.streamParams),
+    ).toBeUndefined();
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessRuntimeOverride: "codex",

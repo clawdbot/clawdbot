@@ -1,10 +1,20 @@
 // Tests path boundary enforcement for safe file access.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { resolveRootPath, resolveRootPathSync } from "./boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestorSync,
+  resolveRealpathOrAbsolute,
+  resolveRootPath,
+  resolveRootPathSync,
+} from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -13,6 +23,78 @@ function createSeededRandom(seed: number): () => number {
     return state / 0x100000000;
   };
 }
+
+describe("resolveRealpathOrAbsolute", () => {
+  it("canonicalizes existing symlinks", async () => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+      const target = path.join(base, "target");
+      const alias = path.join(base, "alias");
+      await fs.mkdir(target);
+      await fs.symlink(target, alias);
+      expect(resolveRealpathOrAbsolute(alias)).toBe(await fs.realpath(target));
+    });
+  });
+
+  it("keeps missing paths lexical and falls back on non-missing errors", async () => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+      const alias = path.join(base, "alias");
+      await fs.symlink(path.join(base, "target"), alias);
+      const missing = path.join(alias, "missing");
+      expect(resolveRealpathOrAbsolute(missing)).toBe(path.resolve(missing));
+      vi.spyOn(fsSync, "realpathSync").mockImplementation(() => {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      });
+      expect(resolveRealpathOrAbsolute("denied")).toBe(path.resolve("denied"));
+    });
+  });
+});
+
+describe("resolveIdentityPathViaExistingAncestorSync", () => {
+  it("continues through native realpath failures to preserve ancestor identity", () => {
+    const aliasRoot = path.resolve("identity-alias");
+    const targetPath = path.join(aliasRoot, "locked", "leaf");
+    const lockedPath = path.dirname(targetPath);
+    const canonicalRoot = path.resolve("identity-real");
+    const calls: string[] = [];
+
+    vi.spyOn(fsSync.realpathSync, "native").mockImplementation((candidate) => {
+      const resolved = path.resolve(String(candidate));
+      calls.push(resolved);
+      if (resolved === aliasRoot) {
+        return canonicalRoot;
+      }
+      throw new Error("simulated realpath failure");
+    });
+
+    expect(resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(
+      path.join(canonicalRoot, "locked", "leaf"),
+    );
+    expect(calls).toEqual([targetPath, lockedPath, aliasRoot]);
+  });
+
+  it("falls back lexically only after native realpath fails through the root", () => {
+    const targetPath = path.resolve("identity-alias", "locked", "leaf");
+    const calls: string[] = [];
+    const expectedCalls: string[] = [];
+    let cursor = targetPath;
+    while (true) {
+      expectedCalls.push(cursor);
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+
+    vi.spyOn(fsSync.realpathSync, "native").mockImplementation((candidate) => {
+      calls.push(path.resolve(String(candidate)));
+      throw new Error("simulated realpath failure");
+    });
+
+    expect(resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(targetPath);
+    expect(calls).toEqual(expectedCalls);
+  });
+});
 
 describe("resolveRootPath", () => {
   it("resolves symlink parents with non-existent leafs inside root", async () => {

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Slack tests cover media plugin behavior.
 import type { WebClient } from "@slack/web-api";
@@ -127,10 +130,12 @@ const saveRemoteMediaMock = vi.hoisted(() =>
 );
 const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn());
 const logVerboseMock = vi.hoisted(() => vi.fn());
+const mediaWarnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.runtime.js", () => ({
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
   saveRemoteMedia: saveRemoteMediaMock,
+  slackMediaLog: { warn: mediaWarnMock },
 }));
 
 vi.mock("./thread.runtime.js", () => ({
@@ -161,6 +166,7 @@ beforeEach(() => {
   readRemoteMediaBufferMock.mockClear();
   fetchWithRuntimeDispatcherMock.mockClear();
   logVerboseMock.mockClear();
+  mediaWarnMock.mockClear();
   saveMediaBufferMock.mockReset();
   saveMediaBufferMock.mockImplementation(
     async (
@@ -701,6 +707,7 @@ describe("resolveSlackMedia", () => {
       "https://files.slack.com/stale.jpg",
       "https://files.slack.com/fresh.jpg",
     ]);
+    expect(mediaWarnMock).not.toHaveBeenCalled();
   });
 
   it("rejects a refreshed URL when its file metadata fails caller admission", async () => {
@@ -742,23 +749,36 @@ describe("resolveSlackMedia", () => {
     ]);
   });
 
-  it("rejects HTML auth pages for non-HTML files", async () => {
-    mockFetch.mockResolvedValueOnce(
-      new Response("<!DOCTYPE html><html><body>login</body></html>", {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      }),
-    );
+  it.each(["text/html; charset=utf-8", "image/jpeg"])(
+    "records blocked HTML auth pages for non-HTML files served as %s without retaining bytes",
+    async (contentType) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slack-blocked-media-"));
+      const savedPath = path.join(dir, "test.jpg");
+      await fs.writeFile(savedPath, "<!DOCTYPE html><html><body>login</body></html>");
+      saveRemoteMediaMock.mockResolvedValueOnce({
+        ...createSavedMedia(savedPath, contentType),
+        fileName: "test.jpg",
+      });
+      const file = { url_private: "https://files.slack.com/test.jpg", name: "test.jpg" };
+      try {
+        const result = await resolveSlackAttachmentContent({
+          files: [file],
+          token: "xoxb-test-token",
+          maxBytes: 1024 * 1024,
+        });
 
-    const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
-    expect(result).toBeNull();
-    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
-  });
+        expect(result?.media).toEqual([]);
+        await expect(fs.stat(savedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result?.files).toEqual([{ ...file, reason: "blocked: unexpected HTML content" }]);
+        expect(result).toMatchObject({ unavailableMediaCount: 1 });
+        expect(mediaWarnMock).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("blocked: unexpected HTML content"),
+        );
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("allows expected HTML uploads", async () => {
     saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/page.html", "text/html"));
@@ -961,8 +981,10 @@ describe("resolveSlackMedia", () => {
       mimetype: "image/jpeg",
     }));
 
+    const unavailableFiles = new Map<SlackFile, string>();
     const result = await resolveSlackMedia({
       files,
+      unavailableFiles,
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
@@ -971,6 +993,7 @@ describe("resolveSlackMedia", () => {
     expect(media).toHaveLength(8);
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
+    expect([...unavailableFiles]).toEqual([[files[8], "omitted: 8-file limit"]]);
   });
 
   it("routes dispatcher-backed Slack media requests through runtime fetch", async () => {
@@ -1275,36 +1298,93 @@ describe("Slack message file intake", () => {
     expect(result?.rawBody).toContain("FRICH.png (image/png, fileId: FRICH)");
   });
 
-  it("reuses the exact preloaded voice-file object across forwarded duplicates", async () => {
-    const voice = file("FVOICE");
-    const preloaded = {
-      path: "/tmp/preloaded-voice.ogg",
-      contentType: "audio/ogg",
-      placeholder: "[Slack file: voice.ogg (fileId: FVOICE)]",
-    };
+  it.each(["direct", "forwarded"] as const)(
+    "reuses the exact preloaded %s voice-file object across forwarded duplicates",
+    async (source) => {
+      const voice = file("FVOICE");
+      const direct = source === "direct" ? voice : file(" FVOICE ");
+      const forwarded = source === "forwarded" ? voice : file("FVOICE");
+      const preloaded = {
+        path: "/tmp/preloaded-voice.ogg",
+        contentType: "audio/ogg",
+        placeholder: "[Slack file: voice.ogg (fileId: FVOICE)]",
+      };
+
+      const result = await resolveMessageFiles({
+        direct: [direct],
+        forwarded: [[forwarded]],
+        preloadedMedia: new Map([[voice, preloaded]]),
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result?.effectiveDirectMedia).toEqual([preloaded]);
+      expect(result?.effectiveDirectMedia?.[0]).toBe(preloaded);
+      expect(result?.rawBody.match(/fileId: FVOICE/g)).toHaveLength(1);
+    },
+  );
+
+  it("keeps failed file identities beside renamed, overlapping, and ID-less downloads", async () => {
+    const downloaded = file("F11");
+    const unavailable = { id: "F1", name: "missing-contract.pdf", mimetype: "application/pdf" };
+    const downloadedWithoutId = { name: "available.png", mimetype: "image/png" };
+    const unavailableWithSameMetadata = { ...downloadedWithoutId };
+    const unavailableWithoutId = { name: "missing.png", mimetype: "image/png" };
 
     const result = await resolveMessageFiles({
-      direct: [voice],
-      forwarded: [[file("FVOICE")]],
-      preloadedMedia: new Map([[voice, preloaded]]),
+      direct: [
+        downloaded,
+        unavailable,
+        downloadedWithoutId,
+        unavailableWithSameMetadata,
+        unavailableWithoutId,
+      ],
+      preloadedMedia: new Map([
+        [
+          downloaded,
+          {
+            path: "/tmp/renamed.png",
+            fileName: "renamed.png",
+            placeholder: "[Slack file: renamed.png (fileId: F11)]",
+          },
+        ],
+        [
+          downloadedWithoutId,
+          {
+            path: "/tmp/server-renamed.png",
+            fileName: "server-renamed.png",
+            placeholder: "[Slack file: server-renamed.png (image/png)]",
+          },
+        ],
+      ]),
     });
 
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(result?.effectiveDirectMedia).toEqual([preloaded]);
-    expect(result?.effectiveDirectMedia?.[0]).toBe(preloaded);
+    expect(result?.effectiveDirectMedia).toHaveLength(2);
+    expect(result?.rawBody.match(/fileId: F11/g)).toHaveLength(1);
+    expect(result?.rawBody.match(/server-renamed\.png/g)).toHaveLength(1);
+    expect(result?.rawBody.match(/available\.png/g)).toHaveLength(1);
+    expect(result?.rawBody).toContain("missing-contract.pdf (application/pdf, fileId: F1)");
+    expect(result?.rawBody).toContain("missing.png (image/png)");
   });
 
-  it("applies Slack's eight-file budget once across direct and forwarded sources", async () => {
-    const result = await resolveMessageFiles({
-      direct: Array.from({ length: 8 }, (_, index) => file(`FDIRECT${index}`)),
-      forwarded: [Array.from({ length: 8 }, (_, index) => file(`FFORWARDED${index}`))],
-    });
+  it.each([1, 8])(
+    "announces %i omitted files beyond the shared eight-file budget",
+    async (omitted) => {
+      const result = await resolveMessageFiles({
+        direct: Array.from({ length: 8 }, (_, index) => file(`FDIRECT${index}`)),
+        forwarded: [Array.from({ length: omitted }, (_, index) => file(`FFORWARDED${index}`))],
+      });
 
-    expect(mockFetch).toHaveBeenCalledTimes(8);
-    expect(result?.effectiveDirectMedia).toHaveLength(8);
-    expect(result?.rawBody).toContain("FDIRECT0.png");
-    expect(result?.rawBody).not.toContain("FFORWARDED0.png");
-  });
+      expect(mockFetch).toHaveBeenCalledTimes(8);
+      expect(result?.effectiveDirectMedia).toHaveLength(8);
+      expect(result?.rawBody).toContain("FDIRECT0.png");
+      for (let index = 0; index < omitted; index++) {
+        expect(result?.rawBody).toContain(
+          `FFORWARDED${index}.png (image/png, fileId: FFORWARDED${index}) unavailable (omitted: 8-file limit)`,
+        );
+      }
+      expect(mediaWarnMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps forwarded images before their files without letting failures shift later attachments", async () => {
     mockFetch.mockImplementation(async (input) => {
@@ -1343,6 +1423,22 @@ describe("Slack message file intake", () => {
     expect(result?.rawBody).toContain(
       "FDIRECT)] [Forwarded image: first-image.png] [Slack file: FFIRST",
     );
+    expect(result?.rawBody).toContain("FFAILED.png (image/png, fileId: FFAILED)");
+  });
+
+  it("bounds omission text while retaining the total unavailable count", async () => {
+    const result = await resolveMessageFiles({
+      direct: Array.from({ length: 48 }, (_, index) => file(`FFILE${index}`)),
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(8);
+    expect(result?.effectiveDirectMedia).toHaveLength(8);
+    expect(result?.rawBody).toContain(
+      "FFILE8.png (image/png, fileId: FFILE8) unavailable (omitted: 8-file limit)",
+    );
+    expect(result?.rawBody).toContain("… (file references truncated)");
+    expect(result?.rawBody).toContain("[slack 40 attachments unavailable]");
+    expect(expectDefined(result, "Slack message content").rawBody.length).toBeLessThan(2600);
   });
 
   it("preserves distinct files without Slack file identifiers", async () => {
@@ -1365,7 +1461,9 @@ describe("Slack message file intake", () => {
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.effectiveDirectMedia).toBeNull();
-    expect(result?.rawBody).toBe("Attached files\n[Slack file: file (fileId: FUNTRUSTED)]");
+    expect(result?.rawBody).toBe(
+      "Attached files\n[Slack file: file (fileId: FUNTRUSTED) unavailable (no private download URL)]\n\n[slack attachment unavailable]",
+    );
   });
 
   it("ignores richer metadata beyond the existing forwarded-attachment trust limit", async () => {
@@ -1379,7 +1477,9 @@ describe("Slack message file intake", () => {
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.effectiveDirectMedia).toBeNull();
-    expect(result?.rawBody).toBe("Attached files\n[Slack file: file (fileId: FLATE)]");
+    expect(result?.rawBody).toBe(
+      "Attached files\n[Slack file: file (fileId: FLATE) unavailable (no private download URL)]\n\n[slack attachment unavailable]",
+    );
   });
 });
 
@@ -1393,6 +1493,41 @@ describe("resolveSlackAttachmentContent", () => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
+
+  it.each(["direct", "forwarded"])(
+    "records one bounded reason and warning for a failed %s file after URL refresh",
+    async (source) => {
+      const file = {
+        id: "FFAILED",
+        name: "missing.png",
+        url_private: "https://files.slack.com/stale.png",
+      };
+      const client = {
+        files: {
+          info: vi.fn(async () => ({ file: { url_private: "https://files.slack.com/fresh.png" } })),
+        },
+      } as unknown as WebClient;
+      mockFetch.mockRejectedValueOnce(new Error("stale URL"));
+      mockFetch.mockRejectedValueOnce(new Error(`Download denied\n${"detail ".repeat(100)}`));
+      const result = await resolveSlackAttachmentContent({
+        ...(source === "direct"
+          ? { files: [file] }
+          : { attachments: [{ is_share: true, files: [file] }] }),
+        client,
+        token: "xoxb-test-token",
+        maxBytes: 1024,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result?.media).toEqual([]);
+      const reason = `Download denied ${"detail ".repeat(100)}`.slice(0, 200);
+      expect.soft(result?.files).toEqual([{ ...file, reason }]);
+      expect.soft(result).toMatchObject({ unavailableMediaCount: 1 });
+      expect(mediaWarnMock).toHaveBeenCalledExactlyOnceWith(
+        `slack: file missing.png (fileId: FFAILED) unavailable (${reason})`,
+      );
+    },
+  );
 
   it("ignores non-forwarded attachments", async () => {
     const result = await resolveSlackAttachmentContent({
@@ -1427,7 +1562,7 @@ describe("resolveSlackAttachmentContent", () => {
     expect(result).toEqual({
       text: "[Forwarded message from Bob]\nPlease review this",
       media: [],
-      unavailableImageCount: 0,
+      unavailableMediaCount: 0,
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -1440,8 +1575,33 @@ describe("resolveSlackAttachmentContent", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toEqual({ text: "", media: [], unavailableImageCount: 0, files: [file] });
+    expect(result).toEqual({
+      text: "",
+      media: [],
+      unavailableMediaCount: 1,
+      files: [{ ...file, reason: "no private download URL" }],
+    });
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("redacts download credentials before exposing a failure reason or warning", async () => {
+    mockFetch.mockRejectedValueOnce(
+      new Error(
+        "Download failed at https://files.slack.com/file.png?token=synthetic-private-query-value",
+      ),
+    );
+    const result = await resolveSlackAttachmentContent({
+      files: [{ name: "file.png", url_private: "https://files.slack.com/file.png" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(result?.files?.[0]).toMatchObject({
+      reason: expect.stringContaining("Download failed"),
+    });
+    expect(JSON.stringify(result)).not.toContain("synthetic-private-query-value");
+    expect(mediaWarnMock).toHaveBeenCalledOnce();
+    expect(mediaWarnMock.mock.calls[0]?.[0]).not.toContain("synthetic-private-query-value");
   });
 
   it("skips forwarded image URLs on non-Slack hosts", async () => {
@@ -1482,7 +1642,7 @@ describe("resolveSlackAttachmentContent", () => {
           placeholder: "[Forwarded image: forwarded.jpg]",
         },
       ],
-      unavailableImageCount: 0,
+      unavailableMediaCount: 0,
     });
     const firstCall = requireMockCall(mockFetch, 0, "fetch");
     expect(firstCall[0]).toBe("https://files.slack.com/forwarded.jpg");
@@ -1503,7 +1663,7 @@ describe("resolveSlackAttachmentContent", () => {
     expect(result).toEqual({
       text: "",
       media: [],
-      unavailableImageCount: 1,
+      unavailableMediaCount: 1,
     });
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledOnce();

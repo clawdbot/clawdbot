@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   collectChannelStatusIssues: vi.fn(),
   buildChannelsTable: vi.fn(),
+  applyLoggingConfig: vi.fn(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -37,6 +38,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: mocks.resolveOsSummary,
+}));
+
+vi.mock("../logging/logger.js", () => ({
+  applyLoggingConfig: mocks.applyLoggingConfig,
 }));
 
 vi.mock("./status.scan.bootstrap-shared.js", () => ({
@@ -95,6 +100,8 @@ describe("collectStatusScanOverview", () => {
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
     mocks.readCommandConfigSnapshot.mockResolvedValue({
       snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
         valid: true,
         runtimeConfig: { session: {} },
         sourceConfig: { session: { raw: true } },

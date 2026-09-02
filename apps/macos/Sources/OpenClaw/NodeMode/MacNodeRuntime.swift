@@ -232,7 +232,9 @@ actor MacNodeRuntime {
                  MacNodeClaudeSessionCatalogContract.readCommand:
                 return try await self.handleClaudeSessionInvoke(req)
             default:
-                if let nodeHostWorker, await nodeHostWorker.supports(command) {
+                // Private supervisor controls are not public pairing capabilities.
+                // The shared dispatcher owns their validation and local hosting consent.
+                if let nodeHostWorker {
                     return await nodeHostWorker.invoke(req)
                 }
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")

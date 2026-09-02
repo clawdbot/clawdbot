@@ -1,12 +1,13 @@
-// Formatting helpers for status tokens, durations, prompt-cache stats, and daemon runtime snippets.
+// Formatting helpers for status tokens, prompt-cache stats, and daemon runtime snippets.
 // These helpers are shared by report rows and command output surfaces.
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { BestEffortConfigSnapshot } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
-import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "../status/types.js";
 import { formatTokenCount } from "../utils/token-format.js";
@@ -15,23 +16,13 @@ export { shortenText } from "./text-format.js";
 export const formatKTokens = formatTokenCount;
 
 /** Formats the actionable entries shown under status config diagnostic headings. */
-export function formatStatusConfigDiagnosticEntries(
+export const formatStatusConfigDiagnosticEntries = (
   diagnostics: NonNullable<BestEffortConfigSnapshot["configDiagnostics"]>,
-): string[] {
-  return [
-    `- Config file is invalid: ${sanitizeTerminalText(diagnostics.path)}`,
-    ...formatConfigIssueLines(diagnostics.issues, "-", { normalizeRoot: true }),
-    "- Fix: openclaw doctor --fix",
-  ];
-}
-
-/** Formats a duration or returns `unknown` for missing/non-finite values. */
-export const formatDuration = (ms: number | null | undefined) => {
-  if (ms == null || !Number.isFinite(ms)) {
-    return "unknown";
-  }
-  return formatDurationPrecise(ms, { decimals: 1 });
-};
+): string[] => [
+  `- Config file is invalid: ${sanitizeTerminalText(diagnostics.path)}`,
+  ...formatConfigIssueLines(diagnostics.issues, "-", { normalizeRoot: true }),
+  `- Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+];
 
 /** Formats session token usage and prompt-cache hit rate for the sessions table. */
 export const formatTokensCompact = (
@@ -119,19 +110,12 @@ function resolvePromptCacheStats(
 }
 
 /** Formats daemon runtime status plus launchd/systemd details into one compact string. */
-export const formatDaemonRuntimeShort = (runtime?: {
-  status?: string;
-  pid?: number;
-  state?: string;
-  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
-  detail?: string;
-  missingUnit?: boolean;
-}) => {
+export const formatDaemonRuntimeShort = (runtime?: GatewayServiceRuntime) => {
   if (!runtime) {
     return null;
   }
   const details: string[] = [];
-  const detail = runtime.detail?.replace(/\s+/g, " ").trim() || "";
+  const detail = runtime.inspectionFailure ? "" : runtime.detail?.replace(/\s+/g, " ").trim() || "";
   const noisyLaunchctlDetail =
     runtime.missingUnit === true &&
     normalizeLowercaseStringOrEmpty(detail).includes("could not find service");

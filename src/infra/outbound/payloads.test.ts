@@ -1,5 +1,7 @@
 // Covers outbound payload normalization across text, media, presentation,
 // interactive blocks, mirror text, and suppressed relay status payloads.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
@@ -31,6 +33,18 @@ function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
 }
 
 describe("normalizeReplyPayloadsForDelivery", () => {
+  it.each(["photo.png", "café 100% image.png"])(
+    "deduplicates a file URL directive with its explicit local path: %s",
+    (fileName) => {
+      const filePath = path.resolve("media", fileName);
+      const [payload] = normalizeReplyPayloadsForDelivery([
+        { text: `Caption\nMEDIA:${pathToFileURL(filePath).href}`, mediaUrl: filePath },
+      ]);
+
+      expect(payload).toMatchObject({ text: "Caption", mediaUrl: filePath, mediaUrls: [filePath] });
+    },
+  );
+
   it("parses directives, merges media, and preserves reply metadata", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
@@ -651,6 +665,27 @@ describe("OutboundPayloadPlan projections", () => {
     expect(projectOutboundPayloadPlanForDelivery(plan)).toEqual(
       normalizeReplyPayloadsForDelivery(matrix),
     );
+  });
+
+  it.each([
+    ["current tag with one closing bracket", "[[reply_to_current] Visible reply"],
+    ["explicit tag with one closing bracket", "[[reply_to:message-7] Visible reply"],
+  ])("strips a malformed %s without creating reply metadata", (_name, text) => {
+    const [normalized] = normalizeReplyPayloadsForDelivery([{ text }]);
+
+    expect(normalized).toMatchObject({
+      text: "Visible reply",
+      replyToTag: false,
+    });
+    expect(normalized?.replyToId).toBeUndefined();
+    expect(normalized?.replyToCurrent).toBeUndefined();
+  });
+
+  it("preserves an ambiguous unterminated explicit reply prefix", () => {
+    const text = "[[reply_to:message-7 Visible reply";
+    const [normalized] = normalizeReplyPayloadsForDelivery([{ text }]);
+
+    expect(normalized).toMatchObject({ text, replyToTag: false });
   });
 
   it("projects transport payloads without no-reply or reasoning entries", () => {

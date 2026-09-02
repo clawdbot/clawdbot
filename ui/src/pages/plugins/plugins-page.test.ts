@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type {
@@ -24,11 +25,14 @@ import {
   createResult,
   createRuntimeConfigHarness,
   deferred,
+  mountClawHubSearchPage,
   mountPage,
   resetPluginsPageTestState,
   type RuntimeConfigTestState,
 } from "./plugins-page.test-support.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
   page
@@ -39,6 +43,7 @@ function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills"
 describe("PluginsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
   });
 
   afterEach(resetPluginsPageTestState);
@@ -261,17 +266,17 @@ describe("PluginsPage", () => {
     } satisfies PluginInstallRequest;
     page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
 
-    await page.install(catalogRequest, installIdentity);
+    await page.consentController.install(catalogRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (1).",
     );
 
-    await page.install(searchRequest, installIdentity);
+    await page.consentController.install(searchRequest, installIdentity);
     expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
       "Review this plugin (2).",
     );
 
-    await page.install(
+    await page.consentController.install(
       { ...searchRequest, acknowledgeInstallPolicyWarning: true },
       installIdentity,
     );
@@ -317,6 +322,52 @@ describe("PluginsPage", () => {
     );
   });
 
+  it.each([0, 1, 3])(
+    "announces %i completed ClawHub search results in the existing status",
+    async (count) => {
+      vi.useFakeTimers();
+      const response = deferred<{ results: PluginSearchResult[] }>();
+      const { client } = createClient(async (method) => {
+        if (method === "plugins.search") {
+          return response.promise;
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const { page } = await mountClawHubSearchPage(client);
+      const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
+      search.value = "calendar";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      const pending = page.querySelector('[role="status"]');
+      expect(pending?.textContent).toContain("Searching ClawHub");
+
+      const results: PluginSearchResult[] = Array.from({ length: count }, (_, index) => ({
+        score: 1,
+        package: {
+          name: `calendar-${index}`,
+          displayName: `Calendar ${index}`,
+          family: "code-plugin",
+          channel: "community",
+          isOfficial: false,
+        },
+      }));
+      response.resolve({ results });
+      await vi.waitFor(() => expect(page.searchResults).toEqual(results));
+      await page.updateComplete;
+
+      const completed = page.querySelector('[role="status"]');
+      expect(completed).toBe(pending);
+      expect(completed?.getAttribute("aria-live")).toBe("polite");
+      expect(completed?.textContent).toContain(
+        count === 0
+          ? "ClawHub has no results for “calendar”."
+          : `${count} result${count === 1 ? "" : "s"}`,
+      );
+      expect(completed?.classList.contains(count === 0 ? "settings-empty" : "sr-only")).toBe(true);
+      expect(page.querySelectorAll("[data-package-name]")).toHaveLength(count);
+    },
+  );
+
   it("commits only the latest ClawHub search result", async () => {
     vi.useFakeTimers();
     const first = deferred<{ results: PluginSearchResult[] }>();
@@ -327,15 +378,7 @@ describe("PluginsPage", () => {
       }
       return (params as { query: string }).query === "first" ? first.promise : second.promise;
     });
-    const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(
-        harness.gateway,
-        createResult(),
-        createPluginsRouteLocation("/settings/plugins/discover"),
-      ),
-    );
+    const { page } = await mountClawHubSearchPage(client);
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "first";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -361,6 +404,8 @@ describe("PluginsPage", () => {
     await Promise.resolve();
 
     expect(page.searchResults).toEqual([latest]);
+    await page.updateComplete;
+    expect(page.querySelector('[role="status"]')?.textContent).toContain("1 result");
   });
 
   it("refreshes plugins and runtime config without discarding a pending config draft", async () => {
@@ -497,7 +542,7 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install(
+        await page.consentController.install(
           {
             source: "clawhub",
             packageName: "example-plugin",
@@ -708,7 +753,7 @@ describe("PluginsPage", () => {
     await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
-  it("uninstalls a removable plugin after inline confirmation", async () => {
+  it("waits for uninstall restart confirmation and sends nothing when cancelled", async () => {
     const removable = createPlugin({
       id: "community-thing",
       name: "Community Thing",
@@ -742,12 +787,26 @@ describe("PluginsPage", () => {
       }),
     );
 
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
-    page
-      .querySelector<HTMLButtonElement>(
-        '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
-      )
-      ?.click();
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    expect(showConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Remove Community Thing?",
+        message:
+          "Removing this plugin package and all of its entries restarts the Gateway immediately and interrupts active sessions.",
+        confirmLabel: "Remove",
+        danger: true,
+      }),
+    );
+    expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
+
+    confirmation.resolve(false);
+    await confirmation.promise;
+    expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
+
+    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
 
     await waitForFast(() =>
       expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),

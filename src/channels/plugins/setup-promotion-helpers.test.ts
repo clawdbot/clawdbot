@@ -6,6 +6,11 @@ const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());
 const getBundledChannelSetupPluginMock = vi.hoisted(() => vi.fn());
 const hasBundledChannelPackageSetupFeatureMock = vi.hoisted(() => vi.fn());
 const resolveBundledSurfaceMock = vi.hoisted(() => vi.fn());
+const loadManifestRegistryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: loadManifestRegistryMock,
+}));
 
 vi.mock("./bundled.js", () => ({
   getBundledChannelPlugin: getBundledChannelPluginMock,
@@ -17,11 +22,19 @@ vi.mock("./registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: getLoadedChannelPluginMock,
 }));
 
-import { resolveBundledChannelSetupPromotionSurface } from "./setup-promotion-bundled.js";
-import {
-  resolveSingleAccountKeysToMove,
-  resolveSingleAccountPromotion,
-} from "./setup-promotion-helpers.js";
+import { resolveDiscoveredChannelSetupPromotionSurface } from "./setup-promotion-discovery.js";
+import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
+
+function resolveSingleAccountKeysToMove(
+  params: Parameters<typeof resolveSingleAccountPromotion>[0],
+): string[] {
+  const promotion = resolveSingleAccountPromotion(params);
+  expect(promotion.kind).toBe("promote");
+  if (promotion.kind !== "promote") {
+    throw new Error("Expected ordinary account promotion");
+  }
+  return promotion.keysToMove;
+}
 
 const legacyCommonKeys = [
   "accessToken",
@@ -44,6 +57,7 @@ describe("setup promotion helpers", () => {
     hasBundledChannelPackageSetupFeatureMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
     resolveBundledSurfaceMock.mockReset();
+    loadManifestRegistryMock.mockReset().mockReturnValue({ plugins: [] });
   });
 
   it("resolves bundled promotion from the setup-only plugin", () => {
@@ -52,7 +66,7 @@ describe("setup promotion helpers", () => {
       setup: { singleAccountKeysToMove: ["customAuth"] },
     });
 
-    expect(resolveBundledChannelSetupPromotionSurface("demo")).toEqual({
+    expect(resolveDiscoveredChannelSetupPromotionSurface("demo", {})).toEqual({
       singleAccountKeysToMove: ["customAuth"],
     });
     expect(getBundledChannelSetupPluginMock).toHaveBeenCalledWith("demo");
@@ -65,12 +79,12 @@ describe("setup promotion helpers", () => {
       setupContract: { singleAccountKeysToMove: ["signalNumber"] },
     });
 
-    expect(resolveBundledChannelSetupPromotionSurface("signal")).toEqual({
+    expect(resolveDiscoveredChannelSetupPromotionSurface("signal", {})).toEqual({
       singleAccountKeysToMove: ["signalNumber"],
     });
   });
 
-  it("keeps static single-account migration keys cheap", () => {
+  it("resolves generic migration keys without importing plugin runtime", () => {
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
       channel: {
@@ -83,9 +97,38 @@ describe("setup promotion helpers", () => {
     });
 
     expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
-    expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
+    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
     expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+    expect(getBundledChannelSetupPluginMock).not.toHaveBeenCalled();
   });
+
+  describe.each(["caller", "loaded", "discovered"])(
+    "explicit preserve-root from the %s surface",
+    (source) => {
+      it.each([
+        { name: "Root", groupPolicy: "allowlist", accounts: { ada: {} } },
+        { enabled: true },
+        { enabled: true, accounts: {} },
+      ])("preserves the owned root including an empty promotion key set: %j", (channel) => {
+        const surface = { configPromotion: "preserve-root" as const };
+        if (source === "loaded") {
+          getLoadedChannelPluginMock.mockReturnValue({ setupContract: surface });
+        }
+        resolveBundledSurfaceMock.mockReturnValue(surface);
+        expect(
+          resolveSingleAccountPromotion({
+            channelKey: "demo",
+            channel,
+            ...(source === "caller" ? { setupSurface: surface } : {}),
+            resolveBundledSurface: resolveBundledSurfaceMock,
+          }),
+        ).toEqual({ kind: "preserve-root" });
+        if (source !== "discovered") {
+          expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("retains the published-reader common tier when no declarations resolve", () => {
     expect(

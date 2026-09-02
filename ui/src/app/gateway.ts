@@ -16,6 +16,7 @@ export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   phase: ApplicationGatewayPhase;
   offlineStable: boolean;
+  restartPending?: boolean;
   hello: GatewayHelloOk | null;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;

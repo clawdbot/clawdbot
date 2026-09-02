@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Page } from "playwright";
 import { expect } from "vitest";
@@ -50,9 +49,6 @@ async function setDarkTheme(page: Page) {
 }
 
 export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScopeFlowOptions) {
-  if (params.captureProof) {
-    await mkdir(params.artifactDir, { recursive: true });
-  }
   const context = await params.browser.newContext({
     locale: "en-US",
     recordVideo: params.captureProof
@@ -275,7 +271,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const sidebarUpdate = sidebar.locator(
       'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
     );
-    await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(1);
+    await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
     await sidebar.locator(".sidebar-issues-button").click();
     await expect.poll(() => sidebarUpdate.count()).toBe(1);
     await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);

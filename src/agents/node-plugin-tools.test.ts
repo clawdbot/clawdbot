@@ -8,12 +8,13 @@ import {
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { compactToolSearchCatalogEntry, createToolSearchCatalogRef } from "./tool-search.js";
+import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -155,11 +156,12 @@ describe("createNodePluginTools", () => {
     });
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-1",
         command: "remote.echo",
         params: { text: "ping" },
+        timeoutMs: 30_000,
         idempotencyKey: "call-1",
         sessionKey: "agent:main:canvas",
       },
@@ -216,11 +218,12 @@ describe("createNodePluginTools", () => {
 
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-1",
         command: "remote.echo",
         params: { text: "ping" },
+        timeoutMs: 30_000,
         idempotencyKey: "call-cancellable",
       },
       { scopes: ["operator.write"], signal: controller.signal },
@@ -256,12 +259,13 @@ describe("createNodePluginTools", () => {
     );
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-1",
         command: "remote.echo",
         params: { text: "ping" },
         idempotencyKey: "call-aborted",
+        timeoutMs: 30_000,
       },
       { scopes: ["operator.write"], signal: controller.signal },
     );
@@ -646,12 +650,13 @@ describe("createNodePluginTools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["node_a_remote_echo", "node_b_remote_echo"]);
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 35_000 },
       {
         nodeId: "node-b",
         command: "remote.echo",
         params: { text: "ping" },
         idempotencyKey: "call-2",
+        timeoutMs: 30_000,
       },
       { scopes: ["operator.write"] },
     );

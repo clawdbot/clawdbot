@@ -62,6 +62,10 @@ gh attestation verify OpenClaw-Android.apk \
 Google Play and standalone APK installs use different update channels and may have different signing identities. Android may require uninstalling the existing app before switching channels, which removes its local app data. Stay on one channel for normal updates.
 </Warning>
 
+<Note>
+Building a release artifact (APK or app bundle) from source or a fork requires your own Android signing identity. Debug builds use an automatically generated debug signing key. The official OpenClaw release key is not included in the repository. See [Sign your app](https://developer.android.com/studio/publish/app-signing) for how to generate and configure a signing key for release builds.
+</Note>
+
 ## Mirror and control Android from a remote Mac
 
 [scrcpy](https://github.com/Genymobile/scrcpy) mirrors an Android screen in a macOS window and
@@ -296,11 +300,32 @@ openclaw gateway call node.list --params "{}"
 
 ### 6. Chat + history
 
+The draft has its own full-width row above the attachment and voice/send controls,
+so larger text and narrow screens do not squeeze it between buttons. The empty
+hint stays on one line; drafts show up to four lines and scroll when space is limited.
+The composer has narrower side gutters than the transcript, with readable draft
+text and 48dp action targets. Typography still follows system text scaling.
+Model and thinking controls sit together, opposite the microphone and primary
+action. The model name stays on one line and follows system text scaling;
+long names use a middle ellipsis to keep both ends visible. The full name remains
+in the model sheet and accessibility text. The thinking dial opens a menu without
+expanding the composer.
+Context usage is available in the model sheet and the model control's
+accessibility value, leaving more room for the model name in the toolbar.
+During Talk, the live waveform replaces the microphone and remains tappable to
+end Talk. If a run is also active, a separate, softly tinted Stop button stays at
+the trailing edge to abort that run.
+
 The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
+- Long replies: tap **View all** on a capped assistant reply to load the full formatted text inline. Attachments stay in the conversation, and message actions use the expanded text. Tap **Show less** or press Back to restore the preview; reopening reuses the loaded reply. Loading, retryable failures, unavailable messages, and required reconnects or Gateway updates appear in the message rather than an alert. Synthetic message-tool and commentary previews retain their existing display and actions but do not offer **View all**, because their copied transcript ID cannot retrieve that synthesized text. This also recognizes the older capped-preview format from released Gateways such as v2026.7.1-2. Android requests up to 1,000,000 characters per text field, matching the Gateway's default retrieval limit; oversized or still-capped results show **The full message is too large to display.** instead of an incomplete reply.
+- Large code blocks scroll within a bounded viewport, with **Start of code**, **End of code**, and **Copy code** controls. Selection stays within the displayed text segment; **Copy code** copies the entire block. Reading within the code pauses automatic transcript following; **Jump to latest** resumes it. The separate message **Select text** action opens a plain-text selection reader; long answers use bounded pages, and selection applies to the displayed page.
+- Mermaid code blocks render as diagrams after the closing fence arrives or the reply finishes. Tap a diagram to open a full-screen view with pinch-to-zoom and panning. The small corner controls copy the source or open a menu to switch between diagram and source. Rendering works offline with bundled assets. Failed diagrams keep their readable source, and temporary failures offer retry. Other code block languages remain code.
+- Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection.
+- Offline history: cached transcripts update in the order live histories are accepted, so a delayed reconnect health check cannot restore an older snapshot. Switching sessions preserves queued cache updates for the session you left.
 - Send: `chat.send`
-- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
+- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Image input works through the picker and Android Sharesheet. Assistant-generated images resolve through the paired Gateway connection, render inline with a full-screen preview, and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
@@ -323,8 +348,10 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
-- Android does not advertise the `voiceWake` capability. Use Chat dictation,
-  a voice note, or Talk for voice input.
+- Enable **Settings → Voice → Listen for wake words** for foreground on-device
+  Voice Wake. Android advertises `voiceWake` only when enabled, on-device
+  recognition and microphone permission are available, and wake words are
+  synchronized with the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).

@@ -116,10 +116,12 @@ export type RuntimeConfigExternalMutationResult<T> =
       error: string;
     };
 
-export type RuntimeConfigExternalMutationOptions = {
+export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   waitForWritesResumed?: boolean;
   canDispatch?: () => boolean;
   dispatchError?: string;
+  /** Refresh only responses that changed configuration, such as completed device authorization. */
+  shouldRefresh?: (value: T) => boolean;
 };
 
 export type RuntimeConfigDispatchOptions = {
@@ -149,7 +151,7 @@ export type ConfigWriteCoordinator = {
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   dispose: () => void;
 };
@@ -159,7 +161,7 @@ export async function executeConfigExternalMutation<T>(
   client: GatewayBrowserClient,
   connectionEpoch: number,
   task: (client: GatewayBrowserClient) => Promise<T>,
-  options: RuntimeConfigExternalMutationOptions,
+  options: RuntimeConfigExternalMutationOptions<T>,
   refresh: () => Promise<boolean>,
 ): Promise<RuntimeConfigExternalMutationResult<T>> {
   if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
@@ -206,6 +208,9 @@ export async function executeConfigExternalMutation<T>(
     return refreshFailure("Connection changed before the configuration update was refreshed.");
   }
   try {
+    if (options.shouldRefresh && !options.shouldRefresh(value)) {
+      return { ok: true, value, refresh: { ok: true } };
+    }
     const refreshed = await refresh();
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return refreshFailure("Connection changed before the configuration update was refreshed.");
@@ -224,7 +229,7 @@ export async function executeConfigExternalMutation<T>(
 
 export async function loadConfig(
   state: RuntimeConfigState,
-  options: LoadConfigOptions = {},
+  options: LoadConfigOptions & { background?: boolean; beforeApplySnapshot?: () => void } = {},
   isCurrentLoad: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
@@ -233,7 +238,9 @@ export async function loadConfig(
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const version = nextRequestVersion(state, "config");
-  state.configLoading = true;
+  if (!options.background) {
+    state.configLoading = true;
+  }
   state.lastError = null;
   state.chatError = null;
   try {
@@ -241,6 +248,8 @@ export async function loadConfig(
     if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
       return false;
     }
+    // Recovery captures the latest intent before a clean draft is replaced.
+    options.beforeApplySnapshot?.();
     applyConfigSnapshot(state, res, options);
     return true;
   } catch (err) {
@@ -249,7 +258,10 @@ export async function loadConfig(
     }
     return false;
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (
+      !options.background &&
+      isCurrentRequest(state, "config", version, client, connectionEpoch)
+    ) {
       state.configLoading = false;
     }
   }

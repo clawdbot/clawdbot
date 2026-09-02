@@ -225,6 +225,10 @@ export function parseMarkdownOwnership(text: string): MarkdownOwnership {
 
 /** Returns parser-owned CommonMark/GFM code ranges, including their delimiters. */
 export function findMarkdownCodeSpans(text: string): Array<[number, number]> {
+  // CommonMark code needs a literal delimiter or indentation, even inside containers.
+  if (!/[`~\t]| {4}/u.test(text)) {
+    return [];
+  }
   return parseMarkdownOwnership(text).codeSpans;
 }
 

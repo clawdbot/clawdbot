@@ -5,17 +5,7 @@ const MAX_MANAGER_REPLAY_KEYS = 10_000;
 /** Keep typical provider replay IDs near one raw persisted-record chunk. */
 export const MAX_CALL_REPLAY_KEYS = 500;
 
-function pruneOldestSetEntries(keys: Set<string>, maxEntries: number): void {
-  while (keys.size > maxEntries) {
-    const oldest = keys.values().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    keys.delete(oldest);
-  }
-}
-
-function pruneOldestMapEntries(keys: Map<string, symbol>, maxEntries: number): void {
+function pruneOldestEntries(keys: Set<string> | Map<string, symbol>, maxEntries: number): void {
   while (keys.size > maxEntries) {
     const oldest = keys.keys().next().value;
     if (oldest === undefined) {
@@ -32,7 +22,7 @@ export function rememberManagerReplayKey(
   maxEntries = MAX_MANAGER_REPLAY_KEYS,
 ): void {
   keys.add(key);
-  pruneOldestSetEntries(keys, maxEntries);
+  pruneOldestEntries(keys, maxEntries);
 }
 
 /** Append one per-call replay key and retain only the newest bounded suffix. */
@@ -67,7 +57,7 @@ export function reserveRejectedProviderCall(
   }
   const reservation = Symbol(providerCallId);
   calls.set(providerCallId, reservation);
-  pruneOldestMapEntries(calls, maxEntries);
+  pruneOldestEntries(calls, maxEntries);
   return reservation;
 }
 

@@ -93,6 +93,11 @@ const openRouterModel = {
   baseUrl: "https://openrouter.ai/api/v1",
 } satisfies Model<"openai-completions">;
 
+const openRouterModelWithoutBaseUrl = {
+  ...openRouterModel,
+  baseUrl: undefined,
+} as unknown as Model<"openai-completions">;
+
 const context = {
   systemPrompt: "Be exact.",
   messages: [{ role: "user", content: "Find the answer.", timestamp: 1 }],
@@ -544,7 +549,9 @@ describe("provider and transport observable parity fixtures", () => {
           {
             type: "text",
             text: "Interim.",
-            textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+            textSignature: expect.stringMatching(
+              /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+            ),
           },
           {
             type: "thinking",
@@ -554,7 +561,9 @@ describe("provider and transport observable parity fixtures", () => {
           {
             type: "text",
             text: "Final.",
-            textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+            textSignature: expect.stringMatching(
+              /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+            ),
           },
         ]);
       }
@@ -569,13 +578,17 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         { type: "thinking", thinking: "Second thought." },
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
 
@@ -593,7 +606,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -603,7 +618,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
 
@@ -617,12 +634,16 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
       expect(hiddenReasoningResult.terminal.openclawDelivery).toEqual({
@@ -663,7 +684,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -673,7 +696,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -705,7 +730,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -737,6 +764,24 @@ describe("provider and transport observable parity fixtures", () => {
     }
   });
 
+  it("fails closed before using the OpenAI default endpoint for another provider", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiChunks,
+        true,
+        openRouterModelWithoutBaseUrl,
+      );
+
+      expect(result.terminal.stopReason).toBe("error");
+      expect(result.errorFields.errorMessage).toContain(
+        'Provider "openrouter" requires an explicit base URL',
+      );
+      expect(openAiMockState.payloads).toEqual([]);
+    }
+  });
+
   it("preserves earlier visible details when later ordinary content is interrupted", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runOpenAi(
@@ -751,7 +796,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Visible first.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -761,7 +808,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -771,7 +820,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-1","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-1-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
     }

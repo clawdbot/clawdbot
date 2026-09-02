@@ -9,7 +9,7 @@ function createProvider(maxInputTokens: number): EmbeddingProvider {
     id: "mock",
     model: "mock-embed",
     maxInputTokens,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }
@@ -21,7 +21,7 @@ function createProviderWithoutMaxInputTokens(params: {
   return {
     id: params.id,
     model: params.model,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }

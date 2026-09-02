@@ -31,6 +31,7 @@ vi.mock("../../media/store.js", async (importOriginal) => {
   return { ...actual, readMediaBuffer: mocks.readMediaBuffer };
 });
 
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -40,8 +41,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -281,6 +286,17 @@ function installUpstreamForkHarness(): void {
   setActivePluginRegistry(registry);
 }
 
+async function archiveSourceSession(storePath?: string): Promise<void> {
+  const entry = expectDefined(
+    loadSessionEntry({ agentId: "main", sessionKey, storePath }),
+    "source session",
+  );
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey, storePath },
+    { ...entry, archivedAt: Date.now() },
+  );
+}
+
 describe("session message-cut methods", () => {
   it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
     const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
@@ -323,6 +339,50 @@ describe("session message-cut methods", () => {
 
     const rewind = await invoke("sessions.rewind", "user-entry", client, false, runtimeConfig);
     expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  });
+
+  it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
+    const profile = ensureProfileForEmail("sandbox-required-fork-creator@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sandbox: "required",
+            },
+          },
+        },
+      },
+    });
+
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+
+    expect(fork).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("sandbox");
   });
 
   it("returns an empty branch list for a not-yet-materialized session", async () => {
@@ -485,6 +545,66 @@ describe("session message-cut methods", () => {
   });
 
   it.each([
+    ["sessions.rewind", "user-entry", "Rewind"],
+    ["sessions.branches.switch", "off-path-entry", "Branch switch"],
+  ] as const)("rejects archived %s", async (method, entryId, label) => {
+    await archiveSourceSession();
+
+    const respond = await invoke(method, entryId);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: `${label} is unavailable for archived sessions.`,
+      }),
+    );
+  });
+
+  it("allows archived sessions to fork", async () => {
+    await archiveSourceSession();
+
+    const respond = await invoke("sessions.fork", "user-entry");
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+  });
+
+  it("rechecks archived state after waiting for the session lifecycle lock", async () => {
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    const mutationEntered = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const archiving = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sourceSessionId],
+      run: async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+        await archiveSourceSession(storePath);
+      },
+    });
+    await mutationEntered.promise;
+
+    const rewinding = invoke("sessions.rewind", "user-entry");
+    releaseMutation.resolve();
+    await archiving;
+
+    const respond = await rewinding;
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Rewind is unavailable for archived sessions.",
+      }),
+    );
+  });
+
+  it.each([
     ["missing", "message entry not found"],
     ["assistant-entry", "entry is not a user message"],
     ["off-path-entry", "not on the active path"],
@@ -563,6 +683,65 @@ describe("session message-cut methods", () => {
         }),
       }),
     );
+  });
+
+  it("preserves the authenticated creator and required sandbox when a harness materializes an upstream fork", async () => {
+    const profile = ensureProfileForEmail("sandbox-required-upstream-fork@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sandbox: "required",
+            },
+          },
+        },
+      },
+    });
+    linkToUpstreamConversation();
+    installUpstreamForkHarness();
+    mocks.upstreamFork.mockImplementation(async ({ targetKey }: { targetKey: string }) => {
+      const created = await createRuntimeAgent().session.createSessionEntry({
+        cfg: runtimeConfig(),
+        key: targetKey,
+        initialEntry: { agentHarnessId: "test-harness" },
+      });
+      return { status: "created", key: created.key };
+    });
+
+    const fork = await withPluginRuntimeGatewayRequestScope(
+      { client, isWebchatConnect: () => false },
+      () => invoke("sessions.fork", "user-entry", client, false, runtimeConfig),
+    );
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+
+    expect(fork).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+    expect(mocks.upstreamFork).toHaveBeenCalledWith(
+      expect.objectContaining({ sandbox: "required" }),
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
   });
 
   it("does not mutate the local session when the upstream fork fails", async () => {

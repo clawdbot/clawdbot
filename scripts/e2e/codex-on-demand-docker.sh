@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Installs a prepared OpenClaw npm tarball in Docker, runs OpenAI onboarding,
-# and verifies the Codex plugin plus @openai/codex dependency are downloaded on demand.
+# Installs OpenClaw and Codex from npm artifacts with explicit capability consent,
+# then verifies OpenAI onboarding, managed dependencies, and doctor in Docker.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-PREPUBLISH_PLUGIN_REGISTRY_ARGS=()
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 run_log=""
 
@@ -20,33 +21,9 @@ run_log=""
 # the Codex assertions instead of failing as a silent package-install timeout.
 export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
 
-configure_prepublish_plugin_registry() {
-  local registry_dir="$1"
-  local resolved_registry_dir
-  resolved_registry_dir="$(cd "$registry_dir" && pwd)"
-  local manifest="$resolved_registry_dir/prepublish-plugin-registry.json"
-  if [ ! -f "$manifest" ]; then
-    echo "Prepublish plugin registry manifest is missing." >&2
-    exit 1
-  fi
-  local source_sha="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}"
-  local candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}"
-  local manifest_sha256="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}"
-  source_sha="${source_sha:-$(node -e 'process.stdout.write(require(process.argv[1]).sourceSha)' "$manifest")}"
-  candidate_version="${candidate_version:-$(node -e 'process.stdout.write(require(process.argv[1]).candidateVersion)' "$manifest")}"
-  if [ -z "$manifest_sha256" ]; then
-    manifest_sha256="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$manifest")"
-  fi
-  PREPUBLISH_PLUGIN_REGISTRY_ARGS=(
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
-    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="$source_sha"
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$candidate_version"
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$manifest_sha256"
-    -v "$resolved_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
-  )
-}
 if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  configure_prepublish_plugin_registry "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+  openclaw_prepublish_plugin_registry_configure_docker_args \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
 fi
 
 cleanup() {
@@ -88,7 +65,7 @@ if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
     OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
     OPENCLAW_DOCKER_ALL_TIMINGS=0 \
     node "$ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry >/dev/null
-  configure_prepublish_plugin_registry \
+  openclaw_prepublish_plugin_registry_configure_docker_args \
     "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
 fi
 
@@ -100,7 +77,7 @@ echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  ${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]+"${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}"} \
+  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
@@ -121,6 +98,7 @@ dump_debug_logs() {
   echo "Codex on-demand scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-codex-registry/server.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-plugins-list.json \
@@ -135,16 +113,8 @@ cleanup_inner() {
 trap cleanup_inner EXIT
 
 configure_plugin_registry() {
-  [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
-  local registry_root="/tmp/openclaw-codex-registry"
-  OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='["@openclaw/codex"]' \
-    openclaw_prepublish_plugin_registry_start \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
-    "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}" \
-    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" \
-    "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}" \
-    "$registry_root" \
-    plugin_registry_pid
+  openclaw_prepublish_plugin_registry_start_mounted \
+    /tmp/openclaw-codex-registry plugin_registry_pid '["@openclaw/codex"]'
 }
 
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
@@ -159,7 +129,17 @@ openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PR
 
 configure_plugin_registry
 
-echo "Running non-interactive OpenAI onboarding; Codex should install on demand..."
+# Non-interactive onboarding cannot grant capabilities. Use the shared fixture
+# consent flow and the exact companion when testing an unpublished candidate.
+codex_install_args=("@openclaw/codex")
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  codex_install_args=("npm:@openclaw/codex@${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" --pin)
+fi
+echo "Installing Codex on demand with explicit capability consent..."
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${codex_install_args[@]}" \
+  >/tmp/openclaw-codex-plugin-install.log 2>&1
+
+echo "Running non-interactive OpenAI onboarding with the accepted Codex plugin..."
 openclaw onboard --non-interactive --accept-risk \
   --mode local \
   --auth-choice openai-api-key \
@@ -174,6 +154,7 @@ openclaw onboard --non-interactive --accept-risk \
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect codex --runtime --json >/tmp/openclaw-codex-inspect.json
 node scripts/e2e/lib/codex-on-demand/assertions.mjs
+node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
 
 echo "Codex on-demand Docker E2E passed"
 EOF
@@ -181,4 +162,5 @@ EOF
   exit 1
 fi
 
+docker_e2e_print_log "$run_log"
 echo "Codex on-demand Docker E2E passed"

@@ -29,29 +29,14 @@ internal data class SystemNotifyRequest(
 
 /** Notification posting seam used by production Android and unit tests. */
 internal interface SystemNotificationPoster {
-  fun isAuthorized(): Boolean
-
   fun post(request: SystemNotifyRequest)
 }
 
 private class AndroidSystemNotificationPoster(
   private val appContext: Context,
 ) : SystemNotificationPoster {
-  /** Checks both Android 13 runtime permission and app-level notification enablement. */
-  override fun isAuthorized(): Boolean {
-    if (Build.VERSION.SDK_INT >= 33) {
-      val granted =
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
-          PackageManager.PERMISSION_GRANTED
-      if (!granted) return false
-    }
-    return NotificationManagerCompat.from(appContext).areNotificationsEnabled()
-  }
-
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
-    val channelId = ensureChannel(request.priority)
-    val notification = buildSystemNotification(appContext, channelId, request)
     if (
       Build.VERSION.SDK_INT >= 33 &&
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -59,6 +44,11 @@ private class AndroidSystemNotificationPoster(
     ) {
       throw SecurityException("notifications permission missing")
     }
+    if (!NotificationManagerCompat.from(appContext).areNotificationsEnabled()) {
+      throw SecurityException("notifications disabled")
+    }
+    val channelId = ensureChannel(request.priority)
+    val notification = buildSystemNotification(appContext, channelId, request)
     NotificationManagerCompat.from(appContext).notify((System.currentTimeMillis() and 0x7FFFFFFF).toInt(), notification)
   }
 
@@ -68,20 +58,29 @@ private class AndroidSystemNotificationPoster(
     // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
-        "passive" ->
+        "passive" -> {
           Triple("passive", NotificationManager.IMPORTANCE_LOW, nativeString("OpenClaw Passive"))
-        "timesensitive" ->
+        }
+
+        "timesensitive" -> {
           Triple(
             "timesensitive",
             NotificationManager.IMPORTANCE_HIGH,
             nativeString("OpenClaw Time Sensitive"),
           )
-        else ->
+        }
+
+        else -> {
           Triple("active", NotificationManager.IMPORTANCE_DEFAULT, nativeString("OpenClaw Active"))
+        }
       }
     val channelId = "$NOTIFICATION_CHANNEL_BASE_ID.$suffix"
     val manager = appContext.getSystemService(NotificationManager::class.java)
     val existing = manager.getNotificationChannel(channelId)
+    // notify() silently drops blocked channels; report the user's existing choice before posting.
+    if (existing?.importance == NotificationManager.IMPORTANCE_NONE) {
+      throw SecurityException("notification channel disabled")
+    }
     if (existing == null) {
       manager.createNotificationChannel(NotificationChannel(channelId, name, importance))
     }
@@ -138,19 +137,13 @@ class SystemHandler private constructor(
         message = "INVALID_REQUEST: empty notification",
       )
     }
-    if (!poster.isAuthorized()) {
-      return GatewaySession.InvokeResult.error(
-        code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: notifications",
-      )
-    }
     return try {
       poster.post(params)
       GatewaySession.InvokeResult.ok(null)
     } catch (_: SecurityException) {
       GatewaySession.InvokeResult.error(
         code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: notifications",
+        message = "NOT_AUTHORIZED: enable OpenClaw notifications and the selected priority in Android Settings",
       )
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(

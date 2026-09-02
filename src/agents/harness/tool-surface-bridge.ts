@@ -62,9 +62,11 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
   /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
-  model?: { compat?: unknown };
+  model?: { compat?: unknown; contextWindow?: number };
+  contextTokenBudget?: number;
   modelId?: string;
   modelProvider?: string;
+  codeModeOverride?: boolean | "auto";
   modelToolsEnabled: boolean;
   prompt?: string;
   runId?: string;
@@ -87,6 +89,9 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     sessionKey: params.sessionKey,
     forceDirectMessageTool,
     model: params.model,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    codeModeOverride: params.codeModeOverride,
     toolsEnabled: params.modelToolsEnabled,
     disableTools: params.disableTools,
     isRawModelRun: params.isRawModelRun === true,
@@ -143,6 +148,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
       ? createCodeModeTools({
           config: params.config,
           runtimeConfig: params.config,
+          modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,

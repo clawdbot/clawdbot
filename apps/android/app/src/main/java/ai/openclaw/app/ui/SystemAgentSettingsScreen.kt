@@ -97,7 +97,7 @@ internal fun SystemAgentSettingsScreen(
       }
 
       when (state.access) {
-        SystemAgentChatAccess.Ready ->
+        SystemAgentChatAccess.Ready -> {
           SystemAgentConversation(
             state = state,
             onInputChange = viewModel::setSystemAgentChatInput,
@@ -107,7 +107,11 @@ internal fun SystemAgentSettingsScreen(
             onRestart = viewModel::restartSystemAgentChat,
             onOpenChat = viewModel::openSystemAgentChatHandoff,
           )
-        else -> SystemAgentAccessGate(state = state)
+        }
+
+        else -> {
+          SystemAgentAccessGate(state = state)
+        }
       }
     }
   }

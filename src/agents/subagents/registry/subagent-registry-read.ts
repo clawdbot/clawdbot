@@ -6,6 +6,7 @@
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
@@ -169,6 +170,18 @@ export function isSubagentRunLive(
     return false;
   }
   return Boolean(getAgentRunContext(entry.runId));
+}
+
+/** Queued admission belongs to the exact current registration and scheduler reservation. */
+export function isSubagentRunQueued(entry: SubagentRunReadRecord | null | undefined): boolean {
+  const current = entry ? subagentRuns.get(entry.runId) : undefined;
+  return Boolean(
+    current &&
+    current === entry &&
+    current.collect &&
+    current.execution.status === "queued" &&
+    ownsSwarmRunReservation(current.schedulerSlotId ?? current.runId, current),
+  );
 }
 
 /** Returns the run to display for a child session, using live memory before snapshot state. */

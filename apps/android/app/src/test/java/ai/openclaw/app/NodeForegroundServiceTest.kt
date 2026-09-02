@@ -175,7 +175,7 @@ class NodeForegroundServiceTest {
       assertEquals(2, Shadows.shadowOf(controller.get()).stopSelfResultId)
       assertNull(app.peekRuntime())
     } finally {
-      controller.destroy()
+      closeNodeServiceTestFixture(controller, app)
     }
   }
 
@@ -207,8 +207,7 @@ class NodeForegroundServiceTest {
       assertEquals(Service.START_NOT_STICKY, stopped)
       assertEquals(Service.START_STICKY, resumed)
     } finally {
-      controller.destroy()
-      app.peekRuntime()?.disconnect()
+      closeNodeServiceTestFixture(controller, app)
     }
   }
 
@@ -225,7 +224,7 @@ class NodeForegroundServiceTest {
       assertFalse(runtime.isForeground.value)
       assertFalse(prefs.voiceMicEnabled.value)
     } finally {
-      runtime.disconnect()
+      closeNodeRuntimeTestFixture(runtime)
     }
   }
 

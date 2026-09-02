@@ -111,6 +111,7 @@ export async function resolvePromptBuildHookResult(params: {
     : await drainPluginNextTurnInjectionContext({
         cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
+        agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
@@ -468,6 +469,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "messageChannel"
   | "messageProvider"
   | "agentAccountId"
@@ -476,6 +478,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "currentMessageId"
   | "config"
   | "skillsSnapshot"
+  | "toolsAllow"
   | "senderId"
   | "provider"
   | "modelId"
@@ -539,6 +542,8 @@ export function buildAfterTurnRuntimeContext(params: {
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
+      sandboxSessionKey: params.attempt.sandboxSessionKey,
+      sandboxAgentId: params.attempt.sandboxAgentId,
       messageChannel: params.attempt.messageChannel,
       messageProvider: params.attempt.messageProvider,
       agentAccountId: params.attempt.agentAccountId,
@@ -552,6 +557,7 @@ export function buildAfterTurnRuntimeContext(params: {
       cwd: params.cwd,
       agentDir: params.agentDir,
       config: params.attempt.config,
+      toolsAllow: params.attempt.toolsAllow,
       skillsSnapshot: params.attempt.skillsSnapshot,
       senderId: params.attempt.senderId,
       provider: params.attempt.provider,

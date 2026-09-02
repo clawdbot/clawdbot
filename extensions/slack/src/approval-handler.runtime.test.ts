@@ -263,6 +263,13 @@ async function updateSlackApprovalEntry(
     ...APPROVAL_CONTEXT,
     context,
     entry: { channelId: "C123", messageTs: "1712345678.999999" },
+    request: {
+      id: "approval-1",
+      request: { command: "echo hi" },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    },
+    approvalKind: "exec",
     payload,
     phase: "resolved",
   });
@@ -320,8 +327,8 @@ function findApprovalMrkdwn(payload: SlackPayload, prefix: string): string {
 }
 
 describe("slackApprovalNativeRuntime", () => {
-  it("subscribes to plugin approval events", () => {
-    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin"]);
+  it("subscribes to all native approval events", () => {
+    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
   });
 
   it("does not leave dangling surrogates when truncating exec approval command mrkdwn", async () => {
@@ -394,6 +401,10 @@ describe("slackApprovalNativeRuntime", () => {
       metadata: [
         { label: "Severity", value: "Warning" },
         { label: "Plugin", value: "computer-use" },
+        {
+          label: "Scope",
+          value: "Send to 3 recipients via email (external): alice@example.com, +2 more",
+        },
       ],
       decisions: ["allow-once", "allow-always", "deny"],
     });
@@ -404,6 +415,12 @@ describe("slackApprovalNativeRuntime", () => {
     );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
+    expect(payload.text).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
+    expect(readMrkdwnTexts(payload.blocks)).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
     expect(payload.text).not.toContain("*Command*");
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,

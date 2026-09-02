@@ -107,6 +107,9 @@ export async function routeCodexAppServerElicitationRequest(params: {
   if (!approvalShaped) {
     return { kind: "not-mine" };
   }
+  if (params.signal?.aborted) {
+    return handled(createCodexElicitationResponse("cancel"));
+  }
   const pluginResolution = resolvePluginElicitation({
     requestParams,
     pluginAppPolicyContext: params.pluginAppPolicyContext,
@@ -674,6 +677,7 @@ async function requestPluginApprovalOutcome(params: {
   try {
     const requestResult = await requestPluginApproval({
       hostCapabilities: params.paramsForRun.hostCapabilities,
+      signal: params.signal,
       title: params.title,
       description: params.description,
       severity: "warning",

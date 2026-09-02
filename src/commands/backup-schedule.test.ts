@@ -140,6 +140,16 @@ describe("scheduled backups", () => {
     expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 
+  it.each(["", "   "])("rejects an explicit blank interval %j before scheduling", async (every) => {
+    const runtime = createTestRuntime();
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+
+    await expect(
+      backupEnableCommand(runtime, { repository: "/tmp/openclaw-backups", every }),
+    ).rejects.toThrow("Invalid duration (empty)");
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
+  });
+
   it("atomically converges an existing declaration and removes it idempotently", async () => {
     gatewayRpc.call.mockResolvedValueOnce({
       created: false,
@@ -159,6 +169,7 @@ describe("scheduled backups", () => {
       expect.anything(),
       expect.objectContaining({
         declarationKey: BACKUP_CRON_JOB_NAME,
+        schedule: { kind: "every", everyMs: 86_400_000 },
         payload: expect.objectContaining({ argv: expect.arrayContaining(["--global"]) }),
       }),
     );

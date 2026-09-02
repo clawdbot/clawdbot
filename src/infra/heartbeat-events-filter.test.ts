@@ -151,6 +151,8 @@ describe("heartbeat event classification", () => {
     { value: "  Cron: rotate logs  ", expected: true },
     { value: "", expected: false },
     { value: "   ", expected: false },
+    { value: "NO_REPLY", expected: false },
+    { value: "no_reply: actual reminder", expected: true },
     { value: "HEARTBEAT_OK", expected: false },
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "heartbeat poll: noop", expected: false },

@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -267,39 +268,83 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("attributes stable and exact run sessions to the stored automation creator", async () => {
-    await useRealCronSessionState();
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      mockEmbeddedTranscriptWrite(storePath, "creator-attributed transcript");
-      const job: CronStoredJob = {
-        ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
-        createdActor: { type: "human", id: "profile-ada" },
-        delivery: { mode: "none" },
-      };
-
-      const res = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath),
-        deps: makeDeps(),
-        job,
-        message: "persist this turn",
-        sessionKey: "cron:job-1",
-        lane: "cron",
+  it.each([
+    { required: false, source: "profile" },
+    { required: true, source: "profile" },
+    { required: true, source: "channel" },
+    { required: true, source: "unknown" },
+  ] as const)(
+    "retains $source provenance on both cron owners before running (required=$required)",
+    async ({ required, source }) => {
+      await useRealCronSessionState();
+      await withTempHome(async (home) => {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const profile = ensureProfileForEmail("cron-creator@example.test");
+        const createdActor = { type: "human" as const, source, id: profile.id };
+        const job: CronStoredJob = {
+          ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
+          createdActor,
+          delivery: { mode: "none" },
+        };
+        const cfg = makeCfg(
+          home,
+          storePath,
+          required
+            ? {
+                gateway: {
+                  roles: {
+                    default: "guest",
+                    definitions: {
+                      guest: {
+                        sessions: { others: "none" },
+                        agents: "*",
+                        scopes: [],
+                        sandbox: "required",
+                      },
+                    },
+                  },
+                },
+              }
+            : {},
+        );
+        runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+          const sessionKey = typeof input.sessionKey === "string" ? input.sessionKey : "";
+          expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+          for (const key of ["agent:main:cron:job-1", sessionKey]) {
+            const entry = loadSessionEntry({ storePath, sessionKey: key });
+            expect(entry).toMatchObject({ createdVia: "cron", createdActor });
+            expect(entry?.sandbox).toBe(required ? "required" : undefined);
+          }
+          return {
+            payloads: [{ text: "ok" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: {
+                sessionId: input.sessionId,
+                provider: "anthropic",
+                model: "claude-opus-4-6",
+              },
+            },
+          };
+        });
+        const res = await runCronIsolatedAgentTurn({
+          cfg,
+          deps: makeDeps(),
+          job,
+          message: "persist this turn",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+        expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        for (const key of ["agent:main:cron:job-1", res.sessionKey!]) {
+          const entry = await readCronSessionEntry(storePath, key);
+          expect(entry).toMatchObject({ createdActor });
+          expect(entry?.sandbox).toBe(required ? "required" : undefined);
+        }
       });
-
-      expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
-      await expect(readCronSessionEntry(storePath, "agent:main:cron:job-1")).resolves.toMatchObject(
-        {
-          createdVia: "cron",
-          createdActor: { type: "human", id: "profile-ada" },
-        },
-      );
-      await expect(readCronSessionEntry(storePath, res.sessionKey!)).resolves.toMatchObject({
-        createdVia: "cron",
-        createdActor: { type: "human", id: "profile-ada" },
-      });
-    });
-  });
+    },
+  );
 
   it("persists rotated transcript identity for current-bound cron runs", async () => {
     await withTempHome(async (home) => {

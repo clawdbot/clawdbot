@@ -5,12 +5,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type * as Sdk from "@github/copilot-sdk";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import copilotPluginPackage from "../package.json" with { type: "json" };
 
 function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "npm-runtime", "copilot");
 }
 
-const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
+const COPILOT_SDK_SPEC = `@github/copilot-sdk@${copilotPluginPackage.dependencies["@github/copilot-sdk"]}`;
 
 let cached: Promise<typeof Sdk> | undefined;
 

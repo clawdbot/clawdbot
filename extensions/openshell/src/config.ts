@@ -8,22 +8,6 @@ import {
 import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 
-type OpenShellPluginConfig = {
-  mode?: "mirror" | "remote";
-  command?: string;
-  gateway?: string;
-  gatewayEndpoint?: string;
-  workspace?: string;
-  from?: string;
-  policy?: string;
-  providers?: string[];
-  gpu?: boolean;
-  autoProviders?: boolean;
-  remoteWorkspaceDir?: string;
-  remoteAgentWorkspaceDir?: string;
-  timeoutSeconds?: number;
-};
-
 export type ResolvedOpenShellPluginConfig = {
   mode: "mirror" | "remote";
   command: string;
@@ -193,7 +177,7 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
     const message = formatPluginConfigIssue(parsed.error.issues[0]);
     throw new Error(`Invalid openshell plugin config: ${message}`);
   }
-  const cfg = parsed.data as OpenShellPluginConfig;
+  const cfg = parsed.data;
   const mode = cfg.mode ?? DEFAULT_MODE;
   return {
     mode,

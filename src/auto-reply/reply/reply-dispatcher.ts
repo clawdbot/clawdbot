@@ -34,8 +34,9 @@ import {
 import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
-  isExplicitlyNonVisibleDelivery,
-  isReplyDispatchProvenInvisible,
+  REPLY_DISPATCH_OUTCOME_COUNTS,
+  resolveReplyDispatchDeliveryOutcome,
+  shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
 import {
@@ -107,6 +108,7 @@ export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadli
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
 const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
+const conversationContextsByDispatcher = new WeakMap<ReplyDispatcher, string>();
 const replyDispatcherPreparers = new WeakMap<
   ReplyDispatcher,
   {
@@ -114,6 +116,14 @@ const replyDispatcherPreparers = new WeakMap<
     normalize: (kind: ReplyDispatchKind, payload: ReplyPayload) => NormalizeReplyOutcome;
   }
 >();
+
+/** Associate this turn's finalized prompt with its exact dispatcher without changing the SDK. */
+export function bindReplyDispatcherConversationContext(
+  dispatcher: ReplyDispatcher,
+  conversationContext: string,
+): void {
+  conversationContextsByDispatcher.set(dispatcher, conversationContext);
+}
 
 /** Capture one core-dispatcher delivery outcome without changing send* return types. */
 export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
@@ -211,6 +221,7 @@ type NormalizeReplyPayloadInternalOptions = Pick<
   | "onHeartbeatStrip"
   | "transformReplyPayload"
 > & {
+  conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -226,6 +237,7 @@ function normalizeReplyPayloadInternal(
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     transformReplyPayload: opts.transformReplyPayload,
+    conversationContext: opts.conversationContext,
     onSkip: opts.onSkip,
   });
 }
@@ -340,6 +352,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       transformReplyPayload: options.transformReplyPayload,
+      conversationContext: conversationContextsByDispatcher.get(dispatcher),
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: notifySkip
         ? (reason) =>
@@ -434,7 +447,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            return isExplicitlyNonVisibleDelivery(outcome) ? "delivered-not-visible" : "delivered";
+            return resolveReplyDispatchDeliveryOutcome(outcome);
           } catch {
             await settleCustody("unknown");
             return "failed-deliver";
@@ -535,7 +548,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       try {
         const attempt = await delivery;
         deliveryOutcome = await attempt.settlement;
-        if (deliveryFallback && isReplyDispatchProvenInvisible(deliveryOutcome)) {
+        if (deliveryFallback && shouldRetryReplyDispatch(deliveryOutcome)) {
           const fallbackAttempt = await startSerializedDelivery(
             deliveryFallback,
             dispatchInfo,
@@ -543,18 +556,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           );
           deliveryOutcome = await fallbackAttempt.settlement;
         }
-        const counts = settledCounts[kind];
-        if (deliveryOutcome === "delivered") {
-          counts.delivered += 1;
-        } else if (deliveryOutcome === "delivered-not-visible") {
-          counts.deliveredNotVisible += 1;
-        } else if (deliveryOutcome === "cancelled") {
-          counts.cancelled += 1;
-        } else if (deliveryOutcome === "failed-before-deliver") {
-          counts.failedBeforeSend += 1;
-        } else {
-          counts.failedAfterSend += 1;
-        }
+        settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
       } catch (err: unknown) {
         settledCounts[kind].failedBeforeSend += 1;
         try {

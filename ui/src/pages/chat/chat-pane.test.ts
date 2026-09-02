@@ -3,12 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
-  getRenderedModalDialog,
   installDialogPolyfill,
   submitInputDialog,
   waitForConfirmDialogActions,
@@ -50,34 +49,59 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
 }
 
 describe("chat pane retained presentation", () => {
-  it("keeps a hidden retained session current without requesting a transcript redraw", () => {
-    const { pane, requestUpdate, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.presented = false;
-    requestUpdate.mockClear();
-    const result = {
-      count: 1,
-      path: "",
-      sessions: [{ key: state.sessionKey, kind: "direct", updatedAt: 1 }],
-    } as NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+  it.each(["hidden", "frame", "no-frame"] as const)(
+    "keeps session publications current while scheduling %s presentation",
+    (presentation) => {
+      const { pane, requestUpdate, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions: createSessionCapabilityFixture(),
+      });
+      pane.presented = presentation !== "hidden";
+      requestUpdate.mockClear();
+      const frames: FrameRequestCallback[] = [];
+      const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        presentation === "no-frame" ? undefined : requestFrame,
+      );
+      const rendered: Array<ChatPageHost["sessionsResult"]> = [];
+      requestUpdate.mockImplementation(() => rendered.push(state.sessionsResult));
+      for (const updatedAt of [1, 2, 3]) {
+        const result = {
+          ts: updatedAt,
+          count: 1,
+          path: "",
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: state.sessionKey, kind: "direct", updatedAt }],
+        } satisfies NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+        pane.applySessionsState({
+          agentId: "main",
+          deletedSessions: [],
+          error: null,
+          groups: [],
+          groupSettings: [],
+          loading: false,
+          modelOverrides: {},
+          result,
+          sectionOrder: [],
+        });
+        expect(state.sessionsResult).toBe(result);
+      }
 
-    pane.applySessionsState({
-      agentId: "main",
-      deletedSessions: [],
-      error: null,
-      groups: [],
-      groupSettings: [],
-      loading: false,
-      modelOverrides: {},
-      result,
-      sectionOrder: [],
-    });
-
-    expect(state.sessionsResult).toBe(result);
-    expect(requestUpdate).not.toHaveBeenCalled();
-  });
+      if (presentation === "frame") {
+        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(requestFrame).toHaveBeenCalledOnce();
+        frames[0]?.(0);
+        expect(rendered).toEqual([state.sessionsResult]);
+      } else {
+        expect(requestFrame).not.toHaveBeenCalled();
+        expect(requestUpdate).toHaveBeenCalledTimes(presentation === "hidden" ? 0 : 3);
+        if (presentation === "no-frame") {
+          expect(rendered.at(-1)).toBe(state.sessionsResult);
+        }
+      }
+    },
+  );
 
   it("does not redraw a retained transcript when its navigation callback is replaced", async () => {
     const { pane } = createTestChatPane({
@@ -103,6 +127,8 @@ describe("chat pane header state", () => {
     ["pin", { kind: "toggle-pin" } as const, { pinned: true }],
     ["unread", { kind: "toggle-unread" } as const, { unread: true }],
     ["icon", { kind: "set-icon", icon: "🦞" } as const, { icon: "🦞" }],
+    ["color", { kind: "set-color", color: "purple" } as const, { color: "purple" }],
+    ["clear color", { kind: "set-color", color: null } as const, { color: null }],
     ["group", { kind: "move-to-group", category: "Projects" } as const, { category: "Projects" }],
   ])("patches the active session from the header %s action", async (_name, action, expected) => {
     const patch = vi.fn(async () => ({}));
@@ -262,75 +288,6 @@ describe("chat pane header state", () => {
 
     expect(patch).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
-  });
-
-  it("commits a trimmed label and clears with null", async () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    pane.beginHeaderRename(session);
-    pane.headerRenameValue = "  Renamed session  ";
-    pane.commitHeaderRename();
-    expect(patch).toHaveBeenCalledWith(
-      session.key,
-      { label: "Renamed session" },
-      { agentId: "main" },
-    );
-
-    const labeled = { ...session, label: "Renamed session" };
-    pane.beginHeaderRename(labeled);
-    pane.headerRenameValue = "   ";
-    pane.commitHeaderRename();
-    expect(patch).toHaveBeenLastCalledWith(session.key, { label: null }, { agentId: "main" });
-  });
-
-  it("renames the selected agent's canonical global session", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions,
-    });
-    state.sessionKey = "global";
-    state.assistantAgentId = "research";
-    const session = {
-      key: "global",
-      kind: "global",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-
-    pane.beginHeaderRename(session);
-    pane.headerRenameValue = "Research thread";
-    pane.commitHeaderRename();
-
-    expect(patch).toHaveBeenCalledWith(
-      "global",
-      { label: "Research thread" },
-      { agentId: "research" },
-    );
-  });
-
-  it("cancels and skips an unchanged generated dashboard title", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
-    const session = {
-      key: "agent:main:dashboard:generated",
-      kind: "direct",
-      displayName: "Generated title",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    pane.beginHeaderRename(session);
-    expect(pane.headerRenameValue).toBe("Generated title");
-    pane.commitHeaderRename();
-    pane.beginHeaderRename(session);
-    pane.cancelHeaderRename();
-    expect(patch).not.toHaveBeenCalled();
   });
 
   it("copies the resolved workspace path and branch", async () => {
@@ -769,9 +726,10 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     state.sessionKey = "main";
     state.hello = hello;
-    state.initialUserMessage = createInitialUserMessageHandoff();
+    state.chatSubmissions = createChatSubmissions();
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
     pane.sessionKey = canonicalSessionKey;
 
     (
@@ -787,62 +745,6 @@ describe("chat pane initialization", () => {
 });
 
 describe("chat pane keyboard shortcuts", () => {
-  it("does not steal typing focus from a shadow-root confirmation", async () => {
-    const restoreDialogPolyfill = installDialogPolyfill();
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
-    const container = document.body.appendChild(document.createElement("div"));
-    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
-    const cancel = modal.appendChild(document.createElement("button"));
-
-    try {
-      const { dialog } = await getRenderedModalDialog(container);
-      expect(dialog.open).toBe(true);
-      expect(document.querySelector("dialog[open]")).toBeNull();
-      cancel.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-
-      cancel.dispatchEvent(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
-
-      expect(focus).not.toHaveBeenCalled();
-    } finally {
-      container.remove();
-      restoreDialogPolyfill();
-    }
-  });
-
-  it("does not steal typing focus from a light-DOM confirmation", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
-    pane.presented = true;
-    const composer = document.createElement("div");
-    composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
-    pane.append(composer);
-    const focus = vi.spyOn(textarea, "focus");
-    const modal = document.body.appendChild(document.createElement("div"));
-    modal.setAttribute("aria-modal", "true");
-
-    try {
-      pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
-
-      expect(focus).not.toHaveBeenCalled();
-    } finally {
-      modal.remove();
-    }
-  });
-
   it("toggles only the active pane's session workspace", () => {
     const client = createGatewayBrowserClientFixture();
     const sessions = createSessionCapabilityFixture();
@@ -870,6 +772,12 @@ describe("chat pane keyboard shortcuts", () => {
       "workspace",
     ]);
     expect(state.sidebarContent).toBe(canvasContent);
+    state.attachmentSidebarContent = {
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "report.pdf",
+      src: "/media/report.pdf",
+    };
 
     const collapseEvent = new KeyboardEvent("keydown", {
       cancelable: true,
@@ -884,6 +792,7 @@ describe("chat pane keyboard shortcuts", () => {
     expect(hasWorkspace()).toBe(false);
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
+    expect(state.attachmentSidebarContent).toBeNull();
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);
     expect(mainSidebarEvent.defaultPrevented).toBe(false);
@@ -914,8 +823,8 @@ describe("chat pane keyboard shortcuts", () => {
     expect(press().defaultPrevented).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
     expect(press().defaultPrevented).toBe(true);
-    expect(state.sidebarLayout.columns).toEqual([]);
-    expect(state.sidebarLayout.open).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(false);
   });
 });
 

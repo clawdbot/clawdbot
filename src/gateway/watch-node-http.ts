@@ -346,29 +346,27 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         : undefined;
     const disconnectedNodeId = options.nodeRegistry.unregister(session.connId);
     if (disconnectedNodeId) {
-      void (async () => {
-        try {
-          if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
-            await recordPairedNodeDisconnection({
-              nodeId: disconnectHistory.nodeId,
-              connectedAtMs: disconnectHistory.connectedAtMs,
-              disconnectedAtMs: now(),
-              expectedPairingGeneration: {
-                nodeId: disconnectHistory.nodeId,
-                key: disconnectHistory.pairingGeneration,
-              },
-              baseDir: options.pairingBaseDir,
-            });
-          }
-        } catch (error) {
-          options.onError?.("watch node disconnect persistence failed", error);
-        }
-        try {
-          options.onNodeDisconnected?.(disconnectedNodeId, reason);
-        } catch (error) {
-          options.onError?.("watch node disconnect cleanup failed", error);
-        }
-      })();
+      const disconnectedAtMs = now();
+      // Finish node-owned cleanup before persistence yields to a replacement connection.
+      try {
+        options.onNodeDisconnected?.(disconnectedNodeId, reason);
+      } catch (error) {
+        options.onError?.("watch node disconnect cleanup failed", error);
+      }
+      if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
+        void recordPairedNodeDisconnection({
+          nodeId: disconnectHistory.nodeId,
+          connectedAtMs: disconnectHistory.connectedAtMs,
+          disconnectedAtMs,
+          expectedPairingGeneration: {
+            nodeId: disconnectHistory.nodeId,
+            key: disconnectHistory.pairingGeneration,
+          },
+          baseDir: options.pairingBaseDir,
+        }).catch((error: unknown) =>
+          options.onError?.("watch node disconnect persistence failed", error),
+        );
+      }
     }
   };
 

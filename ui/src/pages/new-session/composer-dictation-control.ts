@@ -1,7 +1,10 @@
+import { html } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  renderComposerDictationSendAction,
+  renderComposerDictationStatus,
   renderComposerVoiceButton,
   renderMicrophonePicker,
 } from "../chat/components/chat-composer-controls.ts";
@@ -16,18 +19,13 @@ type NewSessionDictationOptions = {
   canCommit: () => boolean;
   onMessage: (message: string) => void;
   onError: (message: string) => void;
-  onClearError: (message: string) => void;
+  onSubmit: () => void;
   requestUpdate: () => void;
 };
 
 /**
- * Dictation for the new-session draft: hold the microphone, speak, release, and
- * the transcript lands at the caret.
- *
- * Deliberately dictation only. The chat composer's microphone doubles as a Talk
- * toggle, but Talk needs a live session and this composer exists precisely
- * because there is not one yet, so a plain tap has nothing to start and says so
- * instead of silently doing nothing.
+ * Dictation for the new-session draft. This surface has no Talk capability, so
+ * its microphone enters the shared dictation session directly on click.
  */
 export class NewSessionDictationControl {
   private readonly devicePicker: ComposerMicrophonePicker;
@@ -38,15 +36,26 @@ export class NewSessionDictationControl {
     this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
   }
 
-  get locked(): boolean {
-    return this.dictation?.locksComposer === true;
-  }
-
   dispose(): void {
     this.owner = null;
     this.dictation?.dispose();
     this.dictation = null;
     this.devicePicker.dispose();
+  }
+
+  get active(): boolean {
+    return this.dictation?.active === true;
+  }
+
+  previewDraft(): string | undefined {
+    const dictation = this.dictation;
+    return dictation?.active
+      ? this.options.textarea.previewTranscript(dictation.transcript)
+      : undefined;
+  }
+
+  renderStatus() {
+    return renderComposerDictationStatus(this.dictation ?? undefined);
   }
 
   render(ownerKey: string) {
@@ -59,20 +68,21 @@ export class NewSessionDictationControl {
     const ownsDraft = () => this.owner === owner;
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
+    this.devicePicker.syncCatalog(client, connected);
     const enabled = this.options.canCommit();
     const dictationOptions = {
       client,
       connected,
       enabled,
+      dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
-      onCommit: (transcript: string) => {
-        // Route changes replace draft ownership while finalization is asynchronous.
-        // Object identity keeps even an A -> B -> A transition from accepting A's result.
+      onCommit: (transcript: string, late?: true) => {
+        // Route changes replace draft ownership. Object identity keeps even an
+        // A -> B -> A transition from accepting the prior route's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
-        this.options.onClearError(t("newSession.dictationHoldToSpeak"));
-        const next = this.options.textarea.insertTranscript(transcript);
+        const next = this.options.textarea.insertTranscript(transcript, late);
         if (next !== null) {
           this.options.onMessage(next);
         }
@@ -88,40 +98,43 @@ export class NewSessionDictationControl {
           this.options.requestUpdate();
         }
       },
-      onTap: () => {
-        if (ownsDraft()) {
-          this.options.onError(t("newSession.dictationHoldToSpeak"));
-        }
-      },
+      onDictationUnavailable: this.devicePicker.handleOpen,
     };
     this.dictation ??= new ComposerDictationController(dictationOptions);
     this.dictation.update(dictationOptions);
     const dictation = this.dictation;
 
-    return renderComposerVoiceButton({
-      connected,
-      sending: false,
-      isBusy: !enabled,
-      dictation,
-      idleLabel: t("newSession.dictate"),
-      microphonePicker: renderMicrophonePicker({
-        devices: this.devicePicker.devices,
-        loading: this.devicePicker.loading,
-        open: this.devicePicker.open,
-        selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
-        voiceActive: false,
-        issue: this.devicePicker.issue,
-        onOpen: this.devicePicker.handleOpen,
-        onClose: this.devicePicker.handleClose,
-        onSelect: (deviceId: string) => {
-          patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
-          this.devicePicker.handleClose();
-        },
-      }),
-      onDictationPointerDown: (event: PointerEvent) => {
-        this.options.textarea.captureSelection();
-        dictation.handlePointerDown(event);
-      },
-    });
+    return html`
+      ${renderComposerVoiceButton({
+        connected,
+        sending: false,
+        isBusy: !enabled,
+        dictation,
+        idleLabel: t("newSession.dictate"),
+        microphonePicker: renderMicrophonePicker({
+          devices: this.devicePicker.devices,
+          loading: this.devicePicker.loading,
+          open: this.devicePicker.open,
+          selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
+          voiceActive: false,
+          issue: this.devicePicker.issue,
+          showRealtimeCapability: false,
+          realtimeStatus: this.devicePicker.realtimeStatus,
+          dictationStatus: this.devicePicker.dictationStatus,
+          onOpen: this.devicePicker.handleOpen,
+          onClose: this.devicePicker.handleClose,
+          onSelect: (deviceId: string) => {
+            patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
+            this.devicePicker.handleClose();
+          },
+        }),
+        onDirectDictationStart: () => this.options.textarea.captureSelection(),
+      })}
+      ${renderComposerDictationSendAction(dictation, () => {
+        if (ownsDraft() && this.options.canCommit()) {
+          this.options.onSubmit();
+        }
+      })}
+    `;
   }
 }

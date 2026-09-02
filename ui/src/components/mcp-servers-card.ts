@@ -23,7 +23,9 @@ import { icons } from "./icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "./mcp-server-form.ts";
 import {
   renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsSection,
   renderSettingsStatus,
 } from "./settings-ui.ts";
@@ -225,7 +227,7 @@ class McpServersCard extends OpenClawLightDomElement {
     const blockedReason = this.mutationBlockedReason();
     const rows = this.rows;
     const body = !rows
-      ? html`<div class="mcp-server-loading" role="status">${t("common.loading")}</div>`
+      ? renderSettingsLoadingSkeleton({ rows: 2 })
       : rows.length === 0
         ? renderSettingsEmpty(html`
             ${t("mcpPage.noServers")} ${renderDocsLink(this.docsUrl, t("mcpPage.setUpFirstServer"))}
@@ -237,8 +239,7 @@ class McpServersCard extends OpenClawLightDomElement {
           {
             title: t("mcpPage.configuredServers"),
             description: html`
-              ${t("mcpPage.runtimeHint")}
-              <a href=${this.pluginsHref}>${t("mcpPage.connectorsLink")}</a>
+              ${t("mcpPage.runtimeHint")} ${renderLearnMoreLink(this.pluginsHref)}
             `,
             actions: html`
               <button

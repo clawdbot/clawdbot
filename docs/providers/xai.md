@@ -417,6 +417,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     surface, but the xAI REST STT integration forwards only file and language
     because those map to the current public xAI endpoint.
 
+    Valid empty transcripts are skipped, and OpenClaw tries any configured
+    fallback. Malformed responses and HTTP failures remain errors.
+
   </Accordion>
 
   <Accordion title="Streaming speech-to-text">

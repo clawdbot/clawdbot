@@ -1,13 +1,96 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import {
-  rememberChatMetadata,
+  beginChatMetadataPublication,
   revalidateChatMetadata,
+  invalidateChatMetadataStore,
+  subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 describe("new-session model metadata lifecycle", () => {
+  it("retains draft model controls across client replacement but clears them for another agent", async () => {
+    const model: ModelCatalogEntry = {
+      id: "model",
+      name: "Model",
+      provider: "openai",
+      available: true,
+    };
+    const agent = { id: "main", model: { primary: "openai/model" } };
+    const first = contextWith([model]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(first.context, "main", true, { agent });
+    await vi.waitFor(() => expect(first.request).toHaveBeenCalledOnce());
+    const selection = {
+      selected: "openai/model",
+      contextWindow: "200k",
+      thinkingLevel: "high",
+      fastMode: true,
+    } as const;
+    Object.assign(control, selection);
+    const replacement = contextWith([
+      { ...model, available: false, unavailableReason: "missing-auth" },
+    ]);
+
+    control.load(replacement.context, "main", true, { agent });
+    expect(control).toMatchObject(selection);
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
+    expect(control).toMatchObject(selection);
+
+    control.load(replacement.context, "research", true);
+    expect(control).toMatchObject({
+      selected: "",
+      contextWindow: "",
+      thinkingLevel: "",
+      fastMode: undefined,
+    });
+    control.reset();
+  });
+
+  it("retains its neutral auth gate through pending, rejected and failed refreshes, isolated from a session projection", async () => {
+    const model: ModelCatalogEntry = {
+      id: "model",
+      name: "Model",
+      provider: "test",
+      available: false,
+      unavailableReason: "missing-auth",
+    };
+    const agent = { id: "main", model: { primary: "test/model" } };
+    const { context, request } = contextWith([model]);
+    const client = context.gateway.snapshot.client!;
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true, { agent });
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
+    const scope = { agentId: "main", sessionKey: "agent:main:locked" };
+    const release = subscribeChatMetadata(client, scope, () => {});
+    beginChatMetadataPublication(client, scope).publish({
+      commands: [],
+      models: [{ ...model, available: true, unavailableReason: undefined }],
+    });
+    expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
+    const pending = deferred<{ models: ModelCatalogEntry[] }>();
+    request.mockReturnValueOnce(pending.promise);
+    invalidateChatMetadataStore(client);
+    expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
+    pending.resolve({ models: [{ ...model, unavailableReason: "auth-failed" }] });
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("auth-failed"));
+    request.mockRejectedValueOnce(new Error("transport failed"));
+    invalidateChatMetadataStore(client);
+    await expect(revalidateChatMetadata(client, { agentId: "main" })).rejects.toThrow(
+      "transport failed",
+    );
+    expect(control.modelUnavailableReason(agent)).toBe("auth-failed");
+    request.mockResolvedValueOnce({
+      models: [{ ...model, available: true, unavailableReason: undefined }],
+    });
+    invalidateChatMetadataStore(client);
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBeUndefined());
+    release();
+    control.reset();
+  });
+
   it("discovers account models when an operator opens the New Session picker", async () => {
     const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
     const discovered = [
@@ -16,7 +99,10 @@ describe("new-session model metadata lifecycle", () => {
     ];
     const { context, request } = contextWith(prepared);
     const client = context.gateway.snapshot.client!;
-    rememberChatMetadata(client, "main", { commands: [], models: prepared });
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({
+      commands: [],
+      models: prepared,
+    });
     request.mockImplementation((method: string) =>
       Promise.resolve({
         models: discovered,
@@ -44,7 +130,11 @@ describe("new-session model metadata lifecycle", () => {
       agentId: "main",
       refresh: true,
     });
-    expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith(
+      "chat.metadata",
+      { agentId: "main" },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
   });
 
   it("keeps a ready catalog authoritative across control teardown", async () => {
@@ -54,13 +144,14 @@ describe("new-session model metadata lifecycle", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     const { context, request } = contextWith(models);
     const firstControl = new NewSessionModelControl(() => undefined);
     firstControl.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(firstControl.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(firstControl.modelUnavailableReason(agent)).toBe("missing-auth"));
     firstControl.reset();
 
     const remountedControl = new NewSessionModelControl(() => undefined);
@@ -68,13 +159,11 @@ describe("new-session model metadata lifecycle", () => {
 
     const container = renderControl(remountedControl, context, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
-    expect(remountedControl.isModelUnavailable(agent)).toBe(true);
+    expect(remountedControl.modelUnavailableReason(agent)).toBe("missing-auth");
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
     ).not.toBeNull();
-    expect(container.textContent).toContain(
-      "Authentication failed. Review the provider credential or sign-in, then retry.",
-    );
+    expect(container.textContent).toContain("No models available");
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -131,9 +220,9 @@ describe("new-session model metadata lifecycle", () => {
     const refresh = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     const client = context.gateway.snapshot.client!;
-    rememberChatMetadata(client, "main", { commands: [], models });
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models });
     request.mockReturnValueOnce(refresh.promise);
-    const pendingRefresh = revalidateChatMetadata(client, "main");
+    const pendingRefresh = revalidateChatMetadata(client, { agentId: "main" });
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true, {

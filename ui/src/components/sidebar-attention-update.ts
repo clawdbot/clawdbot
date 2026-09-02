@@ -1,7 +1,5 @@
 import type { ApplicationContext } from "../app/context.ts";
-import { hasNativeUpdateBridge } from "../app/native-link-routing.ts";
-import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
-import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
+import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
@@ -65,23 +63,4 @@ export function resolveSidebarUpdateAttention(
     forced,
     present,
   };
-}
-
-export function startSidebarUpdateAttention(params: {
-  context: SidebarUpdateContext;
-  nativeUpdateDeclined: boolean;
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-}) {
-  const state = resolveSidebarUpdateAttention(params.context);
-  if (!state.actionable || state.busy || !state.canUpdate) {
-    return;
-  }
-  const snapshot = params.context.overlays.snapshot;
-  void confirmAndStartUpdate({
-    startGatewayUpdate: () => void params.context.overlays.runUpdate(),
-    ...(params.watchUpdateProgress ? { watchUpdateProgress: params.watchUpdateProgress } : {}),
-    updateAvailable: snapshot.updateAvailable,
-    updateSchedule: snapshot.updateSchedule,
-    viaNativeApp: !params.nativeUpdateDeclined && hasNativeUpdateBridge(),
-  });
 }

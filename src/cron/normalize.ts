@@ -1,6 +1,7 @@
 /** Normalizes cron create/patch payloads before validation and persistence. */
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,16 +9,18 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
-import { isRecord } from "../utils.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
@@ -26,7 +29,7 @@ import {
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
-import type { CronJobCreate, CronJobPatch } from "./types.js";
+import { isSystemOwnedCronPayloadKind, type CronJobCreate, type CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -41,8 +44,8 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
 };
 
 function coerceSchedule(schedule: UnknownRecord) {
-  const next: UnknownRecord = { ...schedule };
-  const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
+  const next = snapshotOwnCronRecord(schedule);
+  const rawKind = normalizeLowercaseStringOrEmpty(next.kind);
   const kind =
     rawKind === "at" ||
     rawKind === "every" ||
@@ -51,16 +54,16 @@ function coerceSchedule(schedule: UnknownRecord) {
     rawKind === "stream"
       ? rawKind
       : undefined;
-  const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
-  const timezone = normalizeOptionalString(schedule.tz);
-  const commandRaw = normalizeOptionalString(schedule.command) ?? "";
-  const streamCommand = normalizeCronCommandArgv(schedule.command);
-  const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
-  const streamMode = normalizeOptionalLowercaseString(schedule.mode);
-  const streamMatch = typeof schedule.match === "string" ? schedule.match : undefined;
-  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
-  const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
-  const atString = normalizeOptionalString(schedule.at) ?? "";
+  const exprRaw = normalizeOptionalString(next.expr) ?? "";
+  const timezone = normalizeOptionalString(next.tz);
+  const commandRaw = normalizeOptionalString(next.command) ?? "";
+  const streamCommand = normalizeCronCommandArgv(next.command);
+  const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
+  const streamMode = normalizeOptionalLowercaseString(next.mode);
+  const streamMatch = typeof next.match === "string" ? next.match : undefined;
+  const everyMs = coerceFiniteScheduleNumber(next.everyMs);
+  const anchorMs = coerceFiniteScheduleNumber(next.anchorMs);
+  const atString = normalizeOptionalString(next.at) ?? "";
   const parsedAtMs = atString ? parseAbsoluteTimeMs(atString) : null;
 
   if (kind) {
@@ -116,7 +119,7 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
     normalizeCronStreamBatching(next);
   }
-  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+  const staggerMs = normalizeCronStaggerMs(next.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
   } else if ("staggerMs" in next) {
@@ -173,12 +176,13 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.maxBatchBytes;
   }
 
-  return next;
+  return { ...next };
 }
 
 function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
-  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
-  const once = parseBoolean(trigger.once);
+  const input = snapshotOwnCronRecord(trigger);
+  const script = typeof input.script === "string" ? input.script.trim() : "";
+  const once = parseBoolean(input.once);
   return {
     script,
     ...(once !== undefined ? { once } : {}),
@@ -186,35 +190,35 @@ function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
 }
 
 function coerceDelivery(delivery: UnknownRecord) {
-  const next: UnknownRecord = { ...delivery };
-  const parsed = parseDeliveryInput(delivery);
+  const next = snapshotOwnCronRecord(delivery);
+  const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
     next.mode = parsed.mode;
   } else if ("mode" in next) {
     delete next.mode;
   }
-  if ("channel" in delivery && delivery.channel === null) {
+  if ("channel" in next && next.channel === null) {
     next.channel = null;
   } else if (parsed.channel !== undefined) {
     next.channel = parsed.channel;
   } else if ("channel" in next) {
     delete next.channel;
   }
-  if ("to" in delivery && delivery.to === null) {
+  if ("to" in next && next.to === null) {
     next.to = null;
   } else if (parsed.to !== undefined) {
     next.to = parsed.to;
   } else if ("to" in next) {
     delete next.to;
   }
-  if ("threadId" in delivery && delivery.threadId === null) {
+  if ("threadId" in next && next.threadId === null) {
     next.threadId = null;
   } else if (parsed.threadId !== undefined) {
     next.threadId = parsed.threadId;
   } else if ("threadId" in next) {
     delete next.threadId;
   }
-  if ("accountId" in delivery && delivery.accountId === null) {
+  if ("accountId" in next && next.accountId === null) {
     next.accountId = null;
   } else if (parsed.accountId !== undefined) {
     next.accountId = parsed.accountId;
@@ -247,12 +251,13 @@ function coerceDelivery(delivery: UnknownRecord) {
       }
     }
   }
-  return next;
+  return { ...next };
 }
 
 function coerceCompletionDestination(value: UnknownRecord) {
-  const mode = normalizeOptionalLowercaseString(value.mode);
-  const to = normalizeOptionalString(value.to);
+  const input = snapshotOwnCronRecord(value);
+  const mode = normalizeOptionalLowercaseString(input.mode);
+  const to = normalizeOptionalString(input.to);
   if (mode !== "webhook") {
     return null;
   }
@@ -263,7 +268,7 @@ function coerceCompletionDestination(value: UnknownRecord) {
 }
 
 function coerceFailureDestination(value: UnknownRecord) {
-  const next: UnknownRecord = { ...value };
+  const next = snapshotOwnCronRecord(value);
   if ("channel" in next) {
     if (next.channel === null) {
       next.channel = null;
@@ -320,7 +325,7 @@ function coerceFailureDestination(value: UnknownRecord) {
       }
     }
   }
-  return next;
+  return { ...next };
 }
 
 function normalizeSessionTarget(raw: unknown) {
@@ -359,8 +364,8 @@ export function normalizeCronJobInput(
   if (!isRecord(raw)) {
     return null;
   }
-  const base = raw;
-  const next: UnknownRecord = { ...base };
+  const base = snapshotOwnCronRecord(raw);
+  const next = snapshotOwnCronRecord(base);
 
   for (const field of ["declarationKey", "displayName"] as const) {
     if (field in base && typeof base[field] === "string") {
@@ -374,10 +379,11 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.owner)) {
-    const agentId = normalizeOptionalString(base.owner.agentId);
-    const sessionKey = normalizeOptionalString(base.owner.sessionKey);
+    const owner = snapshotOwnCronRecord(base.owner);
+    const agentId = normalizeOptionalString(owner.agentId);
+    const sessionKey = normalizeOptionalString(owner.sessionKey);
     const accountId = normalizeOptionalAccountId(
-      typeof base.owner.accountId === "string" ? base.owner.accountId : undefined,
+      typeof owner.accountId === "string" ? owner.accountId : undefined,
     );
     if (agentId || sessionKey || accountId) {
       next.owner = {
@@ -400,7 +406,9 @@ export function normalizeCronJobInput(
   }
 
   if ("toolsAllowProvenance" in base) {
-    const provenance = base.toolsAllowProvenance;
+    const provenance = isRecord(base.toolsAllowProvenance)
+      ? snapshotOwnCronRecord(base.toolsAllowProvenance)
+      : undefined;
     if (
       isRecord(provenance) &&
       provenance.version === 1 &&
@@ -413,6 +421,26 @@ export function normalizeCronJobInput(
       };
     } else {
       delete next.toolsAllowProvenance;
+    }
+  }
+
+  if ("toolsAllowExecTarget" in base) {
+    const execTarget = normalizeCronToolsAllowExecTarget(base.toolsAllowExecTarget);
+    if (execTarget) {
+      next.toolsAllowExecTarget = execTarget;
+    } else {
+      delete next.toolsAllowExecTarget;
+    }
+  }
+
+  if ("toolsAllowExecTargetRequirement" in base) {
+    const requirement = normalizeCronToolsAllowExecTargetRequirement(
+      base.toolsAllowExecTargetRequirement,
+    );
+    if (requirement) {
+      next.toolsAllowExecTargetRequirement = requirement;
+    } else {
+      delete next.toolsAllowExecTargetRequirement;
     }
   }
 
@@ -539,7 +567,7 @@ export function normalizeCronJobInput(
       // Agent turns bind to the creating conversation by default: the run carries
       // that chat's context and announces its result there. Callers without session
       // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent" || kind === "heartbeat") {
+      if (kind === "systemEvent" || isSystemOwnedCronPayloadKind(kind)) {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
         next.sessionTarget = "current";
@@ -601,7 +629,7 @@ export function normalizeCronJobInput(
     }
   }
 
-  return next;
+  return { ...next };
 }
 
 /** Normalizes a raw cron create request and applies create-time defaults. */

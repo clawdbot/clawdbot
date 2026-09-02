@@ -9,6 +9,14 @@ const NODE_RELEASE_FLOORS = [
 ];
 const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS[NODE_RELEASE_FLOORS.length - 1];
 
+// Render diagnostics from the same release floors used by the runtime guard.
+export const SUPPORTED_NODE_VERSIONS = `${NODE_RELEASE_FLOORS.map(
+  ({ major, minor, patch }, index) =>
+    `>=${major}.${minor}.${patch}${index < NODE_RELEASE_FLOORS.length - 1 ? ` <${major + 1}` : ""}`,
+)
+  .join(", ")
+  .replace(/, ([^,]+)$/, ", or $1")} (Node 26 recommended)`;
+
 /** Parses an anchored release SemVer, allowing a leading v and valid build metadata. */
 export function parseNodeReleaseVersion(value) {
   if (typeof value !== "string") {

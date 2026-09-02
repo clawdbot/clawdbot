@@ -147,7 +147,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("0px");
+        .toBe("48px");
 
       const send = page.getByRole("button", { name: "Send message" });
       await expect.poll(() => send.isVisible()).toBe(true);
@@ -177,7 +177,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
 
@@ -186,7 +186,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("0px");
+        .toBe("48px");
       await installPointerTrace(page, stop);
       await stop.tap();
       expectStablePointerActivation(await readPointerTrace(page));
@@ -197,7 +197,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect.poll(() => stop.count()).toBe(0);
     } finally {
@@ -233,7 +233,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await textarea.focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
-        .toBe("0px");
+        .toBe("48px");
 
       const send = page.getByRole("button", { name: "Send message" });
       await expect.poll(() => send.isVisible()).toBe(true);
@@ -263,7 +263,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
 
@@ -274,7 +274,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await clickMouseAtCurrentCenter(page, stop);
       expectStablePointerActivation(await readPointerTrace(page));
       const abortRequest = await gateway.waitForRequest("chat.abort");
-      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "main" });
+      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
       await expect
         .poll(() => textarea.evaluate((node) => document.activeElement === node))
         .toBe(true);
@@ -326,7 +326,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
 
@@ -335,7 +335,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await expect.poll(() => stop.evaluate((node) => document.activeElement === node)).toBe(true);
       await stop.press("Space");
       const abortRequest = await gateway.waitForRequest("chat.abort");
-      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "main" });
+      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
 
       await textarea.fill("Verify keyboard Send");
       await textarea.focus();

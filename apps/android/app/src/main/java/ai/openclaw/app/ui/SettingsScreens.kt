@@ -94,15 +94,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -271,21 +267,28 @@ private fun UsageSettingsScreen(
       }
     }
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      usageSummary.providers.isNotEmpty() -> UsageProvidersPanel(providers = usageSummary.providers)
+      }
+
+      usageSummary.providers.isNotEmpty() -> {
+        UsageProvidersPanel(providers = usageSummary.providers)
+      }
+
       // The warning panel above already reports a failed load; adding
       // "No usage data yet." beside it claims the operator has no providers.
-      usageErrorText != null -> Unit
-      else ->
+      usageErrorText != null -> {}
+
+      else -> {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(text = nativeString("Provider limits will appear here when your gateway reports them."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
+      }
     }
   }
 }
@@ -359,22 +362,30 @@ private fun CronJobsSettingsScreen(
       }
     }
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load automations."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      cronJobs.isEmpty() ->
+      }
+
+      cronJobs.isEmpty() -> {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = nativeString("No automations yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(text = nativeString("Scheduled work created on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      visibleJobs.isEmpty() ->
+      }
+
+      visibleJobs.isEmpty() -> {
         ClawPanel {
           Text(text = nativeString("No matching automations."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> CronJobsPanel(jobs = visibleJobs, onJobClick = { selectedJobId = it.id })
+      }
+
+      else -> {
+        CronJobsPanel(jobs = visibleJobs, onJobClick = { selectedJobId = it.id })
+      }
     }
   }
 }
@@ -491,19 +502,25 @@ private fun CronJobDetailSettingsScreen(
     )
 
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to inspect automations."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      errorText != null ->
+      }
+
+      errorText != null -> {
         ClawPanel {
           Text(text = errorText.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
         }
-      current == null ->
+      }
+
+      current == null -> {
         ClawPanel {
           Text(text = if (loading) nativeString("Loading automation…") else nativeString("Automation not loaded."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else ->
+      }
+
+      else -> {
         CronJobDetailPanel(
           job = current,
           editorDraft = editorDraft ?: CronEditorDraftState.from(current),
@@ -520,6 +537,7 @@ private fun CronJobDetailSettingsScreen(
           onRefreshHistory = { viewModel.refreshCronRunHistory(current.id) },
           onDelete = { viewModel.deleteCronJob(current.id) },
         )
+      }
     }
   }
 }
@@ -561,15 +579,21 @@ private fun AgentsSettingsScreen(
         ),
     )
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load agents."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      agents.isEmpty() ->
+      }
+
+      agents.isEmpty() -> {
         ClawPanel {
           Text(text = nativeString("No agents loaded yet."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+      }
+
+      else -> {
+        AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+      }
     }
   }
 }
@@ -909,13 +933,18 @@ private fun AudioInputDeviceRow(
 private fun audioInputDeviceTypeLabel(type: Int): String =
   when (type) {
     AudioDeviceInfo.TYPE_BUILTIN_MIC -> nativeString("Built-in microphone")
+
     AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> nativeString("Bluetooth microphone")
+
     AudioDeviceInfo.TYPE_BLE_HEADSET -> nativeString("Bluetooth LE microphone")
+
     AudioDeviceInfo.TYPE_WIRED_HEADSET -> nativeString("Wired headset microphone")
+
     AudioDeviceInfo.TYPE_USB_DEVICE,
     AudioDeviceInfo.TYPE_USB_ACCESSORY,
     AudioDeviceInfo.TYPE_USB_HEADSET,
     -> nativeString("USB microphone")
+
     else -> nativeString("External microphone")
   }
 
@@ -1079,7 +1108,7 @@ private fun NotificationSettingsScreen(
 
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      viewModel.setNotificationForwardingEnabled(granted)
+      viewModel.setNotificationForwardingEnabled(granted && DeviceNotificationListenerService.isAccessEnabled(context))
     }
 
   fun setForwarding(checked: Boolean) {
@@ -1087,12 +1116,16 @@ private fun NotificationSettingsScreen(
       viewModel.setNotificationForwardingEnabled(false)
       return
     }
+    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+    if (!listenerEnabled) {
+      openNotificationListenerSettings(context)
+      return
+    }
     if (Build.VERSION.SDK_INT >= 33 && !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
       viewModel.setNotificationForwardingEnabled(true)
     }
-    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
   }
 
   SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = Icons.Default.Notifications, onBack = onBack) {
@@ -1315,10 +1348,12 @@ private fun PhoneCapabilitiesScreen(
       val requestedMode = LocationMode.fromRawValue(pendingLocationModeRaw)
       pendingLocationModeRaw = null
       when (requestedMode) {
-        LocationMode.WhileUsing ->
+        LocationMode.WhileUsing -> {
           viewModel.setLocationMode(
             if (foregroundGranted) LocationMode.WhileUsing else LocationMode.Off,
           )
+        }
+
         LocationMode.Always -> {
           if (foregroundGranted) {
             viewModel.setLocationMode(LocationMode.WhileUsing)
@@ -1328,7 +1363,8 @@ private fun PhoneCapabilitiesScreen(
             pendingAlwaysPreviousModeRaw = null
           }
         }
-        LocationMode.Off -> Unit
+
+        LocationMode.Off -> {}
       }
       viewModel.setLocationPreciseEnabled(fineGranted)
     }
@@ -1393,7 +1429,10 @@ private fun PhoneCapabilitiesScreen(
 
   fun setLocationAccess(mode: LocationMode) {
     when (mode) {
-      LocationMode.Off -> viewModel.setLocationMode(LocationMode.Off)
+      LocationMode.Off -> {
+        viewModel.setLocationMode(LocationMode.Off)
+      }
+
       LocationMode.WhileUsing -> {
         if (hasLocationPermission(context)) {
           viewModel.setLocationMode(LocationMode.WhileUsing)
@@ -1407,6 +1446,7 @@ private fun PhoneCapabilitiesScreen(
           )
         }
       }
+
       LocationMode.Always -> {
         if (!backgroundLocationAvailable) return
         if (hasLocationPermission(context) && hasBackgroundLocationPermission(context)) {
@@ -2337,7 +2377,6 @@ internal fun SettingsDetailFrame(
 ) {
   ClawScaffold(
     contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
-    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
   ) {
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
       item {
@@ -2836,10 +2875,22 @@ internal fun execApprovalMetadata(
         val nodeId = approval.nodeId.take(8)
         nativeString("Node \${nodeId}", nodeId)
       }
-      approval.host == "node" -> nativeString("Node")
-      approval.host == "gateway" -> nativeString("Gateway")
-      approval.host != null -> approval.host
-      else -> nativeString("Gateway")
+
+      approval.host == "node" -> {
+        nativeString("Node")
+      }
+
+      approval.host == "gateway" -> {
+        nativeString("Gateway")
+      }
+
+      approval.host != null -> {
+        approval.host
+      }
+
+      else -> {
+        nativeString("Gateway")
+      }
     }
   val agent =
     approval.agentId?.let {
@@ -2950,9 +3001,18 @@ internal fun formatUsageUpdated(
   val minutes = deltaMs / 60_000L
   val hours = minutes / 60L
   return when {
-    minutes < 1 -> nativeString("Now")
-    hours < 1 -> nativeString("\${minutes}m", minutes)
-    hours < 24 -> nativeString("\${hours}h", hours)
+    minutes < 1 -> {
+      nativeString("Now")
+    }
+
+    hours < 1 -> {
+      nativeString("\${minutes}m", minutes)
+    }
+
+    hours < 24 -> {
+      nativeString("\${hours}h", hours)
+    }
+
     else -> {
       val days = hours / 24L
       nativeString("\${days}d", days)
@@ -3025,7 +3085,7 @@ private fun notificationPackageSelectionSummary(
   selectedCount: Int,
 ): String =
   when (mode) {
-    NotificationPackageFilterMode.Allowlist ->
+    NotificationPackageFilterMode.Allowlist -> {
       if (selectedCount == 0) {
         nativeString("No apps selected. Nothing forwards until you add apps.")
       } else if (selectedCount == 1) {
@@ -3033,7 +3093,9 @@ private fun notificationPackageSelectionSummary(
       } else {
         nativeString("\$selectedCount apps allowed to forward.", selectedCount)
       }
-    NotificationPackageFilterMode.Blocklist ->
+    }
+
+    NotificationPackageFilterMode.Blocklist -> {
       if (selectedCount == 0) {
         nativeString("No apps blocked. Apps can forward unless you add blocks.")
       } else if (selectedCount == 1) {
@@ -3041,6 +3103,7 @@ private fun notificationPackageSelectionSummary(
       } else {
         nativeString("\$selectedCount apps blocked from forwarding.", selectedCount)
       }
+    }
   }
 
 /** Builds compact two-letter app badges from package-picker labels. */

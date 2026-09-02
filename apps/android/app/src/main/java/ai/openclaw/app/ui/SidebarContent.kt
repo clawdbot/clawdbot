@@ -137,8 +137,6 @@ private fun ChatSessionEntry.isDashboardSession(): Boolean {
 
 internal fun sidebarSessionTitle(session: ChatSessionEntry): String = sessionPresentationTitle(session) { session.key }
 
-internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agentPickerName(agent)
-
 internal data class SidebarPalette(
   val background: Color,
   val elevated: Color,
@@ -276,14 +274,16 @@ internal fun OpenClawSidebar(
       if (searchState.query.isNotEmpty()) {
         SidebarSectionTitle(nativeString("Threads"), palette)
         when (sessionEmptyMode(searchState.query, searchState.loading)) {
-          SessionEmptyMode.SearchLoading ->
+          SessionEmptyMode.SearchLoading -> {
             Text(
               text = nativeString("Searching threads"),
               style = ClawTheme.type.caption,
               color = palette.muted,
               modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
             )
-          else ->
+          }
+
+          else -> {
             if (searchResults.isEmpty()) {
               Text(
                 text = nativeString("No matching threads"),
@@ -303,6 +303,7 @@ internal fun OpenClawSidebar(
                 }
               }
             }
+          }
         }
       } else {
         if (agentPicker.selected != null) {

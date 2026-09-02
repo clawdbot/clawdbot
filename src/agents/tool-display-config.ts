@@ -225,6 +225,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Ask User",
       detailKeys: ["questions.0.question"],
     },
+    secrets: {
+      emoji: "🔑",
+      title: "Secrets",
+      detailKeys: ["action", "name", "kind"],
+    },
     suggest_task: {
       emoji: "✨",
       title: "Suggest Task",

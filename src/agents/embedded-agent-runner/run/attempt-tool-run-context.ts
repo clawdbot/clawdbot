@@ -1,36 +1,41 @@
+import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
-/**
- * Builds tool run context passed to embedded-agent tool handlers.
- */
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
  * Builds the stable tool-run context forwarded into an embedded-attempt execution.
  */
 export function buildEmbeddedAttemptToolRunContext(params: {
+  thinkLevel?: ThinkLevel;
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
   toolsAllow?: string[];
+  forceMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   conversationToolPolicy?: GroupToolPolicyConfig;
   trace?: DiagnosticTraceContext;
-}): {
-  trigger?: EmbeddedRunTrigger;
-  jobId?: string;
-  memoryFlushWritePath?: string;
-  runtimeToolAllowlist?: string[];
-  conversationToolPolicy?: GroupToolPolicyConfig;
-  trace?: DiagnosticTraceContext;
-} {
+}) {
+  // Collector output is mandatory result transport, even on a narrowed tool surface.
+  const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
+    forceMessageTool: params.forceMessageTool,
+    forceToolNames:
+      params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
+  });
   return {
+    requesterThinkingLevel: params.thinkLevel,
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
-    ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
+    swarmCollector: params.swarmCollector,
+    swarmOutputSchema: params.swarmOutputSchema,
+    ...(runtimeToolAllowlist ? { runtimeToolAllowlist } : {}),
     ...(params.conversationToolPolicy
       ? { conversationToolPolicy: params.conversationToolPolicy }
       : {}),

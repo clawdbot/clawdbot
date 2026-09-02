@@ -19,6 +19,7 @@ import {
   resolveEffectiveAgentSkillFilter,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
+import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
@@ -28,7 +29,6 @@ import type {
   SkillEligibilityContext,
   SkillEntry,
 } from "../types.js";
-import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import {
@@ -96,7 +96,6 @@ type WorkspaceSkillLoadOptions = {
   agentSkillFilter?: "apply" | "ignore";
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
-  includeArchived?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -166,6 +165,7 @@ function filterSkillEntries(
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
   const bundledAllowlist = resolveBundledAllowlist(config);
+  assertUnambiguousManagedSkillNames(entries);
   let filtered = entries.filter((entry) =>
     shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility }),
   );
@@ -384,7 +384,6 @@ function loadSkillEntries(
     pluginSkillsDir?: string;
     workspaceSkillsDir?: string;
     workspaceOnly?: boolean;
-    includeArchived?: boolean;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
@@ -410,7 +409,6 @@ function loadSkillEntries(
     opts?.managedSkillsDir,
     opts?.bundledSkillsDir,
     opts?.pluginSkillsDir,
-    opts?.includeArchived === true,
     opts?.config ? fingerprintSkillSnapshotConfig(opts.config) : undefined,
     osHomeDir,
     process.env.OPENCLAW_STATE_DIR,
@@ -503,11 +501,7 @@ function loadSkillEntries(
   const workspaceSkills = loadSkills({ dir: workspaceSkillsDir, source: "openclaw-workspace" });
 
   const merged = new Map<string, LoadedSkillRecord>();
-  const archivedSkillFiles = opts?.includeArchived ? null : getArchivedSkillFiles();
   const mergeRecord = (record: LoadedSkillRecord) => {
-    if (archivedSkillFiles?.has(canonicalizePath(record.skill.filePath))) {
-      return;
-    }
     const replaced = merged.get(record.skill.name);
     if (replaced) {
       warnSkillPrecedenceCollision(record.skill, replaced.skill, workspaceDir);
@@ -578,11 +572,6 @@ function loadSkillEntries(
   return entries;
 }
 
-function filterArchivedSkillEntries(entries: SkillEntry[]): SkillEntry[] {
-  const archivedSkillFiles = getArchivedSkillFiles();
-  return entries.filter((entry) => !archivedSkillFiles.has(canonicalizePath(entry.skill.filePath)));
-}
-
 function resolveEffectiveWorkspaceSkillFilter(opts?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -613,12 +602,12 @@ export function resolveWorkspaceSkillPromptEntries(
   },
 ): { eligible: SkillEntry[]; skillFilter: string[] | undefined } {
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
-  const skillEntries = opts?.entries
-    ? filterArchivedSkillEntries(opts.entries)
-    : mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
-        canExec: opts?.eligibility?.nodeSkills?.canExec,
-        node: opts?.eligibility?.nodeSkills?.node,
-      });
+  const skillEntries =
+    opts?.entries ??
+    mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+      canExec: opts?.eligibility?.nodeSkills?.canExec,
+      node: opts?.eligibility?.nodeSkills?.node,
+    });
   return {
     eligible: filterSkillEntries(
       skillEntries,

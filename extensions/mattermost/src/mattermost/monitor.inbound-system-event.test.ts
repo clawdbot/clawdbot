@@ -7,14 +7,14 @@ import path from "node:path";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
   createMessageReceiptFromOutboundResults,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type { MattermostPost } from "./client.js";
@@ -1337,6 +1337,73 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
   });
+
+  it.each([
+    { message: "@openclawdia hello", expectedBody: null },
+    { message: "@openclaw:remote.example hello", expectedBody: null },
+    { message: "hello.@openclaw", expectedBody: "hello." },
+    { message: "hello-@openclaw", expectedBody: "hello-" },
+    { message: "hello:@openclaw", expectedBody: "hello:" },
+    { message: "@openclaw.", expectedBody: "." },
+    { message: "@openclaw-", expectedBody: "-" },
+    { message: "@openclaw: hello", expectedBody: ": hello" },
+  ])(
+    "dispatches only genuine mention-required posts: $message",
+    async ({ message, expectedBody }) => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      mockState.abortController = abortController;
+      const verboseDebug = vi.fn();
+      const config: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            baseUrl: "https://mattermost.example.com",
+            botToken: "bot-token",
+            // No chatmode: "onmessage" would force requireMention off (accounts.ts).
+            dmPolicy: "open",
+            groupPolicy: "open",
+            requireMention: true,
+          },
+        },
+      };
+      mockState.runtimeCore = createRuntimeCore(config, undefined, { verboseDebug });
+
+      const monitor = monitorMattermostProvider({
+        config,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
+
+      await vi.waitFor(() => {
+        expect(socket.openListenerCount).toBeGreaterThan(0);
+      });
+      socket.emitOpen();
+
+      await emitMattermostChannelPost(socket, {
+        id: "post-mention-boundary",
+        message,
+      });
+
+      if (expectedBody === null) {
+        await vi.waitFor(() => {
+          expect(verboseDebug).toHaveBeenCalledWith(
+            expect.stringContaining("drop group message (missing mention"),
+          );
+        });
+        expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
+      } else {
+        expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+        expect(mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx.BodyForAgent).toBe(
+          expectedBody,
+        );
+      }
+      abortController.abort();
+      socket.emitClose(1000);
+      await monitor;
+    },
+  );
 
   it("merges Mattermost progress preview updates and clears after message-tool delivery", async () => {
     const socket = new FakeWebSocket();

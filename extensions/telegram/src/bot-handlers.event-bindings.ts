@@ -1,8 +1,10 @@
 import type { ChatMember, ReactionTypeEmoji } from "grammy/types";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams, TelegramEventBindings } from "./bot-handlers.types.js";
@@ -12,6 +14,7 @@ import {
 } from "./bot-processing-outcome.js";
 import { resolveTelegramThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import { evaluateTelegramGroupPolicyAccess } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { findTelegramPollRegistryEntry, retireTelegramPollRegistryEntry } from "./poll-registry.js";
@@ -52,7 +55,8 @@ export function createTelegramEventBindings({
   authorization,
   registerMessages,
 }: CreateTelegramEventBindingsOptions): TelegramEventBindings {
-  const { accountId, ownerAgentId, bot, cfg, runtime, shouldSkipUpdate, telegramDeps } = params;
+  const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate, telegramDeps } =
+    params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
   const {
     buildSyntheticContext,
@@ -60,6 +64,76 @@ export function createTelegramEventBindings({
     processMessageWithReplyChain,
     resolveCachedMessageThreadSpec,
   } = message;
+
+  const registerChatMembership = () => {
+    bot.on("my_chat_member", async (ctx) => {
+      const membership = ctx.myChatMember;
+      if (!membership || shouldSkipUpdate(ctx)) {
+        return;
+      }
+      const botUserId = ctx.me?.id ?? opts.botInfo?.id;
+      const isGroup = membership.chat.type === "group" || membership.chat.type === "supergroup";
+      if (
+        !isGroup ||
+        botUserId === undefined ||
+        membership.new_chat_member.user.id !== botUserId ||
+        isCurrentTelegramChatMember(membership.old_chat_member) ||
+        !isCurrentTelegramChatMember(membership.new_chat_member)
+      ) {
+        return;
+      }
+
+      const chatId = membership.chat.id;
+      const currentCfg = telegramDeps.getRuntimeConfig();
+      const telegramCfg = resolveTelegramAccount({ cfg: currentCfg, accountId }).config;
+      const { groupConfig } = params.resolveTelegramGroupConfig(chatId, undefined, currentCfg);
+      const groupPolicyAccess = evaluateTelegramGroupPolicyAccess({
+        isGroup: true,
+        chatId,
+        cfg: currentCfg,
+        telegramCfg,
+        groupConfig,
+        effectiveGroupAllow: normalizeAllowFrom(),
+        resolveGroupPolicy: params.resolveGroupPolicy,
+        enforcePolicy: true,
+        enforceAllowlistAuthorization: false,
+        allowEmptyAllowlistEntries: false,
+        requireSenderForAllowlistAuthorization: false,
+        checkChatAllowlist: true,
+      });
+      const roomAllowed = groupConfig?.enabled !== false && groupPolicyAccess.allowed;
+      const inviter = membership.from;
+      const inviterLabel =
+        [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
+
+      await reportChannelRoomJoin({
+        cfg: currentCfg,
+        channel: "telegram",
+        accountId,
+        conversationId: String(chatId),
+        deliverTo: String(chatId),
+        route: resolveTelegramConversationRoute({
+          cfg: currentCfg,
+          accountId,
+          chatId,
+          isGroup: true,
+          threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+        }).route,
+        inviterLabel,
+        roomAllowed,
+        resolveRoomContext: async () => {
+          const chat = await bot.api.getChat(chatId);
+          // The Bot API exposes room metadata and pins, but cannot retrieve pre-join history.
+          return {
+            title: chat.title,
+            purpose: chat.description,
+            pinned: chat.pinned_message?.text ?? chat.pinned_message?.caption,
+            historyUnavailable: true,
+          };
+        },
+      });
+    });
+  };
 
   const registerReaction = () => {
     bot.on("message_reaction", async (ctx) => {
@@ -411,5 +485,11 @@ export function createTelegramEventBindings({
     });
   };
 
-  return { registerReaction, registerPolls, registerMigration, registerMessages };
+  return {
+    registerChatMembership,
+    registerReaction,
+    registerPolls,
+    registerMigration,
+    registerMessages,
+  };
 }

@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var openClawChatDesktopLayout = false
+}
+
 #if os(macOS)
 import AppKit
 #else
@@ -225,7 +229,7 @@ enum OpenClawChatTheme {
 
     static var composerBorder: Color {
         #if os(macOS)
-        Color.white.opacity(0.12)
+        Color(nsColor: .separatorColor).opacity(0.6)
         #else
         self.adaptiveColor(light: .separator, dark: UIColor.white.withAlphaComponent(0.14))
         #endif

@@ -379,6 +379,60 @@ describe("modelsAliasesAddCommand", () => {
     const written = replaceParams?.nextConfig as OpenClawConfig;
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBe("fast");
   });
+
+  it("resolves alias targets from the CAS-fenced snapshot", async () => {
+    const staleCfg = {
+      agents: { defaults: { models: { "openai/gpt-5.6-sol": { alias: "old-alias" } } } },
+    } as unknown as OpenClawConfig;
+    const currentCfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
+            "anthropic/claude-opus-5": { alias: "old-alias" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.loadModelsConfig.mockResolvedValue(staleCfg);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...snapshot(currentCfg),
+      hash: "current-hash",
+    });
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    const runtime = makeRuntime();
+
+    await modelsAliasesAddCommand("new-alias", "old-alias", runtime);
+
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.baseHash).toBe("current-hash");
+    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
+      "anthropic/claude-opus-5": { alias: "new-alias" },
+    });
+    expect(runtime.logs).toContain("Alias new-alias -> anthropic/claude-opus-5");
+  });
+
+  it("resolves a runtime-only alias while persisting only source config", async () => {
+    const sourceConfig = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+    };
+    const runtimeConfig = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } } } },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...snapshot(sourceConfig as unknown as OpenClawConfig),
+      runtimeConfig,
+    });
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await modelsAliasesAddCommand("fast", "sonnet", makeRuntime());
+
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": { alias: "fast" },
+    });
+  });
 });
 
 describe("modelsAliasesListCommand <-> modelsAliasesRemoveCommand agreement", () => {

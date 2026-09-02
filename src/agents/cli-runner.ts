@@ -270,27 +270,20 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
-  // Prior turn maintenance can rewrite transcript entries after finalization.
-  // Reads for the next same-session inference must observe that rewrite.
-  if (!turnSideEffectsDisabled) {
+  // Durable reads must observe prior deferred rewrites. Caller-owned memory is
+  // independent of durable work sharing its correlation key.
+  if (!turnSideEffectsDisabled && !params.sessionManager) {
     await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   }
-  const historyMessages = needsHookHistory
-    ? await loadCliSessionHistoryMessages({
-        sessionId: params.sessionId,
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
-      })
-    : [];
+  const historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+  const promptForHooks = context.promptForHooks ?? params.prompt;
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
     provider: params.provider,
     model: context.modelId,
     systemPrompt: context.systemPrompt,
-    prompt: params.prompt,
+    prompt: promptForHooks,
     historyMessages,
     imagesCount: params.images?.length ?? 0,
   } as const;
@@ -325,7 +318,7 @@ export async function runPreparedCliAgent(
     ...buildAgentHookConversationMessages({
       historyMessages,
       currentTurnMessages: [
-        buildCliHookUserMessage(params.prompt),
+        buildCliHookUserMessage(promptForHooks),
         ...(lastAssistant ? [lastAssistant] : []),
       ],
     }),
@@ -402,7 +395,9 @@ export async function runPreparedCliAgent(
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      // Strict isolated completion owns valid-empty output after reasoning is removed.
+      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
     ) {
       const process = output.diagnostics?.process;
       if (process) {
@@ -514,7 +509,9 @@ export async function runPreparedCliAgent(
       contextEngine: context.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
+      sessionManager: params.sessionManager,
       config: context.contextEngineConfig,
       contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
         backendId: context.backendResolved.id,
@@ -524,13 +521,7 @@ export async function runPreparedCliAgent(
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine
-      ? await loadCliSessionContextEngineMessages({
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
-        })
+      ? await loadCliSessionContextEngineMessages(params)
       : [];
     const finishCliAttempt = async (
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
@@ -630,7 +621,7 @@ export async function runPreparedCliAgent(
       try {
         beforeRunResult = await hookRunner.runBeforeAgentRun(
           {
-            prompt: params.prompt,
+            prompt: promptForHooks,
             systemPrompt: context.systemPrompt,
             messages: buildAgentHookConversationMessages({
               historyMessages,

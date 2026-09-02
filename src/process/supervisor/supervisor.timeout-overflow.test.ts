@@ -102,16 +102,13 @@ describe("process supervisor oversized timer deadlines", () => {
               adapterMock.mockResolvedValue(adapter);
 
               const supervisor = createProcessSupervisor();
-              const commonInput = {
+              const run = await supervisor.spawn({
                 backendId: "test",
                 sessionId: `timeout-overflow-${mode}`,
                 [timeoutField]: durationMs,
-              };
-              const run = await supervisor.spawn(
-                mode === "child"
-                  ? { ...commonInput, mode: "child", argv: [process.execPath, "-e", ""] }
-                  : { ...commonInput, mode: "pty", ptyCommand: "printf running" },
-              );
+                mode,
+                argv: [process.execPath, "-e", ""],
+              });
 
               try {
                 expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual([
@@ -192,16 +189,13 @@ describe("process supervisor oversized timer deadlines", () => {
           const adapterMock = mode === "child" ? createChildAdapterMock : createPtyAdapterMock;
           adapterMock.mockResolvedValue(adapter);
 
-          const commonInput = {
+          const run = await createProcessSupervisor().spawn({
             backendId: "test",
             sessionId: `late-timeout-${mode}`,
             [timeoutField]: MAX_TIMER_TIMEOUT_MS + trailingDurationMs,
-          };
-          const run = await createProcessSupervisor().spawn(
-            mode === "child"
-              ? { ...commonInput, mode: "child", argv: [process.execPath, "-e", ""] }
-              : { ...commonInput, mode: "pty", ptyCommand: "printf running" },
-          );
+            mode,
+            argv: [process.execPath, "-e", ""],
+          });
 
           try {
             if (refreshOutput) {

@@ -46,6 +46,7 @@ export function buildAccountScopedDmSecurityPolicy(params: {
   approveChannelId?: string;
   approveHint?: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }): ChannelSecurityDmPolicy {
   const resolvedAccountId = params.accountId ?? params.fallbackAccountId ?? DEFAULT_ACCOUNT_ID;
@@ -101,5 +102,6 @@ export function buildAccountScopedDmSecurityPolicy(params: {
     approveHint:
       params.approveHint ?? formatPairingApproveHint(params.approveChannelId ?? params.channelKey),
     normalizeEntry: params.normalizeEntry,
+    classifyEntryAuthentication: params.classifyEntryAuthentication,
   };
 }

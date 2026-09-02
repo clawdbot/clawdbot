@@ -226,29 +226,29 @@ describe("exportTrajectoryCommand", () => {
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
 
-  it("keeps a configured explicit agent as the session store owner", async () => {
-    const runtime = createRuntime();
-    mocks.getRuntimeConfig.mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "work" }] },
-      session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
-    });
-    mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");
+  it.each(["agent:main:telegram:direct:123", "global"])(
+    "keeps a configured explicit agent as the store owner for %s",
+    async (sessionKey) => {
+      const runtime = createRuntime();
+      mocks.getRuntimeConfig.mockReturnValue({
+        agents: { list: [{ id: "main" }, { id: "work" }] },
+        session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
+      });
+      mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");
 
-    await exportTrajectoryCommand(
-      { sessionKey: "agent:main:telegram:direct:123", agent: "work" },
-      runtime,
-    );
+      await exportTrajectoryCommand({ sessionKey, agent: "work" }, runtime);
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith(
-      "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
-      { agentId: "work" },
-    );
-    expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
-      agentId: "work",
-      sessionKey: "agent:main:telegram:direct:123",
-      storePath: "/tmp/openclaw/agents/work/sessions/sessions.json",
-    });
-  });
+      expect(mocks.resolveStorePath).toHaveBeenCalledWith(
+        "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
+        { agentId: "work" },
+      );
+      expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
+        agentId: "work",
+        sessionKey,
+        storePath: "/tmp/openclaw/agents/work/sessions/sessions.json",
+      });
+    },
+  );
 
   it.each([
     ["home-prefixed", "~/x/sessions.json", "/home/demo/x/sessions.json"],

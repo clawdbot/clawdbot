@@ -1,7 +1,3 @@
-wa-select.settings-select {
-  --wa-form-control-activated-color: var(--primary);
-}
-
 wa-select.settings-select::part(combobox) {
   min-height: var(--settings-control-height);
   padding-inline: 10px;
@@ -42,25 +38,30 @@ wa-select.settings-select::part(listbox) {
 }
 
 wa-select.settings-select wa-option {
+  --wa-form-control-activated-color: var(--bg-hover);
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
   padding: 6px 8px;
   border-radius: calc(var(--radius-md) - 4px);
-  font-size: var(--control-ui-text-md);
+  font-size: var(--control-ui-text-sm);
   color: var(--text);
   cursor: var(--cursor-action);
 }
 
-/* The roving "current" option already carries the accent fill; the global
-   :focus-visible accent outline on top of it is pure noise. */
+/* Selection stays visible while keyboard focus moves. Text-backed focus ink
+   also remains visible with black/white custom accents. */
 wa-select.settings-select wa-option:focus-visible {
-  outline: none;
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
-wa-select.settings-select wa-option:state(current) {
-  color: var(--primary-foreground);
+wa-select.settings-select wa-option:state(selected) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
-.picker-select__option {
-  color: var(--text);
+wa-select.settings-select wa-option::part(checked-icon) {
+  color: color-mix(in srgb, var(--text) 80%, var(--accent));
 }
 
 .picker-select [slot="start"] {
@@ -85,11 +86,15 @@ wa-select.settings-select wa-option:state(current) {
 .picker-select__description {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 80%, var(--text));
   font-size: 0.75rem;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: normal;
+}
+
+.picker-select__option:is(:state(current), :state(selected)) .picker-select__description {
+  color: inherit;
 }
 
 /* The model picker composes the shared picker and loads this same stylesheet. */
@@ -113,8 +118,7 @@ wa-select.settings-select wa-option:state(current) {
   display: none;
 }
 
-/* Forced colors suppresses the box-shadow ring and accent fill that stand in
-   for the outlines removed above, so restore system-color outlines there. */
+/* System colors replace decorative fills/shadows; keep keyboard focus explicit. */
 @media (forced-colors: active) {
   wa-select.settings-select[open]::part(combobox),
   wa-select.settings-select:focus-within::part(combobox) {
@@ -124,6 +128,5 @@ wa-select.settings-select wa-option:state(current) {
 
   wa-select.settings-select wa-option:focus-visible {
     outline: 2px solid SelectedItem;
-    outline-offset: 2px;
   }
 }

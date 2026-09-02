@@ -7,8 +7,8 @@ import path from "node:path";
  * Covers approval registration ids, follow-up idempotency, and approved
  * node/gateway invocation behavior.
  */
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import {
   loadExecApprovals,
   saveExecApprovals,
@@ -35,6 +35,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
     {
       nodeId: "node-1",
       commands: ["system.run", "system.run.prepare"],
+      connected: true,
       platform: "darwin",
     },
   ]),
@@ -719,6 +720,9 @@ describe("exec approvals", () => {
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
         if (invoke.command === "system.run") {
           return { payload: { success: true, stdout: "node-ok" } };
         }
