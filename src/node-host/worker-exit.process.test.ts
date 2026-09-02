@@ -13,7 +13,7 @@ it("exits after a stop frame while the supervisor keeps stdin open", async () =>
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");
   fs.writeFileSync(configPath, JSON.stringify({ nodeHost: { skills: { enabled: false } } }));
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: root,
     USERPROFILE: root,
