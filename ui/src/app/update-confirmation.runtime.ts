@@ -57,9 +57,9 @@ function formatInstalledAndAvailable(
 }
 
 function workingMessage(connected: boolean): string {
-  // The restart is the loud part of the wait; name it while it is happening
-  // instead of leaving the operator to interpret a frozen page.
-  return connected ? t("updates.dialog.installing") : t("updates.dialog.restarting");
+  // A disconnect alone does not prove a restart. Keep update recovery guidance
+  // separate from flows that have an explicit restart result.
+  return connected ? t("updates.dialog.installing") : t("updates.dialog.disconnected");
 }
 
 export async function confirmAndStartUpdateRuntime(

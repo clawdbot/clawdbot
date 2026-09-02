@@ -77,6 +77,7 @@ export function buildBackgroundTasksMock(baseTime: number) {
     finishedTask(5, now),
   ];
   return {
+    sessions: [taskSessionKey, secondTaskSessionKey].map((key) => ({ key })),
     sessionTranscripts: {
       [taskSessionKey]: {
         messages: [

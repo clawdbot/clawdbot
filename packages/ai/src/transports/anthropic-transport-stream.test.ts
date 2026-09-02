@@ -112,7 +112,9 @@ function anthropicMessageStart(message: Record<string, unknown>) {
   return { type: "message_start", message };
 }
 
-function anthropicMessageDelta(delta: Record<string, unknown>, usage: Record<string, unknown>) {
+function anthropicMessageDelta(delta: Record<string, unknown>, usage?: Record<string, unknown>) {
+  // An absent usage object serializes the event without the key, matching proxies that
+  // close a turn with stop_reason alone.
   return { type: "message_delta", delta, usage };
 }
 
@@ -499,6 +501,20 @@ describe("anthropic transport stream", () => {
         cache_creation_input_tokens: null,
       },
       context: { state: "available", promptTokens: 149_374, totalTokens: 164_478 },
+    },
+    {
+      name: "keeps message-start context usage when the final delta omits usage",
+      id: "msg_absent_final_usage",
+      model: "claude-sonnet-4-6",
+      initial: {
+        input_tokens: 12,
+        output_tokens: 0,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 4,
+      },
+      final: undefined,
+      expected: { input: 12, output: 0, cacheRead: 3, cacheWrite: 4, totalTokens: 19 },
+      context: { state: "available", promptTokens: 19, totalTokens: 19 },
     },
     {
       name: "preserves valid message-start billing buckets when a sibling is malformed",

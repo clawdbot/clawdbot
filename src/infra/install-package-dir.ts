@@ -30,6 +30,16 @@ type HiddenProjectConfigFile = {
 type InstallPackageDirFailure = { ok: false; error: string };
 type InstallPackageDirSuccess = { ok: true };
 
+export function hasPackageRuntimeDependencies(manifest: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): boolean {
+  return (
+    Object.keys(manifest.dependencies ?? {}).length > 0 ||
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0
+  );
+}
+
 async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, "package.json");
   const parsed = await tryReadJson<unknown>(manifestPath);
@@ -153,7 +163,7 @@ async function resolveInstallPublishTarget(params: {
   };
 }
 
-type PackageDirInstallTransaction = {
+export type PackageDirInstallTransaction = {
   commit(): Promise<void>;
   rollback(): Promise<void>;
 };
@@ -170,6 +180,15 @@ export function requestDeferredPackageDirInstall<T extends object>(params: T): T
     value: true,
   });
   return params;
+}
+
+export function copyPackageDirInstallTransactionRequest<T extends object>(
+  source: object,
+  target: T,
+): T {
+  return isPackageDirInstallCommitDeferred(source)
+    ? requestDeferredPackageDirInstall(target)
+    : target;
 }
 
 function isPackageDirInstallCommitDeferred(params: object): boolean {
@@ -361,17 +380,20 @@ export async function installPackageDir<
 
   if (params.mode === "update" && (await pathExists(canonicalTargetDir))) {
     const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
-    backupDir = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
+    const backupPath = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
     try {
       await fs.mkdir(backupRoot, { recursive: true });
       await assertInstallBoundaryPaths({
         installBaseDir: installBaseRealPath,
-        candidatePaths: [backupDir],
+        candidatePaths: [backupPath],
       });
       await assertInstallBaseStable({
         installBaseDir,
         expectedRealPath: installBaseRealPath,
       });
+      // Moving the current install is a mutation too; do not displace it after ownership closes.
+      params.beforePersistentApply?.();
+      backupDir = backupPath;
       await movePathWithCopyFallback({
         from: canonicalTargetDir,
         sourceHardlinks,
@@ -465,32 +487,4 @@ export async function installPackageDir<
       },
     },
   );
-}
-
-/**
- * Installs a manifest-backed package directory while deriving whether npm
- * dependencies must be installed and which hardlink policy is safe to use.
- */
-export async function installPackageDirWithManifestDeps<
-  TAfterInstallFailure extends InstallPackageDirFailure = InstallPackageDirFailure,
->(params: {
-  sourceDir: string;
-  targetDir: string;
-  mode: "install" | "update";
-  timeoutMs: number;
-  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
-  copyErrorPrefix: string;
-  depsLogMessage: string;
-  manifestDependencies?: Record<string, unknown>;
-  afterCopy?: (installedDir: string) => void | Promise<void>;
-  afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
-  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
-  beforePersistentApply?: () => void;
-}): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
-  const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
-  return installPackageDir<TAfterInstallFailure>({
-    ...params,
-    hasDeps,
-    sourceHardlinks: hasDeps ? "package-manager" : "reject",
-  });
 }

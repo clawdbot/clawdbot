@@ -356,6 +356,7 @@ internal class MicCaptureManager(
           upsertPendingAssistant(text = deltaText.trim(), isStreaming = true)
         }
       }
+
       "final" -> {
         val finalText = parseAssistantText(payload)?.trim().orEmpty()
         if (finalText.isNotEmpty()) {
@@ -366,6 +367,7 @@ internal class MicCaptureManager(
         }
         completePendingTurn()
       }
+
       "error" -> {
         val gatewayError =
           payload["errorMessage"]
@@ -384,6 +386,7 @@ internal class MicCaptureManager(
         }
         completePendingTurn()
       }
+
       "aborted" -> {
         val abortedText = nativeText("Response aborted")
         upsertPendingAssistant(
@@ -557,13 +560,16 @@ internal class MicCaptureManager(
               completePendingTurn()
               refreshAfterTerminalSuccess()
             }
+
             ack.isTerminalFailure -> {
               completePendingTurn()
               _statusText.value = nativeText("Send failed: Chat failed before the run started; try again.")
             }
+
             runId == null -> {
               completePendingTurn()
             }
+
             else -> {
               armPendingRunTimeout(runId)
             }
@@ -789,6 +795,7 @@ internal class MicCaptureManager(
         _isListening.value = true
         _statusText.value = listeningStatus()
       }
+
       "partial" -> {
         val text = obj["text"].asStringOrNull()?.trim().orEmpty()
         if (text.isNotEmpty()) {
@@ -796,6 +803,7 @@ internal class MicCaptureManager(
           scheduleTranscriptFlush(text)
         }
       }
+
       "transcript" -> {
         transcriptFlushJob?.cancel()
         transcriptFlushJob = null
@@ -809,6 +817,7 @@ internal class MicCaptureManager(
           }
         }
       }
+
       "error" -> {
         val message =
           obj["message"]
@@ -818,6 +827,7 @@ internal class MicCaptureManager(
             .ifEmpty { "transcription failed" }
         failTranscription(currentSession, message)
       }
+
       "close" -> {
         _micEnabled.value = false
         stopTranscription()

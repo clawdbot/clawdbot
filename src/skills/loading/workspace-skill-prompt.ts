@@ -10,7 +10,7 @@ import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "
 import { resolveSkillKey } from "./frontmatter.js";
 import { escapeSkillXml, type Skill } from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
-import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
+import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -38,14 +38,20 @@ function resolveWorkspaceSkillPromptState(
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const limits = opts?.config?.skills?.limits;
   const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
-  const prompt = formatSkillsForPromptBounded({
+  const prepared = prepareSkillsForPrompt({
     skills: compactPromptSkills(resolvedSkills),
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,
     preserveOrder: opts?.preserveEntryOrder,
   });
-  return { eligible, prompt, resolvedSkills, skillFilter };
+  const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
+  return {
+    eligible,
+    prompt: prepared.prompt,
+    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    skillFilter,
+  };
 }
 
 export function buildSkillSnapshot(

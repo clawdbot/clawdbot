@@ -3,6 +3,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -32,13 +33,16 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
-  MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE,
+  MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
+import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
+import { looksLikeGitCheckout } from "./update-runner-install-surface.js";
 
 // The helper deadline covers scheduled restart delay, the full Gateway drain
 // budget, and its bounded parent-exit shutdown reserve. (#99666)
@@ -608,16 +612,16 @@ function writeRestartSentinelPayload(db, payload, currentRevision) {
 
 let triageFailure;
 
-function isFailedUpdatePayload(payload) {
-  return payload.status === "error" || (payload.status === "skipped" &&
-    !params.nonFailureSkippedReasons.includes(payload.stats?.reason));
+function isFailedUpdateOutcome(status, reason) {
+  return status === "error" || (status === "skipped" &&
+    !params.nonFailureSkippedReasons.includes(reason));
 }
 
 function captureFailedUpdateResult() {
-  // The current CLI writes this only for a terminal failure after its cleanup.
-  // Its presence triggers diagnostics, never permission to restart the service.
+  // Enrich an already recorded failure; diagnostic artifacts never decide the
+  // update outcome or permission to restart the service.
   if (fs.existsSync(params.triageContextPath)) {
-    triageFailure = { reason: "managed-service-handoff-failed" };
+    triageFailure = { ...triageFailure, reason: "managed-service-handoff-failed" };
     return true;
   }
   const db = openStateDatabase();
@@ -625,21 +629,22 @@ function captureFailedUpdateResult() {
   try {
     const payload = readRestartSentinelRecord(db)?.payload;
     if (payload?.kind !== "update" || payload.stats?.handoffId !== params.handoffId ||
-      !isFailedUpdatePayload(payload)) return false;
-    triageFailure = { payload, reason: payload.stats.reason || "managed-service-handoff-failed" };
+      !isFailedUpdateOutcome(payload.status, payload.stats?.reason)) return false;
+    triageFailure = { ...triageFailure, payload, reason: payload.stats.reason || "managed-service-handoff-failed" };
     return true;
   } finally {
     db.close();
   }
 }
 
-function markUpdateSentinelFailureIfPending(reason, restored, expectedRevision) {
+function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedRevision) {
+  if (!ownsManagedUpdateLease()) return false;
   let metaFile;
   try {
     metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
   } catch {}
   const meta = metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {};
-  const status = reason === "managed-service-handoff-cancelled" && restored !== false
+  const status = (reason === "managed-service-handoff-cancelled" || completedStatus === "skipped") && restored !== false
     ? "skipped" : "error";
   const fallbackPayload = {
     kind: "update",
@@ -663,9 +668,7 @@ function markUpdateSentinelFailureIfPending(reason, restored, expectedRevision) 
   if (meta.deliveryContext && typeof meta.deliveryContext === "object") {
     fallbackPayload.deliveryContext = meta.deliveryContext;
   }
-  if (status === "error") {
-    triageFailure ??= { payload: fallbackPayload, reason };
-  }
+  if (status === "error") triageFailure ??= { payload: fallbackPayload, reason };
   if (triageFailure && typeof restored === "boolean") triageFailure.restored = restored;
   const db = openStateDatabase();
   if (!db) return null;
@@ -674,37 +677,47 @@ function markUpdateSentinelFailureIfPending(reason, restored, expectedRevision) 
     runManagedUpdateLeaseTransaction(db, () => {
       assertStateDatabaseWriteAllowed(db);
       const current = readRestartSentinelRecord(db);
-      if (expectedRevision !== undefined && (!current || current.revision !== expectedRevision)) return;
-      let payload = current && current.payload;
-      const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
-      if (payload?.kind === "update" && payload.stats?.handoffId === handoffId &&
-        (triageFailure || isFailedUpdatePayload(payload))) {
-        triageFailure ??= { reason };
-        triageFailure.payload = payload;
+      if (expectedRevision !== undefined && (!current || current.revision !== expectedRevision)) {
+        recorded = true;
+        return;
       }
+      let payload = current && current.payload;
+      // A completed child attempts publication before recovery. A missing row
+      // may already be consumed; do not retry its best-effort notification here.
+      if (completedStatus && !payload) { recorded = true; return; }
+      const handoffId = typeof params.handoffId === "string" ? params.handoffId.trim() : "";
       if (
-        (payload && (payload.kind !== "update" || (!isFailedUpdatePayload(payload) &&
-          (payload.status !== "skipped" ||
-            !["managed-service-handoff-started", "restart-health-pending", "managed-service-handoff-cancelled"].includes(payload.stats?.reason))))) ||
-        (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId))
+        (payload && (payload.kind !== "update" || (!isFailedUpdateOutcome(payload.status, payload.stats?.reason) &&
+          (payload.status !== "skipped" || (completedStatus !== "skipped" &&
+            !["managed-service-handoff-started", "restart-health-pending", "managed-service-handoff-cancelled"].includes(payload.stats?.reason)))))) ||
+        (payload && handoffId && (!payload.stats || payload.stats.handoffId !== handoffId)) ||
+        (payload?.stats?.root && payload.stats.root !== params.updateLeaseKey)
       ) {
         return;
       }
       if (payload) {
-        const failed = isFailedUpdatePayload(payload);
+        const failed = isFailedUpdateOutcome(payload.status, payload.stats?.reason);
+        const preserveChildStatus = completedStatus === payload.status && restored !== false;
+        // A failed attempt keeps its reason when recovery turns a skipped status into an error.
         payload = {
-          ...payload, status: failed ? payload.status : status,
-          stats: { ...(payload.stats || {}), ...(failed ? {} : { reason }) },
+          ...payload,
+          status: payload.status === "error" || preserveChildStatus ? payload.status : status,
+          stats: { ...(payload.stats || {}), reason: failed || preserveChildStatus ? payload.stats?.reason ?? reason : reason },
         };
         delete payload.continuation;
       } else {
         payload = fallbackPayload;
       }
-      if (isFailedUpdatePayload(payload)) payload.doctorHint = params.triageHint;
+      if (isFailedUpdateOutcome(payload.status, payload.stats?.reason)) {
+        payload.doctorHint = params.triageHint;
+        triageFailure ??= { reason };
+        triageFailure.payload = payload;
+      }
       if (typeof restored === "boolean") {
         payload.stats.steps = [
           ...(payload.stats.steps || []),
-          { name: "service-restore", command: params.serviceRecovery.kind, log: { exitCode: restored ? 0 : 1 } },
+          { name: "service-restore", command: params.serviceRecovery.kind,
+            log: { exitCode: restored ? 0 : 1, ...(completedStatus && !restored ? { stderrTail: reason } : {}) } },
         ];
       }
       recorded = writeRestartSentinelPayload(db, payload, current ? current.revision : null);
@@ -760,7 +773,7 @@ function isLaunchdNotLoaded(result) {
 let parkedServiceGeneration = null;
 let parkedServiceInvocation = null;
 let restorationArmed = false;
-let recoverySentinelRevision;
+let updaterStarted = false;
 let pendingServiceStop;
 
 async function parkGatewayService() {
@@ -826,14 +839,51 @@ async function parkGatewayService() {
   });
 }
 
-async function restoreGatewayService(reason) {
+async function restoreGatewayService(reason, decision = params.recovery, childStatus) {
+  let expectedRevision;
+  const record = (restored) => recordUpdateHandoffOutcome(
+    restored ? reason : "managed-service-handoff-restore-failed", restored, childStatus, expectedRevision,
+  );
+  if (decision?.serviceRestartSafe !== true || !decision.version) {
+    appendLog("recovery refused: original runtime identity could not be verified");
+    record(false);
+    return false;
+  }
+  const expectedVersion = decision.version;
+  const expectedBuildId = decision.buildId;
   const recovery = params.serviceRecovery;
   let restored = false;
+  const ownsRecovery = () => {
+    try { return ownsManagedUpdateLease() && fs.realpathSync(params.updateLeaseKey) === params.updateLeaseKey; }
+    catch { return false; }
+  };
+  const runOwned = (...args) => ownsRecovery()
+    ? runServiceCommand(...args) : Promise.resolve({ code: 1, stdout: "", stderr: "recovery ownership lost" });
+  if (!ownsRecovery()) return false;
+  // Activation may consume or replace the notification. Annotate only the
+  // observed revision; notification persistence never decides recovery safety.
+  if (childStatus) expectedRevision = recordUpdateHandoffOutcome(reason, undefined, childStatus);
   if (recovery?.kind === "systemd") {
-    const run = (args) => runServiceCommand("systemctl", ["--user", ...args]);
-    await run(["reset-failed", recovery.unit]);
-    const started = await run(["start", recovery.unit]);
-    const current = started.code === 0 && await inspectSystemdService(recovery.unit);
+    if (!pendingServiceStop || (await pendingServiceStop).code !== 0) {
+      appendLog("recovery refused: exact systemd stop did not complete");
+      record(false);
+      return false;
+    }
+    const parked = await inspectSystemdService(recovery.unit);
+    const retained = parked?.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
+      parked?.InvocationID === parkedServiceInvocation;
+    const cleared = parked?.ExecMainStartTimestampMonotonic === "0" && !parked?.InvocationID;
+    if (!parked || parked.Id !== recovery.unit || parked.LoadState !== "loaded" ||
+      parked.ActiveState !== "inactive" || parked.MainPID !== "0" || !(retained || cleared) ||
+      !ownsRecovery()) {
+      appendLog("recovery refused: parked systemd service identity changed or stop is incomplete");
+      record(false);
+      return false;
+    }
+    const started = childStatus
+      ? await runOwnedUpdateCommand("recovery", params.recoveryCommandArgv, params.recoveryTimeoutMs)
+      : await runOwned("systemctl", ["--user", "start", recovery.unit]);
+    const current = !started.signal && started.code === 0 && ownsRecovery() && await inspectSystemdService(recovery.unit);
     restored = Boolean(current && current.Id === recovery.unit &&
       current.LoadState === "loaded" && current.ActiveState === "active" &&
       /^[1-9]\d*$/.test(current.MainPID || "") && current.MainPID !== String(params.parentPid) &&
@@ -843,7 +893,28 @@ async function restoreGatewayService(reason) {
   } else if (recovery?.kind === "launchd") {
     const target = "gui/" + recovery.uid + "/" + recovery.label;
     const deadline = Date.now() + ${PARENT_EXIT_SHUTDOWN_RESERVE_MS};
-    const run = (args) => runServiceCommand("launchctl", args, undefined, deadline);
+    const run = (args) => runOwned("launchctl", args, undefined, deadline);
+    const before = await run(["print", target]);
+    if (before.code === 0) {
+      const pid = Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(before.stdout)?.[1]);
+      if (pid && pid !== params.parentPid) {
+        appendLog("recovery refused: launchd service has another process generation");
+        record(false);
+        return false;
+      }
+    } else if (!isLaunchdNotLoaded(before)) {
+      record(false);
+      return false;
+    }
+    if (childStatus) {
+      const restarted = await runOwnedUpdateCommand("recovery", params.recoveryCommandArgv, params.recoveryTimeoutMs);
+      // The guarded CLI owns its restart deadline; identity inspection gets a fresh probe budget.
+      const current = !restarted.signal && restarted.code === 0 && ownsRecovery()
+        ? await runOwned("launchctl", ["print", target]) : null;
+      const pid = current?.code === 0
+        ? Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(current.stdout)?.[1]) : 0;
+      restored = Boolean(pid && pid !== params.parentPid && isPidAlive(pid));
+    } else {
     const enabled = await run(["enable", target]);
     let kickstarted = false;
     for (let inspection = enabled; enabled.code === 0 && Date.now() < deadline;) {
@@ -873,21 +944,29 @@ async function restoreGatewayService(reason) {
       if (!/bootstrap failed: 5|input\/output error/i.test(detail)) break;
       await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
     }
+    }
   } else if (recovery?.kind === "schtasks") {
-    restored = (await runServiceCommand("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
+    restored = (await runOwned("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
   }
-  return recordServiceRecovery(reason, restored);
-}
-
-function recordServiceRecovery(reason, restored, expectedRevision) {
-  appendLog("gateway service recovery " + (restored ? "succeeded" : "failed"));
-  const recorded = markUpdateSentinelFailureIfPending(
-    restored ? reason : "managed-service-handoff-restore-failed", restored, expectedRevision,
-  );
-  if (!recorded && expectedRevision === undefined) {
+  if (restored) {
+    try {
+      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
+      if (!ownsRecovery()) throw new Error("managed update recovery ownership was lost");
+      const health = await waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId);
+      restored = ownsRecovery() && health.healthy === true &&
+        health.runtime?.status === "running" && health.gatewayVersion === expectedVersion &&
+        (!expectedBuildId || health.gatewayBuildId === expectedBuildId);
+    } catch (error) {
+      appendLog("Gateway recovery readiness failed: " + String(error));
+      restored = false;
+    }
+  }
+  appendLog("gateway service recovery " + (restored ? "succeeded (readiness and runtime identity verified)" : "failed"));
+  const recorded = record(restored);
+  if (!recorded) {
     appendLog("managed update restoration result could not be durably recorded");
   }
-  return restored && recorded !== null;
+  return restored;
 }
 
 function killOwnedCommand(child) {
@@ -901,19 +980,31 @@ function killOwnedCommand(child) {
   try { child.kill("SIGKILL"); } catch {}
 }
 
-async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
+/** @param {"update" | "recovery" | "diagnostic"} phase */
+async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params.cwd) {
   const outputFd = fs.openSync(params.logPath, "a", 0o600);
   let timeout;
+  const updaterChunks = [];
+  let updaterBytes = 0;
+  let outputOverflow = false;
   try {
     const child = spawn(process.execPath, ["-e", ${JSON.stringify(HANDOFF_COMMAND_RUNNER_SCRIPT)}, JSON.stringify(commandArgv)], {
-      cwd: params.cwd,
+      cwd,
       env: process.env,
       detached: true,
-      stdio: ["pipe", outputFd, outputFd],
+      stdio: ["pipe", "pipe", outputFd],
+    });
+    child.stdout.on("data", (chunk) => {
+      try { fs.writeSync(outputFd, chunk); } catch {}
+      updaterBytes += chunk.length;
+      if (updaterBytes > 4 * 1024 * 1024) {
+        outputOverflow = true;
+        updaterChunks.length = 0;
+      } else updaterChunks.push(chunk);
     });
     const exited = new Promise((resolve) => {
       child.once("error", (error) => resolve({ error }));
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      child.once("close", (code, signal) => resolve({ code, signal }));
     });
     child.stdin.on("error", () => {});
     const runnerIdentity = buildLeaseProcessPayload(child.pid);
@@ -925,10 +1016,10 @@ async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
     try {
       // Sending the gate can start mutation even if its write callback fails.
       // From here, only the updater can authorize recovery of this installation.
-      restorationArmed = false;
+      if (phase === "update") updaterStarted = true;
       if (timeoutMs !== undefined) {
         timeout = setTimeout(() => {
-          appendLog("owned command exceeded its update timeout");
+          appendLog("managed update " + phase + " command exceeded its timeout");
           killOwnedCommand(child);
         }, timeoutMs);
       }
@@ -945,14 +1036,15 @@ async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
       bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity);
       throw error;
     }
-    appendLog("managed update command pid=" + (child.pid || "unknown"));
+    appendLog("managed update " + phase + " command pid=" + (child.pid || "unknown"));
     const exit = await exited;
     if (!bindManagedUpdateLeaseToProcess(process.pid, runnerIdentity)) {
       throw new Error("managed update command lease binding was lost");
     }
     if (exit.error) throw exit.error;
-    appendLog("managed update command exited code=" + (exit.code ?? "null") + " signal=" + (exit.signal || "null"));
-    return exit;
+    appendLog("managed update " + phase + " command exited code=" + (exit.code ?? "null") + " signal=" + (exit.signal || "null"));
+    // Decode after close so split UTF-8 cannot corrupt the authoritative installation root.
+    return { ...exit, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
   } finally {
     clearTimeout(timeout);
     fs.closeSync(outputFd);
@@ -962,6 +1054,8 @@ async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
 async function collectUpdateFailureTriage() {
   try {
     if (!triageFailure || !ownsManagedUpdateLease()) return;
+    // Diagnostic reads share this boundary so they cannot bypass terminal cleanup.
+    captureFailedUpdateResult();
     appendLog("If triage is unavailable, run " + params.triageRecoveryCommand + " on the Gateway host.");
     // The helper and outer updater start from the same installation. Preserve
     // its complete export; absent exports have only the helper's observed failure.
@@ -974,14 +1068,15 @@ async function collectUpdateFailureTriage() {
       ? JSON.parse(fs.readFileSync(params.triageContextPath, "utf8"))
       : { error: "Managed update failed: " + (triageFailure.payload?.stats?.reason || triageFailure.reason) };
     const recovery = typeof triageFailure.restored === "boolean"
-      ? "Helper service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
-      : "Helper service recovery outcome was not recorded; inspect the handoff log before restarting.";
+      ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
+      : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
     failure.error = [failure.error, recovery].filter(Boolean).join("\n");
     // Keep the canonical export intact even when installed triage cannot start.
     // Only this private annotated input is removed with the helper's other files.
     fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
     appendLog("starting diagnostic-only update triage after service recovery settled");
     const exit = await runOwnedUpdateCommand(
+      "diagnostic",
       [...params.triageCommandArgv, "--update-result", params.triageInputPath],
       Math.min(params.recoveryTimeoutMs, 60_000),
     );
@@ -1041,12 +1136,14 @@ async function collectUpdateFailureTriage() {
       }
       wake?.();
     });
-    process.stdin.once("close", () => {
+    const onDisconnect = () => {
       disconnected = true;
       wake?.();
-    });
+    };
+    process.stdin.once("end", onDisconnect).once("close", onDisconnect);
     const reply = (line) => fs.writeSync(1, line + "\n");
     let parked = false;
+    let transferred = false;
     while (isPidAlive(params.parentPid)) {
       if (!ownsManagedUpdateLease()) throw new Error("managed update lease no longer owns the helper");
       if (readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
@@ -1065,8 +1162,20 @@ async function collectUpdateFailureTriage() {
           try { process.kill(params.parentPid, "SIGKILL"); } catch {}
         }
       }
+      // A child CLI must finish reporting before its Gateway's stop kills it.
+      // Only an acknowledged transfer lets EOF commit; ordinary EOF cancels.
+      if (transferred && disconnected && !parked) {
+        appendLog("initiating CLI disconnected; parking the managed gateway service");
+        await parkGatewayService();
+        parked = true;
+        outcome = Date.now() < params.parentExitDeadlineAt ? "update" : "restore";
+      }
       const command = commands.shift();
-      if (command === "park") {
+      if (command === "transfer" && !parked && !transferred) {
+        transferred = true;
+        appendLog("managed update ownership transferred; waiting for initiating CLI exit");
+        reply("transferred");
+      } else if (command === "park") {
         try {
           if (!parked) await parkGatewayService();
           parked = true;
@@ -1077,7 +1186,7 @@ async function collectUpdateFailureTriage() {
             outcome = "restore";
             reply("restore-after-exit");
           } else {
-            markUpdateSentinelFailureIfPending("managed-service-handoff-cancelled");
+            recordUpdateHandoffOutcome("managed-service-handoff-cancelled");
             reply("cancelled");
             return;
           }
@@ -1088,7 +1197,7 @@ async function collectUpdateFailureTriage() {
         reply(restoring ? "restore-after-exit" : "committed");
       } else if (command === "cancel" || (disconnected && outcome !== "update")) {
         if (!restorationArmed) {
-          markUpdateSentinelFailureIfPending("managed-service-handoff-cancelled");
+          recordUpdateHandoffOutcome("managed-service-handoff-cancelled");
           if (command) reply("cancelled");
           return;
         }
@@ -1109,7 +1218,7 @@ async function collectUpdateFailureTriage() {
     }
     if (outcome !== "update") {
       if (restorationArmed) await restoreGatewayService("managed-service-handoff-cancelled");
-      else markUpdateSentinelFailureIfPending("managed-service-handoff-cancelled");
+      else recordUpdateHandoffOutcome("managed-service-handoff-cancelled");
       return;
     }
     if (params.serviceRecovery?.kind === "systemd") {
@@ -1158,29 +1267,53 @@ async function collectUpdateFailureTriage() {
     }
 
     appendLog("starting managed update command: " + params.commandLabel);
-    const exit = await runOwnedUpdateCommand(params.commandArgv);
-    if (exit.signal || exit.code !== 0 || captureFailedUpdateResult()) {
-      if (!exit.signal && exit.code === ${MANAGED_SERVICE_UPDATE_SAFE_EXIT_CODE} && params.serviceRecovery) {
-        // The installed CLI checks current config, service ownership and readiness.
-        // Native restoration would bypass those checks after a rollback.
-        appendLog("updater verified recovery; checking the installed gateway before restart");
-        // Startup can consume this notification during recovery. Retain its exact
-        // revision so later annotation cannot recreate it or replace a newer outcome.
-        recoverySentinelRevision = markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
-        const recovery = await runOwnedUpdateCommand(params.recoveryCommandArgv, params.recoveryTimeoutMs);
-        recordServiceRecovery("managed-service-handoff-failed", !recovery.signal && recovery.code === 0, recoverySentinelRevision);
+    // Update inputs retain shell-relative paths; recovery keeps the durable helper cwd.
+    const exit = await runOwnedUpdateCommand("update", params.commandArgv, undefined, params.invocationCwd);
+    const { updaterOutput, outputOverflow } = exit;
+    // Only this invocation's direct child result carries the producer decision.
+    // Success may change install roots; only recovery requires the original root.
+    // Sentinels and diagnostic exports never authorize activation.
+    let result = null;
+    try { if (!outputOverflow) result = JSON.parse(updaterOutput); } catch {}
+    let resultRoot;
+    try { resultRoot = fs.realpathSync(result?.root); } catch {}
+    const reportedFailure = isFailedUpdateOutcome(result?.status, result?.reason);
+    if (reportedFailure) triageFailure ??= { reason: result?.reason || "managed-service-handoff-failed" };
+    if (exit.code === ${MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE}) {
+      appendLog("managed update reported unsafe recovery; keep the gateway stopped until the installation is repaired and update succeeds");
+      recordUpdateHandoffOutcome("managed-service-handoff-unsafe-recovery");
+      process.exitCode = exit.code;
+    } else if (!resultRoot || result?.status !== "ok" ||
+      exit.signal || exit.code !== 0) {
+      const childStatus = !exit.signal && resultRoot === params.updateLeaseKey && ["error", "skipped"].includes(result?.status) ? result.status : undefined;
+      const recovery = childStatus ? result.recovery : null;
+      const safe = !exit.signal && recovery?.serviceRestartSafe === true &&
+        typeof recovery.version === "string" && recovery.version.trim() &&
+        (recovery.buildId === undefined ? result.mode !== "git" :
+          typeof recovery.buildId === "string" && recovery.buildId.trim() && recovery.buildId.length <= 96) &&
+        ownsManagedUpdateLease();
+      let restored = safe && recovery.service === "healthy";
+      if (safe && recovery.service === undefined) {
+        restored = await restoreGatewayService("managed-service-handoff-failed", recovery, childStatus);
       } else {
-        appendLog("updater exited without requesting helper recovery; inspect the update result before restarting");
-        markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+        if (restored && triageFailure) triageFailure.restored = true;
+        appendLog("managed update recovery not attempted: " +
+          (recovery?.serviceRestartSafe === false ? "updater explicitly rejected activation" :
+            recovery?.service === "healthy" ? "updater already verified recovery" :
+              recovery?.service === "failed" ? "updater recovery failed; no automatic retry" :
+                "no verified recovery result; inspect the installation before restarting"));
+        if (childStatus !== "skipped" || !restored) {
+          recordUpdateHandoffOutcome("managed-service-handoff-failed", undefined, childStatus === "skipped" ? "error" : childStatus);
+        }
       }
-      process.exitCode = 1;
+      process.exitCode = exit.code || (childStatus === "skipped" && restored && !exit.signal && !reportedFailure ? 0 : 1);
     }
   } catch (err) {
     appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
     if (managedUpdateLeaseOwned) {
       bindManagedUpdateLeaseToProcess(process.pid);
-      if (restorationArmed) await restoreGatewayService("managed-service-handoff-helper-failed");
-      else markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed", undefined, recoverySentinelRevision);
+      if (restorationArmed && !updaterStarted) await restoreGatewayService("managed-service-handoff-helper-failed");
+      else recordUpdateHandoffOutcome("managed-service-handoff-helper-failed");
     }
     process.exitCode = 1;
   } finally {
@@ -1191,6 +1324,7 @@ async function collectUpdateFailureTriage() {
     releaseManagedUpdateLease();
     process.stdin.destroy();
     cleanupSensitiveFiles();
+    appendLog("managed update helper completed code=" + (process.exitCode || 0));
   }
 })().catch((err) => {
   appendLog("handoff setup failed: " + (err && err.stack ? err.stack : String(err)));
@@ -1206,6 +1340,7 @@ type ManagedServiceUpdateHandoffParams = {
   restartDelayMs?: number;
   channel?: UpdateChannel;
   tag?: string;
+  acceptCapabilities?: boolean;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
   supervisor?: RespawnSupervisor | null;
@@ -1214,6 +1349,7 @@ type ManagedServiceUpdateHandoffParams = {
   execPath?: string;
   argv1?: string;
   parentPid?: number;
+  invocationCwd?: string;
 };
 
 type ManagedServiceUpdateHandoffResult = {
@@ -1241,10 +1377,14 @@ function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
   channel?: UpdateChannel;
   tag?: string;
+  acceptCapabilities?: boolean;
   execPath?: string;
   argv1?: string;
 }): string[] {
   const updateArgs = ["update", "--yes", "--json"];
+  if (params.acceptCapabilities) {
+    updateArgs.push("--accept-capabilities");
+  }
   if (params.channel) {
     updateArgs.push("--channel", params.channel);
   }
@@ -1274,7 +1414,12 @@ function resolveManagedServiceCliArgv(
 }
 
 export function formatManagedServiceUpdateCommand(
-  params?: { timeoutMs?: number; channel?: UpdateChannel; tag?: string },
+  params?: {
+    timeoutMs?: number;
+    channel?: UpdateChannel;
+    tag?: string;
+    acceptCapabilities?: boolean;
+  },
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return formatCliCommand(
@@ -1404,14 +1549,17 @@ async function spawnManagedServiceUpdateHandoff(
   );
   const logPath = path.join(dir, "handoff.log");
   const commandArgv = resolveUpdateCliArgv({
-    timeoutMs: params.timeoutMs,
-    channel: params.channel,
-    tag: params.tag,
+    ...params,
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
   const commandLabel = formatManagedServiceUpdateCommand(
-    { timeoutMs: params.timeoutMs, channel: params.channel, tag: params.tag },
+    {
+      timeoutMs: params.timeoutMs,
+      channel: params.channel,
+      tag: params.tag,
+      acceptCapabilities: params.acceptCapabilities,
+    },
     params.env,
   );
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
@@ -1454,6 +1602,7 @@ async function spawnManagedServiceUpdateHandoff(
     parentExitTimeoutMs,
     parentExitDeadlineAt: Date.now() + parentExitTimeoutMs,
     cwd: dir,
+    invocationCwd: params.invocationCwd,
     commandArgv,
     recoveryCommandArgv: resolveManagedServiceCliArgv(
       { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
@@ -1491,6 +1640,10 @@ async function spawnManagedServiceUpdateHandoff(
     updateLeaseOwner: params.handoffId,
     sensitivePaths: [scriptPath, paramsPath, metaPath, triageInputPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, serviceEnv),
+    recovery: await ((await looksLikeGitCheckout(rootIdentity))
+      ? readCurrentGitUpdateRecovery(rootIdentity)
+      : verifyPackageUpdateRecovery(rootIdentity)),
+    recoveryModulePath: path.join(rootIdentity, "dist", "cli", "daemon-cli.js"),
   };
 
   let child!: HandoffChild;
@@ -1755,6 +1908,28 @@ export async function commitManagedServiceUpdateHandoff(
       outcome === "update" ? "commit" : "restore-commit",
     )) === "committed"
   );
+}
+
+export async function transferManagedServiceUpdateHandoff(
+  identity: NonNullable<GatewayRestartIntent["successorOwner"]>,
+): Promise<boolean> {
+  const child = activeManagedServiceUpdateHandoffs.get(
+    resolveUpdateInstallRoot(identity.installRoot),
+  )?.launcher;
+  if (
+    !(child?.stdin instanceof Socket) ||
+    !(child.stdout instanceof Socket) ||
+    !claimManagedServiceUpdateHandoff(identity) ||
+    (await sendManagedServiceUpdateHandoffCommand(identity, "transfer")) !== "transferred" ||
+    !claimManagedServiceUpdateHandoff(identity)
+  ) {
+    return false;
+  }
+  // Node's spawn pipe streams are net.Socket instances. Unref keeps the control
+  // channel open until CLI exit, so its result is printed before service stop.
+  child.stdin.unref();
+  child.stdout.unref();
+  return true;
 }
 
 export async function cancelManagedServiceUpdateHandoff(

@@ -367,8 +367,10 @@ export async function sessionsCommand(
       });
   });
   const acpSessionMetaByEntry = readAcpSessionMetaBatch({
-    entries: sessionEntries.map(({ acpSessionKey, entry }) => ({
+    cfg,
+    entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
       sessionKey: acpSessionKey,
+      agentId,
       entry,
     })),
   });

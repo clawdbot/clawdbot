@@ -333,6 +333,7 @@ async function runSystemAgentTurnWithDeps(
   // and the engine executes it after the reply.
   const directiveRef: { current?: SystemAgentTurnDirective } = {};
   const systemAgentTool = {
+    agentId: plan.agentId,
     surface: params.surface,
     approvalArmed: params.approvalArmed,
     ...(params.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),

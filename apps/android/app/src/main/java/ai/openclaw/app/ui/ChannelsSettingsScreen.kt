@@ -81,18 +81,24 @@ internal fun ChannelsSettingsScreen(
       }
     }
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load channels."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      channels.isEmpty() ->
+      }
+
+      channels.isEmpty() -> {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = nativeString("No channels found."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(text = nativeString("Telegram, WhatsApp, email, and other channels appear here after setup."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> ChannelsPanel(channels = channels)
+      }
+
+      else -> {
+        ChannelsPanel(channels = channels)
+      }
     }
   }
 }

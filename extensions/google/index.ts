@@ -34,10 +34,7 @@ let googleRealtimeVoiceProviderPromise: Promise<RealtimeVoiceProviderPlugin> | n
 let googleVideoGenerationProviderPromise: Promise<VideoGenerationProvider> | null = null;
 
 type GoogleMediaUnderstandingProvider = Required<
-  Pick<
-    MediaUnderstandingProvider,
-    "describeImage" | "describeImages" | "transcribeAudio" | "describeVideo"
-  >
+  Pick<MediaUnderstandingProvider, "transcribeAudio" | "describeVideo">
 >;
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
@@ -87,12 +84,7 @@ async function loadGoogleVideoGenerationProvider(): Promise<VideoGenerationProvi
 
 async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMediaUnderstandingProvider> {
   const provider = await loadGoogleMediaUnderstandingProvider();
-  if (
-    !provider.describeImage ||
-    !provider.describeImages ||
-    !provider.transcribeAudio ||
-    !provider.describeVideo
-  ) {
+  if (!provider.transcribeAudio || !provider.describeVideo) {
     throw new Error("google media understanding provider missing required handlers");
   }
   return provider as GoogleMediaUnderstandingProvider;
@@ -140,10 +132,8 @@ function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvide
     },
     autoPriority: { image: 30, audio: 40, video: 10 },
     nativeDocumentInputs: ["pdf"],
-    describeImage: async (...args) =>
-      await (await loadGoogleRequiredMediaUnderstandingProvider()).describeImage(...args),
-    describeImages: async (...args) =>
-      await (await loadGoogleRequiredMediaUnderstandingProvider()).describeImages(...args),
+    describeImage: undefined,
+    describeImages: undefined,
     transcribeAudio: async (...args) =>
       await (await loadGoogleRequiredMediaUnderstandingProvider()).transcribeAudio(...args),
     describeVideo: async (...args) =>

@@ -54,6 +54,7 @@ export function createCronContinuationController(params: {
               !current ||
               marker?.phase !== "continuing" ||
               marker.ownerRunId !== params.runId ||
+              marker.ownerLifecycleGeneration !== params.lifecycleGeneration ||
               marker.lifecycleRevision !== activeClaim.lifecycleRevision
             ) {
               return { result: false };

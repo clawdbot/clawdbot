@@ -1,6 +1,5 @@
-// Tests session maintenance warning formatting and suppression.
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliveryCall = {
   channel?: string;
@@ -90,9 +89,13 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    // Start under this suite's mocks, then reuse the owner across disjoint session keys.
     vi.resetModules();
     ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
+  });
+
+  beforeEach(() => {
     prevVitest = process.env.VITEST;
     prevNodeEnv = process.env.NODE_ENV;
     delete process.env.VITEST;

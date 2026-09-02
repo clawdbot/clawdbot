@@ -49,6 +49,7 @@ export function waitForFile(file) {
     "lib/dist-artifact-ownership.mts",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
+    "lib/vitest-resource-ownership.mts",
     "lib/windows-taskkill.mjs",
     "lib/repo-root.mjs",
   ]) {

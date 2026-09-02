@@ -36,6 +36,15 @@ const healthState = {
 };
 
 describe("config health-state warnings", () => {
+  it("reads an absent health store without creating shared state", () => {
+    const deps = createHealthDeps();
+    const databasePath = resolveOpenClawStateSqlitePath(deps.env);
+
+    const state = readConfigHealthStateFromStore(deps);
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(state).toEqual({});
+  });
+
   it("deduplicates write failures across fresh sync and async config reads", async () => {
     const deps = createHealthDeps();
     const configPath = path.join(deps.env.HOME, "openclaw.json");

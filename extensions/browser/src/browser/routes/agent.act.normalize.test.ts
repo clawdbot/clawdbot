@@ -180,6 +180,17 @@ describe("normalizeActRequest numeric fields", () => {
   });
 });
 
+describe("normalizeActRequest fill fields", () => {
+  it("validates fill fields inside batch sub-actions", () => {
+    expect(() =>
+      normalizeActRequest({
+        kind: "batch",
+        actions: [{ kind: "fill", fields: [{ ref: "e1", value: "Neo", text: "unsupported" }] }],
+      }),
+    ).toThrow('fields[0] unsupported field key "text"');
+  });
+});
+
 describe("normalizeActRequest batch nesting depth", () => {
   const buildNestedBatch = (depth: number): Record<string, unknown> => {
     let action: Record<string, unknown> = { kind: "click", ref: "1" };

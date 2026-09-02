@@ -491,6 +491,7 @@ export async function createServiceChildRelayAdapter(params: {
     pid: commandPid,
     stdin,
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
+    supportsRawOutput: !useWindowsJobAnchor,
     onStdout: stdoutRelay.subscribe,
     onStderr: stderrRelay.subscribe,
     wait: async () => {

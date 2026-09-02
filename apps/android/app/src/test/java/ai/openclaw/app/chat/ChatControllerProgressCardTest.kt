@@ -321,11 +321,15 @@ class ChatControllerProgressCardTest {
               releaseOldFetch.await()
             }
           }
+
           "other" -> {
             newFetchStarted.complete(Unit)
             releaseNewFetch.await()
           }
-          else -> error("unexpected session")
+
+          else -> {
+            error("unexpected session")
+          }
         }
       }
       val controller = newController(gateway)

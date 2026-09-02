@@ -320,6 +320,16 @@ against the Release SHA. The parent must report
 dispatching child lanes. Npm preflight and package/install acceptance still run
 against the exact Release SHA and its new tarball bytes.
 
+Current all-group FRV also owns read-only npm source/build/qualification and
+Docker preparation. Use its successful run as `preflight_run_id`; the candidate
+helper defaults to that run. Do not dispatch a second npm preflight unless
+recovering historical separate evidence. Regular final qualification records
+SDK reports for both `beta` and `latest`; review the acknowledgement for the
+actual publication channel. Prepared descriptors live in `publicationArtifacts` in
+the exact final manifest. Product evidence reuse never substitutes Code-SHA
+package or image bytes for the final Release SHA. A parent that produced these
+artifacts needs a fresh all-group FRV instead of same-parent continuation.
+
 The SHA-pinned helper infers `beta` for matching beta release candidates and
 exact alpha tags, and `stable` for stable/correction versions, then passes the
 Validation SHA + Tooling SHA run identity. Canonical beta `all` without soak

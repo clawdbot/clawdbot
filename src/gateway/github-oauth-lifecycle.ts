@@ -10,6 +10,7 @@ import {
 } from "../agents/agent-lifecycle-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
+  clearGitHubCredentialVerificationCache,
   refreshGitHubOAuthToken,
   type GitHubOAuthTokenPair,
 } from "../agents/github-oauth-client.js";
@@ -621,6 +622,7 @@ export function createGitHubOAuthLifecycle(params: {
       interval.unref?.();
     },
     stop: async () => {
+      clearGitHubCredentialVerificationCache();
       stopping = true;
       if (interval) {
         clearInterval(interval);

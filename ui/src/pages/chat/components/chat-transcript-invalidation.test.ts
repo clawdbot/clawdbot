@@ -34,26 +34,32 @@ describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not normalize historical messages again when their transcript is projected", () => {
-    const messages = Array.from({ length: 30 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `Historical message ${index}`,
-      timestamp: index + 1,
-      __openclaw: { id: `message-${index}` },
-    }));
-    const transcript = {
-      expandedAssistantMessages: new Map(),
-      setContentReady: vi.fn(),
-      syncMessageRows: vi.fn(),
-    } as unknown as Parameters<typeof projectChatTranscript>[1];
-    const props = threadProps("pane-offscreen-history", "agent:main:main", messages);
-    projectChatTranscript(props, transcript);
+  it.each(["agent:main:main", "agent:main:dashboard:history"])(
+    "does not normalize historical messages again when their transcript is projected in %s",
+    (sessionKey) => {
+      const messages = Array.from({ length: 30 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Historical message ${index}`,
+        timestamp: index + 1,
+        __openclaw: { id: `message-${index}` },
+      }));
+      const transcript = {
+        expandedAssistantMessages: new Map(),
+        setContentReady: vi.fn(),
+        syncMessageRows: vi.fn(),
+      } as unknown as Parameters<typeof projectChatTranscript>[1];
+      const props = threadProps("pane-offscreen-history", sessionKey, messages);
+      projectChatTranscript(props, transcript);
 
-    const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
-    projectChatTranscript(props, transcript);
+      const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
+      projectChatTranscript(props, transcript);
 
-    expect(normalizeSpy.mock.calls.some(([message]) => message === messages[0])).toBe(false);
-  });
+      const historicalMessages = new Set<unknown>(messages);
+      expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
+        false,
+      );
+    },
+  );
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";

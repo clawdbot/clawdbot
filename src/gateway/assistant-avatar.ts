@@ -1,4 +1,6 @@
 // Gateway assistant-avatar projection binds the selected value to effective metadata.
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import {
   openLocalAgentAvatarFile,
   type OpenedLocalAgentAvatarFile,
@@ -35,8 +37,10 @@ type OpenGatewayAssistantAvatarProjection = {
 
 const gatewayAvatarDataUrlCache = createGatewayAvatarDataUrlCache();
 
-function resolveSameOriginAvatarUrl(cfg: OpenClawConfig, source: string): string | undefined {
-  const basePath = cfg.gateway?.controlUi?.basePath;
+function resolveSameOriginAvatarUrl(
+  basePath: string | undefined,
+  source: string,
+): string | undefined {
   const unbased = matchControlUiResourceUrl("agentAvatar", source);
   if (unbased) {
     return `${buildControlUiResourcePath("agentAvatar", basePath, unbased.value)}${unbased.search}${unbased.hash}`;
@@ -66,7 +70,7 @@ export function openGatewayAssistantAvatar(params: {
   if (hasAvatarUriScheme(source) && !isWindowsAbsolutePath(source)) {
     return { resolution: { kind: "none", reason: "unsupported_uri", source } };
   }
-  if (resolveSameOriginAvatarUrl(cfg, source)) {
+  if (resolveSameOriginAvatarUrl(cfg.gateway?.controlUi?.basePath, source)) {
     return { resolution: null };
   }
   if (!looksLikeAvatarPath(source)) {
@@ -87,10 +91,15 @@ export function openGatewayAssistantAvatar(params: {
 export function resolveGatewayAssistantAvatar(params: {
   cfg: OpenClawConfig;
   identity: GatewayAssistantIdentity;
+  /** HTTP bootstrap uses authenticated image bytes; RPC clients retain inline avatars. */
+  httpBasePath?: string;
 }): GatewayAssistantAvatarProjection {
   const { cfg, identity } = params;
   const source = identity.avatar;
-  const sameOriginAvatarUrl = resolveSameOriginAvatarUrl(cfg, source);
+  const sameOriginAvatarUrl = resolveSameOriginAvatarUrl(
+    params.httpBasePath ?? cfg.gateway?.controlUi?.basePath,
+    source,
+  );
   if (sameOriginAvatarUrl) {
     return { avatar: sameOriginAvatarUrl, resolution: null };
   }
@@ -103,6 +112,20 @@ export function resolveGatewayAssistantAvatar(params: {
   }
   if (!opened.openedFile) {
     return { avatar: source, resolution: opened.resolution };
+  }
+
+  if (params.httpBasePath !== undefined) {
+    fs.closeSync(opened.openedFile.fd);
+    // Opaque file identity invalidates the browser's authenticated blob cache
+    // after replacement, without exposing a path or reading image bytes at boot.
+    const revision = createHash("sha256")
+      .update(JSON.stringify([opened.openedFile.path, opened.openedFile.stat]))
+      .digest("hex")
+      .slice(0, 16);
+    return {
+      avatar: `${buildControlUiResourcePath("agentAvatar", params.httpBasePath, identity.agentId)}?v=${revision}`,
+      resolution: opened.resolution,
+    };
   }
 
   const dataUrl = gatewayAvatarDataUrlCache.read(opened.openedFile);

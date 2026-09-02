@@ -600,7 +600,7 @@ describe("test-projects args", () => {
         expect(buildVitestRunPlans([file])).toEqual([
           {
             config: plan.config,
-            forwardedArgs: plan.includePatterns ? [] : [file],
+            forwardedArgs: plan.forwardedArgs.includes(file) ? [file] : [],
             includePatterns: plan.includePatterns ? [file] : null,
             watchMode: false,
           },

@@ -714,7 +714,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
-    const params = makeParams({ sandboxSessionKey: "agent:agent-1:policy" });
+    const params = makeParams({
+      agentAccountId: "account-a",
+      sandboxSessionKey: "agent:agent-1:policy",
+    });
     const beforePromptBuild = vi.fn(() => ({
       prependContext: "Use the current repository state.",
       appendContext: "Finish with the current test status.",
@@ -756,6 +759,7 @@ describe("runCopilotAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
       expect.objectContaining({
+        accountId: "account-a",
         runId: "run-1",
         sessionId: "session-1",
         sessionKey: params.sessionKey,
@@ -834,7 +838,7 @@ describe("runCopilotAttempt", () => {
       });
     });
 
-    const attempt = runCopilotAttempt(makeParams(), {
+    const attempt = runCopilotAttempt(makeParams({ agentAccountId: "account-a" }), {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -862,7 +866,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -870,7 +874,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });

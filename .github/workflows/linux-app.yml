@@ -36,18 +36,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            at-spi2-core \
             build-essential \
             curl \
+            dbus-x11 \
             file \
+            gir1.2-atspi-2.0 \
             gstreamer1.0-libav \
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-good \
+            libatk-adaptor \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
-            wget
+            python3-gi \
+            wget \
+            xauth \
+            xvfb
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component rustfmt
@@ -86,6 +93,24 @@ jobs:
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;
         # linux-app-release.yml builds the signed updater bundles.
         run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Test native first-run setup without a CLI
+        id: first-run
+        shell: bash
+        run: |
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/release/openclaw-desktop \
+            2>&1 | tee "${RUNNER_TEMP}/linux-first-run.log"
+
+      - name: Upload first-run failure log
+        if: failure() && steps.first-run.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-first-run-failure
+          retention-days: 14
+          if-no-files-found: error
+          path: ${{ runner.temp }}/linux-first-run.log
 
       - name: Upload bundles
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

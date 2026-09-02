@@ -62,19 +62,19 @@ describe("entry root help fast path", () => {
   });
 
   it("prefers precomputed root help text when available", async () => {
-    let outputPrecomputedRootHelpTextCalls = 0;
+    const outputPrecomputedRootHelpText = vi.fn(() => true);
+    const outputRootHelp = vi.fn();
 
     const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
       env: {},
-      outputPrecomputedRootHelpText: () => {
-        outputPrecomputedRootHelpTextCalls += 1;
-        return true;
-      },
+      outputPrecomputedRootHelpText,
+      outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
     });
 
     expect(handled).toBe(true);
-    expect(outputPrecomputedRootHelpTextCalls).toBe(1);
+    expect(outputPrecomputedRootHelpText).toHaveBeenCalledOnce();
+    expect(outputRootHelp).not.toHaveBeenCalled();
   });
 
   it("renders root help without importing the full program", async () => {

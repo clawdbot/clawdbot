@@ -1,6 +1,7 @@
 /** Doctor-owned migration of plaintext model-catalog credentials into agent SQLite. */
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -69,14 +70,13 @@ function matchesProviderEnvRefMarker(
   return candidate === id || candidate === `$${id}` || candidate === `\${${id}}`;
 }
 
-function findProviderSecretRefProfileIds(store: AuthProfileStore, cfg: OpenClawConfig): string[] {
-  return Object.entries(store.profiles).flatMap(([profileId, credential]) => {
-    return credential.type === "api_key" &&
+function findProviderSecretRefProfiles(store: AuthProfileStore, cfg: OpenClawConfig) {
+  return Object.entries(store.profiles).filter(
+    ([, credential]) =>
+      credential.type === "api_key" &&
       credential.key &&
-      matchesProviderEnvRefMarker(cfg, credential.provider, credential.key)
-      ? [profileId]
-      : [];
-  });
+      matchesProviderEnvRefMarker(cfg, credential.provider, credential.key),
+  );
 }
 
 function collectCredentials(
@@ -164,35 +164,36 @@ async function persistCredentials(params: {
   blockedStores?: readonly AuthProfileStore[];
   credentials: readonly PlaintextCredential[];
   inheritedStore?: AuthProfileStore;
-  invalidProfileIds?: readonly string[];
+  invalidProfiles: ReadonlyArray<[string, AuthProfileCredential]>;
   stateDir: string;
 }): Promise<{ migrated: number; removed: number }> {
   const credentials = uniqueCredentials(params.credentials);
-  const invalidProfileIds = new Set(params.invalidProfileIds ?? []);
-  if (credentials.length === 0 && invalidProfileIds.size === 0) {
+  const { invalidProfiles } = params;
+  if (credentials.length === 0 && invalidProfiles.length === 0) {
     return { migrated: 0, removed: 0 };
   }
   const blockedStores = params.blockedStores ?? [];
   const profileIds = new Map<string, PlaintextCredential>();
   let added = 0;
-  let removed = 0;
+  let removedProfiles: [string, AuthProfileCredential][] = [];
   const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     stateDir: params.stateDir,
     saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
     updater: (localStore) => {
-      const existingInvalidProfileIds = new Set(
-        [...invalidProfileIds].filter((profileId) => localStore.profiles[profileId] !== undefined),
+      // Confirmation can pause while another writer replaces a marker. Only remove
+      // the exact credential observed before prompting, including its references.
+      removedProfiles = invalidProfiles.filter(([profileId, credential]) =>
+        isDeepStrictEqual(localStore.profiles[profileId], credential),
       );
-      if (existingInvalidProfileIds.size > 0) {
+      if (removedProfiles.length > 0) {
         Object.assign(
           localStore,
           removeRuntimeExternalProfileReferences({
             store: localStore,
-            profileIds: existingInvalidProfileIds,
+            profileIds: new Set(removedProfiles.map(([profileId]) => profileId)),
           }),
         );
-        removed = existingInvalidProfileIds.size;
       }
       const effectiveStore = params.inheritedStore
         ? mergeAuthProfileStores(params.inheritedStore, localStore)
@@ -213,7 +214,7 @@ async function persistCredentials(params: {
         effectiveStore.profiles[profileId] = localStore.profiles[profileId];
         added += 1;
       }
-      return added > 0 || removed > 0;
+      return added > 0 || removedProfiles.length > 0;
     },
   });
   if (!updated) {
@@ -228,8 +229,8 @@ async function persistCredentials(params: {
   const effectivePersisted = params.inheritedStore
     ? mergeAuthProfileStores(params.inheritedStore, persisted ?? emptyStore())
     : persisted;
-  for (const profileId of invalidProfileIds) {
-    if (persisted?.profiles[profileId] !== undefined) {
+  for (const [profileId, credential] of removedProfiles) {
+    if (isDeepStrictEqual(persisted?.profiles[profileId], credential)) {
       throw new Error(`credential cleanup verification failed for profile "${profileId}"`);
     }
   }
@@ -238,7 +239,7 @@ async function persistCredentials(params: {
       throw new Error(`credential verification failed for provider "${credential.provider}"`);
     }
   }
-  return { migrated: added, removed };
+  return { migrated: added, removed: removedProfiles.length };
 }
 
 function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalogs {
@@ -321,17 +322,17 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       ),
     ),
   );
-  const invalidMainProfileIds = findProviderSecretRefProfileIds(mainStore, params.cfg);
-  const invalidCatalogProfileIds = catalogs.map((catalog) =>
+  const invalidMainProfiles = findProviderSecretRefProfiles(mainStore, params.cfg);
+  const invalidCatalogProfiles = catalogs.map((catalog) =>
     catalog.agentDir === mainAgentDir
       ? []
-      : findProviderSecretRefProfileIds(catalog.localStore, params.cfg),
+      : findProviderSecretRefProfiles(catalog.localStore, params.cfg),
   );
   const detected =
     configCredentials.length + catalogCredentials.reduce((sum, entries) => sum + entries.length, 0);
   const removable =
-    invalidMainProfileIds.length +
-    invalidCatalogProfileIds.reduce((sum, profileIds) => sum + profileIds.length, 0);
+    invalidMainProfiles.length +
+    invalidCatalogProfiles.reduce((sum, profiles) => sum + profiles.length, 0);
 
   for (const warning of warnings) {
     params.runtime.error(warning);
@@ -368,7 +369,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     const result = await persistCredentials({
       blockedStores: childStores,
       credentials: configCredentials,
-      invalidProfileIds: invalidMainProfileIds,
+      invalidProfiles: invalidMainProfiles,
       stateDir,
     });
     migrated += result.migrated;
@@ -385,7 +386,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       const result = await persistCredentials({
         ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
         credentials: catalogCredentials[index] ?? [],
-        invalidProfileIds: invalidCatalogProfileIds[index] ?? [],
+        invalidProfiles: invalidCatalogProfiles[index] ?? [],
         ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
         stateDir,
       });

@@ -251,6 +251,36 @@ describe("installPackageDir", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it("checks update authority before displacing the existing install", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    let backupReached = false;
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "unused",
+      beforePersistentApply() {
+        throw new Error("update authority closed");
+      },
+      async afterBackup() {
+        backupReached = true;
+        return { ok: true };
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: update authority closed",
+    });
+    expect(backupReached).toBe(false);
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+  });
+
   it("restores edits detected after the existing install moves to backup", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
