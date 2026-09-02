@@ -20,7 +20,7 @@ import {
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readSessionEntryCount,
-  readSessionEntryKeys,
+  iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
@@ -142,7 +142,7 @@ describe("SQLite session entry cache", () => {
     expect(snapshot.keys).toEqual([scope.sessionKey]);
     expect(snapshot.entries.size).toBe(readable ? 1 : 0);
     expect(readSessionEntryCount(database)).toBe(readable ? 1 : 0);
-    expect(readSessionEntryKeys(database)).toEqual(readable ? [scope.sessionKey] : []);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(readable ? [scope.sessionKey] : []);
     expect(snapshot.entries.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
   });
 

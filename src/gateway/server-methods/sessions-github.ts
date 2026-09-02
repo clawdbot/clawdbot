@@ -44,18 +44,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const loaded = loadGatewaySessionEntryReadOnly(
-        sessionKey,
-        caller?.agentId ? { agentId: caller.agentId } : undefined,
-      );
-      if (!loaded.entry?.sessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "GitHub publication session was not found"),
-        );
-        return;
-      }
       try {
         if (params.selection?.source === "personal") {
           if (!params.sessionKey) {
@@ -65,6 +53,18 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           const result = await coordinator.requestPersonalForSession(params, action);
           action.assertCurrent();
           respond(true, result);
+          return;
+        }
+        const loaded = loadGatewaySessionEntryReadOnly(
+          sessionKey,
+          caller?.agentId ? { agentId: caller.agentId } : undefined,
+        );
+        if (!loaded.entry?.sessionId) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "GitHub publication session was not found"),
+          );
           return;
         }
         sessionMutationAuthorization?.assertCurrent();
