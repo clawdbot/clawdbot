@@ -773,5 +773,3 @@ function pruneOldRollingLogs(dir: string): void {
     // ignore missing dir or read errors
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
