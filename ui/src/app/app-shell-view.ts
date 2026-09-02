@@ -78,6 +78,7 @@ export interface ShellViewHost {
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly navigationSidebar: HTMLElement;
+  readonly floatingSidebarAttention: HTMLElement;
   readonly onboardingMode: boolean;
   readonly outboxStoreRuntime: OutboxStoreRuntime | null;
   readonly routeState: ShellRouteState;
@@ -253,14 +254,13 @@ export function renderApplicationShell(host: ShellViewHost) {
     navDrawerOpen,
     mobileNavLayout,
   });
-  if (
-    floatingSidebarAttentionVisible({
-      navigationSurfaceHidden,
-      mobileNavLayout,
-      onboarding,
-      compact: mergedChatChrome,
-    })
-  ) {
+  const floatingAttentionVisible = floatingSidebarAttentionVisible({
+    navigationSurfaceHidden,
+    mobileNavLayout,
+    onboarding,
+    compact: mergedChatChrome,
+  });
+  if (onboarding || floatingAttentionVisible) {
     host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
   }
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
@@ -572,6 +572,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>`
           : nothing}
         ${renderFloatingUpdateCard({
+          attentionElement: host.floatingSidebarAttention,
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
@@ -589,8 +590,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
-          onNavigate: (routeId) => host.navigate(routeId),
-          onOpenApprovals: () => host.openApprovals(),
         })}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked}

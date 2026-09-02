@@ -239,6 +239,37 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
   });
 
+  it("keeps loaded health attention across a view-only remount", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "cron.list") {
+        return Promise.resolve(cronListResponse([cronJob("failed")]));
+      }
+      if (method === "cron.status") {
+        return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 });
+      }
+      if (method === "models.authStatus") {
+        return Promise.resolve(authStatus(1));
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    const { element, provider } = await mountAttention({
+      gateway: harness.gateway,
+      agentSelection: {
+        state: { selectedId: "main", scopeId: null },
+        subscribe: () => () => undefined,
+      } as unknown as ApplicationContext["agentSelection"],
+    });
+    await waitForFast(() =>
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("2"),
+    );
+
+    element.remove();
+    provider.append(element);
+
+    expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("2");
+  });
+
   it("keeps overdue jobs out of the Inbox while the scheduler is disabled", async () => {
     const overdue = cronJob("overdue-id");
     overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };

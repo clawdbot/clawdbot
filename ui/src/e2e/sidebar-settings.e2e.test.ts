@@ -12,6 +12,41 @@ import {
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocked Gateway E2E");
 
+const FAILED_CRON_RESPONSE = {
+  jobs: [
+    {
+      id: "failed-settings-transition",
+      name: "Failed settings transition",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "test" },
+      state: { lastRunStatus: "error", lastError: "Provider request failed" },
+    },
+  ],
+  snapshotRevision: "settings-transition-attention",
+  total: 1,
+  offset: 0,
+  limit: 50,
+  hasMore: false,
+  nextOffset: null,
+};
+
+const MISSING_AUTH_RESPONSE = {
+  ts: 1,
+  providers: [
+    {
+      provider: "openai",
+      displayName: "OpenAI",
+      status: "missing",
+      profiles: [],
+    },
+  ],
+};
+
 suite.define(() => {
   it("dismisses an open font picker before exiting Settings with Escape", async () => {
     const context = await suite.newBrowserContext({
@@ -85,6 +120,57 @@ suite.define(() => {
         page,
         `settings-without-inbox-${testCase.state.replaceAll(" ", "-")}.png`,
       );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps loaded Inbox attention through collapsed chat and Settings", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": FAILED_CRON_RESPONSE,
+        "models.authStatus": MISSING_AUTH_RESPONSE,
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+      await page.locator(".sidebar-brand__collapse").click();
+      const floatingInbox = page.locator(".sidebar-attention--floating");
+      await expect
+        .poll(() => floatingInbox.locator(".sidebar-issues-button__count").textContent())
+        .toBe("2");
+
+      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
+        await gateway.deferNext(method);
+        await gateway.deferNext(method);
+      }
+      await page.keyboard.press("Control+Shift+,");
+      await waitForControlUiSettingsTakeover(page);
+      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+
+      await page.keyboard.press("Escape");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      const restoredInbox = page.locator(".sidebar-attention--floating");
+      await restoredInbox.waitFor({ state: "visible" });
+      expect(await restoredInbox.locator(".sidebar-issues-button__count").textContent()).toBe("2");
+
+      for (let presenter = 0; presenter < 2; presenter += 1) {
+        await gateway.resolveDeferred("cron.list", FAILED_CRON_RESPONSE);
+        await gateway.resolveDeferred("cron.status", {
+          enabled: true,
+          triggersEnabled: true,
+          jobs: 1,
+        });
+        await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }

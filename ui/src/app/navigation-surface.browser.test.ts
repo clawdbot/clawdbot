@@ -49,6 +49,12 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
           </div>
           <main class="content">
             ${renderFloatingUpdateCard({
+              attentionElement: Object.assign(
+                document.createElement("openclaw-sidebar-attention"),
+                {
+                  className: "sidebar-attention--floating",
+                },
+              ),
               navigationSurfaceHidden: true,
               mobileNavLayout: false,
               onboarding: false,

@@ -263,9 +263,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     this.subscriptions.clear();
     void this.loadTask.run([null, null, null, false]);
     this.loadedClient = null;
-    this.loadedGateway = null;
-    this.loadedAgentScope = null;
-    this.modelAuthAgentId = null;
     super.disconnectedCallback();
   }
 
@@ -337,6 +334,13 @@ class SidebarAttention extends OpenClawLightDomElement {
       selectedId: this.context?.agentSelection.state.selectedId ?? null,
       scopeId: this.context?.agentSelection.state.scopeId ?? null,
     };
+    // Surface remounts keep the committed snapshot; a different Gateway owner must not.
+    if (this.loadedGateway && gateway !== this.loadedGateway) {
+      this.cronJobs = [];
+      this.cronSchedulerEnabled = null;
+      this.modelAuthStatus = null;
+      this.modelAuthAgentId = null;
+    }
     const loadedAgentScope = this.loadedAgentScope;
     if (
       gateway === this.loadedGateway &&
