@@ -18,10 +18,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
-import {
-  completeDeferredSessionMcpRuntimeRetirement,
-  getOrCreateRequesterScopedMcpRuntime,
-} from "./agent-bundle-mcp-manager-api.js";
+import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-api.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import {
@@ -3503,8 +3500,9 @@ process.on("SIGINT", shutdown);`,
         await materializeRequesterScopedMcpToolsForHarnessRun(params),
         "first requester tools",
       );
+      const runtimeKey = expectDefined(manager.listRuntimeKeys()[0], "first requester runtime key");
       const firstRuntime = expectDefined(
-        (await getOrCreateRequesterScopedMcpRuntime(params))?.runtime,
+        manager.peekSession({ sessionId: runtimeKey }),
         "first requester runtime",
       );
       const firstTool = expectDefined(firstTools.tools[0], "first requester tool");
@@ -3526,7 +3524,7 @@ process.on("SIGINT", shutdown);`,
 
       releaseResolution.resolve();
       secondTools = expectDefined(await secondRequest, "second requester tools");
-      expect((await getOrCreateRequesterScopedMcpRuntime(params))?.runtime).toBe(firstRuntime);
+      expect(manager.peekSession({ sessionId: runtimeKey })).toBe(firstRuntime);
       const secondTool = expectDefined(secondTools.tools[0], "second requester tool");
       expect(
         readMcpText(await secondTool.execute("second-requester-call", {}), "second MCP result"),
