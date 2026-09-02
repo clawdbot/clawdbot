@@ -34,7 +34,7 @@ The Control UI permission picker labels Default with the agent's resolved exec p
 
 ## Change permissions during a task
 
-Choose a mode from the chat composer's **Permissions** menu. The picker shows **Applying permissions…** until the running task acknowledges the change. Other clients viewing the same session also see this pending state.
+Choose a mode from the chat composer's **Permissions** menu. The picker immediately shows the selected mode's icon and label while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until the next session update rather than restoring a potentially stale mode.
 
 - **Codex:** OpenClaw interrupts the active native turn and stops its background terminals, then continues in the same conversation with the new permissions and an internal **Permission change** notice. It does not reset the conversation or replay the original request.
 - **OpenClaw native runtime:** OpenClaw refreshes the active tool policy without restarting the conversation. Subsequent tool calls use the updated permissions.

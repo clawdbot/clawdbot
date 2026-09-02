@@ -459,7 +459,9 @@ describe("chat pane composer controls", () => {
     const patch = vi.fn(
       async (
         _key: string,
-        params: { permissionMode?: string | null },
+        params: {
+          permissionMode?: "workspace" | "read-only" | "guarded" | "full" | null;
+        },
         options?: { expectedSessionId?: string },
       ) => {
         if (options?.expectedSessionId !== originalSessionId) {
@@ -523,6 +525,86 @@ describe("chat pane composer controls", () => {
     expect(selectedSession.sessionId).toBe(replacementSessionId);
     expect(persistedMode).toBe("workspace");
     expect(state.chatError).toContain("Failed to update permissions");
+  });
+
+  it("does not publish an older permission error over a replacement session success", async () => {
+    const firstPatch = createDeferred<Record<string, never>>();
+    const firstRefresh = createDeferred();
+    const selectedSession = {
+      key: "agent:main:replaced-during-permission-change",
+      kind: "direct" as const,
+      permissionMode: "workspace" as "workspace" | "read-only" | "guarded" | "full",
+      sessionId: "permission-session-before-replacement",
+    };
+    const patch = vi.fn(
+      async (
+        _key: string,
+        params: {
+          permissionMode?: "workspace" | "read-only" | "guarded" | "full" | null;
+        },
+        options?: { expectedSessionId?: string; waitFor?: Promise<boolean> },
+      ) => {
+        if (options?.expectedSessionId === "permission-session-before-replacement") {
+          return await firstPatch.promise;
+        }
+        await options?.waitFor;
+        selectedSession.permissionMode = params.permissionMode ?? "workspace";
+        return {};
+      },
+    );
+    const state = {
+      chatRunId: null,
+      chatError: null,
+      lastError: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: {
+        canonicalListRevision: 1,
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch,
+        refreshReplacement: vi.fn(async () => await firstRefresh.promise),
+      },
+      chatModelSwitchPromises: {},
+      sessionKey: selectedSession.key,
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const params = {
+      state,
+      selectedSession,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    };
+
+    const olderSelection = renderChatPaneComposerControls(params).permissionPicker.onSelect("full");
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    selectedSession.sessionId = "permission-session-after-replacement";
+    selectedSession.permissionMode = "read-only";
+    firstPatch.reject(new Error("older permission change failed"));
+    await vi.waitFor(() => expect(state.sessions.refreshReplacement).toHaveBeenCalledOnce());
+    const newerSelection =
+      renderChatPaneComposerControls(params).permissionPicker.onSelect("guarded");
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+
+    await newerSelection;
+    expect(selectedSession.permissionMode).toBe("guarded");
+    expect(state.chatError).toBeNull();
+    firstRefresh.resolve();
+    await olderSelection;
+    expect(state.sessions.refreshReplacement).toHaveBeenCalledOnce();
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
   });
 
   it("keeps the optimistic mode when authoritative reconciliation is unavailable", async () => {

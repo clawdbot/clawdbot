@@ -49,7 +49,6 @@ export function createControlUiSessionFixtures(input: {
   mainKey: string;
 }) {
   const records = new Map<string, { row: ControlUiSessionFixture; changed: Set<string> }>();
-  const currentListSessionIds = new Map<string, string>();
   const listed = new Set<string>();
   const materialized = new Set<string>();
   let timestamp = 1_800_000_000_000;
@@ -87,9 +86,6 @@ export function createControlUiSessionFixtures(input: {
       },
       changed: new Set(),
     });
-    if (typeof fixture.sessionId === "string") {
-      currentListSessionIds.set(key, fixture.sessionId);
-    }
     listed.add(key);
   }
   const read = (key: string) => ({ ...record(key).row });
@@ -162,9 +158,6 @@ export function createControlUiSessionFixtures(input: {
   const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
     const value = record(key);
     value.row = { ...value.row, ...fields, key: canonicalKey(key) };
-    if (typeof fields.sessionId === "string") {
-      currentListSessionIds.set(canonicalKey(key), fields.sessionId);
-    }
     listed.add(canonicalKey(key));
     materialized.add(canonicalKey(key));
   };
@@ -196,8 +189,6 @@ export function createControlUiSessionFixtures(input: {
   };
   return {
     read,
-    currentListSessionId: (key: string) =>
-      currentListSessionIds.get(canonicalKey(key)) ?? read(key).sessionId,
     // History publishes a full row replacement. An unseeded wire-only fixture
     // has no canonical metadata to publish until its caller declares the row.
     sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),
@@ -205,17 +196,26 @@ export function createControlUiSessionFixtures(input: {
     materialize,
     list,
     materializedCount: () => materialized.size,
-    replaceListSnapshot(rows: ControlUiSessionFixture[]) {
-      // Only explicitly replaced fields supersede earlier commits. Do not read
-      // future cases/sequences or clear unrelated rows' mutation history.
+    replaceCanonicalList(rows: unknown[]) {
       for (const row of rows) {
-        const value = record(row.key);
-        if (typeof row.sessionId === "string") {
-          currentListSessionIds.set(canonicalKey(row.key), row.sessionId);
+        if (!row || typeof row !== "object" || !("key" in row) || typeof row.key !== "string") {
+          continue;
         }
-        for (const field of Object.keys(row)) {
-          value.changed.delete(field);
+        const fixture: ControlUiSessionFixture = { ...row, key: row.key };
+        const value = record(fixture.key);
+        const replaced =
+          typeof fixture.sessionId === "string" && fixture.sessionId !== value.row.sessionId;
+        value.row = replaced
+          ? { ...fixture, key: canonicalKey(fixture.key) }
+          : { ...value.row, ...fixture, key: canonicalKey(fixture.key) };
+        if (replaced) {
+          value.changed.clear();
+        } else {
+          for (const field of Object.keys(fixture)) {
+            value.changed.delete(field);
+          }
         }
+        listed.add(canonicalKey(fixture.key));
       }
     },
   };

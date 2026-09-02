@@ -13,6 +13,7 @@ type Controls = {
   resolveDeferred: (method: string, payload?: unknown) => void;
   rejectDeferred: (method: string) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
+  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
 };
 const flush = () =>
   new Promise<void>((resolve) => {
@@ -370,7 +371,7 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
   ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   expect((await request("sessions.list")).payload.sessions).toEqual(beforeStalePatch);
   const replacementSessionId = "replacement-generation";
-  controls.setMethodResponse("sessions.list", {
+  controls.setSessionsListResponse({
     sessions: [{ ...notes, sessionId: replacementSessionId }],
   });
   expect(
@@ -383,6 +384,16 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
   expect((await request("sessions.list")).payload.sessions).toEqual([
     expect.objectContaining({ sessionId: replacementSessionId, label: "Replacement label" }),
   ]);
+  for (const method of ["sessions.describe", "chat.history", "chat.startup"]) {
+    const params = method === "sessions.describe" ? { key: notes.key } : { sessionKey: notes.key };
+    expect((await request(method, params)).payload).toEqual(
+      expect.objectContaining(
+        method === "sessions.describe"
+          ? { session: expect.objectContaining({ sessionId: replacementSessionId }) }
+          : { sessionId: replacementSessionId },
+      ),
+    );
+  }
 });
 
 it("replays later commits onto an injected list without adopting its stale generation", async ({
@@ -393,11 +404,18 @@ it("replays later commits onto an injected list without adopting its stale gener
   const stale = { ...notes, archived: false, sessionId: "retired-generation" };
   controls.setMethodResponse("sessions.list", { sessions: [stale] });
   expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining(stale),
+    expect.objectContaining({ ...stale, archived: true }),
   ]);
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: stale.sessionId,
+      label: "Wrong generation",
+    }),
+  ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   await request("sessions.patch", { key: notes.key, label: "Renamed" });
   expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ ...stale, label: "Renamed" }),
+    expect.objectContaining({ ...stale, archived: true, label: "Renamed" }),
   ]);
   expect((await request("sessions.describe", { key: notes.key })).payload).toMatchObject({
     session: { sessionId: notes.sessionId, archived: true, label: "Renamed" },

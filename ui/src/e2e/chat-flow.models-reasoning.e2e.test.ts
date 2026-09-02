@@ -204,7 +204,7 @@ suite.define(() => {
         sessionId: "session-after-replacement",
         updatedAt: 5,
       };
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([replacement]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([replacement]));
       await gateway.rejectDeferred("sessions.patch", {
         code: "INVALID_REQUEST",
         message: "session identity changed; refresh and retry",

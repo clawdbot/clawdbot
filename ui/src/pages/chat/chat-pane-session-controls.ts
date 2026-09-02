@@ -41,6 +41,7 @@ type PendingPermissionChange = {
 };
 
 const pendingPermissionChanges = new WeakMap<ChatPageHost, Map<string, PendingPermissionChange>>();
+const permissionOutcomeOwners = new WeakMap<ChatPageHost, Map<string, symbol>>();
 
 export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
@@ -234,6 +235,11 @@ export function renderChatPaneComposerControls(params: {
           ownsSelection,
           pending: true,
         };
+        const outcomeOwner = Symbol(permissionScopeKey);
+        const outcomeOwners = permissionOutcomeOwners.get(state) ?? new Map<string, symbol>();
+        permissionOutcomeOwners.set(state, outcomeOwners);
+        outcomeOwners.set(permissionScopeKey, outcomeOwner);
+        const ownsOutcome = () => outcomeOwners.get(permissionScopeKey) === outcomeOwner;
         permissionChanges.set(permissionScopeKey, change);
         state.requestUpdate?.();
         try {
@@ -251,12 +257,12 @@ export function renderChatPaneComposerControls(params: {
             throw new Error("Session capability is unavailable");
           }
         } catch (error) {
-          if (!ownsRoute()) {
+          if (!ownsRoute() || !ownsOutcome()) {
             return;
           }
           const revision = state.sessions.canonicalListRevision;
           await state.sessions.refreshReplacement(agentScope.agentId);
-          if (!ownsRoute()) {
+          if (!ownsRoute() || !ownsOutcome()) {
             return;
           }
           if (ownsSelection() && state.sessions.canonicalListRevision === revision) {
@@ -267,6 +273,9 @@ export function renderChatPaneComposerControls(params: {
             error: String(error),
           });
         } finally {
+          if (ownsOutcome()) {
+            outcomeOwners.delete(permissionScopeKey);
+          }
           if (
             permissionChanges.get(permissionScopeKey) === change &&
             change.retainUntilRevision === undefined

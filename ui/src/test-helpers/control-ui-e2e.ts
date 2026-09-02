@@ -592,6 +592,7 @@ export type MockGatewayControls = {
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
+  setSessionsListResponse: (payload: { sessions: unknown[] }) => Promise<void>;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
@@ -1082,6 +1083,7 @@ export type ControlUiMockGateway = {
   setOperatorScopes: (scopes: string[]) => void;
   setHistoryMessages: (messages: unknown[]) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
+  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
   setRequestHandler: (method: string, handler: ControlUiMockRequestHandler) => void;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
@@ -1546,7 +1548,7 @@ function installControlUiMockGateway(
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
       if (
         typeof params.expectedSessionId === "string" &&
-        sessions.currentListSessionId(params.key) !== params.expectedSessionId
+        sessions.read(params.key).sessionId !== params.expectedSessionId
       ) {
         return {
           __mockError: {
@@ -2572,9 +2574,6 @@ function installControlUiMockGateway(
       requestHandlers.set(method, handler);
     },
     setMethodResponse(method, payload) {
-      if (method === "sessions.list" && isRecord(payload) && Array.isArray(payload.sessions)) {
-        sessions.replaceListSnapshot(payload.sessions);
-      }
       scenario.methodResponses[method] = payload;
       methodResponseSequenceIndexes.delete(method);
       methodResponseOverrides[method] = payload;
@@ -2586,6 +2585,12 @@ function installControlUiMockGateway(
       } catch {
         // Current-document responses still work if browser storage is unavailable.
       }
+    },
+    setSessionsListResponse(payload) {
+      // Generic method responses may be stale or delayed. Only this explicit
+      // owner transition advances the canonical rows used by mutation CAS.
+      sessions.replaceCanonicalList(payload.sessions);
+      this.setMethodResponse("sessions.list", payload);
     },
     setSessionSharingPolicy(policy) {
       scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
@@ -2846,6 +2851,15 @@ function createMockGatewayControls(
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setSessionsListResponse(payload) {
+      await page.evaluate((responsePayload) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setSessionsListResponse(responsePayload);
+      }, payload);
     },
     async setSessionSharingPolicy(policy) {
       await page.evaluate((nextPolicy) => {
