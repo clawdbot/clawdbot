@@ -2,6 +2,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -108,27 +109,35 @@ describe("Codex sandbox exec-server lifecycle", () => {
     "refuses host metadata discovery outside the isolated home after $key changes ($via)",
     async ({ key, via }) => {
       const testHome = process.env.OPENCLAW_TEST_HOME!;
-      const foreignRoot = path.join(testHome, "..", `foreign-state-${via}`);
+      // The path cases only point outside the home; nothing is created there.
+      let foreignRoot = path.join(testHome, "..", "foreign-state-path");
       let target = foreignRoot;
+      const cleanup: string[] = [];
       if (via === "symlink") {
         // A state root that lexically sits inside the home but physically points outside.
-        fs.mkdirSync(foreignRoot, { recursive: true });
+        foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-foreign-state-"));
         target = path.join(testHome, "linked-state");
-        fs.rmSync(target, { force: true });
         fs.symlinkSync(foreignRoot, target, "dir");
+        cleanup.push(target, foreignRoot);
       }
       spawnMock.mockReturnValue(createFakeChild());
-      await withEnvAsync({ [key]: target }, async () => {
-        await expect(
-          startProcess(
-            createExecServer(createSandboxContext({})),
-            new Map(),
-            createFakeNotifications().send,
-            processStartParams("foreign-state"),
-          ),
-        ).rejects.toThrow("state escaped the isolated test home");
-      });
-      expect(spawnMock).not.toHaveBeenCalled();
+      try {
+        await withEnvAsync({ [key]: target }, async () => {
+          await expect(
+            startProcess(
+              createExecServer(createSandboxContext({})),
+              new Map(),
+              createFakeNotifications().send,
+              processStartParams("foreign-state"),
+            ),
+          ).rejects.toThrow("state escaped the isolated test home");
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        for (const entry of cleanup) {
+          fs.rmSync(entry, { recursive: true, force: true });
+        }
+      }
     },
   );
 
