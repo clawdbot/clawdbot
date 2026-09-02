@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isWithinDir } from "./path-safety.js";
@@ -30,6 +32,65 @@ type StateDirMigrationResult = {
   notices?: string[];
 };
 
+function lstatIfPresent(filePath: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[] } {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+    return { changes: [], warnings: [] };
+  }
+
+  try {
+    const legacyDir = path.join(
+      resolveProfileStateDir("default", env, homedir),
+      `workspace-${profile}`,
+    );
+    const targetDir = path.join(resolveProfileStateDir(profile, env, homedir), "workspace");
+    const legacyStat = lstatIfPresent(legacyDir);
+    if (!legacyStat) {
+      return { changes: [], warnings: [] };
+    }
+    if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+      return {
+        changes: [],
+        warnings: [
+          `Profile workspace migration skipped: legacy path is not a directory (${legacyDir}).`,
+        ],
+      };
+    }
+    if (lstatIfPresent(targetDir)) {
+      return {
+        changes: [],
+        warnings: [
+          `Profile workspace migration skipped: target already exists (${targetDir}). Kept legacy workspace at ${legacyDir}; merge manually.`,
+        ],
+      };
+    }
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    fs.renameSync(legacyDir, targetDir);
+    return { changes: [`Profile workspace: ${legacyDir} → ${targetDir}`], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Profile workspace migration failed: ${String(error)}`],
+    };
+  }
+}
+
 function resolveSymlinkTarget(linkPath: string): string | null {
   try {
     const target = fs.readlinkSync(linkPath);
@@ -46,6 +107,14 @@ function formatStateDirMigration(legacyDir: string, targetDir: string): string {
 function isDirPath(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isEmptyDirPath(filePath: string): boolean {
+  try {
+    return fs.readdirSync(filePath).length === 0;
   } catch {
     return false;
   }
@@ -230,10 +299,21 @@ export async function autoMigrateLegacyStateDir(params: {
         ...(notices.length > 0 ? { notices } : {}),
       };
     }
+    if (legacyDir && isEmptyDirPath(legacyDir)) {
+      try {
+        // Empty residue has no state to merge. Link it so old clients cannot recreate split state.
+        fs.rmdirSync(legacyDir);
+        fs.symlinkSync(targetDir, legacyDir, process.platform === "win32" ? "junction" : "dir");
+        changes.push(formatStateDirMigration(legacyDir, targetDir));
+      } catch (err) {
+        warnings.push(`Failed to retire empty legacy state dir (${legacyDir}): ${String(err)}`);
+      }
+    } else {
+      warnings.push(
+        `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
+      );
+    }
     await migratePluginInstallIndex();
-    warnings.push(
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    );
     return {
       migrated: changes.length > 0,
       skipped: false,

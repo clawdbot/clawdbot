@@ -8,27 +8,58 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
 import { CommandLane } from "../../process/lanes.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
+import {
+  invalidateTurnCompactionContext,
+  recordTurnCompaction,
+} from "./agent-runner-compaction-accounting.js";
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
 import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
-import type { AgentFallbackCycleParams } from "./agent-runner-fallback-cycle.types.js";
+import type {
+  AgentFallbackCandidateCommonParams,
+  AgentFallbackCycleParams,
+} from "./agent-runner-fallback-cycle.types.js";
 import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
+import {
+  bindSourceReplyDeliveryRuntime,
+  createSourceReplyDeliveryRuntime,
+  readSourceReplyDeliveryRuntime,
+  type SourceReplyDeliveryRuntimeOptions,
+} from "./source-reply-delivery-runtime.js";
 
 /** Runs the provider/model fallback candidates while preserving cross-candidate delivery state. */
 export async function runAgentFallbackCandidates(params: AgentFallbackCycleParams) {
   const turn = params.turn;
+  const sourceReplyDeliveryRuntimeOptions = turn.opts as
+    | SourceReplyDeliveryRuntimeOptions
+    | undefined;
+  const sourceReplyDeliveryRuntime =
+    readSourceReplyDeliveryRuntime(turn.followupRun.run) ??
+    createSourceReplyDeliveryRuntime({
+      origin: sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin ?? "stable_policy",
+      initialMode: turn.followupRun.run.sourceReplyDeliveryMode ?? "automatic",
+      projections: [turn.followupRun.run, ...(turn.opts ? [turn.opts] : [])],
+      promptComponentByMode: { automatic: "", message_tool_only: "" },
+      promptComponentOffset: undefined,
+      onModeResolved: sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved,
+    });
+  sourceReplyDeliveryRuntime.track(turn.followupRun.run);
+  if (turn.opts) {
+    sourceReplyDeliveryRuntime.track(turn.opts);
+  }
+  bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
+  const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const sourceRepliesAreToolOnly =
-    turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
-  const runLane = CommandLane.Main;
+  const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   let assistantErrorPersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
@@ -45,6 +76,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const bootstrapContextRunKind = turn.opts?.isHeartbeat
     ? ("heartbeat" as const)
     : ("default" as const);
+  let githubPublicationAvailability: Promise<boolean> | undefined;
 
   params.timing.logMilestoneIfSlow({
     runId: params.runId,
@@ -84,13 +116,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             modelId: model,
             authProfileId: selectedAuthProfile.authProfileId,
           }) ?? provider));
+    const useCliExecution =
+      pinnedCliRuntime !== undefined ||
+      (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, params.runtimeConfig));
     return {
       candidateRun,
       sessionRuntimeOverride,
       cliExecutionProvider,
-      useCliExecution:
-        pinnedCliRuntime !== undefined ||
-        (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, params.runtimeConfig)),
+      useCliExecution,
     };
   };
   return params.timing.measure("model_fallback", () =>
@@ -163,12 +196,25 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
       },
       runCandidate: async (provider, model, runOptions) => {
+        invalidateTurnCompactionContext(params.state.compaction);
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
         const runtime = params.timing.measureSync("fallback_resolve_runtime", () =>
           resolveCandidateRuntime(provider, model),
         );
         const candidateRun = runtime.candidateRun;
+        bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
+        // CLI prompts are fixed to their session binding, so dispatch must publish that
+        // same stable mode or a valid assistant reply can be silently suppressed.
+        const candidateSourceReplyDeliveryMode =
+          sourceReplyDeliveryModeOrigin === "runtime_default" && runtime.useCliExecution
+            ? (candidateRun.cliSessionBindingFacts?.sourceReplyDeliveryMode ?? "automatic")
+            : sourceReplyDeliveryRuntime.currentMode;
+        const applySourceReplyDeliveryModeBeforeInvocation =
+          sourceReplyDeliveryModeOrigin !== "runtime_default" || runtime.useCliExecution;
+        if (candidateSourceReplyDeliveryMode && applySourceReplyDeliveryModeBeforeInvocation) {
+          sourceReplyDeliveryRuntime.applyMode(candidateRun, candidateSourceReplyDeliveryMode);
+        }
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.runtimeConfig,
           provider,
@@ -191,7 +237,18 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
         turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
+          (info) => {
+            if (
+              params.state.compaction.count > 0 &&
+              (info.phase === "model_call_started" || info.phase === "process_spawned")
+            ) {
+              params.state.postCompactionModelAttempted = true;
+            }
+            params.signalExecutionPhaseForTyping(info);
+          };
         const common = {
+          preparedRunAdmission: params.preparedRunAdmission,
           turn,
           candidateRun,
           runtimeConfig: params.runtimeConfig,
@@ -201,6 +258,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           candidateFastMode,
           runId: params.runId,
           runAbortSignal: params.runAbortSignal,
+          runLane,
+          isFallbackRetry: runOptions.isFallbackRetry,
           isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
           suppressQueuedUserPersistenceForCandidate:
             (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
@@ -216,7 +275,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           bootstrapContextRunKind,
           bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
           currentTurnImages: params.currentTurnImages,
-          signalExecutionPhaseForTyping: params.signalExecutionPhaseForTyping,
+          signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
           notifyAgentRunStart: params.notifyAgentRunStart,
           preserveProgressCallbackStartOrder,
           presentation: params.presentation,
@@ -224,13 +283,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
             params.state.pendingLifecycleTerminal = { provider, model, backstop };
           },
-        };
+          deferredLifecycle: params.state.deferredLifecycle,
+        } satisfies AgentFallbackCandidateCommonParams;
         if (runtime.useCliExecution) {
+          params.state.deferredLifecycle.handoffToCli();
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
             lifecycleGeneration: params.state.lifecycleGeneration,
-            runLane,
           });
           params.state.bootstrapPromptWarningSignaturesSeen =
             candidate.bootstrapPromptWarningSignaturesSeen;
@@ -238,6 +298,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         }
         const candidate = await runEmbeddedFallbackCandidate({
           ...common,
+          githubPublicationAvailable: await (githubPublicationAvailability ??=
+            turn.sessionKey && params.effectiveRun.agentId
+              ? prepareGitHubPublicationAvailability({
+                  sessionId: turn.followupRun.run.sessionId,
+                  sessionKey: turn.sessionKey,
+                  agentId: params.effectiveRun.agentId,
+                })
+              : Promise.resolve(false)),
           effectiveRun: params.effectiveRun,
           sessionRuntimeOverride: runtime.sessionRuntimeOverride,
           getLifecycleGeneration: () => params.state.lifecycleGeneration,
@@ -250,10 +318,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             assistantErrorPersistedAcrossFallback = true;
           },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
-          sourceRepliesAreToolOnly,
           messageToolDeliveryState,
-          onCompactionCount: (count) => {
-            params.state.autoCompactionCount += count;
+          onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
+            if (accounting) {
+              recordTurnCompaction(params.state.compaction, accounting);
+            }
+            params.state.postCompactionModelAttempted ||= postCompactionModelAttempted;
           },
         });
         params.state.bootstrapPromptWarningSignaturesSeen =

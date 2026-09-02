@@ -1,6 +1,7 @@
 // OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
@@ -85,7 +86,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
       timeoutPhase === "post_turn");
   const hasTerminalTimeoutMetadata =
     readOptionalTimestamp(record.endedAt) !== undefined ||
-    (!pendingError && readOptionalString(record.error) !== undefined) ||
+    (!pendingError && readNonEmptyString(record.error) !== undefined) ||
     stopReason.length > 0 ||
     typeof record.livenessState === "string" ||
     record.yielded === true;
@@ -130,10 +131,6 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     return "accepted";
   }
   return "failed";
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function readOptionalTimestamp(value: unknown): RunTimestamp | undefined {
@@ -659,14 +656,14 @@ export class Run {
     );
     const record = asRecord(raw);
     const status = runStatusFromWaitPayload(raw);
-    const error = readOptionalString(record.error)
-      ? { message: readOptionalString(record.error) ?? "run failed" }
+    const error = readNonEmptyString(record.error)
+      ? { message: readNonEmptyString(record.error) ?? "run failed" }
       : undefined;
     return {
       runId: this.id,
       status,
-      sessionKey: readOptionalString(record.sessionKey) ?? this.sessionKey,
-      sessionId: readOptionalString(record.sessionId),
+      sessionKey: readNonEmptyString(record.sessionKey) ?? this.sessionKey,
+      sessionId: readNonEmptyString(record.sessionId),
       startedAt: readOptionalTimestamp(record.startedAt),
       endedAt: readOptionalTimestamp(record.endedAt),
       ...(error ? { error } : {}),
@@ -702,7 +699,7 @@ export class Session {
       ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
     const record = asRecord(raw);
-    const runId = readOptionalString(record.runId);
+    const runId = readNonEmptyString(record.runId);
     if (!runId) {
       throw new Error("sessions.send did not return a runId");
     }
@@ -767,7 +764,7 @@ export class SessionsNamespace {
     const raw = await this.client.request("sessions.create", params);
     const record = asRecord(raw);
     const key =
-      readOptionalString(record.key) ?? readOptionalString(record.sessionKey) ?? params.key;
+      readNonEmptyString(record.key) ?? readNonEmptyString(record.sessionKey) ?? params.key;
     if (!key) {
       throw new Error("sessions.create did not return a session key");
     }
@@ -800,11 +797,11 @@ export class RunsNamespace {
       ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
     const record = asRecord(raw);
-    const runId = readOptionalString(record.runId);
+    const runId = readNonEmptyString(record.runId);
     if (!runId) {
       throw new Error("agent did not return a runId");
     }
-    return new Run(this.client, runId, readOptionalString(record.sessionKey) ?? params.sessionKey);
+    return new Run(this.client, runId, readNonEmptyString(record.sessionKey) ?? params.sessionKey);
   }
 
   async get(runId: string): Promise<Run> {

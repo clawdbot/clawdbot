@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   loadBundledPluginManifestRegistry,
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
 } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
@@ -82,6 +82,7 @@ type QaRunnerCredentialHost = {
 };
 
 type QaRunnerTransportFlowPreparationInput = {
+  signal?: AbortSignal;
   config: Record<string, unknown>;
   scenarioId: string;
   scenarioTitle: string;
@@ -336,7 +337,7 @@ function registerLiveTransportQaCli(
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
-    .option("--fast", "Enable provider fast mode where supported", false);
+    .option("--fast", "Enable provider fast mode where supported");
 
   if (params.allowFailuresHelp) {
     command.option("--allow-failures", params.allowFailuresHelp, false);
@@ -407,7 +408,13 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
-  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  createQaLiveLaneGateway: () => {
+    start: (...args: unknown[]) => Promise<unknown>;
+    stop: () => Promise<{
+      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
+      errors: unknown[];
+    }>;
+  };
   runLiveTransportQaSuiteCommand: (params: LiveTransportQaSuiteCommandOptions) => Promise<unknown>;
 };
 
@@ -486,7 +493,9 @@ function listDeclaredQaRunnerPlugins(
 > {
   // Private QA is a source-checkout harness. Its command tree must be derived
   // from repo-owned manifests before Commander pre-action hooks can run.
-  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  const registry = env
+    ? loadBundledPluginManifestRegistry({ env })
+    : loadPluginManifestRegistryCore();
   return registry.plugins
     .filter(
       (

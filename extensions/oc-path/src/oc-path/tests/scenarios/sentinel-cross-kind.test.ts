@@ -37,49 +37,6 @@ describe("sentinel guard cross-kind", () => {
     expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("jsonc render mode walks every leaf for sentinel", () => {
-    const ast = parseJsonc('{ "x": "ok" }').ast;
-    const tampered = {
-      ...ast,
-      root: {
-        kind: "object" as const,
-        entries: [
-          {
-            key: "x",
-            line: 1,
-            value: { kind: "string" as const, value: REDACTED_SENTINEL },
-          },
-        ],
-      },
-    };
-    expect(() => emitJsonc(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
-  it("jsonl render mode walks every value-line leaf", () => {
-    const ast = parseJsonl('{"a":"ok"}\n').ast;
-    const tampered = {
-      ...ast,
-      lines: [
-        {
-          kind: "value" as const,
-          line: 1,
-          raw: '{"a":"ok"}',
-          value: {
-            kind: "object" as const,
-            entries: [
-              {
-                key: "a",
-                line: 1,
-                value: { kind: "string" as const, value: REDACTED_SENTINEL },
-              },
-            ],
-          },
-        },
-      ],
-    };
-    expect(() => emitJsonl(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
   it("jsonc edits reject caller-injected sentinels before mutation", () => {
     const ast = parseJsonc('{ "x": "ok" }').ast;
     expect(() =>

@@ -2,12 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -41,7 +43,6 @@ import {
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
-  readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -1015,6 +1016,52 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
+  it("admits only marked Cron delivery context when explicitly requested", async () => {
+    await writeTranscriptStore();
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        { eventId: "user", message: { role: "user", content: "ordinary user" } },
+        { eventId: "assistant", message: { role: "assistant", content: "ordinary assistant" } },
+      ],
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "scheduled result",
+      idempotencyKey: "cron-delivery",
+      deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND },
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "ordinary delivery mirror",
+      idempotencyKey: "channel-delivery",
+      deliveryMirror: { kind: "channel-final" },
+    });
+    const params = {
+      agentId: "main",
+      sessionKey,
+      storePath: fixture.storePath(),
+      limit: 10,
+    };
+
+    await expect(readRecentUserAssistantTextForSession(params)).resolves.toEqual([
+      expect.objectContaining({ role: "user", text: "ordinary user" }),
+      expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
+    ]);
+    await expect(
+      readRecentUserAssistantTextForSession({
+        ...params,
+        includeCronDirectDeliveryContext: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ role: "user", text: "ordinary user" }),
+      expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
+      expect.objectContaining({ role: "assistant", text: "scheduled result" }),
+    ]);
+  });
+
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
     await persistSessionTranscriptTurn(
@@ -1310,72 +1357,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(latestAssistantText).toBeUndefined();
   });
 
-  it("keeps transcript-only OpenClaw assistant entries available to the tail reader", async () => {
-    await writeTranscriptStore();
-
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Tail delivery mirror",
-      storePath: fixture.storePath(),
-    });
-    expect(mirrorResult.ok).toBe(true);
-    if (!mirrorResult.ok) {
-      return;
-    }
-
-    const tailAssistantText = await readTailAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
-    expect(tailAssistantText?.id).toBe(mirrorResult.messageId);
-    expect(tailAssistantText?.text).toBe("Tail delivery mirror");
-  });
-
-  it("scans past trailing non-assistant entries (e.g. openclaw.cache-ttl) to find the latest assistant text", async () => {
-    // Regression for openclaw/openclaw#83427: the cache-ttl custom entry was
-    // emitted after the canonical assistant turn, and the tail reader returned
-    // undefined on the first non-assistant line, so the gap-fill check in
-    // persistTextTurnTranscript wrote a duplicate `api: "cli"` assistant
-    // message — poisoning the model's own context with verbatim duplicates.
-    await writeTranscriptStore();
-
-    const assistantResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({
-        text: "Canonical answer",
-        provider: "anthropic",
-        model: "claude-haiku-4-5-20251001",
-      }),
-    });
-    expect(assistantResult.ok).toBe(true);
-    if (!assistantResult.ok) {
-      return;
-    }
-
-    const cacheTtlEntry = `${JSON.stringify({
-      type: "custom",
-      customType: "openclaw.cache-ttl",
-      timestamp: new Date().toISOString(),
-      data: {
-        provider: "anthropic",
-        modelId: "claude-haiku-4-5-20251001",
-      },
-    })}\n`;
-    await appendTranscriptEvent(createFixtureTranscriptScope(), JSON.parse(cacheTtlEntry));
-
-    const tailAssistantText = await readTailAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
-    expect(tailAssistantText?.id).toBe(assistantResult.messageId);
-    expect(tailAssistantText?.text).toBe("Canonical answer");
-  });
-
   it("scans past trailing assistant entries without visible text", async () => {
     await writeTranscriptStore();
 
@@ -1420,84 +1401,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
     expect(latestAssistantText?.id).toBe(assistantResult.messageId);
     expect(latestAssistantText?.text).toBe("Visible answer before tool call");
-  });
-
-  it("does not scan past a real tail assistant with no visible text for dedupe", async () => {
-    await writeTranscriptStore();
-
-    const assistantResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({
-        text: "Older visible answer",
-      }),
-    });
-    expect(assistantResult.ok).toBe(true);
-
-    const toolOnlyResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: {
-        ...createExactAssistantMessage({
-          content: [
-            {
-              type: "toolCall",
-              id: "call_tail_no_visible_text",
-              name: "maniple__list_workers",
-              arguments: {},
-            },
-          ],
-        }),
-        stopReason: "toolUse",
-      },
-    });
-    expect(toolOnlyResult.ok).toBe(true);
-    if (!toolOnlyResult.ok) {
-      return;
-    }
-
-    await expect(
-      readTailAssistantTextFromSessionTranscript(toolOnlyResult.target, {
-        excludeTranscriptOnlyOpenClawAssistant: true,
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("scans past excluded delivery mirrors in explicit file-backed tail reads", async () => {
-    const transcriptPath = path.join(fixture.sessionsDir(), "file-backed-delivery-tail.jsonl");
-    fs.writeFileSync(
-      transcriptPath,
-      [
-        {
-          type: "message",
-          id: "real-assistant",
-          message: createExactAssistantMessage({ text: "File-backed canonical answer" }),
-        },
-        {
-          type: "message",
-          id: "delivery-mirror",
-          message: {
-            ...createExactAssistantMessage({
-              provider: "openclaw",
-              model: "delivery-mirror",
-              text: "delivery mirror text",
-            }),
-          },
-        },
-      ]
-        .map((event) => JSON.stringify(event))
-        .join("\n") + "\n",
-      "utf-8",
-    );
-
-    await expect(
-      readTailAssistantTextFromSessionTranscript(transcriptPath, {
-        excludeTranscriptOnlyOpenClawAssistant: true,
-      }),
-    ).resolves.toMatchObject({
-      id: "real-assistant",
-      text: "File-backed canonical answer",
-    });
   });
 
   it("does not reuse an older matching assistant message across turns", async () => {
@@ -1955,6 +1858,48 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ok: false,
       code: "session-rebound",
     });
+  });
+
+  it("rejects revision materialization between the initial check and SQLite append", async () => {
+    await writeTranscriptStore({ lifecycleRevision: undefined });
+    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
+      agentId: "main",
+    }).path;
+    let revisionMaterialized = false;
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedLifecycleRevision: null,
+      expectedSessionId: sessionId,
+      storePath: fixture.storePath(),
+      beforeMessageWrite: ({ message }) => {
+        const external = new DatabaseSync(databasePath);
+        try {
+          const row = external
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey) as { entry_json: string };
+          const replacement = {
+            ...(JSON.parse(row.entry_json) as SessionEntry),
+            lifecycleRevision: "replacement-revision",
+            updatedAt: 2,
+          };
+          external
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+            )
+            .run(JSON.stringify(replacement), replacement.updatedAt, sessionKey);
+          revisionMaterialized = true;
+        } finally {
+          external.close();
+        }
+        return message;
+      },
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+
+    expect(revisionMaterialized).toBe(true);
+    expect(result).toMatchObject({ ok: false, code: "session-rebound" });
+    expect(await loadFixtureMessages()).toEqual([]);
   });
 
   it("rejects a superseded writer claim and accepts the admitted writer", async () => {

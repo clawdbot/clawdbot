@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
@@ -19,6 +19,7 @@ function runPreflight(
     includeCollectorFields?: boolean;
     launchPending?: boolean;
     cached?: boolean;
+    admissionPending?: boolean;
     completed?: boolean;
     ended?: boolean;
   },
@@ -68,7 +69,12 @@ function runPreflight(
             {
               ts: 1,
               ok: true,
-              payload: { status: "accepted", runId: "gateway-run", sessionKey },
+              payload: {
+                status: "accepted",
+                runId: "gateway-run",
+                sessionKey,
+                ...(options.admissionPending ? { reservationId: "pending" } : {}),
+              },
             },
           ],
         ])
@@ -300,6 +306,29 @@ describe("agent request Swarm preflight", () => {
     );
   });
 
+  it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
+    const replayed = runPreflight(undefined, true, {
+      backend: true,
+      register: true,
+      launchPending: false,
+      cached: true,
+      admissionPending: true,
+    });
+    expect(replayed.result).toBeDefined();
+    await replayed.replay();
+    expect(replayed.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "gateway-run",
+        status: "in_flight",
+        admissionPending: true,
+      }),
+      undefined,
+      expect.objectContaining({ cached: true, runId: "gateway-run" }),
+    );
+    expect(replayed.respond.mock.calls[0]?.[1]).not.toHaveProperty("reservationId");
+  });
+
   it("rejects a terminal collector even when its pending launch flag remains set", () => {
     const { respond, result } = runPreflight({ type: "object" }, true, {
       enabled: true,
@@ -380,6 +409,7 @@ describe("agent request restart recovery preflight", () => {
     backend: boolean,
     sourceTool: string,
     internalExecutionIdentityRetry?: boolean,
+    internalExecutionIdentityRecoveryAttempt?: number,
   ) {
     const respond = vi.fn();
     const result = prepareAgentRequestPreflight({
@@ -389,6 +419,9 @@ describe("agent request restart recovery preflight", () => {
         forceRestartSafeTools: true,
         forceCodeModeTools: true,
         ...(internalExecutionIdentityRetry !== undefined ? { internalExecutionIdentityRetry } : {}),
+        ...(internalExecutionIdentityRecoveryAttempt !== undefined
+          ? { internalExecutionIdentityRecoveryAttempt }
+          : {}),
         inputProvenance: {
           kind: "internal_system",
           sourceSessionKey: "agent:main:main",
@@ -408,14 +441,14 @@ describe("agent request restart recovery preflight", () => {
   }
 
   it("accepts the Code Mode override only for backend restart recovery", () => {
-    const accepted = runRestartRecoveryPreflight(true, "main_session_restart_recovery", true);
+    const accepted = runRestartRecoveryPreflight(true, "main_session_restart_recovery", true, 1);
 
     expect(accepted.result).toBeDefined();
     expect(accepted.respond).not.toHaveBeenCalled();
   });
 
   it("rejects private execution retry mode outside backend restart recovery", () => {
-    const rejected = runRestartRecoveryPreflight(false, "main_session_restart_recovery", true);
+    const rejected = runRestartRecoveryPreflight(false, "main_session_restart_recovery", true, 1);
 
     expect(rejected.result).toBeUndefined();
     expect(rejected.respond).toHaveBeenCalledWith(
@@ -423,7 +456,7 @@ describe("agent request restart recovery preflight", () => {
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("execution identity retry mode"),
+        message: expect.stringContaining("execution identity recovery fields"),
       }),
     );
   });
@@ -441,6 +474,54 @@ describe("agent request restart recovery preflight", () => {
       expect.objectContaining({
         code: "INVALID_REQUEST",
         message: "forceCodeModeTools is reserved for main-session restart recovery.",
+      }),
+    );
+  });
+});
+
+describe("agent request session ownership preflight", () => {
+  function runBareSessionPreflight(owner?: string) {
+    const respond = vi.fn();
+    const result = prepareAgentRequestPreflight({
+      request: {
+        message: "continue",
+        sessionKey: "global",
+        idempotencyKey: "bare-session-run",
+      },
+      io: createAgentTurnIo(respond),
+      context: {
+        getRuntimeConfig: () => ({
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: owner ? { sessionStore: { agentId: owner } } : undefined,
+            entries: { ops: {}, research: {} },
+          },
+        }),
+        dedupe: new Map(),
+      },
+      client: null,
+    } as never);
+    return { respond, result };
+  }
+
+  it("admits a bare key owned by the configured fixed store", () => {
+    const { respond, result } = runBareSessionPreflight("ops");
+
+    expect(result).toBeDefined();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ownerless bare key with a typed selection error", () => {
+    const { respond, result } = runBareSessionPreflight();
+
+    expect(result).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
       }),
     );
   });

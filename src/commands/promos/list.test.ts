@@ -5,16 +5,17 @@ const mocks = vi.hoisted(() => ({
   fetchClawHubPromotions: vi.fn(),
 }));
 
-vi.mock("../../infra/clawhub.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../infra/clawhub.js")>("../../infra/clawhub.js");
+vi.mock("../../infra/clawhub-promotions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/clawhub-promotions.js")>(
+    "../../infra/clawhub-promotions.js",
+  );
   return {
     ...actual,
     fetchClawHubPromotions: mocks.fetchClawHubPromotions,
   };
 });
 
-const { ClawHubRequestError } = await import("../../infra/clawhub.js");
+const { ClawHubRequestError } = await import("../../infra/clawhub-client.js");
 const { promosListCommand } = await import("./list.js");
 
 function makeRuntime() {
@@ -68,6 +69,23 @@ describe("promosListCommand", () => {
     expect(output).toContain("openrouter/example/model-alpha (Model Alpha) — suggested default");
     expect(output).toContain("openclaw promos claim spring-models");
   });
+
+  it.each([
+    { remainingMs: 60 * 60 * 1_000, label: "ends today" },
+    { remainingMs: 25 * 60 * 60 * 1_000, label: "1 day left" },
+  ])(
+    "reports $label for a promotion with $remainingMs milliseconds left",
+    async ({ remainingMs, label }) => {
+      mocks.fetchClawHubPromotions.mockResolvedValue([
+        { ...promotion, endsAt: Date.now() + remainingMs },
+      ]);
+      const { runtime, lines } = makeRuntime();
+
+      await promosListCommand({}, runtime);
+
+      expect(lines[0]).toContain(`(${label})`);
+    },
+  );
 
   it("prints an empty-state line when nothing is live", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([]);

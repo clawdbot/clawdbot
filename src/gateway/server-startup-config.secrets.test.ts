@@ -8,21 +8,25 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
+  prepareRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
+import {
+  flushDiagnosticsTimeline,
+  measureDiagnosticsTimelineSpan,
+} from "../infra/diagnostics-timeline.js";
 import { providerResolutionError, refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
 import { activateProviderAuthRuntimeSnapshot } from "../secrets/runtime-provider-auth-activation.js";
 import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
 } from "../secrets/runtime-state.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -197,6 +201,7 @@ function mockLogSecretsForTest(): GatewayStartupLogMock {
 }
 
 function readTimelineEvents(filePath: string): Array<Record<string, unknown>> {
+  flushDiagnosticsTimeline();
   return readFileSync(filePath, "utf8")
     .trim()
     .split(/\r?\n/u)
@@ -215,6 +220,7 @@ function installDiagnosticsTimelineEnv() {
   return {
     timelinePath,
     cleanup: () => {
+      flushDiagnosticsTimeline();
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
       } else {
@@ -427,7 +433,7 @@ describe("gateway startup config secret preflight", () => {
   const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
 
   afterEach(() => {
-    clearSecretsRuntimeSnapshot();
+    clearSecretsRuntimeSnapshotState();
     if (previousSkipChannels === undefined) {
       delete process.env.OPENCLAW_SKIP_CHANNELS;
     } else {
@@ -452,9 +458,9 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot,
     });
     activateSecretsRuntimeSnapshotForTest(initial);
-    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     activateSecretsRuntimeSnapshotForTest(refreshed);
-    const refreshedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const refreshedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
 
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, initialRevision, {
@@ -514,7 +520,7 @@ describe("gateway startup config secret preflight", () => {
       logSecrets,
     });
     activateSecretsRuntimeSnapshotForTest(initial);
-    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const activateSnapshotIfCurrent = vi.fn(() => {
       activateSecretsRuntimeSnapshotForTest(candidate);
       return true;
@@ -576,7 +582,7 @@ describe("gateway startup config secret preflight", () => {
         publishFailureAsDegraded: true,
       }),
     ).rejects.toThrow(failure.message);
-    const expectedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const expectedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     await expect(
       activateProviderAuthRuntimeSnapshot({
         snapshot: candidate,
@@ -636,7 +642,7 @@ describe("gateway startup config secret preflight", () => {
 
     await activateProviderAuthRuntimeSnapshot({
       snapshot: providerDegraded,
-      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
       activateSnapshotIfCurrent: () => {
         activateSecretsRuntimeSnapshotForTest(providerDegraded);
         return true;
@@ -652,7 +658,7 @@ describe("gateway startup config secret preflight", () => {
     const recovered = preparedSnapshot(config);
     await activateProviderAuthRuntimeSnapshot({
       snapshot: recovered,
-      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
       activateSnapshotIfCurrent: () => {
         activateSecretsRuntimeSnapshotForTest(recovered);
         return true;
@@ -689,7 +695,7 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateProviderAuthRuntimeSnapshot({
         snapshot: candidate,
-        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
         activateSnapshotIfCurrent: () => true,
       }),
     ).resolves.toBe(true);
@@ -728,7 +734,7 @@ describe("gateway startup config secret preflight", () => {
     const recovered = preparedSnapshot(config);
     await activateProviderAuthRuntimeSnapshot({
       snapshot: recovered,
-      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
       activateSnapshotIfCurrent: () => {
         activateSecretsRuntimeSnapshotForTest(recovered);
         return true;
@@ -797,7 +803,7 @@ describe("gateway startup config secret preflight", () => {
     const recovered = preparedSnapshot(config);
     await activateProviderAuthRuntimeSnapshot({
       snapshot: recovered,
-      expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      expectedRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
       activateSnapshotIfCurrent: () => {
         activateSecretsRuntimeSnapshotForTest(recovered);
         return true;
@@ -848,7 +854,7 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         rolledBackCandidate,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(rolledBackCandidate);
@@ -859,7 +865,7 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         committedCandidate,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(committedCandidate);
@@ -918,11 +924,11 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         degraded,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(degraded);
-    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const descendant: PreparedSecretsRuntimeSnapshot = structuredClone(degraded);
     descendant.degradedOwners?.push({
       ownerKind: "provider",
@@ -985,11 +991,11 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         degraded,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(degraded);
-    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const recovered = preparedSnapshot(config);
 
     await expect(
@@ -1060,11 +1066,11 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         providerDegraded,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(providerDegraded);
-    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const recovered = preparedSnapshot(config);
 
     await expect(
@@ -1126,11 +1132,11 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         recovered,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(recovered);
-    const outerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const outerRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const descendant = structuredClone(recovered);
 
     await expect(
@@ -1208,7 +1214,7 @@ describe("gateway startup config secret preflight", () => {
 
     const sourceOnly = preparedSnapshot(stableConfig);
     activateSecretsRuntimeSnapshotForTest(sourceOnly);
-    const committedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const committedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const descendant = structuredClone(sourceOnly);
     expect(
       activateSecretsRuntimeSnapshotStateIfCurrent({
@@ -1235,7 +1241,7 @@ describe("gateway startup config secret preflight", () => {
     const initial = preparedSnapshot(gatewayTokenConfig({}));
     const candidate: PreparedSecretsRuntimeSnapshot = {
       ...preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token"),
-      authStores: [
+      authStores: prepareRuntimeAuthProfileStoreSnapshots([
         {
           agentDir,
           store: {
@@ -1251,7 +1257,7 @@ describe("gateway startup config secret preflight", () => {
             },
           },
         },
-      ],
+      ]),
     };
     const activateRuntimeSecretsSnapshot = vi.fn(activateSecretsRuntimeSnapshotForTest);
     const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
@@ -1259,7 +1265,7 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot,
     });
     activateSecretsRuntimeSnapshotForTest(initial);
-    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     setRuntimeAuthProfileStoreSnapshot(
       {
         version: 1,
@@ -1283,7 +1289,9 @@ describe("gateway startup config secret preflight", () => {
       }),
     ).resolves.toBeNull();
     expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
-    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toMatchObject({
+    expect(
+      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
+    ).toMatchObject({
       access: "access-new",
       refresh: "refresh-new",
     });
@@ -1298,7 +1306,7 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot: vi.fn(activateSecretsRuntimeSnapshotForTest),
     });
     activateSecretsRuntimeSnapshotForTest(initial);
-    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     let releasePublication: (() => void) | undefined;
     const publicationBlocked = new Promise<void>((resolve) => {
       releasePublication = resolve;
@@ -1330,7 +1338,7 @@ describe("gateway startup config secret preflight", () => {
     releasePublication?.();
     await candidateActivation;
     await laterActivation;
-    expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe("later-token");
+    expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.auth?.token).toBe("later-token");
   });
 
   it("measures startup auth subphases", async () => {
@@ -1376,7 +1384,6 @@ describe("gateway startup config secret preflight", () => {
       await activateRuntimeSecrets(config, { reason: "startup", activate: false });
 
       const events = readTimelineEvents(timelineEnv.timelinePath);
-      expect(events).toHaveLength(2);
       expect(events.map((event) => event.type)).toEqual(["span.start", "span.end"]);
       for (const event of events) {
         expect(event.name).toBe("secrets.prepare");
@@ -2092,7 +2099,7 @@ describe("gateway startup config secret preflight", () => {
       }),
     ).rejects.toThrow(missingSecretError.message);
     shouldResolve = true;
-    const activeRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const activeRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const prepared = await activateRuntimeSecrets(sourceConfig, {
       reason: "restart-check",
       activate: false,
@@ -2140,7 +2147,7 @@ describe("gateway startup config secret preflight", () => {
       }),
     ).rejects.toThrow(missingSecretError.message);
     shouldResolve = true;
-    const sourceOnlyRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const sourceOnlyRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const sourceOnly = await activateRuntimeSecrets(sourceConfig, {
       reason: "reload",
       activate: false,
@@ -2173,7 +2180,7 @@ describe("gateway startup config secret preflight", () => {
       "SECRETS_RELOADER_DEGRADED",
     ]);
     shouldResolve = true;
-    const newerRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const newerRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const newerPrepared = await activateRuntimeSecrets(sourceConfig, {
       reason: "reload",
       activate: false,
@@ -2218,8 +2225,8 @@ describe("gateway startup config secret preflight", () => {
         publishFailureAsDegraded: true,
       }),
     ).rejects.toThrow(missingSecretError.message);
-    const revertedSnapshot = getActiveSecretsRuntimeSnapshot()!;
-    const revertedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const revertedSnapshot = getActiveSecretsRuntimeSnapshotState()!;
+    const revertedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         revertedSnapshot,
@@ -2267,11 +2274,11 @@ describe("gateway startup config secret preflight", () => {
         publishFailureAsDegraded: true,
       }),
     ).rejects.toThrow(missingSecretError.message);
-    const unrelatedRevertedSnapshot = getActiveSecretsRuntimeSnapshot()!;
+    const unrelatedRevertedSnapshot = getActiveSecretsRuntimeSnapshotState()!;
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         unrelatedRevertedSnapshot,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toMatchObject({ sourceConfig });
@@ -2290,8 +2297,8 @@ describe("gateway startup config secret preflight", () => {
         publishFailureAsDegraded: true,
       }),
     ).rejects.toThrow(missingSecretError.message);
-    const unchangedSnapshot = getActiveSecretsRuntimeSnapshot()!;
-    const unchangedRevision = getActiveSecretsRuntimeSnapshotRevision();
+    const unchangedSnapshot = getActiveSecretsRuntimeSnapshotState()!;
+    const unchangedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         unchangedSnapshot,
@@ -2389,7 +2396,7 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         revertedSnapshot,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(revertedSnapshot);
@@ -2402,7 +2409,7 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         fullyResolvedSnapshot,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(fullyResolvedSnapshot);
@@ -2433,7 +2440,7 @@ describe("gateway startup config secret preflight", () => {
     await expect(
       activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
         secondRevertedSnapshot,
-        getActiveSecretsRuntimeSnapshotRevision(),
+        getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(secondRevertedSnapshot);
@@ -2689,8 +2696,8 @@ describe("gateway startup config secret preflight", () => {
 
     try {
       const {
-        clearSecretsRuntimeSnapshot: clearImportedSecretsRuntimeSnapshot,
-        getActiveSecretsRuntimeSnapshot: getImportedSecretsRuntimeSnapshot,
+        clearSecretsRuntimeSnapshotState: clearImportedSecretsRuntimeSnapshot,
+        getActiveSecretsRuntimeSnapshotState: getImportedSecretsRuntimeSnapshot,
       } = await import("../secrets/runtime-state.js");
       const { getRuntimeConfigSnapshotRefreshHandler } =
         await import("../config/runtime-snapshot.js");
@@ -2819,12 +2826,12 @@ describe("gateway startup config secret preflight", () => {
       agentDir,
     );
     const active = preparedSnapshot(gatewayTokenConfig({}));
-    active.authStores = [
+    active.authStores = prepareRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
         store: { version: 1, profiles: { "openai:default": credential } },
       },
-    ];
+    ]);
     active.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
     activateSecretsRuntimeSnapshotState({
       snapshot: active,
@@ -2858,7 +2865,7 @@ describe("gateway startup config secret preflight", () => {
       activate: true,
       includeAuthStoreRefs: false,
     });
-    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toEqual(
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"]).toEqual(
       credential,
     );
   });
@@ -2935,7 +2942,7 @@ describe("gateway startup config secret preflight", () => {
 
         try {
           await activateStartupConfigWithEnv(
-            { agents: { list: [{ id: "default", default: true }] } },
+            { agents: { list: [{ id: "main", agentDir: relocatedMainAgentDir }] } },
             activationEnv,
           );
 
@@ -2978,7 +2985,7 @@ describe("gateway startup config secret preflight", () => {
           await activateStartupConfigWithEnv(
             {
               agents: {
-                list: [{ id: "default", default: true, agentDir: "~/configured-agent" }],
+                list: [{ id: "main", agentDir: "~/configured-agent" }],
               },
             },
             activationEnv,

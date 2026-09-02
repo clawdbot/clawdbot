@@ -30,6 +30,7 @@ type ContextHarness = {
   setGatewayToken: (token: string) => void;
   setChannelsConnected: (connected: boolean) => void;
   setChannelsSnapshot: (snapshot: ChannelsStatusSnapshot | null) => void;
+  setChannelsError: (error: string | null) => void;
   emitGatewayEvent: (event: Pick<GatewayEventFrame, "event" | "payload">) => void;
 };
 
@@ -88,7 +89,7 @@ export function createContext(
   } as unknown as ApplicationGateway;
   const agentListeners = new Set<() => void>();
   const channelListeners = new Set<(state: ApplicationContext["channels"]["state"]) => void>();
-  const channelState = {
+  const channelState: ApplicationContext["channels"]["state"] = {
     client,
     connected: true,
     channelsLoading: false,
@@ -108,6 +109,13 @@ export function createContext(
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
+  const refreshChannels = vi.fn(() => {
+    channelState.channelsLoading = true;
+    for (const listener of channelListeners) {
+      listener(channelState);
+    }
+    return new Promise<void>(() => {});
+  });
   const context = {
     gateway,
     agents: {
@@ -115,7 +123,7 @@ export function createContext(
         agentsList: options.agentsList ?? {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "global",
           agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
         },
       },
@@ -125,10 +133,10 @@ export function createContext(
       },
       refreshList: vi.fn(),
     },
-    agentSelection: { state: { selectedId: "main" } },
+    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     channels: {
       state: channelState,
-      refresh: vi.fn().mockResolvedValue(undefined),
+      refresh: refreshChannels,
       subscribe: (listener: (state: ApplicationContext["channels"]["state"]) => void) => {
         channelListeners.add(listener);
         return () => channelListeners.delete(listener);
@@ -152,6 +160,8 @@ export function createContext(
     },
     setChannelsConnected: (connected) => {
       channelState.connected = connected;
+      channelState.channelsLoading = false;
+      channelState.channelsError = null;
       for (const listener of channelListeners) {
         listener(channelState);
       }
@@ -159,6 +169,13 @@ export function createContext(
     setChannelsSnapshot: (nextSnapshot) => {
       channelState.channelsSnapshot = nextSnapshot;
       channelState.channelsLastSuccess = nextSnapshot ? Date.now() : null;
+      for (const listener of channelListeners) {
+        listener(channelState);
+      }
+    },
+    setChannelsError: (error: string | null) => {
+      channelState.channelsLoading = false;
+      channelState.channelsError = error;
       for (const listener of channelListeners) {
         listener(channelState);
       }

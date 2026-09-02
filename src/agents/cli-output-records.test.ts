@@ -65,6 +65,17 @@ const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
     },
     normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
   },
+  {
+    name: "all-zero token fields are treated as absent usage",
+    raw: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      total_tokens: 0,
+    },
+    normalized: undefined,
+  },
 ] as const;
 
 function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {
@@ -129,6 +140,25 @@ describe("parseCliJson", () => {
         usage: undefined,
         errorText: "Reached maximum number of turns (3)",
         terminalFailure: { reason: "max_turns", limit: 3 },
+      },
+    },
+    {
+      name: "surfaces Claude error_during_execution errors[] and skips ede_diagnostic telemetry",
+      input: {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "session-json-ede",
+        errors: ["[ede_diagnostic] tool_use_ids=[toolu_1]", "API Error: 529 Overloaded"],
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-ede",
+        usage: undefined,
+        errorText: "API Error: 529 Overloaded",
       },
     },
     {

@@ -1,36 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type { CloudSessionRecovery } from "../../lib/sessions/cloud-recovery.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { t } from "../../i18n/index.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import "./new-session-page.ts";
+import "./new-session-page-entry.ts";
 
-type TestNewSessionPage = {
+type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
-  folder: string;
-  message: string;
-  openedFor: string | null;
-  visibility: "normal" | "draft" | "incognito";
-  worktree: boolean;
-  agentId: string;
-  cloudProfileId: string;
-  context: ApplicationContext;
-  error: string | null;
-  submitting: boolean;
-  gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"];
-  gatewayConnected: boolean;
-  gatewayRecoveryScope: string;
-  gatewayUrl: string;
-  pendingCloud: { capture(): CloudSessionRecovery | null };
-  attachmentDraft: {
-    attachments: ChatAttachment[];
-    replace(attachments: ChatAttachment[]): void;
-  };
-  canSubmit(): boolean;
-  submissionAccess(): { allowed: true };
-  submit(): Promise<void>;
-  setMessageFromUser(message: string): void;
-  updated(): void;
+  updateComplete: Promise<boolean>;
 };
 
 function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
@@ -44,6 +19,34 @@ function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
   };
 }
 
+async function mount(data: NewSessionRouteData): Promise<NewSessionElement> {
+  const page = document.createElement("openclaw-new-session-page") as NewSessionElement;
+  page.data = data;
+  document.body.append(page);
+  await settle(page);
+  return page;
+}
+
+async function settle(page: NewSessionElement) {
+  await page.updateComplete;
+  await page.updateComplete;
+}
+
+async function enterMessage(page: NewSessionElement, value: string) {
+  const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+  expect(textarea).not.toBeNull();
+  if (!textarea) {
+    return;
+  }
+  textarea.value = value;
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+  await settle(page);
+}
+
+function message(page: NewSessionElement): string {
+  return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
+}
+
 afterEach(() => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
   sessionStorage.clear();
@@ -51,140 +54,178 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
-  it("clears all source draft state when destination data is still pending", () => {
-    const page = document.createElement(
-      "openclaw-new-session-page",
-    ) as unknown as TestNewSessionPage;
-    page.data = routeData("research");
-    page.updated();
-    window.history.replaceState({}, "", "/new?agent=research");
-    page.setMessageFromUser("source draft");
-    page.folder = "/workspace/source";
-    page.visibility = "incognito";
-    page.worktree = true;
-
-    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
-    page.data = undefined;
-    page.updated();
-
-    expect(page.message).toBe("");
-    expect(page.folder).toBe("");
-    expect(page.visibility).toBe("normal");
-    expect(page.worktree).toBe(false);
-    expect(page.openedFor).toBe(JSON.stringify(["research", "claude"]));
-  });
-
-  it("keeps destination input through pending data, settlement, and agent resolution", () => {
-    const page = document.createElement(
-      "openclaw-new-session-page",
-    ) as unknown as TestNewSessionPage;
-    page.data = routeData("research");
-    page.updated();
-
-    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
-    page.data = undefined;
-    page.updated();
-    page.setMessageFromUser("keep this fast draft");
-
-    page.data = {
-      ...routeData("", "claude"),
-      requestedAgentId: "research",
+  it("routes every focus-surface and key-class pair by the shared contract", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    const keys = ["x", " ", "Enter", "ArrowDown", "Escape"] as const;
+    type Destination = "composer" | "element" | "overlay" | "nothing";
+    type Surface = {
+      name: string;
+      targets: HTMLElement[];
+      expected: readonly Destination[];
+      openDialog?: boolean;
+      openDropdown?: boolean;
     };
-    page.updated();
-    expect(page.message).toBe("keep this fast draft");
+    const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
+    const main = append(document.createElement("main"));
+    main.tabIndex = -1;
+    const button = append(document.createElement("button"));
+    const link = append(document.createElement("a"));
+    link.href = "#target";
+    const menu = append(document.createElement("wa-dropdown")) as HTMLElement & { open: boolean };
+    const menuItem = menu.appendChild(document.createElement("wa-dropdown-item"));
+    menuItem.setAttribute("role", "menuitemradio");
+    menuItem.tabIndex = -1;
+    const dialog = append(document.createElement("dialog"));
+    dialog.open = true;
+    const dialogButton = dialog.appendChild(document.createElement("button"));
+    const details = append(document.createElement("details"));
+    details.open = true;
+    const summary = details.appendChild(document.createElement("summary"));
+    const input = append(document.createElement("input"));
+    const editable = append(document.createElement("div"));
+    editable.setAttribute("contenteditable", "true");
+    editable.tabIndex = 0;
+    const element = ["element", "element", "element", "element", "element"] as const;
+    const overlay = ["overlay", "overlay", "overlay", "overlay", "overlay"] as const;
+    const routing: Surface[] = [
+      {
+        name: "main",
+        targets: [main],
+        expected: ["composer", "composer", "nothing", "nothing", "nothing"],
+      },
+      { name: "composer", targets: [textarea], expected: element },
+      {
+        name: "button/link",
+        targets: [button, link],
+        expected: ["composer", "element", "element", "nothing", "nothing"],
+      },
+      {
+        name: "menuitem",
+        targets: [menuItem],
+        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
+        openDropdown: true,
+      },
+      {
+        name: "open wa-dropdown",
+        targets: [main],
+        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
+        openDropdown: true,
+      },
+      { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
+      {
+        name: "details/summary",
+        targets: [summary],
+        expected: ["composer", "element", "element", "nothing", "nothing"],
+      },
+      { name: "input/contenteditable", targets: [input, editable], expected: element },
+    ];
 
-    page.data = routeData("research", "claude");
-    page.updated();
-
-    expect(page.message).toBe("keep this fast draft");
+    for (const row of routing) {
+      for (const target of row.targets) {
+        for (const [index, key] of keys.entries()) {
+          menu.open = row.openDropdown === true;
+          dialog.open = row.openDialog === true;
+          target.focus();
+          target.dispatchEvent(
+            new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
+          );
+          const destination = row.expected[index];
+          if (destination === "composer") {
+            expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
+          } else if (destination === "overlay") {
+            expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
+          } else {
+            expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+          }
+        }
+      }
+    }
   });
 
-  it("clears a draft when a different route settles without destination-owned input", () => {
-    const page = document.createElement(
-      "openclaw-new-session-page",
-    ) as unknown as TestNewSessionPage;
-    page.data = routeData("research", "claude");
-    page.updated();
+  it("leaves shortcuts, composition, and other form controls alone", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+
+    for (const init of [
+      { key: "x", ctrlKey: true },
+      { key: "x", metaKey: true },
+      { key: "Tab" },
+      { key: "Escape" },
+      { key: "Process", isComposing: true },
+    ]) {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { ...init, bubbles: true, composed: true }),
+      );
+      expect(document.activeElement).not.toBe(textarea);
+    }
+
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    for (const control of [
+      document.createElement("input"),
+      document.createElement("select"),
+      document.createElement("textarea"),
+      editable,
+    ]) {
+      page.append(control);
+      control.focus();
+      control.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
+      );
+      expect(document.activeElement).toBe(control);
+    }
+  });
+
+  it("labels the message input independently of its placeholder", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+
+    expect(textarea?.getAttribute("aria-label")).toBe(t("newSession.messagePlaceholder"));
+  });
+
+  it("clears source draft state when destination data is still pending", async () => {
+    const page = await mount(routeData("research"));
+    window.history.replaceState({}, "", "/new?agent=research");
+    await enterMessage(page, "source draft");
+
     window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
-    page.setMessageFromUser("route-owned draft");
+    page.data = undefined;
+    await settle(page);
+
+    expect(message(page)).toBe("");
+  });
+
+  it("keeps destination input through pending data, settlement, and agent resolution", async () => {
+    const page = await mount(routeData("research"));
+
+    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
+    page.data = undefined;
+    await settle(page);
+    await enterMessage(page, "keep this fast draft");
+
+    page.data = { ...routeData("", "claude"), requestedAgentId: "research" };
+    await settle(page);
+    expect(message(page)).toBe("keep this fast draft");
+
+    page.data = routeData("research", "claude");
+    await settle(page);
+    expect(message(page)).toBe("keep this fast draft");
+  });
+
+  it("clears a draft when a different route settles without destination-owned input", async () => {
+    const page = await mount(routeData("research", "claude"));
+    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
+    await enterMessage(page, "route-owned draft");
 
     window.history.replaceState({}, "", "/new?agent=main&catalog=codex");
     page.data = undefined;
-    page.updated();
+    await settle(page);
 
-    expect(page.message).toBe("");
-  });
-
-  it("hands cloud startup to the application owner and navigates immediately", async () => {
-    window.history.replaceState({}, "", "/new");
-    const page = document.createElement(
-      "openclaw-new-session-page",
-    ) as unknown as TestNewSessionPage;
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    const client = { recoveryScope: "principal-a", recoveryScopeReady: true };
-    const createResult = vi.fn(async (params: Record<string, unknown>) => ({
-      key: String(params.key),
-      initialRun: { status: "idle" as const },
-    }));
-    const start = vi.fn(
-      (_input: Parameters<ApplicationContext["cloudStartup"]["start"]>[0]) =>
-        new Promise<void>(() => {
-          // The application owner keeps loading after this route commits.
-        }),
-    );
-    const navigate = vi.fn();
-    const setSessionKey = vi.fn();
-    const selectAgent = vi.fn();
-    page.context = {
-      basePath: "",
-      gateway: {
-        connection: { gatewayUrl: "ws://gateway.example" },
-        snapshot: {
-          phase: "connected",
-          client,
-          hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
-        },
-        setSessionKey,
-      },
-      agents: { state: { agentsList: null } },
-      agentSelection: { state: { selectedId: "cloud" }, set: selectAgent },
-      sessions: { state: { result: null }, createResult },
-      cloudStartup: { start },
-      navigate,
-    } as unknown as ApplicationContext;
-    page.agentId = "cloud";
-    page.cloudProfileId = "aws";
-    page.message = "keep this cloud task";
-    page.visibility = "normal";
-    page.worktree = true;
-    page.gatewayClient = client as ApplicationContext["gateway"]["snapshot"]["client"];
-    page.gatewayConnected = true;
-    page.gatewayRecoveryScope = client.recoveryScope;
-    page.gatewayUrl = "ws://gateway.example";
-    page.canSubmit = () => true;
-    page.submissionAccess = () => ({ allowed: true });
-    page.attachmentDraft.replace([
-      {
-        id: "attachment-1",
-        dataUrl: "data:text/plain;base64,SGk=",
-        mimeType: "text/plain",
-        fileName: "note.txt",
-      },
-    ]);
-
-    await page.submit();
-    expect(start).toHaveBeenCalledOnce();
-    expect(start.mock.calls[0]?.[0].recovery).toMatchObject({
-      message: "keep this cloud task",
-      attachments: [{ fileName: "note.txt", content: "SGk=" }],
-      phase: "dispatching",
-    });
-    expect(page.pendingCloud.capture()).toBeNull();
-    expect(page.attachmentDraft.attachments).toHaveLength(0);
-    expect(page.submitting).toBe(false);
-    expect(createResult).toHaveBeenCalledOnce();
-    expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
-    expect(selectAgent).toHaveBeenCalledWith("cloud");
-    expect(navigate).toHaveBeenCalledOnce();
+    expect(message(page)).toBe("");
   });
 });

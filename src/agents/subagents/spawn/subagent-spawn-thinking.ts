@@ -3,13 +3,9 @@
  * this helper to patch the child session without leaking invalid caller input.
  */
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-
-function readString(value: Record<string, unknown>, key: string): string | undefined {
-  const raw = value[key];
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
-}
 
 /** Resolves subagent thinking override and initial session patch from caller/agent config. */
 export function resolveSubagentThinkingOverride(params: {
@@ -27,9 +23,9 @@ export function resolveSubagentThinkingOverride(params: {
   );
   const defaultSubagents = asOptionalObjectRecord(params.cfg.agents?.defaults?.subagents);
   const resolvedThinkingDefaultRaw =
-    readString(requesterSubagents ?? {}, "thinking") ??
-    readString(targetSubagents ?? {}, "thinking") ??
-    readString(defaultSubagents ?? {}, "thinking");
+    normalizeOptionalString(requesterSubagents?.thinking) ??
+    normalizeOptionalString(targetSubagents?.thinking) ??
+    normalizeOptionalString(defaultSubagents?.thinking);
 
   const overrideCandidateRaw = params.thinkingOverrideRaw || resolvedThinkingDefaultRaw;
   if (overrideCandidateRaw) {

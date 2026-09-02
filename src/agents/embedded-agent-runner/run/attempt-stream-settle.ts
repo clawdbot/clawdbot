@@ -2,11 +2,14 @@
  * Prepares transport before streaming and settles the completed stream afterward.
  * It may assume session runtime ownership and provider inputs are established.
  */
+import { resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
+import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -14,7 +17,6 @@ import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
-import { projectToolSearchTargetTranscriptMessages } from "../../tool-search.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -44,30 +46,32 @@ import {
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
-  flushSessionManagerTranscript,
-  normalizeCompactionRecoveryTranscriptTail,
-} from "./attempt-transcript-helpers.js";
-import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type CompletionRequiredAsyncTaskWaitResult,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
-} from "./attempt.context-engine-helpers.js";
+} from "./attempt-context-engine-helpers.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
-} from "./attempt.run-decisions.js";
-import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
+} from "./attempt-run-decisions.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
+import {
+  flushSessionManagerTranscript,
+  normalizeCompactionRecoveryTranscriptTail,
+} from "./attempt-transcript-helpers.js";
 import {
   hasActiveCompactionRetryWork,
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
+import { materializeProviderContext } from "./images.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -75,9 +79,6 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
  */
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
-type ToolSearchTargetTranscriptProjections = Parameters<
-  typeof projectToolSearchTargetTranscriptMessages
->[1];
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type StreamSettleResult = {
@@ -90,6 +91,7 @@ type StreamSettleResult = {
   lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
   currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
   currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+  successfulNestedToolNames: string[];
   attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   cacheBreak: PromptCacheBreak | null;
   lastCallUsage: NormalizedUsage | undefined;
@@ -123,7 +125,7 @@ export async function settleEmbeddedAttemptStream(input: {
   }) => Promise<void> | void;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   prePromptMessageCount: number;
-  toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjections;
+  nestedToolActivities: readonly NestedToolActivity[];
   cache: {
     observabilityEnabled: boolean;
     changesForTurn: PromptCacheChange[] | null;
@@ -320,20 +322,13 @@ export async function settleEmbeddedAttemptStream(input: {
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
     }
-    const modelMessagesSnapshot = snapshotSelection.messagesSnapshot;
-    messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-      modelMessagesSnapshot,
-      input.toolSearchTargetTranscriptProjections,
-    );
+    messagesSnapshot = snapshotSelection.messagesSnapshot;
     sessionIdUsed = snapshotSelection.sessionIdUsed;
-    // Projected target-tool assistants are transcript evidence, not model
-    // turns. Letting one own terminal state hides its parent tool's outcome.
-    lastAssistant = modelMessagesSnapshot
-      .slice()
+    lastAssistant = messagesSnapshot
       .toReversed()
       .find((message): message is AssistantMessage => message.role === "assistant");
     currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-      messagesSnapshot: modelMessagesSnapshot,
+      messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
     currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
@@ -424,6 +419,13 @@ export async function settleEmbeddedAttemptStream(input: {
     lastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
+    successfulNestedToolNames: [
+      ...new Set(
+        input.nestedToolActivities.flatMap(({ details }) =>
+          details.isError ? [] : [details.toolName],
+        ),
+      ),
+    ],
     attemptUsage,
     cacheBreak,
     lastCallUsage,
@@ -439,8 +441,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session: AgentSession;
   settingsManager: SettingsManager;
   providerThinkingLevel: ProviderThinkLevel | undefined;
+  onCurrentTurnImageFailure?: (count: number) => void;
   sessionAgentId: string;
   workspaceDir: string;
+  workspaceOnly: boolean;
   agentDir: string;
   abortSignal: AbortSignal;
   getProviderRuntimeHandle: () => ProviderRuntimePluginHandle;
@@ -496,6 +500,27 @@ export async function prepareEmbeddedAttemptTransport(input: {
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
   });
+  const directProviderStreamFn = providerStreamFn
+    ? wrapStreamFnWithMessageTransform(
+        providerStreamFn,
+        (messages) => messages,
+        ({ context, ...provider }) =>
+          materializeProviderContext({
+            ...provider,
+            context,
+            workspaceDir: input.workspaceDir,
+            workspaceOnly: input.workspaceOnly,
+            localRoots: input.workspaceOnly
+              ? undefined
+              : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+            onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+            sandbox:
+              input.sandbox?.enabled && input.sandbox.fsBridge
+                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+                : undefined,
+          }),
+      )
+    : undefined;
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -503,13 +528,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
   });
   const streamStrategy = describeEmbeddedAgentStreamStrategy({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn,
+    providerStreamFn: directProviderStreamFn,
     model: attempt.model,
     resolvedApiKey: transportApiKey,
   });
   session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn,
+    providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,
@@ -599,7 +624,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
         `(${attempt.provider}/${attempt.modelId})`,
     );
   }
+  session.agent.transport = effectiveAgentTransport;
   return {
+    compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
+      extraParams: effectiveExtraParams,
+      apiKey: transportApiKey,
+    }),
     effectiveAgentTransport,
     effectiveExtraParams,
     effectivePromptCacheRetention,

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginEnable from "../plugins/enable.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runSearchSetupFlow } from "./search-setup.js";
@@ -195,6 +196,43 @@ describe("runSearchSetupFlow", () => {
     authMocks.hasAuthProfileForProvider.mockReturnValue(false);
     webSearchProviderMocks.resolvePluginWebSearchProviders.mockReset();
     webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([mockGrokProvider]);
+  });
+
+  it("keeps search config unchanged when plugin capability consent is declined", async () => {
+    const config: OpenClawConfig = { plugins: { entries: { xai: { enabled: false } } } };
+    const reason = "Plugin requires capability consent.";
+    const enable = vi
+      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
+      .mockResolvedValueOnce({
+        config,
+        enabled: false,
+        pluginId: "xai",
+        reason,
+      });
+    const text = vi.fn(async () => "unused-key");
+    const note = vi.fn(async () => {});
+    try {
+      const result = await runSearchSetupFlow(
+        config,
+        createNonExitingRuntime(),
+        createWizardPrompter({
+          select: vi.fn(async () => "grok") as never,
+          text,
+          note,
+        }),
+      );
+      expect(result).toEqual({
+        outcome: "install-failed",
+        config,
+        providerId: "grok",
+        reason: "failed",
+      });
+      expect(note).toHaveBeenCalledWith(reason, "Web search unavailable");
+      expect(text).not.toHaveBeenCalled();
+      expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    } finally {
+      enable.mockRestore();
+    }
   });
 
   it("names no-provider and user-skip outcomes as kept-current", async () => {

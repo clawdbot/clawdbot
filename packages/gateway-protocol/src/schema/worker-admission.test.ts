@@ -7,20 +7,34 @@ import {
   WorkerAdmissionResponseFrameSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerGitHubPublishResponseFrameSchema,
   WorkerLiveEventRequestFrameSchema,
   WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerPortalResponseFrameSchema,
+  WorkerSessionsSendResponseFrameSchema,
+  WorkerSessionsSpawnResponseFrameSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
+  validateWorkerGitHubPublishParams,
   validateWorkerLiveEventParams,
+  validateWorkerPortalParams,
+  validateWorkerSessionsSendParams,
+  validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
 import {
@@ -265,6 +279,137 @@ describe("worker protocol schemas", () => {
     expect(Value.Check(WorkerHeartbeatResponseFrameSchema, response)).toBe(true);
   });
 
+  it("keeps worker session tools closed and payload-bounded", () => {
+    const spawn = { toolCallId: "call-spawn", task: "run the child" };
+    const send = {
+      toolCallId: "call-send",
+      sessionKey: "agent:main:dashboard:child",
+      message: "report status",
+    };
+    const publish = { toolCallId: "call-publish", title: "Publish the fix" };
+    const portal = { toolCallId: "call-portal", action: "open", port: 3000, path: "/app" };
+    expect(validateWorkerSessionsSpawnParams(spawn)).toBe(true);
+    expect(validateWorkerSessionsSendParams(send)).toBe(true);
+    expect(validateWorkerGitHubPublishParams(publish)).toBe(true);
+    expect(validateWorkerPortalParams(portal)).toBe(true);
+    expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
+    expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, token: "secret" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, repository: "openclaw/openclaw" })).toBe(
+      false,
+    );
+    expect(validateWorkerGitHubPublishParams({ ...publish, branch: "main" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, title: "Fix\rInject" })).toBe(false);
+    expect(validateWorkerGitHubPublishParams({ ...publish, commitMessage: "Inject" })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, token: "secret" })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, action: "unknown" })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, port: 0 })).toBe(false);
+    expect(validateWorkerPortalParams({ ...portal, path: "app" })).toBe(false);
+    const escaped = "\0";
+    const requestBytes = (method: string, requestParams: object) =>
+      Buffer.byteLength(
+        JSON.stringify({
+          type: "req",
+          id: escaped.repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
+          method,
+          params: requestParams,
+        }),
+        "utf8",
+      );
+    const impossibleText = escaped.repeat(10_000);
+    const spawnEnvelope = {
+      toolCallId: escaped.repeat(256),
+      label: escaped.repeat(256),
+      agentId: escaped.repeat(256),
+      model: escaped.repeat(256),
+    };
+    const maximalSpawn = {
+      ...spawnEnvelope,
+      task: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
+      runTimeoutSeconds: 86_400,
+    };
+    expect(validateWorkerSessionsSpawnParams(maximalSpawn)).toBe(true);
+    expect(requestBytes("worker.sessions.spawn", maximalSpawn)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    const impossibleSpawn = { ...spawnEnvelope, task: impossibleText };
+    expect(requestBytes("worker.sessions.spawn", impossibleSpawn)).toBeGreaterThan(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    expect(validateWorkerSessionsSpawnParams(impossibleSpawn)).toBe(false);
+
+    const sendEnvelope = {
+      toolCallId: escaped.repeat(256),
+      sessionKey: escaped.repeat(1_024),
+      timeoutSeconds: 86_400,
+    };
+    const maximalSend = {
+      ...sendEnvelope,
+      message: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
+    };
+    expect(validateWorkerSessionsSendParams(maximalSend)).toBe(true);
+    expect(requestBytes("worker.sessions.send", maximalSend)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    const impossibleSend = { ...sendEnvelope, message: impossibleText };
+    expect(requestBytes("worker.sessions.send", impossibleSend)).toBeGreaterThan(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    expect(validateWorkerSessionsSendParams(impossibleSend)).toBe(false);
+
+    const maximalPublish = {
+      toolCallId: escaped.repeat(256),
+      title: escaped.repeat(256),
+      body: escaped.repeat(8 * 1024),
+    };
+    expect(validateWorkerGitHubPublishParams(maximalPublish)).toBe(true);
+    expect(requestBytes("worker.github.publish", maximalPublish)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    const maximalPortal = {
+      toolCallId: escaped.repeat(256),
+      action: "open",
+      port: 65_535,
+      title: escaped.repeat(256),
+      description: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
+      path: `/${escaped.repeat(1_023)}`,
+      id: escaped.repeat(256),
+    };
+    expect(validateWorkerPortalParams(maximalPortal)).toBe(true);
+    expect(requestBytes("worker.portal", maximalPortal)).toBeLessThanOrEqual(
+      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+    );
+    expect(validateWorkerPortalParams({ ...maximalPortal, description: impossibleText })).toBe(
+      false,
+    );
+    expect(
+      validateWorkerSessionsSpawnParams({
+        ...spawn,
+        runTimeoutSeconds: 86_401,
+      }),
+    ).toBe(false);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_PORTAL_PROTOCOL_FEATURE);
+
+    const response = {
+      type: "res" as const,
+      id: "session-tool-1",
+      ok: true as const,
+      payload: { resultJson: JSON.stringify({ content: [] }) },
+    };
+    expect(Value.Check(WorkerSessionsSpawnResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerSessionsSendResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerGitHubPublishResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerPortalResponseFrameSchema, response)).toBe(true);
+    expect(
+      Value.Check(WorkerSessionsSendResponseFrameSchema, {
+        ...response,
+        payload: { ...response.payload, extra: true },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts semantic transcript commits and generated-id responses", () => {
     const commitParams = transcriptCommit();
     expect(validateWorkerTranscriptCommitParams(commitParams)).toBe(true);
@@ -350,10 +495,15 @@ describe("worker protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("advertises only the current execution-context dialect", () => {
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain("worker-execution-context-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-execution-context-v2");
+  });
+
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
-    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),
@@ -526,6 +676,7 @@ describe("worker protocol schemas", () => {
   });
 
   it("keeps worker close reasons closed", () => {
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "admission-rejected")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);

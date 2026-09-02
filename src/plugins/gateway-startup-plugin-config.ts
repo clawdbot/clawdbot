@@ -2,11 +2,11 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals,
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,8 +19,11 @@ import {
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
+import {
+  resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginIdFromConfig,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type {
   ManifestRegistryLookup,
@@ -60,7 +63,7 @@ export function normalizePluginsConfigForInstalledIndex(
   config: OpenClawConfig["plugins"] | undefined,
   lookup: InstalledPluginIndexScopeLookup,
 ) {
-  return normalizePluginsConfigWithResolver(config, lookup.normalizePluginId);
+  return normalizePluginsConfigWithResolverCore(config, lookup.normalizePluginId);
 }
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
@@ -73,21 +76,36 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
   return true;
 }
 
-export function listPotentialEnabledChannelIds(
+function listPotentialEnabledChannelIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  options: {
+    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+    includePersistedAuthState?: boolean;
+  } = {},
 ): string[] {
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
-  return sortUniquePluginIds([
+  const enabledSignals = [
     ...listPotentialConfiguredChannelIds(config, env, {
       includePersistedAuthState: false,
-      ambientEnvTriggers,
+      ambientEnvTriggers: options.ambientEnvTriggers,
     }),
     ...listExplicitConfiguredChannelIdsForConfig(config),
-  ])
+  ]
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
+  if (options.includePersistedAuthState !== true) {
+    return sortUniquePluginIds(enabledSignals);
+  }
+  const persistedSignals = listPotentialConfiguredChannelPresenceSignals(config, env, {
+    includePersistedAuthState: true,
+    ambientEnvTriggers: options.ambientEnvTriggers,
+  })
+    .filter((signal) => signal.source === "persisted-auth")
+    .map((signal) => normalizeOptionalLowercaseString(signal.channelId) ?? "")
+    .filter(Boolean);
+  // Only persisted-auth evidence bypasses disabled activation during migration.
+  return sortUniquePluginIds([...enabledSignals, ...persistedSignals]);
 }
 
 function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
@@ -211,18 +229,10 @@ export function resolveContextEngineSlotStartupPluginId(params: {
   if (!configuredSlot) {
     return undefined;
   }
-  const normalized = normalizePluginId(configuredSlot);
-  // "legacy" is the built-in default engine — no plugin startup needed.
-  if (normalized === "legacy") {
-    return undefined;
-  }
-  if (activationSourcePlugins.deny.includes(normalized)) {
-    return undefined;
-  }
-  if (activationSourcePlugins.entries[normalized]?.enabled === false) {
-    return undefined;
-  }
-  return normalized;
+  return resolveSelectedContextEnginePluginIdFromConfig(
+    activationSourcePlugins,
+    normalizePluginId(configuredSlot),
+  );
 }
 
 export function shouldConsiderForGatewayStartup(params: {
@@ -367,60 +377,17 @@ export function collectConfiguredStartupChannelIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  includePersistedAuthState?: boolean;
 }): string[] {
   return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
-    ...listPotentialEnabledChannelIds(
-      params.activationSourceConfig,
-      params.env,
-      params.ambientEnvTriggers,
-    ),
-  ]);
-}
-
-function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): string[] {
-  const channelIds: string[] = [];
-  const pushTarget = (target: unknown) => {
-    if (typeof target !== "string") {
-      return;
-    }
-    const normalized = normalizeOptionalLowercaseString(target);
-    if (!normalized || normalized === "last" || normalized === "none") {
-      return;
-    }
-    channelIds.push(normalized);
-  };
-  pushTarget(config.agents?.defaults?.heartbeat?.target);
-  for (const agent of listAgentEntries(config)) {
-    pushTarget(agent?.heartbeat?.target);
-  }
-  return sortUniquePluginIds(channelIds);
-}
-
-function collectValidationChannelConfigIds(config: OpenClawConfig): string[] {
-  const channels = isRecord(config.channels) ? config.channels : null;
-  if (!channels) {
-    return [];
-  }
-  return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults" && channelId !== "modelByChannel")
-    .map((channelId) => normalizeOptionalLowercaseString(channelId) ?? "")
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function collectConfigValidationChannelIds(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  return sortUniquePluginIds([
-    ...collectValidationChannelConfigIds(params.config),
-    ...collectConfiguredStartupChannelIds({
-      config: params.config,
-      activationSourceConfig: params.config,
-      env: params.env,
+    ...listPotentialEnabledChannelIds(params.config, params.env, {
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      includePersistedAuthState: params.includePersistedAuthState,
     }),
-    ...collectValidationHeartbeatTargetChannelIds(params.config),
+    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env, {
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      includePersistedAuthState: params.includePersistedAuthState,
+    }),
   ]);
 }
 

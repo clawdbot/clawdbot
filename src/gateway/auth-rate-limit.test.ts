@@ -1,13 +1,14 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Auth rate-limit tests cover sliding-window, lockout, scope, loopback, and
 // cleanup behavior shared by gateway secret and device-token authentication.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   buildRateLimitIdentityKey,
   createAuthRateLimiter,
+  isAuthRateLimitClientExempt,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 
@@ -415,6 +416,18 @@ describe("auth rate limiter", () => {
     });
     limiter.recordFailure("127.0.0.1");
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
+  });
+
+  it("reports the authoritative exemption policy for fallback serialization", () => {
+    limiter = createAuthRateLimiter();
+    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(true);
+    expect(isAuthRateLimitClientExempt(limiter, buildRateLimitIdentityKey("node", "node-1"))).toBe(
+      false,
+    );
+    limiter.dispose();
+
+    limiter = createAuthRateLimiter({ exemptLoopback: false });
+    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(false);
   });
 
   it("does not exempt opaque identity keys", () => {

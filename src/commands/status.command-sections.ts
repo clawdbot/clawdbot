@@ -13,6 +13,7 @@ import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { SessionStatus, StatusSummary } from "../status/types.js";
+import { formatDeliveryQueueHealthLine } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
@@ -111,6 +112,9 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
     .map((agent) => {
       if (!agent.enabled || !agent.everyMs) {
         return `disabled (${agent.agentId})`;
+      }
+      if (agent.waitingForRoute) {
+        return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)`;
       }
       return `${agent.every} (${agent.agentId})`;
     })
@@ -265,7 +269,7 @@ export function buildStatusSecurityAuditLines(params: {
   return lines;
 }
 
-/** Builds health table rows from gateway health and channel health text. */
+/** Builds gateway, channel, and delivery queue health table rows. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
   formatHealthChannelLines: (summary: HealthSummary, opts: { accountMode: "all" }) => string[];
@@ -273,7 +277,7 @@ export function buildStatusHealthRows(params: {
   warn: (value: string) => string;
   muted: (value: string) => string;
 }) {
-  const rows: Array<Record<string, string>> = [
+  const rows: Array<{ Item: string; Status: string; Detail: string }> = [
     {
       Item: "Gateway",
       Status: params.ok("reachable"),
@@ -287,7 +291,12 @@ export function buildStatusHealthRows(params: {
       Detail: formatEventLoopHealthDetail(params.health.eventLoop),
     });
   }
-  for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
+  const healthLines = params.formatHealthChannelLines(params.health, { accountMode: "all" });
+  const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);
+  if (deliveryQueueLine) {
+    healthLines.push(deliveryQueueLine);
+  }
+  for (const line of healthLines) {
     const colon = line.indexOf(":");
     if (colon === -1) {
       continue;
@@ -295,20 +304,17 @@ export function buildStatusHealthRows(params: {
     const item = line.slice(0, colon).trim();
     const detail = line.slice(colon + 1).trim();
     const normalized = normalizeLowercaseStringOrEmpty(detail);
-    // Channel health format is string-based; classify known prefixes into table status chips.
-    const status = normalized.startsWith("ok")
-      ? params.ok("OK")
-      : normalized.startsWith("failed")
-        ? params.warn("WARN")
+    // Shared health text uses known prefixes to classify table status chips.
+    const status =
+      normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
+        ? params.ok("OK")
         : normalized.startsWith("not configured")
           ? params.muted("OFF")
-          : normalized.startsWith("configured")
-            ? params.ok("OK")
-            : normalized.startsWith("linked")
-              ? params.ok("LINKED")
-              : normalized.startsWith("not linked")
-                ? params.warn("UNLINKED")
-                : params.warn("WARN");
+          : normalized.startsWith("linked")
+            ? params.ok("LINKED")
+            : normalized.startsWith("not linked")
+              ? params.warn("UNLINKED")
+              : params.warn("WARN");
     rows.push({ Item: item, Status: status, Detail: detail });
   }
   return rows;

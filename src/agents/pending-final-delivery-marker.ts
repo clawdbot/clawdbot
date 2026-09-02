@@ -9,7 +9,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import { persistSessionEntry } from "./command/attempt-execution.shared.js";
+import { persistAgentSession } from "./command/attempt-execution.shared.js";
 
 type PersistPendingFinalDeliveryMarkerParams = {
   deliver: boolean;
@@ -49,7 +49,10 @@ export async function persistPendingFinalDeliveryMarker(
     params.suppressVisibleSessionEffects ||
     params.sessionReboundDuringRun ||
     isSubagentSessionKey(params.sessionKey) ||
-    !hasSendableFinalPayload
+    !hasSendableFinalPayload ||
+    // A run without a resolvable delivery route (e.g. rejected best-effort
+    // target) must not leave a custody marker restart recovery could act on.
+    !params.deliveryContext
   ) {
     return {
       sessionEntry: params.sessionEntry,
@@ -70,7 +73,7 @@ export async function persistPendingFinalDeliveryMarker(
   const now = Date.now();
   const intentId = randomUUID();
   const deliveryId = randomUUID();
-  const persisted = await persistSessionEntry({
+  const persisted = await persistAgentSession({
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -84,7 +87,7 @@ export async function persistPendingFinalDeliveryMarker(
         intentId,
         deliveries: [{ id: deliveryId, state: "prepared" as const }],
         createdAt: now,
-        ...(params.deliveryContext ? { context: params.deliveryContext } : {}),
+        context: params.deliveryContext,
       },
       updatedAt: now,
     },

@@ -2,13 +2,14 @@
  * Baseten model catalog, compat metadata, and live row projection.
  */
 import {
-  buildManifestModelDefinition,
+  buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelCompatConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
@@ -107,16 +108,10 @@ export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
 
 /** Builds the network-free fallback catalog. */
 export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
-  return BASETEN_MODEL_CATALOG.map(
-    buildManifestModelDefinition({
-      providerId: "baseten",
-      catalog: BASETEN_MANIFEST_CATALOG,
-      decorate: (normalized) => ({
-        ...normalized,
-        compat: buildBasetenModelCompat(normalized.id),
-      }),
-    }),
-  );
+  return buildManifestModelProviderConfig({
+    providerId: "baseten",
+    catalog: BASETEN_MANIFEST_CATALOG,
+  }).models.map((model) => Object.assign(model, { compat: buildBasetenModelCompat(model.id) }));
 }
 
 type BasetenLiveModelRow = {
@@ -142,12 +137,6 @@ function readPerTokenPrice(value: unknown): number | undefined {
   return Number.isFinite(number) && number >= 0
     ? Number((number * 1_000_000).toFixed(9))
     : undefined;
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function applyLiveReasoningEffortCompat(
@@ -177,11 +166,8 @@ function projectLiveModel(
   }
 
   const hasLiveFeatures = Array.isArray(row.supported_features);
-  const features = new Set(readStringArray(row.supported_features));
-  const pricing =
-    row.pricing && typeof row.pricing === "object" && !Array.isArray(row.pricing)
-      ? (row.pricing as Record<string, unknown>)
-      : {};
+  const features = new Set(filterStringEntries(row.supported_features));
+  const pricing = asNonArrayRecord(row.pricing);
   const inputPrice = readPerTokenPrice(pricing.prompt);
   const outputPrice = readPerTokenPrice(pricing.completion);
   const cacheReadPrice = readPerTokenPrice(pricing.input_cache_read);

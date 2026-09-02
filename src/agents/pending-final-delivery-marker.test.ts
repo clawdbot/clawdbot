@@ -3,15 +3,15 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { persistPendingFinalDeliveryMarker } from "./pending-final-delivery-marker.js";
 
-const state = vi.hoisted(() => ({ persistSessionEntry: vi.fn() }));
+const state = vi.hoisted(() => ({ persistAgentSession: vi.fn() }));
 
 vi.mock("./command/attempt-execution.shared.js", () => ({
-  persistSessionEntry: (...args: unknown[]) => state.persistSessionEntry(...args),
+  persistAgentSession: (...args: unknown[]) => state.persistAgentSession(...args),
 }));
 
 describe("persistPendingFinalDeliveryMarker", () => {
   beforeEach(() => {
-    state.persistSessionEntry
+    state.persistAgentSession
       .mockReset()
       .mockImplementation(async (params: { entry: SessionEntry }) => params.entry);
   });
@@ -29,6 +29,7 @@ describe("persistPendingFinalDeliveryMarker", () => {
       suppressVisibleSessionEffects: false,
       sessionReboundDuringRun: false,
       payloads,
+      deliveryContext: { channel: "discord", to: "channel:c1" },
       runOwnedSessionId: "session-1",
     });
 

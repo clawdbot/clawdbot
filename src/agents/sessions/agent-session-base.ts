@@ -1,4 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -9,13 +11,17 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import {
+  takeCodeModeResponseSource,
+  prepareCodeModeSourceAppend,
+} from "../transcript-code-mode-source.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
   AgentSessionEventListener,
   AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
-import { extractTextContent } from "./agent-session-utils.js";
+import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
 import {
   type ExtensionCommandContextActions,
@@ -39,6 +45,10 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
+import {
+  registerQueuedUserMessageRetirement,
+  retireQueuedUserMessage,
+} from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -71,16 +81,16 @@ export abstract class AgentSessionBase {
   private eventListeners: AgentSessionEventListener[] = [];
 
   /** Tracks pending steering messages for UI display. Removed when delivered. */
-  protected steeringMessages: string[] = [];
+  protected steeringMessages: Array<{ text: string }> = [];
   /** Tracks pending follow-up messages for UI display. Removed when delivered. */
-  protected followUpMessages: string[] = [];
+  protected followUpMessages: Array<{ text: string }> = [];
   /** Messages queued to be included with the next user prompt as context ("asides"). */
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
   // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
-  protected overflowRecoveryAttempted = false;
+  protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
 
   // Branch summarization state
@@ -116,6 +126,7 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
+  private readonly cleanupProviderSessionResourcesOnDispose: boolean;
 
   // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
@@ -152,6 +163,8 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.cleanupProviderSessionResourcesOnDispose =
+      config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
   /** Model registry for API key resolution and model discovery */
@@ -190,8 +203,8 @@ export abstract class AgentSessionBase {
     headers?: Record<string, string>;
   }> {
     if (
-      this.agent.streamFn ===
-      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+      getStreamLlmRuntime(this.agent.streamFn) ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime
     ) {
       return this.getRequiredRequestAuth(model);
     }
@@ -258,6 +271,7 @@ export abstract class AgentSessionBase {
             content: result.content,
             details: result.details,
             isError,
+            ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
           }),
       );
 
@@ -267,8 +281,7 @@ export abstract class AgentSessionBase {
       this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
-        content: hookResult.content,
-        details: hookResult.details,
+        ...hookResult,
         isError: hookResult.isError ?? isError,
       };
     };
@@ -302,9 +315,32 @@ export abstract class AgentSessionBase {
   protected emitQueueUpdate(): void {
     this.emit({
       type: "queue_update",
-      steering: [...this.steeringMessages],
-      followUp: [...this.followUpMessages],
+      steering: this.steeringMessages.map((entry) => entry.text),
+      followUp: this.followUpMessages.map((entry) => entry.text),
     });
+  }
+
+  protected trackQueuedUserMessage(
+    message: AgentMessage,
+    owner: "steering" | "followUp",
+    text: string,
+  ): void {
+    const queue = owner === "steering" ? this.steeringMessages : this.followUpMessages;
+    const entry = { text };
+    queue.push(entry);
+    registerQueuedUserMessageRetirement(message, () => {
+      if (queue !== this.steeringMessages && queue !== this.followUpMessages) {
+        return false;
+      }
+      const queueIndex = queue.indexOf(entry);
+      if (queueIndex === -1) {
+        return false;
+      }
+      queue.splice(queueIndex, 1);
+      this.emitQueueUpdate();
+      return true;
+    });
+    this.emitQueueUpdate();
   }
 
   // Track last assistant message for auto-compaction check
@@ -336,30 +372,16 @@ export abstract class AgentSessionBase {
       this.lastAssistantEntryId = undefined;
     }
 
-    // When a user message starts, check if it's from either queue and remove it BEFORE emitting
-    // This ensures the UI sees the updated queue state
+    // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
-      this.overflowRecoveryAttempted = false;
-      const messageText = extractTextContent(event.message.content);
-      if (messageText) {
-        // Check steering queue first
-        const steeringIndex = this.steeringMessages.indexOf(messageText);
-        if (steeringIndex !== -1) {
-          this.steeringMessages.splice(steeringIndex, 1);
-          this.emitQueueUpdate();
-        } else {
-          // Check follow-up queue
-          const followUpIndex = this.followUpMessages.indexOf(messageText);
-          if (followUpIndex !== -1) {
-            this.followUpMessages.splice(followUpIndex, 1);
-            this.emitQueueUpdate();
-          }
-        }
-      }
+      this.overflowRecoveryAttempts = 0;
+      retireQueuedUserMessage(event.message);
     }
 
+    const sourceSlots =
+      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     // Emit to extensions first
-    const messageChangedByExtension = await this.emitExtensionEvent(event);
+    const messageChanged = await this.emitExtensionEvent(event);
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
@@ -395,10 +417,14 @@ export abstract class AgentSessionBase {
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         let entryId: string;
         try {
-          entryId = this.sessionManager.appendMessage(event.message, {
-            invalidateSerializedPrefixCache:
-              messageChangedByExtension || toolResultChangedByExtension,
-          });
+          // Normalize live delivery facts before persistence makes its redacted copy.
+          // Stored arguments must never replace the values used for tool execution.
+          applyAssistantDeliveryDirectives(event.message);
+          const appendOptions = {
+            invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
+          };
+          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
+          entryId = this.sessionManager.appendMessage(event.message, appendOptions);
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);
@@ -423,7 +449,7 @@ export abstract class AgentSessionBase {
         // A length response may still need overflow recovery in checkCompaction();
         // retryCount is independent and resets for every non-error response below.
         if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
-          this.overflowRecoveryAttempted = false;
+          this.overflowRecoveryAttempts = 0;
         }
 
         // Reset retry counter immediately on successful assistant response
@@ -463,22 +489,6 @@ export abstract class AgentSessionBase {
       }
     }
     return undefined;
-  }
-
-  private replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
-    // Agent-core stores the finalized message object in its state before emitting message_end.
-    // SessionManager persistence happens later in handleAgentEvent() with event.message.
-    // Mutating this object in place keeps agent state, later turn/agent events, listeners,
-    // and the eventual SessionManager.appendMessage(event.message) persistence in sync.
-    if (target === replacement) {
-      return;
-    }
-
-    const targetRecord = target as unknown as Record<string, unknown>;
-    for (const key of Object.keys(targetRecord)) {
-      delete targetRecord[key];
-    }
-    Object.assign(targetRecord, replacement);
   }
 
   /** Emit extension events based on agent events */
@@ -524,7 +534,7 @@ export abstract class AgentSessionBase {
       };
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
-        this.replaceMessageInPlace(event.message, replacement);
+        replaceAgentMessageInPlace(event.message, replacement);
         return true;
       }
     } else if (event.type === "tool_execution_start") {
@@ -622,7 +632,9 @@ export abstract class AgentSessionBase {
     );
     this.disconnectFromAgent();
     this.eventListeners = [];
-    cleanupSessionResources(this.sessionId);
+    if (this.cleanupProviderSessionResourcesOnDispose) {
+      cleanupSessionResources(this.sessionId);
+    }
   }
 
   // =========================================================================

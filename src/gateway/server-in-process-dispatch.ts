@@ -1,17 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
-export type GatewayMethodDispatchResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
-  meta?: Record<string, unknown>;
-};
+export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 
 type InProcessGatewayDispatchOptions = {
   client: GatewayRequestOptions["client"];
@@ -22,6 +19,7 @@ type InProcessGatewayDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
+  sessionMutationCommitGuard?: () => void;
   timeoutMs?: number;
   signal?: AbortSignal;
 };
@@ -31,13 +29,19 @@ export function unwrapGatewayMethodDispatchResponse(
   response: GatewayMethodDispatchResponse,
 ): unknown {
   if (!response.ok) {
-    throw new GatewayClientRequestError({
+    const requestError = new GatewayClientRequestError({
       code: response.error?.code,
       message: response.error?.message ?? `Gateway method "${method}" failed.`,
       details: response.error?.details,
       retryable: response.error?.retryable,
       retryAfterMs: response.error?.retryAfterMs,
     });
+    retainGatewayResponsePayload(requestError, response.payload);
+    const cause = (response.error as (ErrorShape & { cause?: unknown }) | undefined)?.cause;
+    if (cause !== undefined) {
+      Object.defineProperty(requestError, "cause", { value: cause });
+    }
+    throw requestError;
   }
   return response.payload;
 }
@@ -59,6 +63,13 @@ function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : createAbortError(`gateway request aborted for ${method}`, { cause: signal.reason });
+}
+
+/** Reject before a cancelled in-process request can invoke method work. */
+export function throwIfGatewayDispatchAborted(method: string, signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw resolveDispatchAbortError(method, signal);
+  }
 }
 
 async function waitForDispatch<T>(
@@ -116,8 +127,15 @@ export async function waitForGatewayDispatch<T>(
   promise: Promise<T>,
   timeoutMs?: number,
   signal?: AbortSignal,
+  onSignalAbort?: () => Promise<void> | void,
 ): Promise<T> {
-  return await waitForDispatch(method, promise, resolveDispatchDeadlineMs(timeoutMs), signal);
+  return await waitForDispatch(
+    method,
+    promise,
+    resolveDispatchDeadlineMs(timeoutMs),
+    signal,
+    onSignalAbort,
+  );
 }
 
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */
@@ -126,9 +144,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   params: unknown,
   options: InProcessGatewayDispatchOptions,
 ): Promise<GatewayMethodDispatchResponse> {
-  if (options.signal?.aborted) {
-    throw resolveDispatchAbortError(method, options.signal);
-  }
+  throwIfGatewayDispatchAborted(method, options.signal);
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
   let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -165,6 +181,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     },
     context: options.context,
     methodRegistry: options.methodRegistry,
+    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
     ...(options.signal ? { signal: options.signal } : {}),
   })
     .then(() => {
@@ -192,7 +209,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     options.onSignalAbort,
   );
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
-  if (options.expectFinal !== true || firstPayload?.status !== "accepted") {
+  if (!firstResponse.ok || options.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
   }
   options.onAccepted?.(firstResponse.payload);

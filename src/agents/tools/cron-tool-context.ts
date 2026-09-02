@@ -34,6 +34,7 @@ function extractMessageText(message: ChatMessage): { role: string; text: string 
 
 export async function buildReminderContextLines(params: {
   agentSessionKey?: string;
+  agentId?: string;
   gatewayOpts: GatewayCallOptions;
   contextMessages: number;
   callGatewayTool: GatewayToolCaller;
@@ -58,6 +59,7 @@ export async function buildReminderContextLines(params: {
       params.gatewayOpts,
       {
         sessionKey: resolvedKey,
+        agentId: params.agentId,
         limit: maxMessages,
       },
     );

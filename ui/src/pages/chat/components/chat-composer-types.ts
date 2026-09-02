@@ -1,45 +1,63 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { ChatSendShortcut } from "../../../app/settings.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
-import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import type {
+  ChatGoalAction,
+  ChatGoalDraft,
+  ChatGoalDraftMode,
+  ChatQueueItem,
+} from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
+import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type {
-  RealtimeTalkCameraDevice,
-  RealtimeTalkDeviceIssue,
-  RealtimeTalkInputDevice,
-} from "../realtime-talk-input.ts";
+import type { RealtimeTalkCameraDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream-contract.ts";
+import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
 import type {
-  ChatComposerPlusMenuProps,
+  ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
+import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
+import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
+import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
-export type CapabilityMenuProps = Omit<
-  ChatComposerPlusMenuProps,
-  | "attachments"
-  | "disabled"
-  | "open"
-  | "view"
-  | "toolOverrides"
-  | "onOpenChange"
-  | "onViewChange"
-  | "showCapabilities"
->;
+/** One shape for queued-row edit state and actions. */
+type ChatQueuedEditProps = {
+  /** Id of the row with an inline draft, or null when no row is being edited. */
+  editingId: string | null;
+  editingText?: string;
+  source?: ChatQueueItem;
+  onEdit?: (id: string) => void;
+  onEditChange?: (text: string) => void;
+  onEditSubmit?: () => void;
+  onCancel: () => void;
+};
+
+export type CapabilityMenuProps = ChatComposerCapabilityMenuProps;
 
 type ChatComposerDisabledBannerContent = {
+  title?: string;
   text: string;
+  tone?: "info" | "neutral";
+  icon?: "warning" | "archive";
   actionLabel: string;
+  actionStyle?: "primary";
+  busy?: boolean;
+  busyLabel?: string;
   disabledReason?: string;
   onAction: () => void;
 };
@@ -47,7 +65,7 @@ type ChatComposerDisabledBannerContent = {
 export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });
 
-export type ChatComposerProps = {
+export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -56,6 +74,8 @@ export type ChatComposerProps = {
   queuedOutboxCount?: number;
   canSend: boolean;
   disabledReason: string | null;
+  disabledReasonTone?: "info" | "danger";
+  disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: { summary: string } | null;
   sending: boolean;
@@ -64,25 +84,28 @@ export type ChatComposerProps = {
   waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
-  planStatus?: PlanStatus | null;
+  progressCard?: ProgressCard | null;
+  progressCardHasActiveRun?: boolean;
+  collapseTaskProgress?: boolean;
+  onDismissProgressCard?: (card: ProgressCard) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  modelCatalog: readonly ModelCatalogEntry[];
+  modelSwitching: boolean;
   sessions: SessionsListResult | null;
+  /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
+  selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
-  attachments?: ChatAttachment[];
-  getAttachments?: () => ChatAttachment[];
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
-  readSignal?: AbortSignal;
-  onPendingReadsChange?: (delta: 1 | -1) => void;
   replyTarget?: {
     messageId: string;
     text: string;
@@ -101,31 +124,36 @@ export type ChatComposerProps = {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  onComposerHoldToRecordChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string }[];
-  onTypingChange?: (typing: boolean) => void;
+  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
-  getDraft?: () => string;
+  anchoredNotices?: TemplateResult | typeof nothing;
+  permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
-  onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: () => void;
-  onCompact?: () => void | Promise<void>;
+  onSlashCommand?: (command: string) => void;
+  onSend: (followUpModeOverride?: ChatFollowUpMode, submissionAction?: Event) => void;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
-  onDictationError?: (message: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
-  onNewSession: () => void;
+  onQueueMove?: (id: string, toIndex: number) => void;
+  queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
-  onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
-  onRemoveAttachment?: (attachment: ChatAttachment) => void;
-  onGoalCommand?: (command: string) => void;
+  onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
+  onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
+  goalDraftMode?: ChatGoalDraftMode | null;
+  onGoalDraftModeChange?: (mode: ChatGoalDraftMode | null) => void;
+  currentSessionId?: string | null;
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
@@ -141,51 +169,29 @@ type ComposingDraft = {
   value: string;
 };
 
-type SkillMenuTarget = {
-  start: number;
-  end: number;
-  query: string;
-};
-
-export type ChatComposerState = {
-  slashMenuOpen: boolean;
-  slashMenuItems: SlashCommandDef[];
-  slashMenuIndex: number;
-  slashMenuMode: "command" | "args";
-  slashMenuCommand: SlashCommandDef | null;
-  slashMenuArgItems: string[];
-  slashMenuExpanded: boolean;
-  slashCommandRefreshPending: boolean;
-  skillMenuOpen: boolean;
-  skillMenuItems: SlashCommandDef[];
-  skillMenuIndex: number;
-  skillMenuTarget: SkillMenuTarget | null;
-  skillCommandRefreshPending: boolean;
-  skillCommandRefreshGeneration: number;
-  skillCommandRefreshTargetStart: number | null;
-  composerComposing: boolean;
-  composingDraft: ComposingDraft | null;
-  composerInputIntentKey: string | null;
-  pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
-  goalExpandedId: string | null;
-  activeGatewayQuestionId: string | null;
-  gatewayQuestionCollapsed: boolean;
-  questionTakeoverActive: boolean;
-  restoreComposerFocus: boolean;
-  composerTextarea: HTMLTextAreaElement | null;
-  microphonePickerOpen: boolean;
-  microphonePickerLoading: boolean;
-  microphoneDevices: RealtimeTalkInputDevice[];
-  microphoneIssue: RealtimeTalkDeviceIssue | null;
-  /** Unsubscribe for the devicechange watch; non-null only while the picker is open. */
-  microphoneDeviceWatch: (() => void) | null;
-  microphoneDiscoveryRequest: number;
-  capabilityMenuOpen: boolean;
-  capabilityMenuView: ChatComposerPlusMenuView;
-  // Stable Lit ref: an inline arrow would change identity per render and force
-  // a layout re-measure of the textarea on every chat render, not just attach.
-  textareaRef: ((element?: Element) => void) | null;
-  dictation: ComposerDictationController | null;
-  dictationDraftKey: string | null;
-  dictationSelection: { start: number; end: number } | null;
-};
+export type ChatComposerState = SkillMenuState &
+  SlashMenuState & {
+    composerComposing: boolean;
+    composingDraft: ComposingDraft | null;
+    composerInputIntentKey: string | null;
+    pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
+    goalExpandedId: string | null;
+    goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
+    activeGatewayQuestionId: string | null;
+    gatewayQuestionCollapsed: boolean;
+    questionTakeoverActive: boolean;
+    restoreComposerFocus: boolean;
+    composerInput: HTMLElement | null;
+    composerTextarea: HTMLTextAreaElement | null;
+    microphonePicker: ComposerMicrophonePicker | null;
+    capabilityMenuOpen: boolean;
+    capabilityMenuView: ChatComposerPlusMenuView;
+    // Stable Lit refs: inline arrows would change identity per render and force
+    // layout observers to detach and reconnect on every chat update.
+    composerInputRef: ((element?: Element) => void) | null;
+    textareaRef: ((element?: Element) => void) | null;
+    dictation: ComposerDictationController | null;
+    composerDraftScopeKey: string | null;
+    dictationError: string | null;
+    dictationSelection: { start: number; end: number; value: string } | null;
+  };

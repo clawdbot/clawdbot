@@ -4,11 +4,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  loadSessionEntry,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,37 +30,6 @@ export type LiveSessionModelSelection = {
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
-
-function resolveLiveSessionModelSelection(params: {
-  cfg?: OpenClawConfig | undefined;
-  sessionKey?: string;
-  agentId?: string;
-  defaultProvider: string;
-  defaultModel: string;
-}): LiveSessionModelSelection | null {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const cfg = params.cfg;
-  if (!cfg || !sessionKey) {
-    return null;
-  }
-  const agentId = normalizeOptionalString(params.agentId);
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId,
-  });
-  const entry = loadSessionEntryReadOnly({
-    storePath,
-    sessionKey,
-    hydrateSkillPromptRefs: false,
-    readConsistency: "latest",
-  });
-  return resolveSelectionFromSessionEntry({
-    cfg,
-    entry,
-    agentId,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-  });
-}
 
 /**
  * Entry-snapshot variant of the selection resolver, so atomic patch callbacks
@@ -135,11 +103,8 @@ function hasDifferentLiveSessionModelSelection(
     authProfileId?: string;
     authProfileIdSource?: string;
   },
-  next: LiveSessionModelSelection | null | undefined,
-): next is LiveSessionModelSelection {
-  if (!next) {
-    return false;
-  }
+  next: LiveSessionModelSelection,
+): boolean {
   const modelSelectionDiffers =
     (current.provider !== next.provider || current.model !== next.model) &&
     !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
@@ -177,6 +142,7 @@ export function shouldSwitchToLiveModel(params: {
   cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
+  sessionPersistence?: "durable" | "detached";
   defaultProvider: string;
   defaultModel: string;
   currentProvider: string;
@@ -187,13 +153,14 @@ export function shouldSwitchToLiveModel(params: {
 }): LiveSessionModelSelection | undefined {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
-  if (!cfg || !sessionKey) {
+  // A borrowed identity does not own the durable turn's pending switch.
+  if (!cfg || !sessionKey || params.sessionPersistence === "detached") {
     return undefined;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionEntry({
+  const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     hydrateSkillPromptRefs: false,
@@ -203,9 +170,9 @@ export function shouldSwitchToLiveModel(params: {
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
-  const persisted = resolveLiveSessionModelSelection({
+  const persisted = resolveSelectionFromSessionEntry({
     cfg,
-    sessionKey,
+    entry,
     agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
@@ -234,7 +201,7 @@ export function shouldSwitchToLiveModel(params: {
     });
     return undefined;
   }
-  return persisted ?? undefined;
+  return persisted;
 }
 
 /**
@@ -271,11 +238,11 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
     config: cfg,
     agentId: params.agentId,
   });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   if (!storePath) {
     return;
   }
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {
       if (!entry.liveModelSwitchPending) {
@@ -319,13 +286,13 @@ export async function clearLiveModelSwitchPending(params: {
   if (!cfg || !sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
   if (!storePath) {
     return;
   }
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     (entry) => {
       const next = { ...entry };

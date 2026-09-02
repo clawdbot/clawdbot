@@ -1,4 +1,5 @@
 import { t } from "../../../i18n/index.ts";
+import { formatUiExternalText } from "../../../lib/format-error.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
@@ -26,7 +27,13 @@ type AssistantAttachmentAvailability =
       width?: number;
       height?: number;
     }
-  | { status: "unavailable"; reason: string; checkedAt: number; retryAttempted?: true };
+  | {
+      status: "unavailable";
+      reason: string;
+      checkedAt: number;
+      recoverable: boolean;
+      retryAttempted?: true;
+    };
 
 export type ManagedAttachmentAvailability =
   | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }
@@ -44,12 +51,10 @@ const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 
-let assistantAttachmentAvailabilityRenderVersion = 0;
-
 export function resolveAssistantAttachmentAvailability(
   source: string,
   localMediaPreviewRoots: readonly string[],
-  basePath: string | undefined,
+  resourceBasePath: string | undefined,
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
 ): AssistantAttachmentAvailability {
@@ -65,10 +70,11 @@ export function resolveAssistantAttachmentAvailability(
       status: "unavailable",
       reason: t("chat.attachments.outsideAllowedFolders"),
       checkedAt: Date.now(),
+      recoverable: false,
     };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     cacheKey,
@@ -84,12 +90,12 @@ export function resolveAssistantAttachmentAvailability(
     const now = Date.now();
     if (
       cached.status === "unavailable" &&
+      cached.recoverable &&
       !cached.retryAttempted &&
       now - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
     ) {
       resource.retryAttempted = true;
       resource.value = undefined;
-      bumpAssistantAttachmentAvailabilityRenderVersion();
     } else if (
       cached.status === "available" &&
       cached.mediaTicket &&
@@ -158,7 +164,7 @@ export function resolveAssistantAttachmentAvailability(
         ),
       ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
     );
-    const pending = fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
+    const pending = fetch(buildAssistantAttachmentMetaUrl(source, resourceBasePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
@@ -175,6 +181,7 @@ export function resolveAssistantAttachmentAvailability(
           width?: number;
           height?: number;
           reason?: string;
+          retryable?: boolean;
         } | null;
         if (payload?.available === true) {
           const mediaTicket = payload.mediaTicket?.trim();
@@ -207,8 +214,9 @@ export function resolveAssistantAttachmentAvailability(
           return availability;
         }
         const unavailable = createUnavailableAssistantAttachment(
-          payload?.reason?.trim() || t("chat.attachments.unavailable"),
+          formatUiExternalText(payload?.reason, t("chat.attachments.unavailable")),
           resource.retryAttempted,
+          payload?.retryable !== false,
         );
         setAssistantAttachmentAvailability(resource, unavailable);
         return unavailable;
@@ -240,29 +248,50 @@ export function resolveAssistantAttachmentAvailability(
   return refreshingAvailability ?? { status: "checking" };
 }
 
+export function retryAssistantAttachmentAvailability(
+  source: string,
+  resourceBasePath: string | undefined,
+  authToken: string | null | undefined,
+  onRequestUpdate: (() => void) | undefined,
+): void {
+  if (!isLocalAssistantAttachmentSource(source)) {
+    onRequestUpdate?.();
+    return;
+  }
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
+    "assistant-attachment",
+    cacheKey,
+    onRequestUpdate,
+    source,
+  );
+  resource.abortController?.abort();
+  resource.abortController = undefined;
+  resource.pending = undefined;
+  resource.value = undefined;
+  resource.retryAttempted = false;
+  scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
+  notifyChatMediaResourceSubscribers(resource);
+  onRequestUpdate?.();
+}
+
 function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,
+  recoverable = true,
 ): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
   return {
     status: "unavailable",
     reason,
     checkedAt: Date.now(),
+    recoverable,
     ...(retryAttempted ? { retryAttempted: true } : {}),
   };
 }
 
-export function getAssistantAttachmentAvailabilityRenderVersion(): number {
-  return assistantAttachmentAvailabilityRenderVersion;
-}
-
-export function bumpAssistantAttachmentAvailabilityRenderVersion(): void {
-  assistantAttachmentAvailabilityRenderVersion =
-    (assistantAttachmentAvailabilityRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
-}
-
-function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
+function buildAssistantAttachmentMetaUrl(source: string, resourceBasePath?: string): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, resourceBasePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 
@@ -274,7 +303,6 @@ function setAssistantAttachmentAvailability(
     return;
   }
   resource.value = availability;
-  bumpAssistantAttachmentAvailabilityRenderVersion();
   scheduleAssistantAttachmentRefresh(resource, availability);
 }
 
@@ -283,7 +311,9 @@ function scheduleAssistantAttachmentRefresh(
   availability: AssistantAttachmentAvailability,
 ): void {
   const refreshAt =
-    availability.status === "unavailable" && !availability.retryAttempted
+    availability.status === "unavailable" &&
+    availability.recoverable &&
+    !availability.retryAttempted
       ? availability.checkedAt + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
       : availability.status === "available" &&
           availability.mediaTicket &&
@@ -298,13 +328,8 @@ function scheduleAssistantAttachmentRefresh(
     // Keep the failed generation until its retry can inherit the one-attempt
     // budget. A ticket refresh keeps the playable generation mounted while
     // its replacement is minted, otherwise the checking card resets playback.
-    if (availability.status === "available") {
-      // Virtual rows use this version as their media invalidation key. Notify
-      // alone updates the host but can leave the attachment row memoized.
-      bumpAssistantAttachmentAvailabilityRenderVersion();
-    } else if (availability.status !== "unavailable") {
+    if (availability.status === "checking") {
       resource.value = undefined;
-      bumpAssistantAttachmentAvailabilityRenderVersion();
     }
     notifyChatMediaResourceSubscribers(resource);
   });

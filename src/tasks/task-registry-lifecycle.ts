@@ -1,6 +1,8 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
   appendTaskEvent,
   mapAgentRunTerminalOutcomeToTaskStatus,
@@ -20,6 +22,9 @@ import {
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+// Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
+const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
+
 function ensureListener() {
   if (!claimTaskRegistryListenerStart()) {
     return;
@@ -35,7 +40,14 @@ function ensureListener() {
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
-      if (isTerminalTaskStatus(current.status)) {
+      if (isTerminalTaskStatus(current.status) || !hasAuthoritativeTaskBacking(current)) {
+        continue;
+      }
+      if (recordTaskActivityEvent(current, evt)) {
+        const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
+        if (now - lastEventAt >= ACTIVITY_LIVENESS_WRITE_MS) {
+          updateTask(current.taskId, { lastEventAt: now });
+        }
         continue;
       }
       const patch: Partial<TaskRecord> = {

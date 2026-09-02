@@ -1,0 +1,33 @@
+name: Prepare Git owner
+description: Materialize the action's trusted Git lifecycle owner outside the checkout.
+outputs:
+  owner-path:
+    description: Absolute path to the job's isolated Git owner copy.
+    value: ${{ steps.prepare.outputs.owner-path }}
+runs:
+  using: composite
+  steps:
+    - id: prepare
+      shell: bash
+      env:
+        OWNER_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python_command=python3
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          python_command=python
+        fi
+        "$python_command" -I -S - <<'PYTHON'
+        import os
+        from pathlib import Path
+        import shutil
+        import tempfile
+
+        directory = Path(tempfile.mkdtemp(prefix="ci-git-owner-", dir=os.environ["RUNNER_TEMP"]))
+        owner = directory / "owner.py"
+        shutil.copyfile(Path(os.environ["OWNER_ACTION_PATH"]) / "owner.py", owner)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"owner-path={owner}\n")
+        with open(os.environ["GITHUB_ENV"], "a") as output:
+            output.write(f"CI_GIT_OWNER={owner}\n")
+        PYTHON

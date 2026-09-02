@@ -34,7 +34,7 @@ paths:
   - src/agents/embedded-agent-runner/tool-name-allowlist.ts
   - src/agents/embedded-agent-runner/tool-schema-runtime.ts
   - src/agents/tools/gateway-tool.ts
-  - src/agents/tools/message-tool.ts
+  - src/agents/tools/message-tool-*.ts
   - src/agents/tools/sessions-send-tool.ts
   - src/agents/tools/sessions-spawn-tool.ts
   - src/agents/tools/subagents-tool.ts

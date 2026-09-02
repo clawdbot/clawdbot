@@ -2,10 +2,11 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -32,14 +33,15 @@ type CachedScopedTools = {
   toolSchema: McpToolSchemaEntry[];
 };
 
-type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
+type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner" | "skillWorkshop"> & {
+  skillWorkshop?: SkillWorkshopRunOptions;
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   grantToken?: string;
   senderIsOwner: boolean | undefined;
   yieldContextCacheKey?: string;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
 };
 
 type LoopbackToolsAllowMode = "exact" | "policy";
@@ -51,13 +53,13 @@ function resolveMediatedNativeTools(
   if (mode === "exact") {
     return new Set(
       (toolsAllow ?? [])
-        .map((name) => normalizeToolName(name))
+        .map((name) => normalizeToolPolicyName(name))
         .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
     );
   }
   if (
     toolsAllow === undefined ||
-    toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+    toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
   ) {
     return new Set();
   }
@@ -143,10 +145,10 @@ function applyGrantToolsAllow(
   if (!toolsAllow) {
     return tools;
   }
-  const allowed = new Set(toolsAllow.map((name) => normalizeToolName(name)).filter(Boolean));
+  const allowed = new Set(toolsAllow.map((name) => normalizeToolPolicyName(name)).filter(Boolean));
   return tools.filter((tool) => {
     const name = readMcpLoopbackToolName(tool);
-    return name !== undefined && allowed.has(normalizeToolName(name));
+    return name !== undefined && allowed.has(normalizeToolPolicyName(name));
   });
 }
 
@@ -181,6 +183,7 @@ export class McpLoopbackToolCache {
       params.grantToken ?? "",
       params.sessionKey,
       params.runtimePolicySessionKey ?? "",
+      params.runtimePolicyAgentId ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
       params.runId ?? "",
@@ -188,12 +191,14 @@ export class McpLoopbackToolCache {
       params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
+      params.modelHasVision === true ? "vision" : "text-only",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId ?? "",
+      params.replyToMode ?? "",
       params.currentInboundAudio === true ? "audio" : "no-audio",
       params.accountId ?? "",
       params.inboundEventKind ?? "",
@@ -204,12 +209,16 @@ export class McpLoopbackToolCache {
       // Unset (full scope) must never share a cache row with an empty
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
+      JSON.stringify(params.skillWorkshop?.proposalRevision ?? null),
+      // A delegation-restricted attempt must never read or seed the cached
+      // full-capability list for the same session/run context.
+      params.delegationCapability === "report_only" ? "delegation:report_only" : "",
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",
-      params.execSession?.execSecurity ?? "",
-      params.execSession?.execAsk ?? "",
       params.execSession?.execNode ?? "",
+      params.execSession?.permissionMode ?? "",
+      params.execOverrides?.mode ?? "",
       params.execOverrides?.host ?? "",
       params.execOverrides?.security ?? "",
       params.execOverrides?.ask ?? "",

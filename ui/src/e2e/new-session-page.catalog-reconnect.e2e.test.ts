@@ -18,12 +18,6 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const cliAgentsProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "cli-agents-picker",
-);
 
 function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
   return Boolean(
@@ -62,16 +56,76 @@ function cliAgentCatalog(startTerminal: boolean) {
 }
 
 suite.define(() => {
+  it("waits for the current roster before loading the CLI catalog", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "roboclaw",
+      assistantName: "Roboclaw",
+      cliAgentsEnabled: true,
+      defaultAgentId: "roboclaw",
+      deferredMethods: ["agents.list"],
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS],
+      methodResponses: {
+        "sessions.catalog.list": { catalogs: [cliAgentCatalog(false)] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("agents.list");
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+      expect(
+        (await gateway.getRequests("sessions.catalog.list"))
+          .filter((request) => requestHasParam(request, "limitPerHost", 1))
+          .map((request) => request.params),
+      ).toEqual([]);
+
+      await gateway.resolveDeferred("agents.list");
+
+      await page.getByRole("heading", { name: "Roboclaw" }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).filter((request) =>
+            requestHasParam(request, "limitPerHost", 1),
+          ),
+        )
+        .toHaveLength(1);
+      const catalogRequest = (await gateway.getRequests("sessions.catalog.list")).find((request) =>
+        requestHasParam(request, "limitPerHost", 1),
+      );
+      expect(catalogRequest?.params).toEqual({
+        agentId: "roboclaw",
+        limitPerHost: 1,
+      });
+
+      await page.locator('[data-chat-model-select="true"]').click();
+      const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
+      await expect.poll(() => cliGroup.isVisible()).toBe(true);
+      await pollLocatorText(cliGroup).toContain("Claude Code");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
     if (captureCliAgentsProof) {
-      await mkdir(cliAgentsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureCliAgentsProof
-        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cli-agents-picker"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -128,7 +182,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "picker-group.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "picker-group.png"),
         });
       }
 
@@ -147,7 +201,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "catalog-target.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "catalog-target.png"),
         });
       }
     } finally {
@@ -208,7 +262,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(true);
-      expect(await page.locator(".chat-send-btn").count()).toBe(1);
+      expect(await page.locator(".new-session-page__start-submit").count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -216,14 +270,19 @@ suite.define(() => {
 
   it("creates a worktree, starts the catalog session, and opens its terminal", async () => {
     if (captureCliAgentsProof) {
-      await mkdir(cliAgentsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureCliAgentsProof
-        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cli-agents-picker"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -235,13 +294,22 @@ suite.define(() => {
       });
     });
     const worktreePath = "/home/peter/.openclaw/worktrees/terminal-e2e";
+    const config = { tools: { web: { search: { provider: "brave" } } } };
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
       terminalEnabled: true,
+      operatorScopes: ["operator.read", "operator.write", "operator.admin"],
       workspace: WORKSPACE,
       workspaceGit: true,
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
+        "config.get": {
+          raw: JSON.stringify(config),
+          hash: "terminal-capability-overrides",
+          sourceConfig: config,
+          runtimeConfig: config,
+          config,
+        },
         "agents.list": {
           agents: [
             {
@@ -297,24 +365,58 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => page.locator(".new-session-page__start-split").count()).toBe(1);
 
-      await page.locator("#new-session-place-trigger").click();
-      const placePopover = page.locator("wa-popover.new-session-page__place-popover");
-      await placePopover.getByRole("button", { name: "Worktree" }).click();
-      await placePopover.getByLabel("Base branch").fill("main");
+      await page.locator("#new-session-detail-trigger").click();
+      const placePopover = page.locator("wa-popover.new-session-page__detail-popover");
+      const worktreeButton = placePopover.getByRole("button", { name: "Worktree" });
+      await worktreeButton.waitFor({ state: "visible" });
+      const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
+      await worktreeButton.click();
+      await expect.poll(() => placePopover.getByLabel("Base branch").inputValue()).toBe("main");
       await placePopover.getByLabel("Worktree name").fill("terminal-task");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-detail-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
+
+      const composer = page.locator(".new-session-page__composer");
+      const capabilityMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await composer.getByRole("button", { name: "Add attachment" }).click();
+      await capabilityMenu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
+      await page.keyboard.press("Escape");
+      const terminalTrigger = page.getByRole("button", { name: "Start in terminal" });
+      await expect.poll(() => terminalTrigger.isDisabled()).toBe(true);
+      const terminalTooltip = page.locator("openclaw-tooltip").filter({ has: terminalTrigger });
+      await expect
+        .poll(() => terminalTooltip.evaluate((element) => element.getAttribute("content")))
+        .toBe("Clear session capability overrides before starting in a terminal.");
+      expect(await gateway.getRequests("sessions.catalog.startTerminal")).toHaveLength(0);
+      await composer.locator(".new-session-page__selection-status").click();
+      await capabilityMenu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
+      // A tooltip owns the first Escape only while a hint is actually open.
+      const openHints = page.locator("openclaw-tooltip[open]");
+      if (await openHints.count()) {
+        await page.keyboard.press("Escape");
+        await expect.poll(() => openHints.count()).toBe(0);
+        expect(await capabilityMenu.getAttribute("open")).not.toBeNull();
+      }
+      await page.keyboard.press("Escape");
+      await expect.poll(() => capabilityMenu.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() =>
+          composer
+            .getByRole("button", { name: "Add attachment" })
+            .evaluate((button) => button.matches(":focus")),
+        )
+        .toBe(true);
+      await expect.poll(() => terminalTrigger.isEnabled()).toBe(true);
 
       if (captureCliAgentsProof) {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "terminal-split.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "terminal-split.png"),
         });
       }
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
 
       const worktreeRequest = await gateway.waitForRequest("worktrees.create");
       expect(worktreeRequest.params).toEqual({
@@ -329,6 +431,9 @@ suite.define(() => {
         cwd: worktreePath,
         initialMessage: "inspect the checkout",
       });
+      expect(await gateway.getRequests("worktrees.branches")).toHaveLength(
+        initialBranchRequestCount,
+      );
       const requests = await gateway.getRequests();
       const methods = requests.map((request) => request.method);
       expect(methods.indexOf("worktrees.create")).toBeLessThan(
@@ -348,7 +453,6 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
         .toBe(true);
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
       await expect
         .poll(async () => {
           const currentRequests = await gateway.getRequests();
@@ -403,133 +507,11 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await page.locator(".new-session-page__message").fill("keep this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
 
       await expect
         .poll(() => page.locator(".new-session-page__alert-message").textContent())
         .toBe(serverMessage);
       expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("shows metadata failure truthfully and recovers the full catalog on retry", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const models = [
-      {
-        available: true,
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
-        provider: "openai",
-      },
-      {
-        available: true,
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        provider: "openai",
-      },
-      {
-        available: true,
-        id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
-        provider: "openai",
-      },
-    ];
-    const gateway = await installMockGateway(page, {
-      agentModel: "openai/gpt-5.6-luna",
-      methodResponses: {
-        "chat.metadata": {
-          sequence: [
-            {
-              __mockError: {
-                code: "UNAVAILABLE",
-                message: "metadata request timed out",
-              },
-            },
-            { commands: [], models },
-          ],
-        },
-      },
-      models,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("chat.metadata");
-
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await expect.poll(() => modelSelect.textContent()).toContain("Models unavailable");
-      await modelSelect.click();
-      await expect
-        .poll(() => page.locator('[data-chat-model-catalog-state="error"]').isVisible())
-        .toBe(true);
-      expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
-
-      await page.locator('[data-chat-model-catalog-retry="true"]').click();
-
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      await expect.poll(() => page.locator("[data-chat-model-option]").count()).toBe(3);
-      expect(await page.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("restores the model picker after startup-sidecars metadata becomes available", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const recoveredModel = {
-      available: true,
-      id: "gpt-5.6-luna",
-      name: "Recovered GPT-5.6 Luna",
-      provider: "openai",
-      reasoning: true,
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.metadata": {
-          sequence: [
-            {
-              __mockError: {
-                code: "UNAVAILABLE",
-                details: { reason: "startup-sidecars" },
-                message: "gateway startup sidecars are still initializing",
-                retryable: true,
-                retryAfterMs: 100,
-              },
-            },
-            { commands: [], models: [recoveredModel] },
-          ],
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-
-      const modelSelect = page.locator(
-        '.new-session-page__composer [data-chat-model-select="true"]',
-      );
-      await modelSelect.click();
-      await expect
-        .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
-        .toContain(recoveredModel.name);
-
-      expect(await gateway.getRequests("chat.metadata")).toEqual([
-        expect.objectContaining({ params: { agentId: "main" } }),
-        expect.objectContaining({ params: { agentId: "main" } }),
-      ]);
     } finally {
       await context.close();
     }
@@ -941,7 +923,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
       await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
       await pollLocatorText(
-        page.locator("#new-session-place-trigger .new-session-page__trigger-label"),
+        page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -951,8 +933,8 @@ suite.define(() => {
         includeRepositoryStatus: true,
       });
 
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeSelect = page.locator("wa-popover.new-session-page__detail-popover");
+      const placeTrigger = page.locator("#new-session-detail-trigger");
       await placeTrigger.click();
       const worktreeItem = placeSelect.getByRole("button", { name: "Worktree" });
       await worktreeItem.click();

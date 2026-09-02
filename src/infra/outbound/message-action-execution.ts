@@ -1,12 +1,14 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "../../agents/tools/common.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -18,6 +20,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -30,7 +33,6 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
-import { readBooleanParam } from "./message-action-params.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import {
@@ -46,6 +48,7 @@ import {
   isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
   isDeliveredCurrentSourceReplyAction,
+  isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -71,12 +74,19 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions and polls are visible source replies too: leaving them
-  // unmarked made dispatch send the no-visible-reply fallback after a delivered
-  // reply or poll.
-  const isReplyActionResult =
+  // Reply-type actions, thread replies, and polls are visible source replies too:
+  // leaving them unmarked makes dispatch send the no-visible-reply fallback after
+  // the channel has already delivered a visible result.
+  const isMessageIdReplyActionResult =
     result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
+  const isThreadPlacementReplyActionResult =
+    result.kind === "action" && isThreadPlacementSourceReplyActionName(result.action);
+  if (
+    result.kind !== "send" &&
+    result.kind !== "poll" &&
+    !isMessageIdReplyActionResult &&
+    !isThreadPlacementReplyActionResult
+  ) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
@@ -84,7 +94,12 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    action:
+      isMessageIdReplyActionResult || isThreadPlacementReplyActionResult
+        ? result.action
+        : result.kind === "poll"
+          ? "poll"
+          : "send",
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -98,7 +113,7 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     replyToIsExplicit: params.replyToIsExplicit,
   };
   if (
-    isReplyActionResult
+    isMessageIdReplyActionResult
       ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
       : !isDeliveredCurrentSourceReply(mirrorParams)
   ) {
@@ -212,6 +227,21 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
   );
 }
 
+export function projectGatewayQueuedDeliveryResult(error: unknown) {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return undefined;
+  }
+  const details = asResultRecord(asResultRecord(error)?.details);
+  if (details?.code !== GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED) {
+    return undefined;
+  }
+  return {
+    status: "delivery_queued",
+    delivered: false as const,
+    message: `Message not delivered: ${error.message}. The gateway queued it and will retry automatically. Do not resend it.`,
+  };
+}
+
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
   if (idempotencyKey) {
     return idempotencyKey;
@@ -289,6 +319,7 @@ export async function executeGatewayAction(params: {
   channel: ChannelId;
   channelPlugin?: ChannelPlugin;
   action: ChannelMessageActionName;
+  reply?: OutboundReplyFacts;
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionGateway;
@@ -334,6 +365,7 @@ export async function executeGatewayAction(params: {
     sessionId: params.input.sessionId,
     agentId: params.agentId,
     toolContext: params.input.messageActionAuthorization?.toolContext,
+    replyToIsExplicit: params.reply?.source === "explicit",
     idempotencyKey,
     sourceReplyFinal: params.input.sourceReplyFinal,
     toolCallId: params.input.sourceReplyToolCallId,
@@ -359,6 +391,7 @@ export async function executeGatewayAction(params: {
         channel: params.channel,
         action: params.action,
         params: params.params,
+        ...(params.reply ? { reply: params.reply } : {}),
         accountId: params.accountId ?? undefined,
         senderIsOwner: params.input.senderIsOwner,
         sessionKey: params.input.sessionKey,
@@ -415,7 +448,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
   } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
-  const to = readStringParam(params, "to", { required: true });
+  const to = readToolStringParam(params, "to", { required: true });
   const silent = readBooleanParam(params, "silent");
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
@@ -461,7 +494,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       dryRun,
     }),
   });
-  const pollReplyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  const pollReplyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     return annotateSourceDelivery(gatewayPluginAction, {
       cfg,
@@ -497,7 +530,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       silent: silent ?? undefined,
     },
     resolveCorePoll: () => {
-      const question = readStringParam(params, "pollQuestion", {
+      const question = readToolStringParam(params, "pollQuestion", {
         required: true,
       });
       const options = readStringArrayParam(params, "pollOption", { required: true });
@@ -512,6 +545,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       return {
         to,
         question,
+        content: readToolStringParam(params, "message", { allowEmpty: true }) ?? undefined,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
         durationHours: durationHours ?? undefined,
@@ -591,7 +625,9 @@ export async function executeMessagePlugin(
   // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
     normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
-  if (targetForThreading) {
+  // File downloads authorize caller-supplied resource scope. Ambient threading
+  // must not silently narrow a channel-only request to the current thread.
+  if (targetForThreading && action !== "download-file") {
     resolveAndApplyOutboundThreadId(params, {
       cfg,
       to: targetForThreading,
@@ -599,7 +635,7 @@ export async function executeMessagePlugin(
       toolContext: input.toolContext,
       resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
       resolveReplyTransport: channelPlugin.threading?.resolveReplyTransport,
-      replyToIsExplicit: Boolean(readStringParam(params, "replyTo")),
+      replyToIsExplicit: Boolean(readToolStringParam(params, "replyTo")),
     });
   }
 
@@ -623,7 +659,7 @@ export async function executeMessagePlugin(
       dryRun,
     }),
   });
-  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
     return annotateSourceDelivery(gatewayPluginAction, {

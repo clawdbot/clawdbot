@@ -14,8 +14,10 @@ import {
   readTranscriptRawDelta,
   replaceTranscriptEventsSync,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -44,7 +46,7 @@ describe("SessionManager.open", () => {
       sessionId,
       storePath,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionFile: marker,
@@ -155,7 +157,7 @@ describe("SessionManager.open", () => {
     const sessionId = "legacy-persisted-session";
     const sessionKey = "agent:main:legacy-persisted-session";
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
     replaceTranscriptEventsSync(scope, [
       {
         type: "session",
@@ -185,7 +187,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:current-persisted-session",
       storePath,
     };
-    await upsertSessionEntry(currentScope, { sessionId: currentScope.sessionId, updatedAt: 2 });
+    await upsertSessionEntryCore(currentScope, { sessionId: currentScope.sessionId, updatedAt: 2 });
     const currentManager = SessionManager.open(currentScope, dir);
     expect(() => currentManager.setSessionTarget(scope)).toThrow(
       "require doctor/import migration before runtime use",
@@ -233,7 +235,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:dashboard:sqlite-leaf-control",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
     });
@@ -271,7 +273,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:dashboard:sqlite-model-change-first",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
     });
@@ -336,7 +338,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:sqlite-empty-existing-row",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "sqlite-existing-row",
       updatedAt: 123,
       label: "preserved",
@@ -356,7 +358,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:sqlite-rebound-before-header",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "sqlite-current-owner",
       updatedAt: 456,
       label: "preserved",
@@ -418,8 +420,8 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:second-target",
       storePath,
     };
-    await upsertSessionEntry(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
-    await upsertSessionEntry(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
     await appendTranscriptMessage(firstTarget, {
       cwd: path.join(dir, "first-workspace"),
       message: { role: "user", content: "first" },
@@ -446,7 +448,7 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:prompt-reload",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(target, dir);
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
     const external = await appendTranscriptMessage(target, {
@@ -476,8 +478,8 @@ describe("SessionManager.open", () => {
       sessionKey: "agent:main:header-target",
       storePath,
     };
-    await upsertSessionEntry(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
-    await upsertSessionEntry(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(firstTarget, dir);
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
     manager.appendLeafControl({ targetId: firstId, appendParentId: firstId, appendMode: "side" });
@@ -560,7 +562,7 @@ describe("SessionManager.open", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     const marker = formatSqliteSessionFileMarker(scope);
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: marker,
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -627,7 +629,7 @@ describe("SessionManager.open", () => {
       idempotencyKey: "runtime-user-parent:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
     await appendTranscriptMessage(scope, {
       cwd: dir,
       eventId: "pre-persisted-user",
@@ -733,7 +735,7 @@ describe("SessionManager.open", () => {
     const sessionId = "sqlite-opaque-header";
     const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionFile: marker, sessionId, updatedAt: 10 },
     );
@@ -756,10 +758,11 @@ describe("SessionManager.open", () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
+    const sensitivePeer = "+15551234567";
+    const sessionKey = `agent:main:whatsapp:direct:${sensitivePeer}\n\x1b[31mspoof`;
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
     const user = await appendTranscriptMessage(scope, {
       cwd: dir,
       eventId: "rebound-user",
@@ -772,24 +775,30 @@ describe("SessionManager.open", () => {
       parentId: user.messageId,
     });
     const sessionManager = openMarker(marker, sessionKey, dir);
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
     );
 
-    try {
-      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
-      throw new Error("expected rebound compaction persistence to fail");
-    } catch (error) {
-      expect(error).toMatchObject({
-        cause: {
-          actualSessionId: "replacement-session",
-          code: "session-rebound",
-          expectedSessionId: sessionId,
-          sessionKey,
-        },
-      });
-    }
+    const expectedCause = {
+      actualSessionIdHash: redactIdentifier("replacement-session"),
+      agentIdHash: redactIdentifier(scope.agentId),
+      code: "session-rebound",
+      expectedSessionIdHash: redactIdentifier(sessionId),
+      sessionKeyHash: redactIdentifier(sessionKey),
+    };
+    const captureError = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected rebound transcript persistence to fail");
+    };
+    const compactionError = captureError(() =>
+      sessionManager.appendCompaction("late summary", assistant.messageId, 42),
+    );
+    expect(compactionError).toMatchObject({ cause: expectedCause });
 
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
@@ -797,12 +806,26 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
       "entry was not persisted",
     );
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      "entry was not persisted",
-    );
-    expect(() =>
+    const eventError = captureError(() => sessionManager.appendModelChange("openai", "gpt-5.5"));
+    const messageError = captureError(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).toThrow("message was not persisted");
+    );
+    for (const error of [eventError, messageError]) {
+      expect(error).toMatchObject({ cause: expectedCause });
+      const operatorFacingReason = formatErrorMessage(error);
+      for (const hash of Object.values(expectedCause).filter((value) =>
+        value.startsWith("sha256:"),
+      )) {
+        expect(operatorFacingReason).toContain(hash);
+      }
+      expect(operatorFacingReason).not.toContain(sessionKey);
+      expect(operatorFacingReason).not.toContain(sensitivePeer);
+      expect(operatorFacingReason).not.toContain("spoof");
+      expect(operatorFacingReason).not.toContain(sessionId);
+      expect(operatorFacingReason).not.toContain("replacement-session");
+      expect(operatorFacingReason).not.toContain("\n");
+      expect(operatorFacingReason).not.toContain("\x1b");
+    }
     expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
     expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
@@ -819,7 +842,7 @@ describe("SessionManager.open", () => {
       storePath,
     });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionFile: marker,
@@ -870,7 +893,7 @@ describe("SessionManager.open", () => {
       storePath,
     });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         delivery: { kind: "internal" },
@@ -931,7 +954,7 @@ describe("SessionManager.open", () => {
     const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       lifecycleRevision: "branch-original-revision",
       sessionFile: marker,
       sessionId,
@@ -1001,7 +1024,7 @@ describe("SessionManager.open", () => {
       sessionId,
       storePath,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionFile: marker,

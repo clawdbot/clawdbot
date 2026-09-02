@@ -58,12 +58,14 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+const SAFE_SESSION_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._-]{0,127}$/u;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
   if (
+    trimmed !== trimmed.normalize("NFC") ||
     !SAFE_SESSION_ID_RE.test(trimmed) ||
+    Buffer.byteLength(`${trimmed}.jsonl`, "utf8") > 255 ||
     isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
   ) {
     throw new Error(`Invalid session ID: ${sessionId}`);
@@ -276,6 +278,9 @@ export function resolveSessionTranscriptPathInDir(
     safeTopicId !== undefined
       ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
       : `${safeSessionId}.jsonl`;
+  if (Buffer.byteLength(fileName, "utf8") > 255) {
+    throw new Error(`Invalid session transcript filename: ${fileName}`);
+  }
   return resolvePathWithinSessionsDir(sessionsDir, fileName);
 }
 
@@ -286,7 +291,7 @@ export function resolveSessionTranscriptPath(
 ): string {
   return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
 }
-export function resolveSessionFilePath(
+export function resolveSessionFilePathCore(
   sessionId: string,
   entry?: object,
   opts?: SessionFilePathOptions,
@@ -317,7 +322,7 @@ export class SessionStoreAgentIdRequiredError extends Error {
 }
 
 /** Resolves fixed literal paths without an owner; derived or templated paths require agentId. */
-export function resolveStorePath(
+export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {

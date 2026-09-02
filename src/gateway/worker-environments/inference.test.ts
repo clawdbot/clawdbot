@@ -47,6 +47,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: "b",
   sessionId: REQUEST.sessionId,
   runId: REQUEST.runId,
+  turnClaim: {
+    sessionId: REQUEST.sessionId,
+    claimId: "claim-r",
+    runId: REQUEST.runId,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "w", ownerEpoch: REQUEST.runEpoch },
+  },
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -83,6 +90,20 @@ const CANCEL = {
   runId: REQUEST.runId,
   turnId: REQUEST.turnId,
 };
+
+function identityFor(request: WorkerInferenceStartParams): WorkerConnectionIdentity {
+  return {
+    ...IDENTITY,
+    sessionId: request.sessionId,
+    runId: request.runId,
+    turnClaim: {
+      ...IDENTITY.turnClaim!,
+      sessionId: request.sessionId,
+      runId: request.runId,
+      claimId: `claim-${request.runId}`,
+    },
+  };
+}
 
 type Manager = ReturnType<typeof createWorkerInferenceManager>;
 type StartOverrides = {
@@ -130,7 +151,7 @@ function accept(manager: Manager, overrides: StartOverrides = {}, launch = true)
 }
 
 function makeManager(execute: WorkerInferenceExecutor, store = createMemoryStore()) {
-  return createWorkerInferenceManager({ execute, store, now: () => 0 });
+  return createWorkerInferenceManager({ execute, store });
 }
 
 describe("worker inference manager", () => {
@@ -151,10 +172,11 @@ describe("worker inference manager", () => {
     });
     const sink = createSink();
     accept(instance, { sink: sink.sink });
+    const competing = { ...REQUEST, runId: "run-b", turnId: "turn-b" };
     expect(
       instance.start({
-        identity: IDENTITY,
-        request: { ...REQUEST, runId: "run-b", turnId: "turn-b" },
+        identity: identityFor(competing),
+        request: competing,
         sink: createSink().sink,
       }),
     ).toEqual({ ok: false, reason: "invalid-context" });
@@ -190,7 +212,8 @@ describe("worker inference manager", () => {
       });
     }
     expect(signals[0]?.aborted).toBe(true);
-    accept(instance, { request: { ...REQUEST, runId: "new-run", turnId: "new-turn" } });
+    const nextRequest = { ...REQUEST, runId: "new-run", turnId: "new-turn" };
+    accept(instance, { identity: identityFor(nextRequest), request: nextRequest });
     await waitForFast(() => expect(signals).toHaveLength(2));
     expect(instance.cancelSession(REQUEST.sessionId, "new-run")).toEqual(["new-run"]);
     expect(signals[1]?.aborted).toBe(true);
@@ -206,10 +229,12 @@ describe("worker inference manager", () => {
 
     const drain = beginSessionDrain(instance, REQUEST.sessionId);
     expect(drain.hasWork()).toBe(true);
+    const replacementRequest = { ...REQUEST, runId: "replacement", turnId: "replacement" };
+    const replacementIdentity = identityFor(replacementRequest);
     expect(
       instance.start({
-        identity: IDENTITY,
-        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        identity: replacementIdentity,
+        request: replacementRequest,
         sink: createSink().sink,
       }),
     ).toEqual({ ok: false, reason: "cancelled" });
@@ -220,8 +245,8 @@ describe("worker inference manager", () => {
     drain.release();
     expect(
       instance.start({
-        identity: IDENTITY,
-        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        identity: replacementIdentity,
+        request: replacementRequest,
         sink: createSink().sink,
       }),
     ).toMatchObject({ ok: true });
@@ -262,7 +287,6 @@ describe("worker inference manager", () => {
         return pending.promise;
       },
       store,
-      now: () => 0,
       streamMaxBytes: 2_048,
     });
     const sink = createSink();
@@ -273,7 +297,8 @@ describe("worker inference manager", () => {
         reason: "provider-error",
       }),
     );
-    accept(instance, { request: { ...REQUEST, runId: "retry-run", turnId: "retry-turn" } });
+    const retryRequest = { ...REQUEST, runId: "retry-run", turnId: "retry-turn" };
+    accept(instance, { identity: identityFor(retryRequest), request: retryRequest });
     const replay = createSink("replay");
     expect(accept(instance, { sink: replay.sink }).result.status).toBe("replayed");
     expect(terminalFrames(replay.frames)[0]?.payload.outcome).toEqual(ERROR);

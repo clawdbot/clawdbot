@@ -1,4 +1,4 @@
-import type { JsonValue } from "./protocol.js";
+import { isJsonObject, type JsonValue } from "./protocol.js";
 
 /** RPC error wrapper that preserves app-server error code and data. */
 export class CodexAppServerRpcError extends Error {
@@ -35,8 +35,4 @@ function readCodexAppServerRpcReloginDetail(data: JsonValue | undefined): string
     (nested.reason === "cloudRequirements" && nested.errorCode === "Auth");
   const detail = typeof nested.detail === "string" ? nested.detail.trim() : "";
   return isRelogin && detail ? detail : undefined;
-}
-
-function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

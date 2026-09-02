@@ -103,7 +103,10 @@ enum CLIInstaller {
     enum LocalGatewayActivation: Equatable {
         case ready
         case deferred
-        case failed
+        /// Binds the concrete failure to this activation attempt: GatewayProcessManager's
+        /// lastFailureReason is mutable shared state that a later attempt can overwrite before
+        /// a caller gets around to rereading it, misattributing a stale or newer reason.
+        case failed(reason: String?)
     }
 
     enum Status: Equatable {
@@ -176,8 +179,11 @@ enum CLIInstaller {
         return locations
     }
 
-    static func managedExecutableLocation() -> String {
-        URL(fileURLWithPath: self.installPrefix())
+    static func managedExecutableLocation(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        URL(fileURLWithPath: self.installPrefix(homeDirectory: homeDirectory, profile: profile))
             .appendingPathComponent("bin/openclaw")
             .path
     }
@@ -198,7 +204,7 @@ enum CLIInstaller {
                 expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
                 preferredPaths: preferredPaths)
             if status.isReady {
-                self.rememberValidated(status)
+                self.rememberValidated(status, defaults: AppDefaults.standard)
                 return status
             }
             fallbackStatus = fallbackStatus ?? status
@@ -222,7 +228,7 @@ enum CLIInstaller {
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
         if status.isReady {
-            self.rememberValidated(status)
+            self.rememberValidated(status, defaults: AppDefaults.standard)
         }
         return status
     }
@@ -313,10 +319,14 @@ enum CLIInstaller {
         return environment
     }
 
-    private static func rememberValidated(_ status: Status) {
+    static func rememberValidated(_ status: Status, defaults: UserDefaults) {
         guard case let .ready(location, version) = status else { return }
-        AppDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
-        AppDefaults.standard.set(version, forKey: cliValidatedVersionKey)
+        if defaults.string(forKey: cliValidatedExecutableKey) != location {
+            defaults.set(location, forKey: cliValidatedExecutableKey)
+        }
+        if defaults.string(forKey: cliValidatedVersionKey) != version {
+            defaults.set(version, forKey: cliValidatedVersionKey)
+        }
     }
 
     @discardableResult
@@ -430,10 +440,13 @@ enum CLIInstaller {
         target == .channel(.dev) ? 7200 : 900
     }
 
-    private static func installPrefix() -> String {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".openclaw")
-            .path
+    static func installPrefix(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        // Managed install identity follows only the profile; a state override must not split
+        // the install used by its LaunchAgent.
+        profile.stateDirectoryURL(homeDirectory: homeDirectory).path
     }
 
     static func installScriptCommand(
@@ -577,11 +590,14 @@ enum CLIInstaller {
         waitUntilReady: @MainActor () async -> Bool = {
             await GatewayProcessManager.shared.waitForGatewayReady(
                 timeout: GatewayLaunchAgentManager.startupMigrationTolerance)
-        }) async -> LocalGatewayActivation
+        },
+        failureReason: @MainActor () -> String? = { GatewayProcessManager.shared.lastFailureReason }) async
+        -> LocalGatewayActivation
     {
         guard mode == .local, !paused else { return .deferred }
         start()
-        return await waitUntilReady() ? .ready : .failed
+        guard await waitUntilReady() else { return .failed(reason: failureReason()) }
+        return .ready
     }
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {

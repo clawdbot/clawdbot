@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
 import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
@@ -108,7 +111,8 @@ describe("doctor model catalog credential migration", () => {
     expect(first.migrated).toBe(3);
     expect(first.warnings).toEqual([]);
     expect(cfg.models?.providers?.configured?.apiKey).toBe("configured-secret");
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toMatchObject({
+    const migratedProfiles = loadPersistedSharedAuthProfileStore(state.env)?.profiles ?? {};
+    expect(migratedProfiles).toMatchObject({
       "configured:default": {
         type: "api_key",
         provider: "configured",
@@ -123,6 +127,64 @@ describe("doctor model catalog credential migration", () => {
 
     const second = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
     expect(second).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
+  });
+
+  it("preserves custom provider env references and removes profiles containing their markers", async () => {
+    const state = createState();
+    const cfg: OpenClawConfig = {
+      models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
+    };
+    fs.writeFileSync(
+      path.join(state.agentDir, "models.json"),
+      `${JSON.stringify({ providers: { custom: provider("CUSTOM_PROVIDER_KEY") } }, null, 2)}\n`,
+    );
+
+    const first = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
+
+    expect(first).toEqual({ detected: 0, migrated: 0, removed: 0, warnings: [] });
+    expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
+
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "custom:default": {
+            type: "api_key",
+            provider: "custom",
+            key: "${CUSTOM_PROVIDER_KEY}",
+          },
+          "custom:models-json": {
+            type: "api_key",
+            provider: "custom",
+            key: "CUSTOM_PROVIDER_KEY",
+          },
+        },
+        order: { custom: ["custom:default", "custom:models-json"] },
+        lastGood: { custom: "custom:default" },
+      },
+      state.agentDir,
+    );
+
+    const repaired = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
+
+    expect(repaired).toEqual({ detected: 0, migrated: 0, removed: 2, warnings: [] });
+    expect(loadPersistedSharedAuthProfileStore(state.env)).toEqual({ version: 1, profiles: {} });
+  });
+
+  it("does not copy a stale generated credential over an explicit provider SecretRef", async () => {
+    const state = createState();
+    const cfg: OpenClawConfig = {
+      models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
+    };
+    fs.writeFileSync(
+      path.join(state.agentDir, "models.json"),
+      `${JSON.stringify({ providers: { custom: provider("stale-provider-key") } }, null, 2)}\n`,
+    );
+
+    await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
+      { detected: 0, migrated: 0, removed: 0, warnings: [] },
+    );
+    expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
   });
 
   it("never overwrites an occupied default profile while preserving the catalog key", async () => {
@@ -193,6 +255,38 @@ describe("doctor model catalog credential migration", () => {
 
     expect(result).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
     expect(loadPersistedAuthProfileStore(childAgentDir)).toBeNull();
+  });
+
+  it("scans an explicit multi-agent roster without requiring a legacy default", async () => {
+    const state = createState();
+    const helperAgentDir = path.join(state.stateDir, "agents", "helper", "agent");
+    const thirdAgentDir = path.join(state.stateDir, "agents", "third", "agent");
+    fs.mkdirSync(helperAgentDir, { recursive: true });
+    fs.mkdirSync(thirdAgentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(helperAgentDir, "models.json"),
+      `${JSON.stringify({ providers: { custom: provider("helper-catalog-secret") } })}\n`,
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: state.agentDir },
+          helper: { agentDir: helperAgentDir },
+          third: { agentDir: thirdAgentDir },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
+      { detected: 1, migrated: 1, removed: 0, warnings: [] },
+    );
+    expect(loadPersistedAuthProfileStore(helperAgentDir)?.profiles["custom:default"]).toMatchObject(
+      {
+        key: "helper-catalog-secret",
+      },
+    );
   });
 
   it("allocates a global config profile that child stores cannot shadow", async () => {

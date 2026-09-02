@@ -6,7 +6,6 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -20,21 +19,17 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { resolveHealthAccountContext } from "../gateway/health/account-context.js";
 import {
-  buildHealthSessionSummary as buildSessionSummary,
+  buildHealthAgentSummaries,
   resolveHealthAgentOrder as resolveAgentOrder,
 } from "../gateway/health/collector.js";
-import type { AgentHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import type { HealthSummary } from "../gateway/health/types.js";
 import { info } from "../globals.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  formatDurationCompact,
-  formatDurationHuman,
-} from "../infra/format-time/format-duration.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -43,7 +38,7 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthChannelLines } from "./health-format.js";
+import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
@@ -72,6 +67,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
@@ -94,6 +90,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+    ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
     localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
@@ -182,30 +179,6 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-/** Formats dead-lettered delivery queue entries for text health output. */
-export function formatDeliveryQueueHealthLine(
-  summary: HealthSummary,
-  now = Date.now(),
-): string | null {
-  const failed = summary.deliveryQueues?.failed ?? [];
-  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
-  if (failed.length === 0 && ingressFailed.length === 0) {
-    return null;
-  }
-  const counts = [
-    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
-    ...ingressFailed.map(
-      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
-    ),
-  ].join(", ");
-  const oldest = [...failed, ...ingressFailed]
-    .map((queue) => queue.oldestFailedAt)
-    .filter((value): value is number => typeof value === "number");
-  const oldestNote =
-    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
-  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
-}
-
 /** Formats config hot-reload watcher degradation for text health output. */
 export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
   if (summary.configReload?.hotReloadStatus !== "disabled") {
@@ -213,9 +186,6 @@ export function formatConfigReloadHealthLine(summary: HealthSummary): string | n
   }
   return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
-
-const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
-  resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 /** Runs the `openclaw health` command against the gateway and renders JSON or text. */
 export async function healthCommand(
@@ -226,11 +196,12 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
   },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortHealthConfig());
+  const cfg = opts.config ?? (await readNonObservingHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -248,6 +219,8 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          sharedStateMode: "read-only",
+          ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
     );
@@ -260,6 +233,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
@@ -279,9 +253,6 @@ export async function healthCommand(
     }
     throw error;
   }
-  // Gateway reachability defines success; channel issues are reported but not fatal here.
-  const fatal = false;
-
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
   } else {
@@ -290,6 +261,7 @@ export async function healthCommand(
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({
         config: cfg,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
       });
       logGatewayConnectionDetails({
@@ -302,23 +274,11 @@ export async function healthCommand(
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const resolvedAgents =
-      agents.length > 0
-        ? agents
-        : await Promise.all(
-            localAgents.ordered.map(async (entry) => {
-              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-              return {
-                agentId: entry.id,
-                name: entry.name,
-                isDefault: entry.id === localAgents.defaultAgentId,
-                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-                sessions: await buildSessionSummary(storePath, entry.id),
-              } satisfies AgentHealthSummary;
-            }),
-          );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+      agents.length > 0 ? agents : await buildHealthAgentSummaries(cfg, localAgents);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -336,16 +296,17 @@ export async function healthCommand(
           `  ${plugin.id}: accounts=${accountIds.join(", ") || "(none)"} default=${defaultAccountId}`,
         );
         for (const accountId of accountIds) {
-          const { snapshotAccount, configured, diagnostics } = await resolveHealthAccountContext({
-            plugin,
-            cfg,
-            accountId,
-          });
-          const record = asNullableRecord(snapshotAccount);
+          const { inspectedAccount, probeAccount, configured, diagnostics } =
+            await resolveHealthAccountContext({
+              plugin,
+              cfg,
+              accountId,
+            });
+          const record = asNullableRecord(inspectedAccount ?? probeAccount);
           const tokenSource =
             record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
           runtime.log(
-            `    - ${accountId}: configured=${configured}${tokenSource ? ` tokenSource=${tokenSource}` : ""}`,
+            `    - ${accountId}: configured=${configured ?? "unknown"}${tokenSource ? ` tokenSource=${tokenSource}` : ""}`,
           );
           for (const diagnostic of diagnostics) {
             runtime.log(`      ! ${diagnostic}`);
@@ -371,22 +332,6 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
-    const channelAccountFallbacks = Object.fromEntries(
-      displayPlugins.map((plugin) => {
-        const accountIds = plugin.config.listAccountIds(cfg);
-        const defaultAccountId = resolveChannelDefaultAccountId({
-          plugin,
-          cfg,
-          accountIds,
-        });
-        const preferred = resolvePreferredAccountId({
-          accountIds,
-          defaultAccountId,
-          boundAccounts: channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
-        });
-        return [plugin.id, [preferred] as string[]] as const;
-      }),
-    );
     const accountIdsByChannel = (() => {
       const entries = displayAgents.length > 0 ? displayAgents : resolvedAgents;
       const byChannel: Record<string, string[]> = {};
@@ -402,11 +347,6 @@ export async function healthCommand(
         }
         if (accountIds.length > 0) {
           byChannel[channelId] = accountIds;
-        }
-      }
-      for (const [channelId, fallbackIds] of Object.entries(channelAccountFallbacks)) {
-        if (!byChannel[channelId] || byChannel[channelId].length === 0) {
-          byChannel[channelId] = fallbackIds;
         }
       }
       return byChannel;
@@ -447,7 +387,9 @@ export async function healthCommand(
       if (!plugin.status?.logSelfId) {
         continue;
       }
-      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
@@ -464,7 +406,11 @@ export async function healthCommand(
         cfg,
         accountId,
       });
-      if (!accountContext.enabled || !accountContext.configured) {
+      if (
+        accountContext.probeAccount === undefined ||
+        !accountContext.enabled ||
+        accountContext.configured !== true
+      ) {
         continue;
       }
       if (accountContext.diagnostics.length > 0) {
@@ -534,13 +480,30 @@ export async function healthCommand(
       }
     }
   }
-
-  if (fatal) {
-    runtime.exit(1);
-  }
 }
 
-async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await loadConfigRuntime();
-  return await readBestEffortConfig();
+/**
+ * Runs `healthCommand` inside a host flow (wizard/onboard/doctor). The command's
+ * CLI-style `runtime.exit(1)` diagnostic paths surface as a thrown `ExitError`,
+ * so the host reports the failure and keeps running instead of dying mid-flow.
+ */
+export async function healthCommandNonExiting(
+  opts: Parameters<typeof healthCommand>[0],
+  runtime: RuntimeEnv,
+): Promise<void> {
+  await healthCommand(opts, {
+    ...runtime,
+    exit: (code) => {
+      throw new ExitError(code);
+    },
+  });
+}
+
+export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
+  const { readConfigFileSnapshot } = await loadConfigRuntime();
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  return snapshot.runtimeConfig ?? snapshot.config;
 }

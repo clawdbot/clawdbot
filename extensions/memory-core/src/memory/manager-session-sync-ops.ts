@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
+  loadArchivedSessions,
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,
@@ -19,12 +20,16 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { listMemorySessionTombstones } from "../memory-entry-origins.js";
+import { runInMemoryBackgroundContext } from "./background-context.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
-  resolveMemorySessionStartupDirtyFiles,
+  isMemorySessionIndexable,
+  resolveMemorySessionStartupState,
   type MemorySessionStartupFileState,
 } from "./manager-session-sync-state.js";
-import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { inspectMemorySourceState, loadMemorySourceFileState } from "./manager-source-state.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
@@ -42,8 +47,58 @@ type MemorySessionTranscriptUpdate = {
 };
 
 export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps {
-  protected listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
-    return listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+  protected async inspectDiagnosticSourceState(): Promise<void> {
+    if (this.sources.has("memory")) {
+      try {
+        const inspection = await inspectMemorySourceState({
+          db: this.db,
+          workspaceDir: this.workspaceDir,
+          settings: this.settings,
+          concurrency: this.getIndexConcurrency(),
+        });
+        this.sourceInspections.set("memory", inspection);
+        this.dirty ||= inspection.dirty;
+      } catch (error) {
+        this.sourceInspections.set("memory", { eligible: null, issues: [String(error)] });
+        this.dirty = true;
+      }
+    }
+    if (this.sources.has("sessions")) {
+      try {
+        await this.markSessionStartupCatchupDirtyFiles(true);
+      } catch (error) {
+        this.sourceInspections.set("sessions", { eligible: null, issues: [String(error)] });
+        this.sessionsDirty = true;
+      }
+    }
+  }
+
+  protected async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
+    const entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
+    const archivedSessions = new Map(
+      loadArchivedSessions({
+        agentId: this.agentId,
+        storePath: resolveStorePath(this.cfg.session?.store, { agentId: this.agentId }),
+        sessionIds: entries
+          .filter((entry) => entry.artifactKind === "archive-artifact")
+          .map((entry) => entry.sessionId),
+      }).map((archive) => [archive.archiveName, archive]),
+    );
+    const forgottenSessions = new Set(
+      listMemorySessionTombstones({
+        agentId: this.agentId,
+        sessionIds: entries.map((entry) => entry.sessionId),
+      }).map((entry) => entry.sessionId),
+    );
+    return entries.filter((entry) => {
+      const archive = archivedSessions.get(path.basename(entry.sessionFile));
+      const archivedSessionKey =
+        archive?.sessionId === entry.sessionId ? archive.sessionKey : undefined;
+      return (
+        !forgottenSessions.has(entry.sessionId) &&
+        isMemorySessionIndexable(entry, archivedSessionKey)
+      );
+    });
   }
 
   protected sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
@@ -77,21 +132,23 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
-      if (this.closed) {
-        return;
-      }
-      const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
-      if (target) {
-        this.scheduleSessionDirty(target);
-        return;
-      }
-      if (update.sessionFile) {
-        void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
-          log.warn(`memory session corpus update failed: ${String(err)}`);
-        });
-      }
-    });
+    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) =>
+      runInMemoryBackgroundContext(() => {
+        if (this.closed) {
+          return;
+        }
+        const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
+        if (target) {
+          this.scheduleSessionDirty(target);
+          return;
+        }
+        if (update.sessionFile) {
+          void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
+            log.warn(`memory session corpus update failed: ${String(err)}`);
+          });
+        }
+      }),
+    );
   }
 
   protected subscribeSessionTranscriptUpdates(
@@ -123,12 +180,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     });
   }
 
-  protected async markSessionStartupCatchupDirtyFiles(): Promise<string[]> {
+  protected async markSessionStartupCatchupDirtyFiles(inspectSources = false): Promise<string[]> {
     if (!this.sources.has("sessions") || this.closed) {
       return [];
     }
     const corpusEntries = await this.listSessionCorpusEntries();
-    if (corpusEntries.length === 0 || this.closed) {
+    if (this.closed) {
       return [];
     }
     const existingRows = loadMemorySourceFileState({
@@ -168,20 +225,35 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.getIndexConcurrency(),
       )
     ).filter((file): file is MemorySessionStartupFileState => file !== null);
-    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({ files: fileStates, existingRows });
-    if (dirtyFiles.length === 0 || this.closed) {
+    const { dirtyFiles, hasStaleIndexedPaths } = resolveMemorySessionStartupState({
+      files: fileStates,
+      existingRows,
+    });
+    if (inspectSources) {
+      this.sourceInspections.set("sessions", {
+        eligible: fileStates.length,
+        issues: fileStates.length === 0 ? ["no eligible session transcripts found"] : [],
+      });
+    }
+    if (this.closed) {
       return dirtyFiles;
+    }
+    if (hasStaleIndexedPaths) {
+      this.sessionsDirty = true;
+      this.sessionsReconcileDirty = true;
     }
     for (const file of dirtyFiles) {
       this.sessionsDirtyFiles.add(file);
     }
-    this.sessionsDirty = true;
+    if (dirtyFiles.length > 0) {
+      this.sessionsDirty = true;
+    }
     return dirtyFiles;
   }
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
     const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
-    if ((dirtyFiles.length === 0 && !this.sessionsFullRetryDirty) || this.closed) {
+    if (!this.sessionsDirty || this.closed) {
       return dirtyFiles;
     }
     void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
@@ -221,7 +293,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (pending.length > 0) {
       this.sessionsDirty = true;
-      void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
+      // Keep both identity and file keys so every transcript backend enters the
+      // targeted queue instead of letting an active sync clear this newer event.
+      void this.sync({
+        reason: "session-delta",
+        sessions: pendingTargets,
+        archiveFiles: pending,
+      }).catch((err: unknown) => {
         log.warn(`memory sync failed (session update): ${String(err)}`);
       });
     }
@@ -335,7 +413,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-      dirtySessionFileCount: this.sessionsDirtyFiles.size,
       sync: params,
       needsFullReindex,
     });

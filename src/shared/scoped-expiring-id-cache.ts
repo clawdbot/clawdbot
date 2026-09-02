@@ -4,7 +4,7 @@ import {
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 
-export type ScopedExpiringIdCache<TScope extends string | number, TId extends string | number> = {
+type ScopedExpiringIdCache<TScope extends string | number, TId extends string | number> = {
   /** Records an id for a scope at the provided timestamp or current time. */
   record: (scope: TScope, id: TId, now?: number) => void;
   /** Returns true while the id is present and within the inclusive TTL window. */

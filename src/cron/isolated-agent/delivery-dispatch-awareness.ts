@@ -6,20 +6,22 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
-  resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { NormalizedOutboundPayload } from "../../infra/outbound/deliver.js";
+import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import type {
   SourceDeliveryOutcome,
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { CronJob } from "../types.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
@@ -43,6 +45,7 @@ export type DirectCronTranscriptMirror = {
   mediaUrls?: string[];
   storePath?: string;
   idempotencyKey: string;
+  deliveryMirror?: { kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND };
   config: OpenClawConfig;
 };
 
@@ -74,7 +77,7 @@ export function resolveCronAwarenessMainSessionKey(params: {
   agentId: string;
 }): string {
   return params.cfg.session?.scope === "global"
-    ? resolveMainSessionKey(params.cfg)
+    ? "global"
     : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
@@ -144,7 +147,6 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
   channel: string;
   to: string;
   threadId?: string;
-  error: unknown;
   partialDelivered?: boolean;
 }): string {
   const targetParts = [`${params.channel}:${params.to}`];
@@ -155,7 +157,7 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
     "A scheduled automation attempted to deliver to this channel, but delivery failed.",
     `Job: ${params.job.name || params.job.id}`,
     `Target: ${targetParts.join(" ")}`,
-    `Delivery error: ${formatErrorMessage(params.error)}`,
+    "Check automation history for delivery error details.",
     params.partialDelivered
       ? "One or more scheduled message payloads may already have been delivered."
       : "No scheduled message was delivered.",
@@ -179,20 +181,25 @@ export async function queueCronAwarenessSystemEvent(params: {
       agentId: params.agentId,
     });
     if (params.queueMainSession) {
-      enqueueSystemEvent(params.text, {
-        sessionKey: mainSessionKey,
-        contextKey: params.deliveryIdempotencyKey,
-      });
+      enqueueSystemEvent(
+        params.text,
+        withSystemEventOwner(
+          { sessionKey: mainSessionKey, contextKey: params.deliveryIdempotencyKey },
+          params.agentId,
+        ),
+      );
     }
     const targetSessionKey = params.targetSessionKey;
     const shouldQueueTargetSession =
       targetSessionKey &&
       (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
     if (shouldQueueTargetSession) {
-      enqueueSystemEvent(params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text), {
-        sessionKey: targetSessionKey,
-        contextKey: params.deliveryIdempotencyKey,
-      });
+      const text = params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text);
+      const options = withSystemEventOwner(
+        { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
+        params.agentId,
+      );
+      enqueueSystemEvent(text, options);
     }
   } catch (err) {
     await logCronDeliveryWarn(
@@ -314,8 +321,10 @@ function canonicalizeDirectCronRouteSessionKey(params: {
   return `${canonicalBase}:thread:${thread.threadId}`;
 }
 
-// Resolves the session for a concrete visible delivery target and ensures the
-// outbound session exists before cron awareness or transcript code references it.
+// Resolves the outbound session route for a concrete visible delivery target.
+// Does NOT persist the route — the caller must commit it after successful
+// platform delivery, matching the post-success invariant in message-action-send
+// and gateway server-methods/send.
 async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
@@ -323,10 +332,9 @@ async function resolveCronDeliveryRouteSessionKey(params: {
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
   warningContext: string;
-}): Promise<string> {
+}): Promise<{ sessionKey: string; route: OutboundSessionRoute | null }> {
   try {
-    const { resolveOutboundSessionRoute, ensureOutboundSessionEntry } =
-      await outboundSessionRuntimeLoader.load();
+    const { resolveOutboundSessionRoute } = await outboundSessionRuntimeLoader.load();
     const route = await resolveOutboundSessionRoute({
       cfg: params.cfg,
       channel: params.delivery.channel,
@@ -343,7 +351,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
     });
     const routeSessionKey = route?.sessionKey?.trim();
     if (!route || !routeSessionKey) {
-      return params.agentSessionKey;
+      return { sessionKey: params.agentSessionKey, route: null };
     }
     const canonicalRouteSessionKey = canonicalizeDirectCronRouteSessionKey({
       cfg: params.cfg,
@@ -364,35 +372,59 @@ async function resolveCronDeliveryRouteSessionKey(params: {
             sessionKey: canonicalRouteSessionKey,
             baseSessionKey: canonicalRouteBaseSessionKey,
           };
-    // Bootstrap metadata for a cron-originated first contact so the resolved
-    // outbound session is visible to session history before transcript append.
-    await ensureOutboundSessionEntry({
-      cfg: params.cfg,
-      channel: params.delivery.channel,
-      accountId: params.delivery.accountId,
-      route: canonicalRoute,
-    });
-    return canonicalRouteSessionKey;
+    return { sessionKey: canonicalRouteSessionKey, route: canonicalRoute };
   } catch (err) {
     await logCronDeliveryWarn(
       `[cron:${params.job.id}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
     );
-    return params.agentSessionKey;
+    return { sessionKey: params.agentSessionKey, route: null };
   }
 }
 
-/** Resolves the transcript mirror session for direct cron delivery. */
+// Persists the resolved outbound route after successful platform delivery.
+// A failed send must not mint a conversation identity or rebind the session
+// route — this matches the post-success invariant in message-action-send.ts
+// and gateway server-methods/send.ts.
+export async function commitDirectCronOutboundRoute(params: {
+  cfg: OpenClawConfig;
+  runSessionKey: string;
+  delivery: SuccessfulDeliveryTarget;
+  route: OutboundSessionRoute | null;
+}): Promise<void> {
+  if (!params.route) {
+    return;
+  }
+  try {
+    const { ensureOutboundSessionEntry } = await outboundSessionRuntimeLoader.load();
+    await ensureOutboundSessionEntry({
+      cfg: params.cfg,
+      channel: params.delivery.channel,
+      accountId: params.delivery.accountId,
+      route: params.route,
+      sourceSessionKey: params.runSessionKey,
+    });
+  } catch (err) {
+    // Do not block delivery completion on session meta writes.
+    await logCronDeliveryWarn(
+      `[cron] failed to persist outbound route after delivery: ${formatErrorMessage(err)}`,
+    );
+  }
+}
+
+/** Resolves the transcript mirror session key and route for direct cron delivery.
+ *  The route must be persisted by the caller after successful platform delivery
+ *  via `commitDirectCronOutboundRoute`. */
 export async function resolveDirectCronDeliverySessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
-}): Promise<string> {
+}): Promise<{ sessionKey: string; route: OutboundSessionRoute | null }> {
   if (isCustomCronSessionTarget(params.job.sessionTarget)) {
     // Custom session targets are already caller-selected; do not remap them
     // through outbound routing or the explicit session identity would drift.
-    return params.agentSessionKey;
+    return { sessionKey: params.agentSessionKey, route: null };
   }
 
   return await resolveCronDeliveryRouteSessionKey({
@@ -456,14 +488,17 @@ function resolveCronMessageToolAwarenessTarget(params: {
 /** Queues target-session context awareness for cron deliveries made via message tool. */
 export async function queueCronMessageToolDeliveryAwareness(params: {
   cfg: OpenClawConfig;
+  runSessionKey: string;
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  deferredTargetSessionKey?: string;
   runStartedAt: number;
   resolvedDelivery: DeliveryTargetResolution;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
-}): Promise<void> {
+}): Promise<(() => Promise<void>) | undefined> {
   const seen = new Set<string>();
+  const deferredAwareness: Array<() => Promise<void>> = [];
   for (const delivery of params.sourceDeliveryOutcome.visibleDeliveries) {
     const target = resolveCronMessageToolAwarenessTarget({
       delivery,
@@ -483,20 +518,29 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       continue;
     }
     seen.add(dedupeKey);
-    const targetSessionKey = await resolveCronDeliveryRouteSessionKey({
+    const { sessionKey: targetSessionKey, route: targetRoute } =
+      await resolveCronDeliveryRouteSessionKey({
+        cfg: params.cfg,
+        job: params.job,
+        agentId: params.agentId,
+        agentSessionKey: params.agentSessionKey,
+        delivery: target,
+        warningContext: "message-tool delivery awareness",
+      });
+    // Awareness runs after the message-tool delivery has already completed,
+    // so persisting the route here is post-success.
+    await commitDirectCronOutboundRoute({
       cfg: params.cfg,
-      job: params.job,
-      agentId: params.agentId,
-      agentSessionKey: params.agentSessionKey,
+      runSessionKey: params.runSessionKey,
       delivery: target,
-      warningContext: "message-tool delivery awareness",
+      route: targetRoute,
     });
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
       delivery: target,
     });
-    await queueCronAwarenessSystemEvent({
+    const awarenessParams = {
       cfg: params.cfg,
       jobId: params.job.id,
       agentId: params.agentId,
@@ -504,8 +548,23 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       queueMainSession: false,
       targetSessionKey,
       text: target.text,
-    });
+    };
+    if (isSameSessionKey(targetSessionKey, params.deferredTargetSessionKey)) {
+      // A current-session completion owns this target durably. Keep awareness
+      // unavailable until that commit fails so reply admission cannot race it.
+      deferredAwareness.push(() => queueCronAwarenessSystemEvent(awarenessParams));
+      continue;
+    }
+    await queueCronAwarenessSystemEvent(awarenessParams);
   }
+  if (deferredAwareness.length === 0) {
+    return undefined;
+  }
+  return async () => {
+    for (const queue of deferredAwareness) {
+      await queue();
+    }
+  };
 }
 
 async function appendDirectCronDeliveryTranscriptMirror(params: {

@@ -6,6 +6,7 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
 import type {
   CacheRetention,
   Context,
@@ -50,22 +51,6 @@ function getPromptCacheRetention(
   return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
 }
 
-function formatOpenAIResponsesError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
-    const statusCode = typeof status === "number" ? status : undefined;
-    if (statusCode !== undefined) {
-      return `OpenAI API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -108,7 +93,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       applyServiceTierPricing: (usage, serviceTier) =>
         applyResponsesServiceTierPricing(usage, serviceTier, model),
     },
-    formatError: formatOpenAIResponsesError,
   });
 
   return stream;
@@ -177,11 +161,15 @@ function createClient(
         }
       : headers;
 
+  const baseUrl = isCloudflareProvider(model.provider)
+    ? resolveCloudflareBaseUrl(model)
+    : model.baseUrl;
   return new OpenAI({
     apiKey,
-    baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
+    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });

@@ -122,6 +122,28 @@ describe("resolveGatewayHealthProbeToken", () => {
     expect(resolved).toEqual({ password: "resolved-password" });
   });
 
+  it("does not fall back to ambient password auth when its configured SecretRef is unresolved", async () => {
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "ambient-password"; // pragma: allowlist secret
+
+    const resolved = await resolveGatewayHealthProbeToken({
+      gateway: {
+        auth: {
+          mode: "password",
+          password: {
+            source: "env",
+            provider: "default",
+            id: "MISSING_ONBOARD_GATEWAY_PASSWORD",
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.password).toBeUndefined();
+    expect(resolved.unresolvedRefReason).toBe(
+      "gateway.auth.password SecretRef is unresolved (env:default:MISSING_ONBOARD_GATEWAY_PASSWORD).",
+    );
+  });
+
   it("resolves environment-only password auth for the local onboarding health probe", async () => {
     process.env.OPENCLAW_GATEWAY_PASSWORD = "environment-password"; // pragma: allowlist secret
 

@@ -1,5 +1,5 @@
 /** Parses cron schedule timestamps from user-facing absolute time strings. */
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 
 const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;

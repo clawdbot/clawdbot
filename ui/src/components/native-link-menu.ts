@@ -74,6 +74,7 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
         <wa-dropdown-item
           class="session-menu__item"
           value="external"
+          data-new-tab-action
           data-shortcut="b"
           aria-keyshortcuts="B"
         >

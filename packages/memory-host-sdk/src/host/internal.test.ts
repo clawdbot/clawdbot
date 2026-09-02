@@ -19,6 +19,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
+import { readMemoryFile } from "./read-file.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
 type MultimodalIndexingChunk = NonNullable<
@@ -93,6 +94,22 @@ const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an uppercase explicit extra file on case-sensitive hosts",
+    async () => {
+      const tmpDir = getTmpDir();
+      const workspaceDir = path.join(tmpDir, "workspace");
+      const upperPath = path.join(tmpDir, "NOTES.MD");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(upperPath, "not lowercase Markdown", "utf8");
+
+      await expect(listMemoryFiles(workspaceDir, [upperPath])).resolves.toEqual([]);
+      await expect(
+        readMemoryFile({ workspaceDir, extraPaths: [upperPath], relPath: upperPath }),
+      ).rejects.toThrow("path required");
+    },
+  );
 
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");
@@ -181,6 +198,9 @@ describe("memory host SDK package internals", () => {
     fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# User profile");
     fsSync.writeFileSync(path.join(tmpDir, "memory.md"), "# Legacy memory");
+    const defaultMemoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(defaultMemoryDir, { recursive: true });
+    fsSync.writeFileSync(path.join(defaultMemoryDir, "default-diagram.png"), Buffer.from("png"));
     const extraDir = path.join(tmpDir, "extra");
     fsSync.mkdirSync(extraDir, { recursive: true });
     fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
@@ -201,6 +221,69 @@ describe("memory host SDK package internals", () => {
       path.join("extra", "note.md"),
       path.join("extra", "recording.m2a"),
     ]);
+  });
+
+  it.each([
+    {
+      label: "primary memory file",
+      target: (workspaceDir: string) => path.join(workspaceDir, "USER.md"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "workspace memory directory",
+      target: (workspaceDir: string) => path.join(workspaceDir, "memory"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "configured extra path",
+      target: (workspaceDir: string) => path.join(workspaceDir, "extra"),
+      extraPaths: (workspaceDir: string) => [path.join(workspaceDir, "extra")],
+    },
+  ])("propagates operational scan failures for $label", async ({ target, extraPaths }) => {
+    const workspaceDir = getTmpDir();
+    const failedPath = target(workspaceDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${failedPath}`), { code: "EIO" });
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(
+      async (...args: Parameters<typeof fs.lstat>): ReturnType<typeof fs.lstat> => {
+        if (path.resolve(String(args[0])) === failedPath) {
+          throw scanError;
+        }
+        return await realLstat(...args);
+      },
+    );
+
+    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toBe(scanError);
+  });
+
+  it("propagates operational failures while discovering the canonical memory file", async () => {
+    const workspaceDir = getTmpDir();
+    const scanError = Object.assign(new Error(`I/O failure: ${workspaceDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === workspaceDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+  });
+
+  it("propagates operational failures while traversing a memory directory", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${memoryDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === memoryDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
   });
 
   it("filters extra directories by glob while preserving symlink skips", async () => {
@@ -230,6 +313,47 @@ describe("memory host SDK package internals", () => {
       "root.md",
     ]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "skips a symlinked workspace root file instead of aborting enumeration",
+    async () => {
+      const tmpDir = getTmpDir();
+      const outsideDir = path.join(tmpDir, "outside");
+      fsSync.mkdirSync(outsideDir, { recursive: true });
+      fsSync.writeFileSync(path.join(outsideDir, "shared-user.md"), "# Outside user profile");
+      fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# placeholder, replaced below");
+      fsSync.unlinkSync(path.join(tmpDir, "USER.md"));
+      expect(
+        tryCreateSymlink(path.join(outsideDir, "shared-user.md"), path.join(tmpDir, "USER.md")),
+      ).toBe(true);
+      const memoryDir = path.join(tmpDir, "memory");
+      fsSync.mkdirSync(memoryDir, { recursive: true });
+      fsSync.writeFileSync(path.join(memoryDir, "notes.md"), "# Notes");
+
+      const files = await listMemoryFiles(tmpDir);
+
+      expect(files.map((file) => path.relative(tmpDir, file))).toEqual([
+        path.join("memory", "notes.md"),
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "skips a symlink when building a file entry",
+    async () => {
+      const tmpDir = getTmpDir();
+      const outsideDir = path.join(tmpDir, "outside");
+      fsSync.mkdirSync(outsideDir, { recursive: true });
+      const realPath = path.join(outsideDir, "kept.md");
+      fsSync.writeFileSync(realPath, "# Kept");
+      const linkedPath = path.join(tmpDir, "linked.md");
+      expect(tryCreateSymlink(realPath, linkedPath)).toBe(true);
+
+      await expect(buildFileEntry(linkedPath, tmpDir)).resolves.toBeNull();
+      const entry = expectFileEntry(await buildFileEntry(realPath, tmpDir));
+      expect(entry.path).toBe(path.relative(tmpDir, realPath));
+    },
+  );
 
   it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("USER.md")).toBe(true);

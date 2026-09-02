@@ -1,10 +1,6 @@
 // Audit Seams tests cover audit seams script behavior.
 import { describe, expect, it } from "vitest";
-import {
-  HELP_TEXT,
-  describeSeamKinds,
-  determineSeamTestStatus,
-} from "../../scripts/audit-seams.mts";
+import { describeSeamKinds, determineSeamTestStatus } from "../../scripts/audit-seams.mts";
 
 describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {
@@ -77,7 +73,7 @@ describe("audit-seams subagent seam classification", () => {
   it("detects subagent lifecycle registry and announce delivery seams", () => {
     const source = `
       import { resolveContextEngine } from "../context-engine/registry.js";
-      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "./subagent-announce.js";
+      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
       import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
       import { persistSubagentRunsToDisk } from "./subagent-registry-state.js";
 
@@ -90,10 +86,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
-      "subagent-announce-delivery",
-      "subagent-lifecycle-registry",
-    ]);
+    expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual(
+      ["subagent-announce-delivery", "subagent-lifecycle-registry"],
+    );
   });
 
   it("detects the shared delivery-context announce seam", () => {
@@ -105,9 +100,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
-      "subagent-announce-delivery",
-    ]);
+    expect(
+      describeSeamKinds("src/agents/subagents/announce/subagent-announce-origin.ts", source),
+    ).toEqual(["subagent-announce-delivery"]);
   });
 
   it("detects parent-stream seams for ACP spawn relays", () => {
@@ -135,7 +130,7 @@ describe("audit-seams subagent seam classification", () => {
   });
 });
 
-describe("audit-seams status/help", () => {
+describe("audit-seams status", () => {
   it("keeps cron seam statuses conservative when nearby tests exist", () => {
     expect(
       determineSeamTestStatus(
@@ -165,12 +160,5 @@ describe("audit-seams status/help", () => {
       reason:
         "Nearby tests exist (best match: direct-import), but this inventory does not prove cross-layer seam coverage end to end.",
     });
-  });
-
-  it("documents cron and subagent seam coverage in help text", () => {
-    expect(HELP_TEXT).toContain("cron orchestration seams");
-    expect(HELP_TEXT).toContain("subagent seams");
-    expect(HELP_TEXT).toContain("announce delivery");
-    expect(HELP_TEXT).toContain("parent streaming");
   });
 });

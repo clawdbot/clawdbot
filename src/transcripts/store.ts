@@ -325,19 +325,20 @@ export class TranscriptsStore {
       }))
     ) {
       await this.assertExportDestinationOwned(session);
-      const legacySessionDir = path.join(
-        this.exportRootDir,
-        legacyTranscriptSessionSelector(session),
-      );
-      const legacyOwner = await this.readSession(legacyTranscriptSessionSelector(session));
-      const legacyPathIsCanonical =
-        legacyOwner !== undefined &&
-        path.resolve(this.sessionDir(legacyOwner)) === path.resolve(legacySessionDir);
-      if (
-        path.resolve(legacySessionDir) !== path.resolve(this.sessionDir(session)) &&
-        !legacyPathIsCanonical
-      ) {
-        await this.assertExportDestinationOwned(session, legacySessionDir);
+      const legacySelector = legacyTranscriptSessionSelector(session);
+      if (legacySelector !== undefined) {
+        const legacySessionDir = path.join(this.exportRootDir, legacySelector);
+        const legacyRow = this.readCanonicalSelectorRow(legacySelector);
+        const legacyOwner = legacyRow ? sessionFromRow(legacyRow) : undefined;
+        const legacyPathIsCanonical =
+          legacyOwner !== undefined &&
+          path.resolve(this.sessionDir(legacyOwner)) === path.resolve(legacySessionDir);
+        if (
+          path.resolve(legacySessionDir) !== path.resolve(this.sessionDir(session)) &&
+          !legacyPathIsCanonical
+        ) {
+          await this.assertExportDestinationOwned(session, legacySessionDir);
+        }
       }
     }
     const sessionValues = {
@@ -383,38 +384,65 @@ export class TranscriptsStore {
   async readSessionEntry(
     sessionSelector: string,
   ): Promise<StoreTypes.TranscriptsSessionEntry | undefined> {
-    const database = this.database();
-    const db = meetingTranscriptDb(database.db);
-    const qualified = /^\d{4}-\d{2}-\d{2}\//u.test(sessionSelector);
-    const matchingRows = (column: "selector" | "session_id" | "session_slug") => {
-      let query = db
-        .selectFrom("meeting_transcript_sessions")
-        .selectAll()
-        .where(column, "=", sessionSelector);
-      if (column !== "selector") {
-        query = query.orderBy("started_at", "desc").limit(2);
-      }
-      return executeSqliteQuerySync(database.db, query).rows;
-    };
-    const exactRows = matchingRows(qualified ? "selector" : "session_id");
-    const slugRows = qualified ? [] : matchingRows("session_slug");
-    const rows = [
-      ...new Map(
-        [...exactRows, ...slugRows].map((row) => [`${row.session_id}\0${row.started_at}`, row]),
-      ).values(),
-    ];
-    if (rows.length > 1) {
+    const { qualified, unqualified } = this.matchSessionEntries(sessionSelector);
+    const entries = qualified.length ? qualified : unqualified;
+    if (entries.length > 1) {
       throw new Error(
-        `multiple transcripts sessions match ${sessionSelector}; use one of: ${rows
-          .map((row) => row.selector)
+        `multiple transcripts sessions match ${sessionSelector}; use one of: ${entries
+          .map((entry) => entry.selector)
           .join(", ")}`,
       );
     }
-    const row = rows[0];
-    if (!row) {
-      return undefined;
-    }
-    return this.entryFromRow(row, this.hasSummary(database, row));
+    return entries[0];
+  }
+
+  private readCanonicalSelectorRow(selector: string) {
+    const database = this.database();
+    return executeSqliteQueryTakeFirstSync(
+      database.db,
+      meetingTranscriptDb(database.db)
+        .selectFrom("meeting_transcript_sessions")
+        .selectAll()
+        .where("selector", "=", selector),
+    );
+  }
+
+  // Return bounded evidence, not a selection policy: operators prefer qualified
+  // matches, while legacy tool handles must also account for raw-ID collisions.
+  matchSessionEntries(value: string): {
+    qualified: StoreTypes.TranscriptsSessionEntry[];
+    unqualified: StoreTypes.TranscriptsSessionEntry[];
+  } {
+    const database = this.database();
+    const query = meetingTranscriptDb(database.db)
+      .selectFrom("meeting_transcript_sessions")
+      .selectAll()
+      .orderBy("started_at", "desc")
+      .limit(2);
+    const entries = (selection: typeof query) =>
+      executeSqliteQuerySync(database.db, selection).rows.map((row) =>
+        this.entryFromRow(row, this.hasSummary(database, row)),
+      );
+    const canonical = this.readCanonicalSelectorRow(value);
+    const date = value.match(/^(\d{4}-\d{2}-\d{2})\//u)?.[1];
+    const qualified = canonical
+      ? [this.entryFromRow(canonical, this.hasSummary(database, canonical))]
+      : date
+        ? entries(
+            query
+              .where("session_id", "=", value.slice(11))
+              .where("started_at", "like", `${date}T%`),
+          )
+        : [];
+    return {
+      qualified,
+      unqualified: [
+        ...entries(query.where("session_id", "=", value)),
+        // Exclude exact raw IDs so their historical rows cannot fill this bound
+        // and hide a different identity when the tool prefers a current capture.
+        ...entries(query.where("session_slug", "=", value).where("session_id", "!=", value)),
+      ],
+    };
   }
 
   async appendUtteranceForSession(
@@ -449,22 +477,10 @@ export class TranscriptsStore {
       .map(utteranceFromRow);
   }
 
-  async updateStopped(sessionSelector: string, stoppedAt: string): Promise<void> {
-    const entry = await this.readSessionEntry(sessionSelector);
-    if (!entry) {
-      return;
-    }
-    await this.writeSession({ ...entry.session, stoppedAt });
-  }
-
   async writeSummary(
     summary: TranscriptsSummary,
-    session?: TranscriptSessionDescriptor,
+    session: TranscriptSessionDescriptor,
   ): Promise<string> {
-    const resolved = session ?? (await this.readSession(summary.sessionId));
-    if (!resolved) {
-      throw new Error(`transcripts session not found: ${summary.sessionId}`);
-    }
     const summaryJson = JSON.stringify(summary);
     const markdown = renderTranscriptsMarkdown(summary);
     const summaryValues = {
@@ -480,8 +496,8 @@ export class TranscriptsStore {
         meetingTranscriptDb(database)
           .insertInto("meeting_transcript_summaries")
           .values({
-            session_id: resolved.sessionId,
-            session_started_at: resolved.startedAt,
+            session_id: session.sessionId,
+            session_started_at: session.startedAt,
             ...summaryValues,
           })
           .onConflict((conflict) =>
@@ -489,7 +505,7 @@ export class TranscriptsStore {
           ),
       );
     });
-    return path.join(this.sessionDir(resolved), "summary.md");
+    return path.join(this.sessionDir(session), "summary.md");
   }
 
   async readSummary(

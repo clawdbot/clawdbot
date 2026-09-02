@@ -20,6 +20,9 @@ vi.mock("../../config/mcp-config.js", () => ({
     config: {},
     mcpServers: Object.fromEntries(mcpServers),
   })),
+}));
+
+vi.mock("../../agents/mcp-config-mutation.js", () => ({
   setConfiguredMcpServer: vi.fn(async ({ name, server }) => {
     mcpServers.set(name, { ...(server as Record<string, unknown>) });
     return {

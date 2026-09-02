@@ -120,7 +120,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
 
     ```json5
     {
-      env: { MINIMAX_API_KEY: "sk-..." },
+      env: { vars: { MINIMAX_API_KEY: "sk-..." } },
       agents: { defaults: { model: { primary: "minimax/MiniMax-M3" } } },
       models: {
         mode: "merge",
@@ -360,7 +360,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 
     ```json5
     {
-      env: { MINIMAX_API_KEY: "sk-..." },
+      env: { vars: { MINIMAX_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           models: {

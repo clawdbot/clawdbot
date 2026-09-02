@@ -1,8 +1,8 @@
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import type { BootstrapContextMode } from "../../bootstrap-files.js";
 import { normalizeSpawnedRunMetadata } from "../../spawned-context.js";
-import { buildSubagentInitialUserMessage } from "../../subagent-initial-user-message.js";
-import type { SubagentLaunchAuthorization } from "../../subagent-launch-authorization.js";
+import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
+import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentAgentGatewayTimeoutMs } from "./subagent-spawn-gateway.js";
 import { AGENT_LANE_SUBAGENT } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -29,7 +29,6 @@ export function buildSubagentLaunchRequest(params: {
   childSystemPrompt: string;
   thinkingOverride?: string;
   runTimeoutSeconds: number;
-  label?: string;
   lightContext: boolean;
   expectsCompletionMessage: boolean;
   requesterOrigin?: {
@@ -111,7 +110,7 @@ export function buildSubagentLaunchRequest(params: {
     extraSystemPrompt: params.childSystemPrompt,
     thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
-    label: params.label,
+    // Creation owns the label; delayed launches must preserve operator renames.
     ...(bootstrapContextMode
       ? {
           bootstrapContextMode,

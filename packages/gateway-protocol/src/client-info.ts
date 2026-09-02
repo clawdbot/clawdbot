@@ -6,7 +6,7 @@
  */
 import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
 
-function normalizeOptionalLowercaseString(raw?: string | null): string | undefined {
+function normalizeOptionalProtocolLowercaseString(raw?: string | null): string | undefined {
   return normalizeOptionalProtocolString(raw)?.toLowerCase();
 }
 
@@ -63,12 +63,16 @@ export type GatewayClientInfo = {
   displayName?: string;
   /** Client app or package version reported by the connecting process. */
   version: string;
+  /** Exact immutable artifact identity when the client can report one. */
+  buildId?: string;
   /** Runtime platform string, such as `darwin`, `ios`, `android`, or `web`. */
   platform: string;
   /** Optional device family used by native clients for display and routing hints. */
   deviceFamily?: string;
   /** Native hardware/model identifier when available. */
   modelIdentifier?: string;
+  /** Self-reported IANA time zone, such as `Europe/Vienna`, for presence display. */
+  timeZone?: string;
   /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
   /** Per-installation or per-process id used to distinguish same-product clients. */
@@ -88,6 +92,7 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  USAGE_REFRESHING: "usage-refreshing",
 } as const;
 
 /** Optional capability advertised by clients during gateway handshake. */
@@ -100,7 +105,7 @@ const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   // Handshake input is intentionally case-insensitive, but policy decisions use
   // the canonical lowercase ids from the closed registry above.
-  const normalized = normalizeOptionalLowercaseString(raw);
+  const normalized = normalizeOptionalProtocolLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }
@@ -116,7 +121,7 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 
 /** Normalizes untrusted client modes and rejects unknown values. */
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
+  const normalized = normalizeOptionalProtocolLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }

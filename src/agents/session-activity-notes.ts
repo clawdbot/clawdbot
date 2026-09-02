@@ -1,6 +1,8 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -189,7 +191,12 @@ export function flushSessionActivityAssistantNote(
   }
   const sanitized = sanitizeActivityText(state.assistantBuffer, ASSISTANT_BUFFER_MAX_CHARS);
   const visible = keepUtf16SafeTail(sanitized, ASSISTANT_NOTE_MAX_CHARS).trim();
-  if (!visible || visible === HEARTBEAT_TOKEN || visible === HEARTBEAT_TRANSCRIPT_PROMPT) {
+  if (
+    !visible ||
+    visible === HEARTBEAT_TOKEN ||
+    visible === HEARTBEAT_TRANSCRIPT_PROMPT ||
+    isSilentReplyPayloadText(visible)
+  ) {
     return;
   }
   if (visible === state.lastAssistantNote) {
@@ -214,7 +221,7 @@ export function noteSessionActivityEvent(
         addActivityNote(state, "Run is wrapping up", noteMaxChars);
       } else if (phase === "end" || phase === "error") {
         const health = terminalHealthFor(event);
-        const error = readString(data.error);
+        const error = readNonBlankString(data.error);
         addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(data.terminalReply);
         state.terminalReply = terminalReply;
@@ -230,7 +237,7 @@ export function noteSessionActivityEvent(
       if (data.phase !== "start") {
         return;
       }
-      const name = readString(data.name) ?? "tool";
+      const name = readNonBlankString(data.name) ?? "tool";
       const args = summarizeToolArgs(data.args);
       addActivityNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`, noteMaxChars);
       return;
@@ -239,9 +246,9 @@ export function noteSessionActivityEvent(
       if (data.phase !== "end") {
         return;
       }
-      const title = readString(data.title) ?? readString(data.name) ?? "command";
-      const exitCode = readFiniteNumber(data.exitCode);
-      const status = readString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
+      const title = readNonBlankString(data.title) ?? readNonBlankString(data.name) ?? "command";
+      const exitCode = asFiniteNumber(data.exitCode);
+      const status = readNonBlankString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
       addActivityNote(
         state,
         `${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`,
@@ -250,9 +257,9 @@ export function noteSessionActivityEvent(
       return;
     }
     case "item": {
-      const status = readString(data.status);
-      const title = readString(data.title);
-      const itemId = readString(data.itemId) ?? title;
+      const status = readNonBlankString(data.status);
+      const title = readNonBlankString(data.title);
+      const itemId = readNonBlankString(data.itemId) ?? title;
       if (!status || !title || !itemId) {
         return;
       }
@@ -285,8 +292,8 @@ export function noteSessionActivityEvent(
       return;
     }
     case "assistant": {
-      const full = readString(data.text);
-      const delta = readString(data.delta);
+      const full = readNonBlankString(data.text);
+      const delta = readNonBlankString(data.delta);
       if (full) {
         state.assistantRawBuffer = full;
       } else if (delta) {
@@ -317,7 +324,7 @@ export function noteSessionActivityEvent(
       }
       addActivityNote(
         state,
-        `Waiting for approval: ${readString(data.title) ?? "user action"}`,
+        `Waiting for approval: ${readNonBlankString(data.title) ?? "user action"}`,
         noteMaxChars,
       );
       break;
@@ -325,14 +332,6 @@ export function noteSessionActivityEvent(
     default:
       break;
   }
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {

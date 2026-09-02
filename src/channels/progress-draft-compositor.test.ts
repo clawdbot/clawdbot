@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelProgressDraftCompositor,
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
 
@@ -19,25 +19,75 @@ function createTestProgressDraftCompositor(
     ...overrides,
   });
 }
-import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+
+const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 
 describe("createChannelProgressDraftCompositor", () => {
-  it("tracks compact per-turn progress receipts", () => {
-    let now = 1_000;
-    const receipt = createChannelProgressReceiptTracker({ now: () => now });
+  it("keeps summary presentation stable across tool activity and uses plain milestones", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      presentation: "summary",
+      update,
+    });
+    await progress.pushPreambleHeadline("Checking source 🔎");
+    await progress.noteActivity({ startImmediately: true });
+    for (let index = 0; index < 20; index++) {
+      await progress.pushToolEvent({ name: "exec", toolCallId: `call-${index}`, phase: "start" });
+    }
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0]?.[0]).toBe("Checking source 🔎");
+    await progress.pushPlanProgress([{ step: "Verify behavior", status: "in_progress" }]);
+    expect(update.mock.lastCall?.[0]).toBe("Checking source 🔎\n\nIn progress: Verify behavior");
+    progress.cancel();
+  });
 
-    receipt.noteReasoning();
-    receipt.noteToolCall("exec");
-    receipt.noteCommentary("note-1", "First note");
-    receipt.noteCommentary("note-1", "Updated note");
-    receipt.noteReasoning();
+  it("shows and resolves summary approval attention independently of tool activity", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      presentation: "summary",
+      update,
+    });
+    await progress.pushApprovalEvent({
+      phase: "requested",
+      approvalId: "approval-1",
+      title: "Run checks",
+    });
+    expect(update.mock.lastCall?.[0]).toContain("Run checks");
+    expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+    await progress.pushPlanProgress(
+      Array.from({ length: 8 }, (_, index) => ({
+        step: `Milestone ${index + 1}`,
+        status: "pending" as const,
+      })),
+    );
+    expect(update.mock.lastCall?.[0]).toContain("Run checks");
+    await progress.pushPlanProgress([]);
+    for (let index = 0; index < 20; index++) {
+      await progress.pushToolEvent({ name: "read", toolCallId: `call-${index}`, phase: "start" });
+    }
+    expect(update.mock.lastCall?.[0]).toContain("Run checks");
+    await progress.pushApprovalEvent({ phase: "resolved", approvalId: "approval-1" });
+    expect(update.mock.lastCall?.[0]).toBe("Working");
+    progress.cancel();
+  });
+
+  it("counts only work tool calls and resets per turn", () => {
+    let now = 1_000;
+    const work = createChannelProgressWorkCounter({ now: () => now });
+
+    work.noteToolCall("exec");
+    work.noteToolCall("progress_card");
     now = 43_000;
 
-    expect(receipt.buildSummaryLine()).toBe("🧠 2 thoughts · 💬 1 note · 🛠️ 1 tool call · ⏱️ 42s");
+    expect(work.toolCalls).toBe(1);
+    expect(work.elapsedSeconds).toBe(42);
 
-    receipt.reset();
+    work.reset();
     now = 43_500;
-    expect(receipt.buildSummaryLine()).toBe("⏱️ 1s");
+    expect(work.toolCalls).toBe(0);
+    expect(work.elapsedSeconds).toBe(1);
   });
 
   it("starts immediately for plans, replaces snapshots, and clears them on reset", async () => {
@@ -68,6 +118,29 @@ describe("createChannelProgressDraftCompositor", () => {
     progress.reset();
     await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
     expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
+  });
+
+  it("keeps plan task progress independent from tool progress", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true, toolProgress: false },
+        },
+      },
+      update,
+    });
+
+    expect(
+      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
+        explanation: "Applying the change.",
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenLastCalledWith("Applying the change.\n\n▸ Patch", {
+      flush: true,
+      lines: [],
+    });
   });
 
   it("publishes partial-preview tool lines without enabling progress-only plans", async () => {
@@ -465,30 +538,48 @@ describe("createChannelProgressDraftCompositor", () => {
     );
   });
 
-  it("interleaves reasoning bursts with tool calls in arrival order", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } },
-      },
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
+  it.each([
+    {
+      presentation: undefined,
+      text: "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
+      lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
+    },
+    {
+      presentation: "summary" as const,
+      text: "Shelling\n\nPicking the largest",
+      lines: [
+        {
+          id: "reasoning",
+          kind: "item",
+          text: "Picking the largest",
+          label: "Reasoning",
+          prefix: false,
+        },
+      ],
+    },
+  ])(
+    "keeps reasoning bursts separate across tools ($presentation)",
+    async ({ presentation, text, lines }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } },
+        },
+        presentation,
+        reasoningLinePrefix: "🧠 ",
+        update,
+      });
 
-    // thought1 → tool1 → thought2 → tool2: each thought is its own line,
-    // appended in order, not collapsed into a single replaced line.
-    await progress.pushReasoningProgress("Listing the workspace");
-    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
-    await progress.pushReasoningProgress("Picking the largest");
-    await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
+      // Hidden tools still delimit reasoning bursts in summary presentation.
+      await progress.pushReasoningProgress("Listing the workspace");
+      await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+      await progress.pushReasoningProgress("Picking the largest");
+      await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
 
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
-      {
-        lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
-      },
-    );
-  });
+      expect(update).toHaveBeenLastCalledWith(text, { lines });
+      progress.cancel();
+    },
+  );
 
   it("preserves tagged reasoning content without leaking tags", async () => {
     const update = vi.fn();
@@ -963,6 +1054,30 @@ describe("createChannelProgressDraftCompositor", () => {
       expect.objectContaining({ id: "command-1", kind: "command-output", status: "completed" }),
       expect.objectContaining({ id: "patch-1", kind: "patch", toolName: "apply_patch" }),
     ]);
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+  });
+
+  it("wires successful mutation completions into the snapshot diff stat", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Working" } } },
+      update: vi.fn(),
+      updateOnLineChange: true,
+    });
+
+    await progress.pushToolEvent({
+      toolCallId: "write-1",
+      name: "write",
+      phase: "start",
+      args: { path: "src/example.ts", content: "one\ntwo" },
+    });
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+    await progress.pushItemEvent({
+      toolCallId: "write-1",
+      kind: "tool",
+      phase: "end",
+      status: "completed",
+    });
+    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
   });
 
   it("ignores status updates once the final reply started and clears both per turn", async () => {

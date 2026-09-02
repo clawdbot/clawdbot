@@ -1,5 +1,6 @@
 // Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -21,7 +22,7 @@ let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").read
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
-  return { agents: { list: [{ id: "main", default: true }] } };
+  return { agents: { list: [{ id: "main" }] } };
 }
 
 vi.mock("./config.js", () => {
@@ -34,7 +35,7 @@ vi.mock("./config.js", () => {
 });
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistryCore: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
@@ -42,17 +43,20 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     mockLoadPluginManifestRegistry(...args),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: (...args: unknown[]) => ({
-    manifestRegistry: mockLoadPluginManifestRegistry(...args),
-  }),
-  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
-    mockGetCurrentPluginMetadataSnapshot(...args) ?? {
-      manifestRegistry: mockLoadPluginManifestRegistry(...args),
-    },
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (...args: unknown[]) =>
+    createPluginMetadataSnapshotFixture(mockLoadPluginManifestRegistry(...args)),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => {
+    const current = mockGetCurrentPluginMetadataSnapshot(...args);
+    return createPluginMetadataSnapshotFixture(
+      current?.manifestRegistry ?? mockLoadPluginManifestRegistry(...args),
+    );
+  },
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
     mockGetCurrentPluginMetadataSnapshot(...args),
 }));
@@ -489,7 +493,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     loadGatewayRuntimeConfigSchema();
     loadGatewayRuntimeConfigSchema();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
       expect(call[0]).toHaveProperty("config");
       expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");

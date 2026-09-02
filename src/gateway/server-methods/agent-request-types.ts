@@ -37,6 +37,7 @@ export type AgentRunRequest = {
   acpTurnSource?: "manual_spawn";
   internalRuntimeHandoffId?: string;
   internalExecutionIdentityRetry?: boolean;
+  internalExecutionIdentityRecoveryAttempt?: number;
   execApprovalFollowupExpectedSessionId?: string;
   internalEvents?: AgentInternalEvent[];
   suppressPromptPersistence?: boolean;

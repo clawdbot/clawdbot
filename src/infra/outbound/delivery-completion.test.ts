@@ -2,16 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { commitMainSessionRecovery } from "../../agents/main-session-recovery-store.js";
+import { commitMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { settlePendingFinalDelivery } from "./delivery-completion.js";
+import { rejectDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 
 const recoveryMocks = vi.hoisted(() => ({
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
 
-vi.mock("../../agents/main-session-recovery-owner-release.js", () => recoveryMocks);
+vi.mock(
+  "../../agents/main-session-recovery/main-session-recovery-owner-release.js",
+  () => recoveryMocks,
+);
 
 describe("pending-final delivery completion", () => {
   let tmpDir: string;
@@ -76,7 +79,12 @@ describe("pending-final delivery completion", () => {
     });
     await expect(
       commitMainSessionRecovery({
-        command: { kind: "fail_recovery", now: Date.now(), observation },
+        command: {
+          kind: "tombstone",
+          now: Date.now(),
+          observation,
+          reason: "stale delivery decision",
+        },
         requireWriteSuccess: true,
         target: { sessionKey, storePath },
       }),
@@ -96,6 +104,117 @@ describe("pending-final delivery completion", () => {
     });
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
   });
+
+  const noticeContext = { channel: "telegram", to: "chat-1", accountId: "default" };
+
+  async function installContextOnPendingFinal() {
+    const entry = loadSessionEntry({ sessionKey, storePath })!;
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        ...entry,
+        pendingFinalDelivery: { ...entry.pendingFinalDelivery!, context: noticeContext },
+      },
+    );
+  }
+
+  it("owes a notice when claimed custody is affirmed unknown", async () => {
+    await installContextOnPendingFinal();
+    await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+
+    await expect(
+      settlePendingFinalDelivery(completion, "unknown", ["queued", "unknown"]),
+    ).resolves.toEqual({ state: "unknown" });
+
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+      intentId: completion.intentId,
+      state: "owed",
+      context: noticeContext,
+    });
+  });
+
+  it("does not owe a notice for the pre-dispatch claim or terminal outcomes", async () => {
+    await installContextOnPendingFinal();
+    await settlePendingFinalDelivery(completion, "queued", ["prepared"]);
+    await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
+    await settlePendingFinalDelivery(completion, "delivered");
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.pendingDeliveryNotice).toBeUndefined();
+    expect(entry?.pendingFinalDelivery).toMatchObject({
+      deliveries: [{ id: completion.deliveryId, state: "delivered" }],
+    });
+  });
+
+  it("restores prepared custody for a retryable no-send so recovery can replay", async () => {
+    await installContextOnPendingFinal();
+    await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
+
+    await expect(
+      settlePendingFinalDelivery(completion, "prepared", ["queued", "unknown"]),
+    ).resolves.toEqual({ state: "prepared" });
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.pendingDeliveryNotice).toBeUndefined();
+    expect(entry?.pendingFinalDelivery).toMatchObject({
+      deliveries: [{ id: completion.deliveryId, state: "prepared" }],
+    });
+  });
+
+  it("settles a proven pre-dispatch rejection as suppressed without notice debt", async () => {
+    await installContextOnPendingFinal();
+    await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
+
+    await expect(rejectDurableDelivery(completion, "payload rejected")).resolves.toEqual({
+      state: "suppressed",
+    });
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.pendingDeliveryNotice).toBeUndefined();
+    expect(entry?.pendingFinalDelivery).toMatchObject({
+      deliveries: [{ id: completion.deliveryId, state: "suppressed" }],
+    });
+  });
+
+  it.each(["owed", "unresolved", "acknowledged"] as const)(
+    "preserves %s notice history while another delivery remains unknown",
+    async (noticeState) => {
+      await installContextOnPendingFinal();
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingFinalDelivery: {
+            ...entry.pendingFinalDelivery!,
+            deliveries: [
+              { id: completion.deliveryId, state: "unknown" },
+              { id: "delivery-2", state: "queued" },
+            ],
+          },
+          pendingDeliveryNotice: {
+            createdAt: entry.pendingFinalDelivery!.createdAt,
+            context: noticeContext,
+            intentId: completion.intentId,
+            state: noticeState,
+          },
+        },
+      );
+      await settlePendingFinalDelivery({ ...completion, deliveryId: "delivery-2" }, "delivered");
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        noticeState,
+      );
+      await settlePendingFinalDelivery(completion, "unknown");
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        noticeState,
+      );
+      await settlePendingFinalDelivery(completion, "delivered");
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        noticeState === "acknowledged" ? "acknowledged" : undefined,
+      );
+    },
+  );
 
   it("carries the custom queue root when a terminal sibling wakes recovery", async () => {
     const entry = loadSessionEntry({ sessionKey, storePath })!;

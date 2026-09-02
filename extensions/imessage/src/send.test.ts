@@ -15,10 +15,14 @@ import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
 type ApprovalReactionsModule = typeof import("./approval-reactions.js");
+type ClientModule = typeof import("./client.js");
+type ErrorRuntimeModule = typeof import("openclaw/plugin-sdk/error-runtime");
 type PersistedEchoCacheModule = typeof import("./monitor/persisted-echo-cache.js");
 type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
 type SendModule = typeof import("./send.js");
 let clearIMessageApprovalReactionTargetsForTest: ApprovalReactionsModule["clearIMessageApprovalReactionTargetsForTest"];
+let IMessageRpcRequestError: ClientModule["IMessageRpcRequestError"];
+let PlatformMessageNotDispatchedError: ErrorRuntimeModule["PlatformMessageNotDispatchedError"];
 let resolveIMessageApprovalReactionTargetWithPersistence: ApprovalReactionsModule["resolveIMessageApprovalReactionTargetWithPersistence"];
 let hasPersistedIMessageEcho: PersistedEchoCacheModule["hasPersistedIMessageEcho"];
 let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
@@ -28,6 +32,8 @@ let sendMessageIMessage: SendModule["sendMessageIMessage"];
 async function loadFreshSendModule(): Promise<void> {
   ({ findLatestIMessageEntryForChat, rememberIMessageReplyCache } =
     await loadFreshIMessageReplyCacheForTest());
+  ({ IMessageRpcRequestError } = await import("./client.js"));
+  ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
   ({
     clearIMessageApprovalReactionTargetsForTest,
     resolveIMessageApprovalReactionTargetWithPersistence,
@@ -80,6 +86,14 @@ function createApprovalText(id = "approval-123"): string {
     "",
     `Reply with: /approve ${id} allow-once|deny`,
   ].join("\n");
+}
+
+function createApprovalPrompt(id = "approval-123") {
+  return {
+    approvalId: id,
+    approvalKind: "exec" as const,
+    allowedDecisions: ["allow-once", "deny"] as const,
+  };
 }
 
 describe("sendMessageIMessage receipts", () => {
@@ -625,6 +639,17 @@ describe("sendMessageIMessage receipts", () => {
         }
       }
 
+      const dunderReferenceRequestIndex = countNativeRequests();
+      await sendMessageIMessage(
+        "chat_id:10",
+        [
+          "[Class][docs] and [Type][docs] **done**",
+          "",
+          "[docs]: https://docs.python.org/3/library/stdtypes.html#instance.__class__",
+        ].join("\n"),
+        { config: cfg },
+      );
+
       const oversizedYaml = [
         "```yaml",
         ...Array.from({ length: 6 }, (_, index) =>
@@ -664,7 +689,7 @@ describe("sendMessageIMessage receipts", () => {
           );
       const requests = readRequests();
       const expectedFixedRequestCount =
-        1 + disguisedCases.length + 1 + channelContractRequestCount + embeddedRequestCount;
+        1 + disguisedCases.length + 1 + channelContractRequestCount + embeddedRequestCount + 1;
       expect(fixedRequestCount).toBe(expectedFixedRequestCount);
       const monitorRequests = requests.slice(
         expectedFixedRequestCount,
@@ -721,10 +746,27 @@ describe("sendMessageIMessage receipts", () => {
           (boldRange?.start ?? 0) + (boldRange?.length ?? 0),
         ),
       ).toBe("😀 styled");
+      expect(requests[dunderReferenceRequestIndex]?.params).toMatchObject({
+        text: [
+          "Class (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+          "and Type (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+          "done",
+        ].join(" "),
+        formatting: [{ start: 153, length: 4, styles: ["bold"] }],
+      });
 
       const { imessageActionsRuntime } = await import("./actions.runtime.js");
       const actionOptions = { cliPath, chatGuid: "iMessage;+;chat0000" };
       const fencedYaml = ["```yaml", ...roles.map((role) => `${role}:`), "```"].join("\n");
+      await imessageActionsRuntime.sendRichMessage({
+        chatGuid: actionOptions.chatGuid,
+        text: [
+          "[Class][obj.__class__] **done**",
+          "",
+          "[obj.__class__]: https://example.org/python",
+        ].join("\n"),
+        options: actionOptions,
+      });
       await imessageActionsRuntime.sendRichMessage({
         chatGuid: actionOptions.chatGuid,
         text: [
@@ -848,8 +890,9 @@ describe("sendMessageIMessage receipts", () => {
           .map((line) => JSON.parse(line) as string[]);
       const actionValue = (args: string[], flag: string) => args[args.indexOf(flag) + 1] ?? "";
       const actions = readActions();
-      expect(actions).toHaveLength(6);
+      expect(actions).toHaveLength(7);
       const [
+        dunderReferenceAction,
         replyAction,
         effectAction,
         attachmentAction,
@@ -858,6 +901,7 @@ describe("sendMessageIMessage receipts", () => {
         pollAction,
       ] = actions;
       if (
+        !dunderReferenceAction ||
         !replyAction ||
         !effectAction ||
         !attachmentAction ||
@@ -865,8 +909,14 @@ describe("sendMessageIMessage receipts", () => {
         !editAction ||
         !pollAction
       ) {
-        throw new Error("Expected all six native iMessage action subprocesses");
+        throw new Error("Expected all seven native iMessage action subprocesses");
       }
+      expect(actionValue(dunderReferenceAction, "--text")).toBe(
+        "Class (https://example.org/python) done",
+      );
+      expect(JSON.parse(actionValue(dunderReferenceAction, "--format"))).toEqual([
+        { start: 35, length: 4, styles: ["bold"] },
+      ]);
       expect(replyAction).toContain("--reply-to");
       expect(actionValue(replyAction, "--reply-to")).toBe("reply-message-guid");
       expect(actionValue(effectAction, "--effect")).toBe("com.apple.MobileSMS.expressivesend.loud");
@@ -1363,6 +1413,59 @@ describe("sendMessageIMessage receipts", () => {
     ).toBe(false);
   });
 
+  it("maps an authoritative pre-dispatch RPC failure to retry-safe platform custody", async () => {
+    const rpcError = new IMessageRpcRequestError("Delivery failed before dispatch", -32603, {
+      retry_safe: true,
+      disposition: "not_started",
+      transport: "bridge_v2",
+      operation: "send-message",
+    });
+    const client = createRejectingClient(rpcError);
+
+    const rejection = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    }).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(rejection).toMatchObject({ message: rpcError.message, cause: rpcError });
+    expect(getClientMocks(client).request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "may-have-completed disposition",
+      data: { disposition: "may_have_completed", retry_safe: true },
+    },
+    {
+      name: "still-in-flight disposition",
+      data: { disposition: "still_in_flight", retry_safe: true },
+    },
+    {
+      name: "missing retry-safe flag",
+      data: { disposition: "not_started" },
+    },
+    {
+      name: "false retry-safe flag",
+      data: { disposition: "not_started", retry_safe: false },
+    },
+  ])("keeps $name ambiguous", async ({ data }) => {
+    const rpcError = new IMessageRpcRequestError(
+      "Delivery outcome remains ambiguous",
+      -32001,
+      data,
+    );
+    const client = createRejectingClient(rpcError);
+
+    const rejection = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    }).catch((error: unknown) => error);
+
+    expect(rejection).toBe(rpcError);
+    expect(rejection).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  });
+
   it("drops reply metadata from text sends when reply actions are disabled", async () => {
     const client = createClient({ guid: "p:0/imsg-plain" });
 
@@ -1791,6 +1894,43 @@ describe("sendMessageIMessage receipts", () => {
       },
       expect.any(Object),
     );
+  });
+
+  it("maps remote attachment pre-dispatch RPC failure to retry-safe platform custody", async () => {
+    const rpcError = new IMessageRpcRequestError("Delivery failed before dispatch", -32603, {
+      retry_safe: true,
+      disposition: "not_started",
+      transport: "bridge_v2",
+      operation: "send-attachment",
+    });
+    const client = createRejectingClient(rpcError);
+    const withRemoteFile = vi.fn(
+      async (params: { use: (remotePath: string) => Promise<Record<string, unknown>> }) =>
+        await params.use("/tmp/openclaw-imessage-safe/photo.png"),
+    );
+
+    const rejection = await sendMessageIMessage("chat_id:42", "", {
+      config: {
+        channels: {
+          imessage: {
+            accounts: { default: { remoteHost: "work@messages-b" } },
+          },
+        },
+      },
+      mediaUrl: "/gateway/photo.png",
+      resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
+      createClient: async () => client,
+      withRemoteFile: withRemoteFile as never,
+    }).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(rejection).toMatchObject({ message: rpcError.message, cause: rpcError });
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send.attachment",
+      expect.objectContaining({ file: "/tmp/openclaw-imessage-safe/photo.png" }),
+      expect.any(Object),
+    );
+    expect(getClientMocks(client).stop).toHaveBeenCalledOnce();
   });
 
   it("resolves service-qualified remote media through the canonical send RPC", async () => {
@@ -3148,6 +3288,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt(),
       createClient: createClientLocal,
       runCliJson,
       service: "sms",
@@ -3176,6 +3317,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt("approval-default"),
       client,
       runCliJson,
       resolveSentMessageGuidImpl,
@@ -3200,6 +3342,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt("approval-homebrew"),
       client,
       cliPath: "/opt/homebrew/bin/imsg",
       runCliJson,
@@ -3235,6 +3378,7 @@ describe("sendMessageIMessage receipts", () => {
             },
           },
         },
+        approvalPrompt: createApprovalPrompt("approval-remote"),
         client,
         cliPath: "/Users/me/.openclaw/scripts/imsg",
         runCliJson,
@@ -3267,6 +3411,7 @@ describe("sendMessageIMessage receipts", () => {
       const rejection = expect(
         sendMessageIMessage("chat_id:42", approvalText, {
           config: IMESSAGE_TEST_CFG,
+          approvalPrompt: createApprovalPrompt("approval-ssh-wrapper"),
           client,
           cliPath: wrapperPath,
           runCliJson,
@@ -3378,6 +3523,7 @@ describe("sendMessageIMessage receipts", () => {
     const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: IMESSAGE_TEST_CFG,
+        approvalPrompt: createApprovalPrompt(),
         client,
         runCliJson,
         dbPath: "/Users/me/Library/Messages/chat.db",
@@ -3407,7 +3553,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
-      approvalKind: "exec",
+      approvalPrompt: createApprovalPrompt(),
       client,
       dbPath: "/Users/me/Library/Messages/chat.db",
       resolveSentMessageGuidImpl,
@@ -3442,6 +3588,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt(),
       client,
     });
 

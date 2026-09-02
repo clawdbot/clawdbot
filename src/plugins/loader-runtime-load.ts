@@ -1,12 +1,12 @@
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
+import {
+  recordPluginInstallOwnerLookup,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import {
-  getReusableCachedPluginRegistry,
-  pluginLoaderCacheState,
-  setCachedPluginRegistry,
-} from "./loader-cache.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import {
   resolvePluginLoadCacheContext,
@@ -28,6 +28,7 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -55,6 +56,7 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
   return {
     list: (...args) => runtime.nodes.list(...args),
     invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
   };
 }
 
@@ -94,10 +96,11 @@ function loadOpenClawPluginsInternal(
   const logger = options.logger ?? createPluginLoaderLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
-  const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry(context.cacheKey);
+    const cached = pluginLoaderCacheState.get(context.cacheKey);
     if (cached) {
+      maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
         activatePluginRegistry(
           cached,
@@ -148,6 +151,7 @@ function loadOpenClawPluginsInternal(
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
+      allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,
       coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
       ...(options.coreGatewayMethodNames !== undefined && {
         coreGatewayMethodNames: options.coreGatewayMethodNames,
@@ -165,7 +169,6 @@ function loadOpenClawPluginsInternal(
         onlyPluginIdSet,
         emitWarning: context.shouldActivate,
         warningCacheKey: context.cacheKey,
-        suppliedManifestRegistry: options.manifestRegistry,
       });
     const selectedMiddlewareOwnerManifests = new Map<
       string,
@@ -247,14 +250,25 @@ function loadOpenClawPluginsInternal(
         message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
       });
     }
-    warnAboutUntrackedLoadedPlugins({
-      registry,
-      provenance,
-      allowlist: context.normalized.allow,
-      emitWarning: context.shouldActivate,
-      logger,
-      env: context.env,
-    });
+    warnAboutUntrackedLoadedPlugins(
+      recordPluginInstallOwnerLookup(
+        {
+          registry,
+          provenance,
+          allowlist: context.normalized.allow,
+          emitWarning: context.shouldActivate,
+          logger,
+          env: context.env,
+        },
+        new Map(
+          orderedCandidates.flatMap((candidate) => {
+            const pluginId = manifestBySource.get(candidate.source)?.id;
+            const installOwner = resolvePluginCandidateInstallOwner(candidate);
+            return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
+          }),
+        ),
+      ),
+    );
     maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
     if (context.shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
@@ -278,7 +292,7 @@ function loadOpenClawPluginsInternal(
     // Publish only complete registries: failed activation restores the prior runtime selection,
     // then the catch below can discard this builder without poisoning a reusable cache value.
     if (cacheEnabled) {
-      setCachedPluginRegistry(context.cacheKey, registry);
+      pluginLoaderCacheState.set(context.cacheKey, registry);
     }
     return registry;
   } catch (error) {

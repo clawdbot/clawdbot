@@ -17,7 +17,16 @@ const listRawChannelPluginCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
 );
 const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsLogsCommandMock = vi.hoisted(() =>
+  vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
+);
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsCapabilitiesCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsRemoveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelAuthMocks = vi.hoisted(() => ({
+  runChannelLogin: vi.fn(async () => undefined),
+  runChannelLogout: vi.fn(async () => undefined),
+}));
 const runtimeMock = vi.hoisted(() => ({
   log: vi.fn(),
   error: vi.fn(),
@@ -34,8 +43,13 @@ vi.mock("../channels/plugins/catalog.js", () => ({
 
 vi.mock("../commands/channels.js", () => ({
   channelsAddCommand: channelsAddCommandMock,
+  channelsLogsCommand: channelsLogsCommandMock,
   channelsResolveCommand: channelsResolveCommandMock,
+  channelsCapabilitiesCommand: channelsCapabilitiesCommandMock,
+  channelsRemoveCommand: channelsRemoveCommandMock,
 }));
+
+vi.mock("./channel-auth.js", () => channelAuthMocks);
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: runtimeMock,
@@ -91,6 +105,19 @@ describe("registerChannelsCli", () => {
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
   });
 
+  it.each([
+    ["omitted", ["channels", "logs"], undefined],
+    ["explicit all", ["channels", "logs", "--channel", "all"], "all"],
+  ])("distinguishes an %s channels logs filter", async (_label, args, expectedChannel) => {
+    const program = new Command().name("openclaw").exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    const [options] = channelsLogsCommandMock.mock.calls[0] ?? [];
+    expect(options?.channel).toBe(expectedChannel);
+  });
+
   it.each(["auto", "user", "group", "channel"])(
     "forwards the supported %s resolve target kind",
     async (kind) => {
@@ -106,6 +133,38 @@ describe("registerChannelsCli", () => {
       );
     },
   );
+
+  it.each(
+    ["add", "capabilities", "login", "logout", "remove", "resolve"].flatMap((leaf) =>
+      ["parent", "leaf", "both"].map((position) => ({ leaf, position })),
+    ),
+  )("forwards the $position --agent option to channels $leaf", async ({ leaf, position }) => {
+    const parentArgs =
+      position === "leaf" ? [] : ["--agent", position === "both" ? "research" : "ops"];
+    const leafArgs = position === "parent" ? [] : ["--agent", "ops"];
+    const args = ["channels", ...parentArgs, leaf, ...leafArgs, "--channel", "telegram"];
+    if (leaf === "resolve") {
+      args.push("room");
+    }
+    const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    const command = {
+      add: channelsAddCommandMock,
+      capabilities: channelsCapabilitiesCommandMock,
+      login: channelAuthMocks.runChannelLogin,
+      logout: channelAuthMocks.runChannelLogout,
+      remove: channelsRemoveCommandMock,
+      resolve: channelsResolveCommandMock,
+    }[leaf];
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "ops" }),
+      runtimeMock,
+      ...(leaf === "add" ? [{ hasFlags: false }] : leaf === "remove" ? [{ hasFlags: true }] : []),
+    );
+  });
 
   it("rejects unsupported resolve target kinds before dispatching", async () => {
     const writeErr = vi.fn();
@@ -395,6 +454,7 @@ describe("registerChannelsCli", () => {
 
       expect(getChannelAddOptionFlags(program)).toEqual([
         "--channel <name>",
+        "--agent <id>",
         "--account <id>",
         "--name <name>",
       ]);
@@ -597,6 +657,27 @@ describe("registerChannelsCli", () => {
       { hasFlags: true },
     );
   });
+
+  it.each([{ parentArgs: ["--agent", "add"] }, { parentArgs: ["--agent=add"] }])(
+    "registers setup flags after parent owner options $parentArgs",
+    async ({ parentArgs }) => {
+      await runChannelsAddCli([
+        "channels",
+        ...parentArgs,
+        "add",
+        "--channel",
+        "telegram",
+        "--token",
+        "fixture-token",
+      ]);
+
+      expect(channelsAddCommandMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "add", channel: "telegram", token: "fixture-token" }),
+        runtimeMock,
+        { hasFlags: true },
+      );
+    },
+  );
 
   it("prefers modern contract options when a channel also publishes cliAddOptions", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValue([

@@ -9,6 +9,7 @@ import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
   BrowserTargetAmbiguousError,
+  toBrowserErrorResponse,
 } from "../errors.js";
 import {
   assertBrowserNavigationAllowed,
@@ -129,11 +130,16 @@ async function redactBlockedTabUrls(params: {
         ...params.navigationPolicy,
       });
       redactedTabs.push(tab);
-    } catch {
-      // Hide blocked URLs while preserving tab identity for safe operations.
+    } catch (error) {
+      const failure = toBrowserErrorResponse(error);
+      // Preserve safe tab management without turning a DNS failure into a policy denial.
       redactedTabs.push({
         ...tab,
         url: "",
+        urlUnavailableReason:
+          failure && "reason" in failure && failure.reason === "navigation_blocked"
+            ? "navigation_blocked"
+            : "navigation_check_failed",
       });
     }
   }
@@ -321,8 +327,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       targetId,
       mutate: async (profileCtx, id) => {
-        await profileCtx.closeTab(id, targetIdMode === "raw" ? { exactTargetId: true } : undefined);
-        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, id);
+        const canonicalTargetId = await profileCtx.closeTab(
+          id,
+          targetIdMode === "raw" ? { exactTargetId: true } : undefined,
+        );
+        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, canonicalTargetId);
+        return canonicalTargetId;
       },
     });
   });

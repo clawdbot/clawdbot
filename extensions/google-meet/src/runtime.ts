@@ -94,7 +94,6 @@ const nowIso = () => new Date().toISOString();
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
-  readonly #agentId: string;
   readonly #voiceCallGateway: VoiceCallGateway;
   readonly #sessions: GoogleMeetSessionRuntime;
 
@@ -107,7 +106,6 @@ export class GoogleMeetRuntime {
     },
   ) {
     const adapter = GOOGLE_MEET_PLATFORM_ADAPTER;
-    this.#agentId = resolveDefaultAgentId(params.fullConfig);
     this.#voiceCallGateway = createVoiceCallGateway(params);
     this.#sessions = new MeetingSessionRuntime({
       logger: params.logger,
@@ -146,9 +144,7 @@ export class GoogleMeetRuntime {
         url: adapter.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request.transport, params.config),
         mode: resolveMode(request.mode, params.config),
-        agentId: normalizeAgentId(
-          request.agentId ?? params.config.realtime.agentId ?? this.#agentId,
-        ),
+        agentId: this.#resolveAgentId(request.agentId),
       }),
       createSession: ({ resolved, createdAt }): GoogleMeetSession =>
         createMeetingSession({ platform: adapter, config: params.config, resolved, createdAt }),
@@ -292,8 +288,7 @@ export class GoogleMeetRuntime {
   #probeContext(): GoogleMeetRuntimeProbeContext {
     return {
       config: this.params.config,
-      resolveAgentId: (request) =>
-        normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId ?? this.#agentId),
+      resolveAgentId: (request) => this.#resolveAgentId(request.agentId),
       list: () => this.list(),
       join: async (request) => await this.join(request),
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
@@ -301,6 +296,14 @@ export class GoogleMeetRuntime {
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
       refreshCaptionHealth: async (session) => await this.#sessions.refreshCaptionHealth(session),
     };
+  }
+
+  #resolveAgentId(requestedAgentId?: string): string {
+    return normalizeAgentId(
+      requestedAgentId ??
+        this.params.config.realtime.agentId ??
+        resolveDefaultAgentId(this.params.fullConfig),
+    );
   }
 
   async #joinTransport(

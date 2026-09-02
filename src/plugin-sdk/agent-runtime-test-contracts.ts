@@ -11,6 +11,10 @@ export {
   openFileBackedSessionManagerForTest,
 } from "./test-helpers/agents/session-manager-file-fixture.js";
 export {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+  createHostTtsRuntimeContract,
+  createOwnerBackedContractTool,
   createTerminalPresentationContractTool,
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,

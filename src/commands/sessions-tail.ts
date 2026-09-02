@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Session trajectory tail command.
  *
@@ -5,19 +6,19 @@
  * and can follow newly appended SQLite trajectory rows.
  */
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
-import { shortenText } from "./text-format.js";
+import { formatTextCell } from "./text-format.js";
 
 type SessionsTailOptions = {
   store?: string;
@@ -56,22 +57,6 @@ const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
-let followIntervalMsForTests: number | undefined;
-
-/** Overrides the follow polling interval for tests. */
-function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
-  followIntervalMsForTests = intervalMs;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsTailTestApi")] = {
-    setSessionsTailFollowIntervalMsForTests,
-  };
-}
-
-function resolveFollowIntervalMs(): number {
-  return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
-}
 
 function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
@@ -162,10 +147,9 @@ function safePreview(event: TrajectoryEvent): string {
 }
 
 function formatProgressLine(event: TrajectoryEvent): string {
-  const sessionLabel = shortenText(event.sessionKey ?? event.sessionId, SESSION_KEY_PAD).padEnd(
-    SESSION_KEY_PAD,
-  );
-  const typeLabel = shortenText(event.type, EVENT_TYPE_PAD).padEnd(EVENT_TYPE_PAD);
+  const sessionKey = event.sessionKey ?? event.sessionId;
+  const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
+  const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
   const preview = safePreview(event);
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
@@ -290,9 +274,10 @@ async function followSelections(
               error,
             )}`,
           );
+          runtime.exit(1);
         }
       }
-    }, resolveFollowIntervalMs());
+    }, FOLLOW_INTERVAL_MS);
 
     const stop = () => {
       clearInterval(interval);

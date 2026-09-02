@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -68,7 +70,9 @@ function success(stdout = ""): SpawnResult {
   };
 }
 
-function fakeRunner() {
+function fakeRunner(
+  onRun?: (argv: string[], options: CommandOptions) => Promise<SpawnResult> | SpawnResult,
+) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
   const runner: WorkerSshRunner = {
@@ -79,10 +83,32 @@ function fakeRunner() {
     },
     async run(argv, options) {
       runs.push({ argv, options });
-      return success("vnc-secret\n");
+      return (await onRun?.(argv, options)) ?? success("vnc-secret\n");
     },
   };
   return { runner, runs, starts };
+}
+
+function launchApp(
+  manager: ReturnType<typeof createWorkerDesktopTunnels>,
+  app: "browser" | "terminal" = "browser",
+  ownerEpoch = 1,
+  ssh = SSH,
+) {
+  return manager.launchApp({
+    environmentId: "worker:one",
+    ownerEpoch,
+    ssh,
+    app:
+      app === "browser"
+        ? {
+            id: "browser",
+            executablePath: "/usr/local/bin/openclaw-worker-browser",
+            cdpPort: 9222,
+          }
+        : { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
+    resolveIdentity,
+  });
 }
 
 function acquire(
@@ -130,6 +156,32 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts).toHaveLength(1);
     expect(fake.runs).toHaveLength(1);
     await manager.stopAll();
+  });
+
+  it("expires an unattached acquisition and disposes its SSH identity directory", async ({
+    onTestFinished,
+  }) => {
+    vi.useFakeTimers();
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner, lingerMs: 50 });
+    onTestFinished(() => manager.stopAll());
+    const starting = acquire(manager);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]!.process.becomeReady();
+    const result = await starting;
+    if (result.attachment.kind !== "unix-socket") {
+      throw new Error("expected an SSH desktop socket");
+    }
+    const identityDirectory = path.dirname(result.attachment.socketPath);
+    await access(identityDirectory);
+    await vi.advanceTimersByTimeAsync(49);
+    await expect(acquire(manager)).resolves.toEqual(result);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(fake.starts[0]!.process.stopCount).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.starts[0]!.process.stopCount).toBe(1);
+    await manager.stopAll();
+    await expect(access(identityDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fences an older epoch before starting its replacement", async () => {
@@ -229,6 +281,7 @@ describe("worker desktop tunnels", () => {
     fake.starts[0]?.process.exit();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
     replacement?.release();
+    await manager.stopAll();
   });
 
   it("refuses observer tokens minted against a replaced owner epoch", async () => {
@@ -270,5 +323,129 @@ describe("worker desktop tunnels", () => {
       "desktop observe is not supported on Windows gateway hosts",
     );
     expect(fake.starts).toEqual([]);
+  });
+
+  it("deduplicates one exact no-argument launcher command per app and epoch", async () => {
+    const result = deferred<SpawnResult>();
+    const fake = fakeRunner(async () => await result.promise);
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+
+    const first = launchApp(manager);
+    const second = launchApp(manager);
+    await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
+    const run = fake.runs[0]!;
+    expect(run.argv.at(-1)).toBe("'/usr/local/bin/openclaw-worker-browser'");
+    expect(run.argv.at(-1)).not.toContain("9222");
+    expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
+    expect(run.options.timeoutMs).toBeGreaterThan(0);
+    expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
+    expect(run.options.signal).toBeInstanceOf(AbortSignal);
+    result.resolve(success());
+
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+    await manager.stopAll();
+  });
+
+  it.each(["browser", "terminal"] as const)(
+    "does not replay a %s launch after ambiguous SSH exit 255",
+    async (app) => {
+      const fake = fakeRunner(() => ({
+        ...success(),
+        code: 255,
+        stderr: "connection lost after remote acceptance",
+      }));
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+
+      await expect(launchApp(manager, app, 1, { ...SSH, fallbackPorts: [2203] })).rejects.toThrow(
+        "connection lost after remote acceptance",
+      );
+      expect(fake.runs.map(({ argv }) => argv[argv.indexOf("-p") + 1])).toEqual(["2202"]);
+      await manager.stopAll();
+    },
+  );
+
+  it("aborts pending launchers on matching teardown and fences stale epochs", async () => {
+    const signals: AbortSignal[] = [];
+    const fake = fakeRunner(
+      async (_argv, options) =>
+        await new Promise<SpawnResult>((_resolve, reject) => {
+          const signal = options.signal;
+          if (!signal) {
+            reject(new Error("missing launcher abort signal"));
+            return;
+          }
+          signals.push(signal);
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("launcher aborted", { cause: signal.reason }),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const launching = launchApp(manager);
+    await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
+
+    await manager.stop("worker:one", 1);
+    await expect(launching).rejects.toThrow("owner stopped");
+    expect(signals[0]?.aborted).toBe(true);
+    await expect(launchApp(manager, "browser", 0)).rejects.toThrow("owner epoch is stale");
+  });
+
+  it("publishes launcher ownership before immediate teardown can observe it", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+
+    const launching = launchApp(manager);
+    const stopping = manager.stop("worker:one", 1);
+
+    await expect(launching).rejects.toThrow("owner stopped");
+    await stopping;
+    expect(fake.runs).toEqual([]);
+  });
+
+  it("reports unsupported launcher platforms and nonzero launcher exits", async () => {
+    const unsupported = createWorkerDesktopTunnels({
+      runner: fakeRunner().runner,
+      platform: "win32",
+    });
+    await expect(launchApp(unsupported)).rejects.toMatchObject({ code: "unsupported_platform" });
+    await expect(launchApp(unsupported)).rejects.toThrow(
+      "desktop app launch is not supported on Windows gateway hosts",
+    );
+
+    const failed = createWorkerDesktopTunnels({
+      runner: fakeRunner(() => ({ ...success(), code: 7, stderr: "launcher failed" })).runner,
+    });
+    await expect(launchApp(failed)).rejects.toThrow("launcher failed");
+    await failed.stopAll();
+  });
+
+  it("keeps a same-epoch desktop session alive when an app launch fences replaced owners", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    // The launcher claims the epoch first, so its fencing pass runs after the
+    // observer session for that same epoch already exists. Fencing must only
+    // retire strictly older owners; equal epochs share the session.
+    const launching = launchApp(manager, "browser", 1);
+    const starting = acquire(manager, 1);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await starting;
+    await launching;
+
+    const observer = manager.attachObserver("worker:one", {
+      control: false,
+      ownerEpoch: 1,
+      close: vi.fn(),
+    });
+    expect(observer).toBeDefined();
+    observer?.release();
+    await manager.stopAll();
   });
 });

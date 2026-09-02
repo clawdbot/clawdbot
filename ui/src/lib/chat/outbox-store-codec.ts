@@ -1,5 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, ChatQueueItem } from "./chat-types.ts";
+import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -7,19 +11,30 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 // Shipped v1 state could hold one full queue under each of 20 alias keys.
 // Alias consolidation may exceed today's admission cap, but must retain every
 // existing input while the canonical queue drains back below 50.
-export const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
+const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 
 export type StoredComposerSession = {
+  awaitingDefaults?: true;
   draft?: string;
+  goalMode?: ChatGoalDraftMode;
   draftRevision?: number;
   queue?: ChatQueueItem[];
   updatedAt: number;
 };
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
+  return (
+    left.id === right.id &&
+    left.sendRunId === right.sendRunId &&
+    left.sendAttempts === right.sendAttempts &&
+    left.sendState === right.sendState &&
+    left.agentId === right.agentId &&
+    left.sessionKey === right.sessionKey &&
+    left.orderKey === right.orderKey &&
+    left.attachmentPayload?.key === right.attachmentPayload?.key
+  );
 }
 
 function normalizeOptionalBoolean(value: unknown): boolean | undefined {
@@ -27,10 +42,10 @@ function normalizeOptionalBoolean(value: unknown): boolean | undefined {
 }
 
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -52,20 +67,23 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
 }
 
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
-  if (entry.skillWorkshopRevision !== undefined) {
-    return null;
-  }
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt =
     typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
       ? entry.createdAt
       : Date.now();
-  if (!id || (!text.trim() && !Array.isArray(entry.attachments))) {
+  if (
+    !id ||
+    (!text.trim() &&
+      !Array.isArray(entry.attachments) &&
+      entry.attachmentPayload === undefined &&
+      entry.attachmentStorageError === undefined)
+  ) {
     return null;
   }
   const attachments = Array.isArray(entry.attachments)
@@ -74,12 +92,76 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (entry.attachmentPayload !== undefined) {
+    const payload = entry.attachmentPayload;
+    if (
+      isRecord(payload) &&
+      typeof payload.key === "string" &&
+      typeof payload.recoveryScope === "string" &&
+      typeof payload.tabId === "string"
+    ) {
+      item.attachmentPayload = {
+        key: payload.key,
+        recoveryScope: payload.recoveryScope,
+        tabId: payload.tabId,
+      };
+    } else {
+      item.attachmentStorageError = "missing";
+    }
+  }
+  if (
+    entry.attachmentStorageError === "missing" ||
+    entry.attachmentStorageError === "unavailable" ||
+    entry.attachmentStorageError === "capacity"
+  ) {
+    item.attachmentStorageError = entry.attachmentStorageError;
+  }
+  if (Array.isArray(entry.attachments) && attachments.length !== entry.attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+  if (item.attachmentPayload && !attachments.length) {
+    item.attachmentStorageError = "missing";
+  }
+
+  if (entry.intent !== undefined) {
+    const intent = entry.intent;
+    // Never restore a structured admission as ordinary text after losing its intent.
+    if (
+      !isRecord(intent) ||
+      Object.keys(intent).length !== 3 ||
+      intent.kind !== "session-goal-start" ||
+      intent.version !== 1 ||
+      typeof intent.issuedAtMs !== "number" ||
+      !Number.isSafeInteger(intent.issuedAtMs) ||
+      intent.issuedAtMs <= 0
+    ) {
+      return null;
+    }
+    item.intent = { kind: intent.kind, version: intent.version, issuedAtMs: intent.issuedAtMs };
+    const sessionId = normalizeOptionalString(entry.sessionId);
+    if (sessionId) {
+      item.sessionId = sessionId;
+    }
+    if (entry.expectedLeafEntryId === null || typeof entry.expectedLeafEntryId === "string") {
+      item.expectedLeafEntryId = entry.expectedLeafEntryId;
+    }
+  }
+  if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
+    item.orderKey = entry.orderKey;
+  }
   const sender = normalizeSenderIdentity(entry.sender as Record<string, unknown> | undefined);
   if (sender) {
     item.sender = sender;
   }
-  if (entry.kind === "queued" || entry.kind === "steered") {
-    item.kind = entry.kind;
+  const legacySteer =
+    entry.kind === "steered" ||
+    normalizeOptionalString(entry.steerTargetRunId) !== undefined ||
+    entry.sendState === "steering";
+  const queueMode = legacySteer
+    ? "steer"
+    : normalizeQueueMode(typeof entry.queueMode === "string" ? entry.queueMode : undefined);
+  if (queueMode) {
+    item.queueMode = queueMode;
   }
   if (attachments.length) {
     item.attachments = attachments;
@@ -92,7 +174,11 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (
+  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
+    item.sendState = "unconfirmed";
+  } else if (entry.sendState === "sending") {
+    item.sendState = "waiting-reconnect";
+  } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
     entry.sendState === "waiting-idle" ||
@@ -110,10 +196,6 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   const sendRunId = normalizeOptionalString(entry.sendRunId);
   if (sendRunId) {
     item.sendRunId = sendRunId;
-  }
-  const steerTargetRunId = normalizeOptionalString(entry.steerTargetRunId);
-  if (steerTargetRunId) {
-    item.steerTargetRunId = steerTargetRunId;
   }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
@@ -138,14 +220,21 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
 }
 
 export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
+  if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
+    return null;
+  }
+  const goalMode = entry.goalMode;
+  // Reject oversize input as a whole; migration keeps its source bytes intact.
+  if (Array.isArray(entry.queue) && entry.queue.length > MAX_RETAINED_QUEUE_ITEMS) {
+    return null;
+  }
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
-        .slice(0, MAX_RETAINED_QUEUE_ITEMS)
         .map(normalizeStoredQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
@@ -169,11 +258,13 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   // Legacy rows did not version drafts, so their row timestamp is the best
   // available ordering signal. Queue-only rows must not claim draft ownership.
   const draftRevision = storedDraftRevision ?? (draft ? updatedAt : undefined);
-  if (!draft && draftRevision === undefined && (!queue || queue.length === 0)) {
+  if (!draft && !goalMode && draftRevision === undefined && (!queue || queue.length === 0)) {
     return null;
   }
   return {
+    ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
+    ...(goalMode ? { goalMode } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,

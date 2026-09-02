@@ -1,39 +1,34 @@
-// Defines lifecycle-owned cache primitives for plugin metadata.
+// Defines bounded caches for plugin runtime results and schema validation.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 
 /** Result shape for cache lookups that need to distinguish a miss from cached `undefined`. */
 type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
-/** Small process-local LRU cache used for stable plugin metadata and loader artifacts. */
+/** Small process-local LRU cache for runtime registries and compiled validators. */
 export class PluginLruCache<T> {
-  readonly #defaultMaxEntries: number;
-  #maxEntries: number;
+  readonly #maxEntries: number;
   readonly #entries = new Map<string, T>();
 
-  constructor(defaultMaxEntries: number) {
-    this.#defaultMaxEntries = normalizeMaxEntries(defaultMaxEntries, 1);
-    this.#maxEntries = this.#defaultMaxEntries;
-  }
-
-  get maxEntries(): number {
-    return this.#maxEntries;
+  constructor(maxEntries: number) {
+    this.#maxEntries = normalizeMaxEntries(maxEntries, 1);
   }
 
   get size(): number {
     return this.#entries.size;
   }
 
-  setMaxEntriesForTest(value?: number): void {
-    this.#maxEntries =
-      typeof value === "number"
-        ? normalizeMaxEntries(value, this.#defaultMaxEntries)
-        : this.#defaultMaxEntries;
-    pruneMapToMaxSize(this.#entries, this.#maxEntries);
-  }
-
   clear(): void {
     this.#entries.clear();
+  }
+
+  deleteValue(value: T): void {
+    for (const [key, entry] of this.#entries) {
+      if (entry === value) {
+        this.#entries.delete(key);
+      }
+    }
   }
 
   /** Returns a cached value and refreshes its recency when present. */
@@ -111,7 +106,9 @@ export function createConfigScopedPromiseLoader<T>(
     const promise = Promise.resolve().then(() => load(config));
     void promise.catch(() => {
       if (config) {
-        promisesByConfig.delete(config);
+        if (promisesByConfig.get(config) === promise) {
+          promisesByConfig.delete(config);
+        }
       } else if (defaultPromise === promise) {
         defaultPromise = undefined;
       }
@@ -119,7 +116,7 @@ export function createConfigScopedPromiseLoader<T>(
     return promise;
   };
 
-  return {
+  const loader: ConfigScopedPromiseLoader<T> = {
     async load(config?: OpenClawConfig): Promise<T> {
       if (!config) {
         defaultPromise ??= createPromise();
@@ -138,6 +135,9 @@ export function createConfigScopedPromiseLoader<T>(
       promisesByConfig = new WeakMap<OpenClawConfig, Promise<T>>();
     },
   };
+  // Resolved values can retain executable plugin callbacks past install, replacement, or removal.
+  registerPluginMetadataProcessMemoLifecycleClear(() => loader.clear());
+  return loader;
 }
 
 function normalizeMaxEntries(value: number, fallback: number): number {

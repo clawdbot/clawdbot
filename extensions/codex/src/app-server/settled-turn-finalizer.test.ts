@@ -1,10 +1,9 @@
-import {
-  normalizeUsage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CodexSettledTurnContext } from "./settled-turn-context.js";
+import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -26,7 +25,11 @@ vi.mock("./transcript-mirror.js", () => ({
 
 const { runCodexSettledTurnFinalization } = await import("./settled-turn-finalizer.js");
 
-function createAttempt(): EmbeddedRunAttemptParams {
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
+
+function createAttempt(): SettledTurnFinalizationAttemptParams {
   return {
     prompt: "Produce the final user-visible answer now.",
     sessionId: "session-1",
@@ -46,7 +49,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
-  } as EmbeddedRunAttemptParams;
+  } as SettledTurnFinalizationAttemptParams;
 }
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {
@@ -65,9 +68,8 @@ function createSettledAttempt(): EmbeddedRunAttemptResult {
         content: [{ type: "text", text: "Message sent." }],
       } as never,
     ],
-    settledTurnFinalizationContext: {
-      source: "openclaw-transcript",
-      messages: [
+    settledTurnFinalizationContext: new CodexSettledTurnContext(
+      projectSettledCodexMessages([
         { role: "user", content: "Send the update to Alice." } as never,
         {
           role: "assistant",
@@ -79,8 +81,8 @@ function createSettledAttempt(): EmbeddedRunAttemptResult {
           toolName: "message",
           content: [{ type: "text", text: "Message sent." }],
         } as never,
-      ],
-    },
+      ]),
+    ),
     assistantTexts: [],
     toolMetas: [{ toolName: "message", replaySafe: false }],
     lastAssistant: undefined,
@@ -151,8 +153,10 @@ describe("runCodexSettledTurnFinalization", () => {
   });
 
   it("runs an isolated history-backed final turn and returns only its visible answer", async () => {
+    const attempt = createAttempt();
+    attempt.prepareAssistantTranscriptMessage = (message) => message;
     const result = await runCodexSettledTurnFinalization(
-      { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+      { attempt, settledAttempt: createSettledAttempt() },
       { pluginConfig: {} },
     );
 
@@ -179,6 +183,7 @@ describe("runCodexSettledTurnFinalization", () => {
         sessionId: "session-1",
         idempotencyScope: "codex-settled-finalizer:run-1",
         skipBeforeMessageWriteHooks: true,
+        prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
         messages: [expect.objectContaining({ role: "assistant" })],
       }),
     );
@@ -211,7 +216,7 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
   });
 
-  it("rejects an empty final answer before transcript mutation", async () => {
+  it("returns an empty completed final answer for lifecycle classification", async () => {
     mocks.runBounded.mockResolvedValue({ text: " ", items: [], model: "gpt-5.4" });
 
     await expect(
@@ -219,11 +224,11 @@ describe("runCodexSettledTurnFinalization", () => {
         { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
         {},
       ),
-    ).rejects.toThrow("completed without a visible answer");
+    ).resolves.toMatchObject({ assistant: { content: [{ type: "text", text: "" }] } });
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it("rejects an intentionally silent final answer before transcript mutation", async () => {
+  it("returns an intentionally silent final answer as completed empty before transcript mutation", async () => {
     mocks.runBounded.mockResolvedValue({ text: "NO_REPLY", items: [], model: "gpt-5.4" });
 
     await expect(
@@ -231,7 +236,7 @@ describe("runCodexSettledTurnFinalization", () => {
         { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
         {},
       ),
-    ).rejects.toThrow("completed without a visible answer");
+    ).resolves.toMatchObject({ assistant: { content: [{ type: "text", text: "" }] } });
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
@@ -332,16 +337,23 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it("rejects a missing frozen context before starting the isolated turn", async () => {
-    const settledAttempt = createSettledAttempt();
-    delete settledAttempt.settledTurnFinalizationContext;
-
-    await expect(
-      runCodexSettledTurnFinalization({ attempt: createAttempt(), settledAttempt }, {}),
-    ).rejects.toThrow("finalization context is unavailable");
-    expect(mocks.runBounded).not.toHaveBeenCalled();
-    expect(mocks.mirror).not.toHaveBeenCalled();
-  });
+  it.each(["missing", "foreign", "unavailable"])(
+    "rejects %s context before starting the isolated turn",
+    async (kind) => {
+      const settledAttempt = createSettledAttempt();
+      settledAttempt.settledTurnFinalizationContext =
+        kind === "missing"
+          ? undefined
+          : kind === "foreign"
+            ? { source: "harness", data: [] }
+            : { source: "unavailable" };
+      await expect(
+        runCodexSettledTurnFinalization({ attempt: createAttempt(), settledAttempt }, {}),
+      ).rejects.toThrow("finalization context is unavailable");
+      expect(mocks.runBounded).not.toHaveBeenCalled();
+      expect(mocks.mirror).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a stale idempotency hit instead of delivering an unpersisted answer", async () => {
     mocks.mirror.mockImplementation(

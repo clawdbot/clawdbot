@@ -6,15 +6,20 @@ import {
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listGatewayActivatedChannelIds } from "./channel-presence-policy.js";
+import {
+  normalizePluginsConfigWithResolverCore,
+  type NormalizePluginId,
+} from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import {
   canStartConfiguredChannelPlugin,
   canStartGatewayStartupPlugin,
 } from "./gateway-startup-plugin-activation.js";
 import {
   hasConfiguredStartupChannel,
-  listPotentialEnabledChannelIds,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
   resolveContextEngineSlotStartupPluginId,
   resolveMemorySlotStartupPluginId,
@@ -32,15 +37,10 @@ import {
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  createPluginRegistryIdNormalizer,
-  normalizePluginsConfigWithRegistry,
-} from "./plugin-registry-contributions.js";
+import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
-import {
-  collectConfiguredWorkerProviderIds,
-  normalizeWorkerProviderIds,
-} from "./worker-provider-registry.js";
+import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
+import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
 export function resolveChannelPluginIdsFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
@@ -57,27 +57,39 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  normalizePluginId?: NormalizePluginId;
   workerProviderIds?: readonly string[];
+  discovery?: PluginDiscoveryResult;
   platform?: NodeJS.Platform;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
   });
+  const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const configuredChannelIds = new Set(
-    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+    listGatewayActivatedChannelIds({
+      config: params.config,
+      activationSourceConfig,
+      env: params.env,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      manifestRecords: params.manifestRegistry.plugins,
+      discovery: params.discovery,
+    }),
   );
-  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
-    manifestRegistry: params.manifestRegistry,
-  });
+  const normalizePluginId =
+    params.normalizePluginId ??
+    createPluginRegistryIdNormalizer(params.index, { manifestRegistry: params.manifestRegistry });
+  const pluginsConfig = normalizePluginsConfigWithResolverCore(
+    params.config.plugins,
+    normalizePluginId,
+  );
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be
   // misclassified as explicit enablement.
-  const activationSourceConfig = params.activationSourceConfig ?? params.config;
-  const activationSourcePlugins = normalizePluginsConfigWithRegistry(
+  const activationSourcePlugins = normalizePluginsConfigWithResolverCore(
     activationSourceConfig.plugins,
-    params.index,
-    { manifestRegistry: params.manifestRegistry },
+    normalizePluginId,
   );
   const activationSource = {
     plugins: activationSourcePlugins,
@@ -106,9 +118,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     ...collectConfiguredWorkerProviderIds(activationSourceConfig),
     ...normalizeWorkerProviderIds(params.workerProviderIds ?? []),
   ]);
-  const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
-    manifestRegistry: params.manifestRegistry,
-  });
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -162,6 +171,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         activationSource,
         manifestLookup,
         platform: params.platform,
+        env: params.env,
       });
       if (canStartConfiguredChannel) {
         pluginIds.push(plugin.pluginId);
@@ -175,6 +185,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         config: params.config,
         pluginsConfig,
         activationSource,
+        env: params.env,
         requiredAgentHarnessRuntimes,
         configuredWorkerProviderIds,
         configuredSpeechProviderIds,

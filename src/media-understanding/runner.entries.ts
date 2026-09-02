@@ -11,6 +11,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
@@ -62,7 +63,6 @@ import {
   resolveRequestedLocalAudioBackend,
 } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
 import type {
@@ -452,20 +452,19 @@ function resolveAudioProviderPrompt(params: {
   hasConfiguredPrompt: boolean;
   language?: string;
 }): string | undefined {
-  const language = params.language?.trim().toLowerCase();
-  const isEnglish =
-    !language ||
+  const language = normalizeLowercaseStringOrEmpty(params.language);
+  const isExplicitEnglish =
     language === "en" ||
     language === "eng" ||
     language === "english" ||
     language.startsWith("en-") ||
     language.startsWith("en_");
-  if (params.hasConfiguredPrompt || isEnglish) {
+  if (params.hasConfiguredPrompt || isExplicitEnglish) {
     return params.prompt;
   }
   // OpenAI-compatible transcription prompts guide style/context and should
-  // match the audio language; omit OpenClaw's English default for non-English
-  // language hints unless the user supplied an explicit prompt.
+  // match the audio language; omit OpenClaw's English default for autodetection
+  // and non-English hints unless the user supplied an explicit prompt.
   return undefined;
 }
 
@@ -562,9 +561,10 @@ async function resolveProviderExecutionAuth(params: {
       providerConfig,
     };
   };
-  const { isProviderAuthError, requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
+  const { isProviderAuthError, requireApiKey, resolveApiKeyForProviderCore } =
+    await loadModelAuth();
   try {
-    const auth = await resolveApiKeyForProvider({
+    const auth = await resolveApiKeyForProviderCore({
       provider: params.providerId,
       cfg: params.cfg,
       profileId: params.entry.profile,
@@ -1048,7 +1048,7 @@ export async function runCliEntry(params: {
     });
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
-    const templCtx: TemplateContext = {
+    const templCtx: TemplateContext & Record<string, unknown> = {
       ...ctx,
       AttachmentPath: mediaPath,
       AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
@@ -1073,7 +1073,7 @@ export async function runCliEntry(params: {
       "MediaTranscribedIndexes",
       "MediaStaged",
     ]) {
-      delete (templCtx as unknown as Record<string, unknown>)[key];
+      delete templCtx[key];
     }
     const argv = [command, ...args].map((part, index) =>
       index === 0 ? part : applyTemplate(part, templCtx),

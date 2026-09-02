@@ -11,7 +11,7 @@ import {
 } from "./goals.js";
 import {
   loadSessionEntry,
-  upsertSessionEntry as upsertAccessorSessionEntry,
+  upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
@@ -70,7 +70,7 @@ describe("session goals", () => {
     const goal = await createSessionGoal({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "land the PR",
+      objective: "  land the PR \n",
       tokenBudget: 50,
       now: 10,
     });
@@ -396,7 +396,7 @@ describe("session goals", () => {
     const updated = await updateSessionGoalObjective({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "ship the fix and update docs",
+      objective: "\tship the fix and update docs \n",
       now: 20,
     });
 

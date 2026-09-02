@@ -144,13 +144,15 @@ export async function loadSessionCostSummariesFromCache(params: {
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
   const fileTasks = params.sessions.map(
     (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
   );
   const { results: files } = await runTasksWithConcurrency({
     tasks: fileTasks,
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  });
+  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
+    filePaths: files.flatMap((file) => (file ? [file.filePath] : [])),
   });
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
@@ -162,7 +164,7 @@ export async function loadSessionCostSummariesFromCache(params: {
     const file = files[index];
     const stored = file ? rollups.get(file.filePath) : undefined;
     if (!file || !stored || !isUsageCostRollupFresh({ stored, file })) {
-      staleFiles.add(file?.filePath ?? session.sessionFile);
+      staleFiles.add(file?.sourcePath ?? session.sessionFile);
       return null;
     }
     cachedFiles += 1;

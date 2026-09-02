@@ -6,7 +6,12 @@ import {
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
-import { pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import {
+  pathKey,
+  schemaMayAcceptString,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.shared.ts";
 
 export type ConfigSchemaAnalysis = {
   schema: JsonSchema | null;
@@ -73,10 +78,10 @@ function isAnySchema(schema: JsonSchema): boolean {
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
-  return { enumValues: uniqueValues(filtered), nullable };
+  return { enumValues: uniqueSchemaValues(filtered), nullable };
 }
 
-function uniqueValues(values: unknown[]): unknown[] {
+function uniqueSchemaValues(values: unknown[]): unknown[] {
   const unique: unknown[] = [];
   for (const value of values) {
     if (!unique.some((existing) => Object.is(existing, value))) {
@@ -142,11 +147,27 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
 }
 
 function hasOnlySupportedConstraintKeywords(schema: JsonSchema): boolean {
-  return Object.keys(schema).every((key) => SUPPORTED_CONSTRAINT_ONLY_KEYS.has(key));
+  return hasOnlySupportedKeywords(schema, SUPPORTED_CONSTRAINT_ONLY_KEYS);
 }
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
-  return Object.keys(schema).every((key) => SUPPORTED_FORM_SCHEMA_KEYS.has(key));
+  return hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS);
+}
+
+function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<string>): boolean {
+  return Object.keys(schema).every(
+    (key) =>
+      supported.has(key) ||
+      // Key edits use the same value validator as fields. Admit its supported
+      // string constraints without hiding the whole map behind Raw mode.
+      (key === "propertyNames" &&
+        typeof schema.propertyNames === "object" &&
+        schema.propertyNames !== null &&
+        !Array.isArray(schema.propertyNames) &&
+        schemaMayAcceptString(schema.propertyNames) &&
+        normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
+          .length === 0),
+  );
 }
 
 function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boolean {
@@ -365,8 +386,8 @@ function normalizeSchemaNode(
           compositionBranch,
         );
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
+        for (const unsupportedPath of res.unsupportedPaths) {
+          unsupported.add(unsupportedPath);
         }
       }
     }
@@ -424,8 +445,8 @@ function normalizeSchemaNode(
       } else {
         const res = normalizeSchemaNode(schema.items, [...path, "*"], compositionBranch);
         normalized.items = res.schema ?? schema.items;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
+        for (const unsupportedPath of res.unsupportedPaths) {
+          unsupported.add(unsupportedPath);
         }
       }
     }
@@ -569,11 +590,29 @@ function normalizeUnion(
     return secretInput;
   }
 
+  // An exact boolean branch is finite, except oneOf cannot absorb boolean literals
+  // that also match that branch. Open, nullable, or constrained branches stay in Raw mode.
+  if (literals.length > 0 && remaining.length > 0) {
+    const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
+    const plainBooleanBranch =
+      booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
+    if (
+      !plainBooleanBranch ||
+      literals.includes("true") ||
+      literals.includes("false") ||
+      (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+    ) {
+      return null;
+    }
+    remaining.pop();
+    literals.unshift(true, false);
+  }
+
   if (literals.length > 0 && remaining.length === 0) {
     return {
       schema: {
         ...schema,
-        enum: uniqueValues(literals),
+        enum: uniqueSchemaValues(literals),
         nullable,
         enumIncludesNull: nullable,
         anyOf: undefined,
@@ -582,12 +621,6 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
-  }
-
-  // A native field cannot preserve both literal sentinels and an open typed branch.
-  // Keep the original union for Raw mode instead of silently dropping valid values.
-  if (literals.length > 0 && remaining.length > 0) {
-    return null;
   }
 
   if (remaining.length === 1) {

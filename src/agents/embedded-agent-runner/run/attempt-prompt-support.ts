@@ -14,33 +14,19 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { PluginHookLlmInputEvent } from "../../../plugins/hook-types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
 import {
   type createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
 import type { createCacheTrace } from "../../cache-trace.js";
-import {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-} from "../../code-mode-control-tools.js";
+import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { normalizeToolName } from "../../tool-policy.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
-import {
-  restrictToolSearchCatalog,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-} from "../../tool-search.js";
-import type { AnyAgentTool } from "../../tools/common.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
+import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  mergeForcedEmbeddedAttemptToolsAllow,
-} from "./attempt-tool-construction-plan.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -51,6 +37,54 @@ type PromptBuildToolPolicyBaseline = {
   activeToolNames: readonly string[];
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
+
+/** Retains the prompt hook's cap while replacing the host-owned tool generation. */
+export function createPromptBuildToolPolicy<
+  TEffectiveTool extends NamedTool,
+  TUncompactedTool extends NamedTool,
+  TTool extends NamedTool,
+>(
+  params: Omit<
+    Parameters<typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>>[0],
+    "baseline" | "toolsAllow"
+  > & {
+    onApplied?: (
+      surface: ReturnType<
+        typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>
+      >,
+    ) => void;
+  },
+) {
+  const captureBaseline = (): PromptBuildToolPolicyBaseline => ({
+    activeToolNames: params.session.getActiveToolNames(),
+    catalogEntries: [...(params.catalogRef?.current?.entries ?? [])],
+  });
+  let baseline = captureBaseline();
+  let toolsAllow: string[] | undefined;
+  const current = {
+    activeToolNames: [...baseline.activeToolNames],
+    coreReadAuthorized: params.coreReadAuthorized,
+    effectiveTools: params.effectiveTools,
+    uncompactedEffectiveTools: params.uncompactedEffectiveTools,
+    tools: params.tools,
+  };
+  const apply = (nextToolsAllow: string[] | undefined) => {
+    toolsAllow = nextToolsAllow;
+    Object.assign(current, applyPromptBuildToolsAllow({ ...params, baseline, toolsAllow }));
+    params.onApplied?.(current);
+    return current;
+  };
+  return {
+    current,
+    apply,
+    refresh: () => {
+      // A late hook must filter this generation, never restore retained callable
+      // entries from the catalog that the permission owner has just revoked.
+      baseline = captureBaseline();
+      return apply(toolsAllow);
+    },
+  };
+}
 
 export function applyResolvedToolPromptFinalizer(params: {
   prompt: string;
@@ -63,28 +97,9 @@ export function applyResolvedToolPromptFinalizer(params: {
   return params.finalize({
     prompt: params.prompt,
     messageToolAvailable: params.activeToolNames.some(
-      (toolName) => normalizeToolName(toolName) === "message",
+      (toolName) => normalizeToolPolicyName(toolName) === "message",
     ),
   });
-}
-
-function filterTools<T extends NamedTool>(
-  tools: readonly T[],
-  toolsAllow: string[],
-  toolMeta: (tool: T) => { pluginId: string } | undefined = (tool) =>
-    getPluginToolMeta(tool as unknown as AnyAgentTool),
-): T[] {
-  return applyEmbeddedAttemptToolsAllow([...tools], toolsAllow, {
-    toolMeta,
-  });
-}
-
-function applyToolsAllow<T extends NamedTool>(
-  tools: readonly T[],
-  toolsAllow: string[] | undefined,
-  toolMeta?: (tool: T) => { pluginId: string } | undefined,
-): T[] {
-  return toolsAllow === undefined ? [...tools] : filterTools(tools, toolsAllow, toolMeta);
 }
 
 function sameToolNames(left: readonly string[], right: readonly string[]): boolean {
@@ -109,52 +124,47 @@ export function applyPromptBuildToolsAllow<
   tools: TTool[];
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
+  coreReadAuthorized: boolean;
   forceToolNames?: readonly string[];
 }): {
   activeToolNames: string[];
+  coreReadAuthorized: boolean;
   effectiveTools: TEffectiveTool[];
   uncompactedEffectiveTools: TUncompactedTool[];
   tools: TTool[];
 } {
-  const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
+  const policyInput = {
+    toolsAllow: params.toolsAllow,
     forceToolNames: params.forceToolNames,
-  });
-  const allowedCatalogEntries = applyToolsAllow<ToolSearchCatalogEntry>(
-    params.baseline.catalogEntries,
-    toolsAllow,
-    (entry) => getPluginToolMeta(entry.tool as AnyAgentTool),
-  );
-  const catalogToolCount = restrictToolSearchCatalog({
+  };
+  const promptPolicy = createAgentHarnessPromptToolPolicy({
+    tools: params.effectiveTools,
     catalogRef: params.catalogRef,
-    allowedToolNames: new Set(allowedCatalogEntries.map((entry) => entry.name)),
-    baselineEntries: params.baseline.catalogEntries,
-  });
-  const allowedEffectiveTools = applyToolsAllow(params.effectiveTools, toolsAllow);
-  const allowedUncompactedTools = applyToolsAllow(params.uncompactedEffectiveTools, toolsAllow);
-  const allowedTools = applyToolsAllow(params.tools, toolsAllow);
+    catalogEntries: params.baseline.catalogEntries,
+    codeModeControlsEnabled: params.codeModeControlsEnabled,
+  }).apply(policyInput);
+  const allowedUncompactedTools = createAgentHarnessPromptToolPolicy({
+    tools: params.uncompactedEffectiveTools,
+    codeModeControlsEnabled: false,
+  }).apply(policyInput).tools;
+  const allowedTools = createAgentHarnessPromptToolPolicy({
+    tools: params.tools,
+    codeModeControlsEnabled: false,
+  }).apply(policyInput).tools;
   const allowedActiveNames = new Set(
-    applyToolsAllow(
-      params.baseline.activeToolNames.map((name) => ({ name })),
-      toolsAllow,
-    ).map((tool) => normalizeToolName(tool.name)),
+    createAgentHarnessPromptToolPolicy({
+      tools: params.baseline.activeToolNames.map((name) => ({ name })),
+      codeModeControlsEnabled: false,
+    })
+      .apply(policyInput)
+      .tools.map((tool) => normalizeToolPolicyName(tool.name)),
   );
-  for (const tool of [...allowedEffectiveTools, ...allowedUncompactedTools, ...allowedTools]) {
-    allowedActiveNames.add(normalizeToolName(tool.name));
+  for (const tool of [...promptPolicy.tools, ...allowedUncompactedTools, ...allowedTools]) {
+    allowedActiveNames.add(normalizeToolPolicyName(tool.name));
   }
 
-  const catalogControlNames = params.codeModeControlsEnabled
-    ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
-    : TOOL_SEARCH_CONTROL_TOOL_NAMES;
-  const keepVisibleTool = (tool: NamedTool) => {
-    const normalized = normalizeToolName(tool.name);
-    return (
-      allowedActiveNames.has(normalized) ||
-      (catalogToolCount > 0 && catalogControlNames.has(normalized))
-    );
-  };
-  const effectiveTools = params.effectiveTools.filter(keepVisibleTool);
   const activeToolNames = params.baseline.activeToolNames.filter((name) =>
-    keepVisibleTool({ name }),
+    allowedActiveNames.has(normalizeToolPolicyName(name)),
   );
   if (!sameToolNames(params.session.getActiveToolNames(), activeToolNames)) {
     params.session.setActiveToolsByName(activeToolNames);
@@ -162,7 +172,10 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
-    effectiveTools,
+    coreReadAuthorized:
+      params.coreReadAuthorized &&
+      allowedUncompactedTools.some((tool) => normalizeToolPolicyName(tool.name) === "read"),
+    effectiveTools: promptPolicy.tools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,
   };
@@ -240,13 +253,14 @@ export function observeEmbeddedAttemptPrompt(input: {
       note: `images: prompt=${input.imageCount}`,
     });
     const providerVisibleTools = toTrajectoryToolDefinitions(input.effectiveTools);
+    const trajectoryTools = input.toolSearchCompacted
+      ? toTrajectoryToolDefinitions(input.uncompactedEffectiveTools)
+      : providerVisibleTools;
     input.trajectoryRecorder?.recordEvent("context.compiled", {
       systemPrompt: input.systemPromptForHook,
       prompt: input.promptForModel,
       messages: input.sessionMessages,
-      tools: toTrajectoryToolDefinitions(
-        input.toolSearchCompacted ? input.uncompactedEffectiveTools : input.effectiveTools,
-      ),
+      tools: trajectoryTools,
       ...(input.toolSearchCompacted ? { providerVisibleTools } : {}),
       imagesCount: input.imageCount,
       streamStrategy: input.streamStrategy,

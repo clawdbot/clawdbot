@@ -24,7 +24,7 @@
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "autoEnableWhenConfiguredProviders": ["google", "google-gemini-cli", "google-vertex"],
   "modelIdNormalization": {
     "providers": {
       "google": {
@@ -750,7 +750,7 @@
   },
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
-    "memoryEmbeddingProviders": ["gemini"],
+    "embeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
     "realtimeVoiceProviders": ["google"],

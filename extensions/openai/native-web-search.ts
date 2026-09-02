@@ -92,7 +92,10 @@ export function createOpenAINativeWebSearchWrapper(
 ): StreamFn {
   return createPayloadPatchStreamWrapper(
     baseStreamFn,
-    ({ payload }) => {
+    ({ payload, options }) => {
+      (
+        options as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined
+      )?.openclawCodeModeAllowedHostedToolTypes?.add(OPENAI_WEB_SEARCH_TOOL.type);
       patchOpenAINativeWebSearchPayload(payload);
     },
     {

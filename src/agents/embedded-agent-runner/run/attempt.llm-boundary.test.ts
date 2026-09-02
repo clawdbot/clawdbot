@@ -10,7 +10,7 @@ import {
   installModelPromptTransform,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 describe("normalizeMessagesForLlmBoundary", () => {

@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -58,6 +60,7 @@ type WorkflowRunSummary = {
   label: string;
   url?: string;
   durationSeconds?: number;
+  advisory?: { status: string; conclusion: string; failedJobs: string[] };
   bootstrapEvidence?: {
     targetSha: string;
     workflowSha: string;
@@ -91,21 +94,15 @@ const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".
 // verifier on the same release train instead of forcing a republish/correction.
 const NPM_VIEW_ATTEMPTS = 30;
 const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
+const RELEASE_COMMAND_TIMEOUT_MS = 120_000;
+const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function requireString(value: unknown, label: string): string {
-  const stringValue = readString(value);
+  const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined) {
     throw new Error(`${label} is missing.`);
   }
@@ -120,11 +117,11 @@ function readTrustedClawHubToolchainIdentity(): {
   const lockPath = resolve(TRUSTED_TOOLING_ROOT, ".github/release/clawhub-cli/package-lock.json");
   const lockBytes = readFileSync(lockPath);
   const lock = parseJson(lockBytes.toString("utf8"), "trusted ClawHub CLI package-lock.json");
-  if (!isRecord(lock) || !isRecord(lock.packages)) {
+  if (!isJsonRecord(lock) || !isJsonRecord(lock.packages)) {
     throw new Error("Trusted ClawHub CLI package-lock.json is invalid.");
   }
   const clawhub = lock.packages["node_modules/clawhub"];
-  if (!isRecord(clawhub)) {
+  if (!isJsonRecord(clawhub)) {
     throw new Error("Trusted ClawHub CLI package-lock.json is missing clawhub.");
   }
   const clawhubToolchainIntegrity = requireString(
@@ -141,18 +138,31 @@ function readTrustedClawHubToolchainIdentity(): {
   };
 }
 
-function runCommand(command: string, args: string[], options: { cwd?: string } = {}): string {
+export function runReleaseVerifierCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; maxBufferBytes?: number; timeoutMs?: number } = {},
+): string {
   return execFileSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBufferBytes ?? RELEASE_COMMAND_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: options.timeoutMs ?? RELEASE_COMMAND_TIMEOUT_MS,
   }).trim();
 }
 
-function runCommandInherited(command: string, args: string[]): void {
-  execFileSync(command, args, {
-    stdio: "inherit",
-  });
+function isNpmPropagationError(error: unknown): boolean {
+  if (!isJsonRecord(error)) {
+    return false;
+  }
+  const details = [error.code, error.message, error.stderr]
+    .map((value) =>
+      Buffer.isBuffer(value) ? value.toString("utf8") : typeof value === "string" ? value : "",
+    )
+    .join("\n");
+  return /\b(?:E404|ETARGET)\b|No match found for version/u.test(details);
 }
 
 export async function runNpmViewWithRetry(
@@ -170,13 +180,16 @@ export async function runNpmViewWithRetry(
       new Promise((resolveDelay) => {
         setTimeout(resolveDelay, delayMs);
       }));
-  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
+  const run = options.run ?? ((npmArgs: string[]) => runReleaseVerifierCommand("npm", npmArgs));
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return run([...args, "--prefer-online"]);
     } catch (error) {
+      if (!isNpmPropagationError(error)) {
+        throw error;
+      }
       lastError = error;
     }
     if (attempt < attempts) {
@@ -200,22 +213,26 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
   const parsed = parseJson(raw, "npm view");
   if (Array.isArray(parsed)) {
     return {
-      version: readString(parsed[0]),
-      distTagVersion: readString(parsed[1]),
-      integrity: readString(parsed[2]),
-      tarball: readString(parsed[3]),
+      version: normalizeOptionalString(parsed[0]),
+      distTagVersion: normalizeOptionalString(parsed[1]),
+      integrity: normalizeOptionalString(parsed[2]),
+      tarball: normalizeOptionalString(parsed[3]),
     };
   }
-  if (!isRecord(parsed)) {
+  if (!isJsonRecord(parsed)) {
     throw new Error("npm view returned an unsupported JSON shape.");
   }
-  const distTags = isRecord(parsed["dist-tags"]) ? parsed["dist-tags"] : undefined;
-  const dist = isRecord(parsed.dist) ? parsed.dist : undefined;
+  const distTags = isJsonRecord(parsed["dist-tags"]) ? parsed["dist-tags"] : undefined;
+  const dist = isJsonRecord(parsed.dist) ? parsed.dist : undefined;
   return {
-    version: readString(parsed.version),
-    distTagVersion: readString(parsed[`dist-tags.${distTag}`]) ?? readString(distTags?.[distTag]),
-    integrity: readString(parsed["dist.integrity"]) ?? readString(dist?.integrity),
-    tarball: readString(parsed["dist.tarball"]) ?? readString(dist?.tarball),
+    version: normalizeOptionalString(parsed.version),
+    distTagVersion:
+      normalizeOptionalString(parsed[`dist-tags.${distTag}`]) ??
+      normalizeOptionalString(distTags?.[distTag]),
+    integrity:
+      normalizeOptionalString(parsed["dist.integrity"]) ?? normalizeOptionalString(dist?.integrity),
+    tarball:
+      normalizeOptionalString(parsed["dist.tarball"]) ?? normalizeOptionalString(dist?.tarball),
   };
 }
 
@@ -519,11 +536,11 @@ async function verifyNpmPackage(
 }
 
 function readClawHubTags(detail: unknown): Record<string, string> {
-  if (!isRecord(detail)) {
+  if (!isJsonRecord(detail)) {
     return {};
   }
-  const packageDetail = isRecord(detail.package) ? detail.package : undefined;
-  const tags = isRecord(packageDetail?.tags) ? packageDetail.tags : undefined;
+  const packageDetail = isJsonRecord(detail.package) ? detail.package : undefined;
+  const tags = isJsonRecord(packageDetail?.tags) ? packageDetail.tags : undefined;
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(tags ?? {})) {
     if (typeof value === "string") {
@@ -566,7 +583,7 @@ async function verifyClawHubPackage(params: {
 }
 
 function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "release",
     "view",
     params.tag,
@@ -576,7 +593,7 @@ function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
     "tagName,isPrerelease,url",
   ]);
   const release = parseJson(raw, "gh release view");
-  if (!isRecord(release)) {
+  if (!isJsonRecord(release)) {
     throw new Error("GitHub release returned an unsupported JSON shape.");
   }
   if (release.tagName !== params.tag) {
@@ -597,9 +614,10 @@ function verifyWorkflowRun(params: {
   expectedWorkflowName: string;
   expectedHeadBranch?: string;
   allowedHeadBranches?: string[];
+  advisory?: boolean;
   rerunFailed: boolean;
 }): WorkflowRunSummary {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "run",
     "view",
     params.id,
@@ -609,22 +627,22 @@ function verifyWorkflowRun(params: {
     "workflowName,headBranch,event,status,conclusion,url,createdAt,updatedAt,jobs",
   ]);
   const run = parseJson(raw, `gh run view ${params.id}`);
-  if (!isRecord(run)) {
+  if (!isJsonRecord(run)) {
     throw new Error(`${params.label}: workflow run returned an unsupported JSON shape.`);
   }
-  const workflowName = readString(run.workflowName);
+  const workflowName = normalizeOptionalString(run.workflowName);
   if (workflowName !== params.expectedWorkflowName) {
     throw new Error(
       `${params.label}: run ${params.id} workflow is ${workflowName ?? "<missing>"}, expected ${params.expectedWorkflowName}.`,
     );
   }
-  const event = readString(run.event);
+  const event = normalizeOptionalString(run.event);
   if (event !== "workflow_dispatch") {
     throw new Error(
       `${params.label}: run ${params.id} event is ${event ?? "<missing>"}, expected workflow_dispatch.`,
     );
   }
-  const headBranch = readString(run.headBranch);
+  const headBranch = normalizeOptionalString(run.headBranch);
   const allowedHeadBranches =
     params.allowedHeadBranches ??
     (params.expectedHeadBranch !== undefined ? [params.expectedHeadBranch] : []);
@@ -633,29 +651,34 @@ function verifyWorkflowRun(params: {
       `${params.label}: run ${params.id} branch is ${headBranch ?? "<missing>"}, expected ${allowedHeadBranches.join(" or ")}.`,
     );
   }
-  const status = readString(run.status);
-  const conclusion = readString(run.conclusion);
-  const jobs = Array.isArray(run.jobs) ? run.jobs.filter(isRecord) : [];
+  const status = normalizeOptionalString(run.status);
+  const conclusion = normalizeOptionalString(run.conclusion);
+  const jobs = Array.isArray(run.jobs) ? run.jobs.filter(isJsonRecord) : [];
   const failedJobs = jobs.filter((job) => {
-    const jobConclusion = readString(job.conclusion);
+    const jobConclusion = normalizeOptionalString(job.conclusion);
     return (
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
   if (failedJobs.length > 0 && params.rerunFailed) {
-    runCommandInherited("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
+    runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
-    const failedNames = failedJobs.map((job) => readString(job.name) ?? "<unnamed>").join(", ");
+  if (
+    status !== "completed" ||
+    (!params.advisory && (conclusion !== "success" || failedJobs.length > 0))
+  ) {
+    const failedNames = failedJobs
+      .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
+      .join(", ");
     throw new Error(
       `${params.label}: run ${params.id} is ${status ?? "<missing>"}/${conclusion ?? "<missing>"}${failedNames ? `; failed jobs: ${failedNames}` : ""}.`,
     );
   }
-  const createdAt = readString(run.createdAt);
-  const updatedAt = readString(run.updatedAt);
+  const createdAt = normalizeOptionalString(run.createdAt);
+  const updatedAt = normalizeOptionalString(run.updatedAt);
   const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
   const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
   const durationSeconds =
@@ -665,8 +688,17 @@ function verifyWorkflowRun(params: {
   return {
     id: params.id,
     label: params.label,
-    url: readString(run.url),
+    url: normalizeOptionalString(run.url),
     durationSeconds,
+    ...(params.advisory
+      ? {
+          advisory: {
+            status: status ?? "unavailable",
+            conclusion: conclusion ?? "unavailable",
+            failedJobs: failedJobs.map((job) => normalizeOptionalString(job.name) ?? "<unnamed>"),
+          },
+        }
+      : {}),
   };
 }
 
@@ -674,7 +706,7 @@ function requirePositiveIntegerString(value: unknown, label: string): string {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
     return String(value);
   }
-  const stringValue = readString(value);
+  const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined || !POSITIVE_INTEGER_PATTERN.test(stringValue)) {
     throw new Error(`${label} must be a positive integer.`);
   }
@@ -733,7 +765,7 @@ function requireArtifactWorkflowRun(
     throw new Error(`${params.label} is expired or missing its immutable state.`);
   }
   const workflowRun = artifact.workflow_run;
-  if (!isRecord(workflowRun)) {
+  if (!isJsonRecord(workflowRun)) {
     throw new Error(`${params.label} is missing workflow_run metadata.`);
   }
   if (
@@ -762,7 +794,7 @@ function requireClawHubBootstrapRunBinding(
   terminalRunAttempt: string;
   workflowPath: string;
 } {
-  if (!isRecord(run)) {
+  if (!isJsonRecord(run)) {
     throw new Error("Plugin ClawHub New run metadata is invalid.");
   }
   const runId = requirePositiveSafeInteger(run.id, "Plugin ClawHub New run id");
@@ -809,7 +841,7 @@ function requireClawHubReadbackArtifactBinding(
   artifactName: string;
   artifactSizeBytes: number;
 } {
-  if (!isRecord(artifact)) {
+  if (!isJsonRecord(artifact)) {
     throw new Error("Plugin ClawHub New readback artifact metadata is invalid.");
   }
   const artifactName = `clawhub-bootstrap-readback-${run.runId}-${run.terminalRunAttempt}`;
@@ -839,7 +871,7 @@ function validateBootstrapPackageEvidence(
   value: unknown,
   params: { packageName: string; version: string },
 ): void {
-  if (!isRecord(value)) {
+  if (!isJsonRecord(value)) {
     throw new Error(`${params.packageName} bootstrap evidence is invalid.`);
   }
   if (
@@ -876,7 +908,7 @@ function validateBootstrapPackageEvidence(
   const npmIntegrity = requireString(value.npmIntegrity, `${params.packageName} npm integrity`);
   const npmShasum = requireString(value.npmShasum, `${params.packageName} npm shasum`);
   const metadata = value.artifactMetadata;
-  if (!isRecord(metadata)) {
+  if (!isJsonRecord(metadata)) {
     throw new Error(`${params.packageName} artifact metadata evidence is invalid.`);
   }
   if (metadata.kind !== "npm-pack") {
@@ -930,7 +962,7 @@ export function validateClawHubBootstrapEvidence(params: {
     throw new Error("Downloaded Plugin ClawHub New readback artifact digest mismatch.");
   }
 
-  if (!isRecord(params.evidence)) {
+  if (!isJsonRecord(params.evidence)) {
     throw new Error("Plugin ClawHub New readback evidence is invalid.");
   }
   if (params.evidence.schemaVersion !== 2 || params.evidence.verificationMode !== "postpublish") {
@@ -991,7 +1023,7 @@ export function validateClawHubBootstrapEvidence(params: {
   }
   const evidencePackages = params.evidence.packages
     .map((entry) =>
-      isRecord(entry) ? requireString(entry.packageName, "bootstrap package name") : "",
+      isJsonRecord(entry) ? requireString(entry.packageName, "bootstrap package name") : "",
     )
     .toSorted(compareCodeUnits);
   if (JSON.stringify(evidencePackages) !== JSON.stringify(expectedPackages)) {
@@ -1000,13 +1032,13 @@ export function validateClawHubBootstrapEvidence(params: {
   for (const packageName of expectedPackages) {
     validateBootstrapPackageEvidence(
       params.evidence.packages.find(
-        (entry) => isRecord(entry) && entry.packageName === packageName,
+        (entry) => isJsonRecord(entry) && entry.packageName === packageName,
       ),
       { packageName, version: params.expectedVersion },
     );
   }
 
-  if (!isRecord(params.packageArtifact)) {
+  if (!isJsonRecord(params.packageArtifact)) {
     throw new Error("Plugin ClawHub New package artifact metadata is invalid.");
   }
   const packageArtifactId = requirePositiveIntegerString(
@@ -1053,14 +1085,14 @@ export function validateClawHubBootstrapEvidence(params: {
     );
   }
 
-  const createdAt = readString(runBinding.run.created_at);
-  const updatedAt = readString(runBinding.run.updated_at);
+  const createdAt = normalizeOptionalString(runBinding.run.created_at);
+  const updatedAt = normalizeOptionalString(runBinding.run.updated_at);
   const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
   const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
   return {
     id: runId,
     label: "Plugin ClawHub New",
-    url: readString(runBinding.run.html_url),
+    url: normalizeOptionalString(runBinding.run.html_url),
     durationSeconds:
       Number.isFinite(createdMs) && Number.isFinite(updatedMs)
         ? Math.max(0, Math.round((updatedMs - createdMs) / 1000))
@@ -1082,12 +1114,14 @@ export function validateClawHubBootstrapEvidence(params: {
 }
 
 function readGitHubApiJson(repo: string, endpoint: string, label: string): unknown {
-  return parseJson(runCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
+  return parseJson(runReleaseVerifierCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
 }
 
 function readGitHubToken(): string {
   return requireString(
-    process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? runCommand("gh", ["auth", "token"]),
+    process.env.GH_TOKEN ??
+      process.env.GITHUB_TOKEN ??
+      runReleaseVerifierCommand("gh", ["auth", "token"]),
     "GitHub token",
   );
 }
@@ -1186,13 +1220,13 @@ async function verifyClawHubBootstrapRun(params: {
     `actions/runs/${params.runId}/artifacts?per_page=100&name=${encodeURIComponent(readbackName)}`,
     "Plugin ClawHub New readback artifact list",
   );
-  if (!isRecord(artifactList) || !Array.isArray(artifactList.artifacts)) {
+  if (!isJsonRecord(artifactList) || !Array.isArray(artifactList.artifacts)) {
     throw new Error("Plugin ClawHub New readback artifact list is invalid.");
   }
   const readbackArtifacts = artifactList.artifacts.filter(
-    (artifact) => isRecord(artifact) && artifact.name === readbackName,
+    (artifact) => isJsonRecord(artifact) && artifact.name === readbackName,
   );
-  if (readbackArtifacts.length !== 1 || !isRecord(readbackArtifacts[0])) {
+  if (readbackArtifacts.length !== 1 || !isJsonRecord(readbackArtifacts[0])) {
     throw new Error(
       `Plugin ClawHub New run must have exactly one ${readbackName} artifact; found ${readbackArtifacts.length}.`,
     );
@@ -1205,7 +1239,7 @@ async function verifyClawHubBootstrapRun(params: {
     readbackArtifact,
     token: readGitHubToken(),
   });
-  if (!isRecord(downloaded.value)) {
+  if (!isJsonRecord(downloaded.value)) {
     throw new Error("Plugin ClawHub New readback evidence is invalid.");
   }
   const packageArtifactId = requirePositiveIntegerString(
@@ -1236,7 +1270,7 @@ function readRootPackageVersion(rootDir: string): string {
     readFileSync(resolve(rootDir, "package.json"), "utf8"),
     "package.json",
   );
-  if (!isRecord(packageJson)) {
+  if (!isJsonRecord(packageJson)) {
     throw new Error("package.json returned an unsupported JSON shape.");
   }
   return requireString(packageJson.version, "package.json version");
@@ -1276,7 +1310,9 @@ export async function verifyBetaRelease(
     throw new Error(`package.json version is ${rootVersion}; expected ${args.version}.`);
   }
   if (args.releaseSha !== undefined) {
-    const checkedOutSha = runCommand("git", ["rev-parse", "HEAD"], { cwd: rootDir });
+    const checkedOutSha = runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], {
+      cwd: rootDir,
+    });
     if (checkedOutSha !== args.releaseSha) {
       throw new Error(`release checkout SHA is ${checkedOutSha}; expected ${args.releaseSha}.`);
     }
@@ -1298,7 +1334,9 @@ export async function verifyBetaRelease(
       rootDir,
       args.postpublishVerifier,
     );
-    runCommandInherited("node", ["--import", "tsx", postpublishVerifier, args.version]);
+    execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version], {
+      stdio: "inherit",
+    });
     lines.push("openclaw postpublish verifier OK");
   }
 
@@ -1411,14 +1449,21 @@ export async function verifyBetaRelease(
         repo: args.repo,
         expectedWorkflowName: "NPM Telegram Beta E2E",
         allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
+        advisory: true,
         rerunFailed: false,
       }),
     );
   }
   for (const run of workflowRuns) {
-    lines.push(
-      `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
-    );
+    if (run.advisory) {
+      lines.push(
+        `${run.label} advisory: ${run.id} (${run.advisory.status}/${run.advisory.conclusion}; failed jobs: ${run.advisory.failedJobs.join(", ") || "none"})${run.url ? ` ${run.url}` : ""}`,
+      );
+    } else {
+      lines.push(
+        `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
+      );
+    }
   }
 
   if (args.evidenceOut !== undefined) {

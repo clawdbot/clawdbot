@@ -29,6 +29,48 @@ type CronStoreWrite = {
   jobs: Array<{ id: string; delivery: { channel: string; to: string } }>;
 };
 
+const scopedTargetWritebackCases = [
+  {
+    name: "channel Direct Messages topic",
+    rawTarget: "@mychannel:direct-topic:77",
+    matchingTarget: "t.me/MyChannel:direct-topic:77",
+    resolvedTarget: "-100123:direct-topic:77",
+    unmatchedTargets: [
+      "@mychannel",
+      "@mychannel:direct-topic:88",
+      "@mychannel:topic:77",
+      "@mychannel:77",
+      "@otherchannel:direct-topic:77",
+    ],
+  },
+  {
+    name: "explicit forum topic",
+    rawTarget: "@mychannel:topic:77",
+    matchingTarget: "t.me/MyChannel:77",
+    resolvedTarget: "-100123:topic:77",
+    unmatchedTargets: ["@mychannel", "@mychannel:direct-topic:77", "@mychannel:topic:88"],
+  },
+  {
+    name: "shorthand forum topic",
+    rawTarget: "@mychannel:77",
+    matchingTarget: "t.me/MyChannel:topic:77",
+    resolvedTarget: "-100123:77",
+    unmatchedTargets: ["@mychannel", "@mychannel:direct-topic:77", "@mychannel:88"],
+  },
+  {
+    name: "unthreaded target",
+    rawTarget: "t.me/mychannel",
+    matchingTarget: "@MyChannel",
+    resolvedTarget: "-100123",
+    unmatchedTargets: [
+      "@mychannel:direct-topic:77",
+      "@mychannel:direct-topic:88",
+      "@mychannel:topic:77",
+      "@mychannel:77",
+    ],
+  },
+] as const;
+
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-mutation")>(
     "openclaw/plugin-sdk/config-mutation",
@@ -251,33 +293,58 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       ]);
     });
 
-    it("preserves topic suffix style in writeback target", async () => {
+    it.each(
+      scopedTargetWritebackCases.flatMap((testCase) =>
+        (["config", "cron"] as const).map((surface) => ({
+          name: testCase.name,
+          surface,
+          testCase,
+        })),
+      ),
+    )("rewrites only matching $name $surface targets", async ({ surface, testCase }) => {
+      const unmatchedAccounts = Object.fromEntries(
+        testCase.unmatchedTargets.map((target, index) => [`other${index}`, { defaultTo: target }]),
+      );
       readConfigFileSnapshotForWrite.mockResolvedValue({
         snapshot: {
           config: {
             channels: {
               telegram: {
-                defaultTo: "t.me/mychannel:topic:9",
+                defaultTo: testCase.matchingTarget,
+                accounts: unmatchedAccounts,
               },
             },
           },
         },
         writeOptions: {},
       });
-      loadCronStore.mockResolvedValue({ version: 1, jobs: [] });
+      loadCronStore.mockResolvedValue({
+        version: 1,
+        jobs: [testCase.matchingTarget, ...testCase.unmatchedTargets].map((target, index) => ({
+          id: String(index),
+          delivery: { channel: "telegram", to: target },
+        })),
+      });
 
       await maybePersistResolvedTelegramTarget({
         cfg: {} as OpenClawConfig,
-        rawTarget: "t.me/mychannel:topic:9",
+        rawTarget: testCase.rawTarget,
         resolvedChatId: "-100123",
         gatewayClientScopes: undefined,
         trustedInternalWriteback: true,
       });
 
-      expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      const [writtenConfig, writeOptions] = requireWriteConfigCall();
-      expect(writtenConfig.channels?.telegram?.defaultTo).toBe("-100123:topic:9");
-      expect(writeOptions).toEqual({});
+      const persistedTargets =
+        surface === "config"
+          ? [
+              requireWriteConfigCall()[0].channels?.telegram?.defaultTo,
+              ...Object.values(requireWriteConfigCall()[0].channels?.telegram?.accounts ?? {}).map(
+                (account) => account.defaultTo,
+              ),
+            ]
+          : requireSaveCronStoreCall()[1].jobs.map((job) => job.delivery.to);
+
+      expect(persistedTargets).toEqual([testCase.resolvedTarget, ...testCase.unmatchedTargets]);
     });
 
     it("matches username targets case-insensitively", async () => {

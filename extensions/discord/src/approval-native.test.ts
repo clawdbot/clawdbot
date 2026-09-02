@@ -35,6 +35,10 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(getDiscordApprovalCapability().nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
     const adapter = createDiscordNativeApprovalAdapter();
     const cfg = {
@@ -106,6 +110,33 @@ describe("createDiscordNativeApprovalAdapter", () => {
           expiresAtMs: 2,
         },
       }),
+    ).toBe(true);
+  });
+
+  it("reports each configured account as a raw candidate for coordinator selection", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123"] },
+      channels: {
+        discord: {
+          accounts: {
+            default: { token: "token-default", execApprovals: { enabled: true } },
+            ops: { token: "token-ops", execApprovals: { enabled: true } },
+          },
+        },
+      },
+    } as const;
+    const request = {
+      id: "approval-unbound",
+      request: { command: "pwd", turnSourceChannel: "discord" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    } as const;
+
+    expect(
+      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "default", request }),
+    ).toBe(true);
+    expect(
+      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "ops", request }),
     ).toBe(true);
   });
 
@@ -299,7 +330,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: NATIVE_DELIVERY_CFG as never,
-      accountId: "main",
+      accountId: "default",
       approvalKind: "plugin",
       request: {
         id: "abc",
@@ -347,7 +378,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: NATIVE_DELIVERY_CFG as never,
-      accountId: "main",
+      accountId: "default",
       approvalKind: "plugin",
       request: {
         id: "abc",

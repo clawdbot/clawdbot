@@ -1,10 +1,14 @@
-import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isBillingErrorMessage, isRateLimitErrorMessage } from "./message-patterns.js";
+import {
+  isBillingErrorMessage,
+  isProviderRequestSizeCeilingError,
+  isRateLimitErrorMessage,
+} from "./message-patterns.js";
 import {
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
-  matchesLegacyProviderContextOverflow,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -21,8 +25,7 @@ export function isReasoningConstraintErrorMessage(raw: string): boolean {
 }
 
 function hasRateLimitTpmHint(raw: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
+  return matchesContextOverflowMessage(raw, "tpm-rate-limit-hint");
 }
 
 /** Detect explicit context-window overflow without confusing TPM rate limits. */
@@ -30,10 +33,9 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   if (!errorMessage) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(errorMessage);
-
-  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context
+  // overflow — unless the request alone exceeds the whole limit, which no wait can satisfy.
+  if (hasRateLimitTpmHint(errorMessage) && !isProviderRequestSizeCeilingError(errorMessage)) {
     return false;
   }
 
@@ -41,68 +43,37 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
     return false;
   }
 
-  const hasRequestSizeExceeds = lower.includes("request size exceeds");
-  const hasContextWindow =
-    lower.includes("context window") ||
-    lower.includes("context length") ||
-    lower.includes("maximum context length");
-  const hasContextWindowOutOfRoom =
-    hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
-    lower.includes("request_too_large") ||
-    lower.includes("context_overflow") ||
-    isConfiguredContextSizeOverflowError(errorMessage) ||
-    (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
-    lower.includes("request exceeds the maximum size") ||
-    lower.includes("context length exceeded") ||
-    lower.includes("maximum context length") ||
-    lower.includes("prompt is too long") ||
-    lower.includes("prompt too long") ||
-    lower.includes("exceeds model context window") ||
-    lower.includes("model token limit") ||
-    (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
-    hasContextWindowOutOfRoom ||
-    (hasRequestSizeExceeds && hasContextWindow) ||
-    lower.includes("context overflow:") ||
-    lower.includes("exceed context limit") ||
-    lower.includes("exceeds the model's maximum context") ||
-    (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
-    (lower.includes("input length") && lower.includes("exceed") && lower.includes("context")) ||
-    (lower.includes("413") && lower.includes("too large")) ||
-    // Anthropic API and OpenAI-compatible providers (e.g. ZhipuAI/GLM) return this stop reason
-    // when the context window is exceeded. shared model runtime surfaces it as "Unhandled stop reason: model_context_window_exceeded".
-    lower.includes("context_window_exceeded") ||
-    // Chinese proxy error messages for context overflow
-    errorMessage.includes("上下文过长") ||
-    errorMessage.includes("上下文超出") ||
-    errorMessage.includes("上下文长度超") ||
-    errorMessage.includes("超出最大上下文") ||
-    errorMessage.includes("请压缩上下文") ||
-    // Provider-specific patterns (Bedrock, Azure, Ollama, Mistral, Cohere, etc.)
-    matchesLegacyProviderContextOverflow(errorMessage)
+    matchesContextOverflowMessage(errorMessage, "failover-explicit") ||
+    (looksLikeProviderContextOverflowCandidate(errorMessage) &&
+      matchesContextOverflowMessage(errorMessage, "provider-fallback"))
   );
 }
 
-export function isContextOverflowError(errorMessage?: string): boolean {
+export function isContextOverflowError(
+  errorMessage?: string,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
+): boolean {
   if (!errorMessage) {
     return false;
   }
   return (
+    isContextOverflowErrorFromTables(errorMessage) ||
     (looksLikeProviderContextOverflowCandidate(errorMessage) &&
-      classifyProviderPluginError({ errorMessage }) === "context_overflow") ||
-    isContextOverflowErrorFromTables(errorMessage)
+      classifyProviderPluginError({ errorMessage, providerPlugin: opts?.providerPlugin }) ===
+        "context_overflow")
   );
 }
-
-const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
-const CONTEXT_OVERFLOW_HINT_RE =
-  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
-const RATE_LIMIT_HINT_RE =
-  /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
+  }
+
+  // Settle an unsatisfiable request size first: the TPM and rate-limit exclusions below would
+  // otherwise claim the message on its rate-limit wording alone.
+  if (isProviderRequestSizeCeilingError(errorMessage)) {
+    return isContextOverflowErrorFromTables(errorMessage);
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
@@ -121,7 +92,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
 
-  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
+  if (matchesContextOverflowMessage(errorMessage, "context-window-too-small")) {
     return false;
   }
   // Rate limit errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
@@ -133,8 +104,11 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
-  if (RATE_LIMIT_HINT_RE.test(errorMessage)) {
+  if (normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template")) {
     return false;
   }
-  return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
+  if (matchesContextOverflowMessage(errorMessage, "rate-limit-hint")) {
+    return false;
+  }
+  return matchesContextOverflowMessage(errorMessage, "failover-hint");
 }

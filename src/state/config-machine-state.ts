@@ -1,18 +1,16 @@
 // Machine-owned values retired from openclaw.json live in the shared state database.
-import { existsSync } from "node:fs";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
@@ -33,15 +31,11 @@ function serializeStateValue(value: unknown): string {
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
-export function readConfigMachineState<T>(
+export function readConfigMachineStateWithMetadata<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
-): T | undefined {
-  const pathname = options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
-  if (!existsSync(pathname)) {
-    return undefined;
-  }
-  return withOpenClawStateDatabaseReadOnly(({ db: database }) => {
+): { value: T; updatedAtMs: number } | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db: database }) => {
     if (!tableExists(database, "config_machine_state")) {
       return undefined;
     }
@@ -50,11 +44,21 @@ export function readConfigMachineState<T>(
       database,
       db
         .selectFrom("config_machine_state")
-        .select("value_json")
+        .select(["value_json", "updated_at_ms"])
         .where("state_key", "=", normalizeStateKey(key)),
     );
-    return row ? (JSON.parse(row.value_json) as T) : undefined;
+    return row
+      ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
+      : undefined;
   }, options);
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
+export function readConfigMachineState<T>(
+  key: string,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  return readConfigMachineStateWithMetadata<T>(key, options)?.value;
 }
 
 export function writeConfigMachineState(
@@ -87,8 +91,19 @@ export function writeConfigMachineState(
 export function updateConfigMachineState<T>(
   key: string,
   update: (current: T | undefined) => T,
+  options?: OpenClawStateDatabaseOptions,
+): T;
+/** Returning undefined removes the key within the same compare-and-update transaction. */
+export function updateConfigMachineState<T>(
+  key: string,
+  update: (current: T | undefined) => T | undefined,
+  options?: OpenClawStateDatabaseOptions,
+): T | undefined;
+export function updateConfigMachineState<T>(
+  key: string,
+  update: (current: T | undefined) => T | undefined,
   options: OpenClawStateDatabaseOptions = {},
-): T {
+): T | undefined {
   const stateKey = normalizeStateKey(key);
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
@@ -102,6 +117,15 @@ export function updateConfigMachineState<T>(
           .where("state_key", "=", stateKey),
       );
       const value = update(row ? (JSON.parse(row.value_json) as T) : undefined);
+      if (value === undefined) {
+        if (row) {
+          executeSqliteQuerySync(
+            database.db,
+            db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+          );
+        }
+        return undefined;
+      }
       const valueJson = serializeStateValue(value);
       executeSqliteQuerySync(
         database.db,
@@ -116,6 +140,26 @@ export function updateConfigMachineState<T>(
     },
     options,
     { operationLabel: "config-machine-state.update" },
+  );
+}
+
+/** Delete one machine-state value, reporting whether a stored value existed. */
+export function deleteConfigMachineState(
+  key: string,
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  const stateKey = normalizeStateKey(key);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+      );
+      return (result.numAffectedRows ?? 0n) > 0n;
+    },
+    options,
+    { operationLabel: "config-machine-state.delete" },
   );
 }
 

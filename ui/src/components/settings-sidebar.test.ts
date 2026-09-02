@@ -47,7 +47,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "",
@@ -79,7 +79,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "",
@@ -110,7 +110,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "cp",
@@ -149,7 +149,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "mcp",
@@ -183,7 +183,9 @@ describe("settings sidebar search", () => {
       ),
     ].map((item) => item.textContent?.trim());
     expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
-    expect(container.querySelector(".settings-sidebar__item--active")).toBeNull();
+    const active = container.querySelector(".settings-sidebar__item--active");
+    expect(active?.textContent).toContain("Appearance");
+    expect(active?.getAttribute("aria-current")).toBe("page");
 
     const language = container.querySelector<HTMLAnchorElement>(
       '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',
@@ -205,7 +207,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "infrastructure",
@@ -254,7 +256,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "agent defaults",
@@ -274,6 +276,42 @@ describe("settings sidebar search", () => {
     expect(result?.textContent?.trim()).toBe("Agent Defaults");
   });
 
+  it("excludes admin-only pages and config blocks from non-admin search", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        canAdmin: false,
+        searchQuery: "security",
+        searchBlockMatches: [
+          {
+            routeId: "security",
+            label: "Security policy",
+            hash: "#config-section-security",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('a[href="/settings/security"]')).toBeNull();
+    expect(container.querySelector('a[href$="#config-section-security"]')).toBeNull();
+    expect(container.querySelector('a[href="/settings/approvals"]')).not.toBeNull();
+  });
+
   it("keeps Memory search results on the canonical Settings tab path", () => {
     const onNavigate = vi.fn();
     render(
@@ -286,7 +324,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "backend",
@@ -332,7 +370,7 @@ describe("settings sidebar search", () => {
           lastError: null,
           gatewayVersion: "",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
           ...inactiveRefresh,
           searchQuery,
@@ -378,7 +416,14 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
+    expect(labels()).toEqual([
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud workers",
+    ]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
@@ -395,6 +440,54 @@ describe("settings sidebar search", () => {
       .querySelector<HTMLAnchorElement>('.settings-sidebar__item[href="/settings/channels"]')
       ?.click();
     expect(onNavigate).toHaveBeenCalledWith("channels");
+  });
+
+  it("clears a focused search before Escape exits Settings", () => {
+    let searchQuery = "gateway";
+    const onExit = vi.fn();
+    const rerender = () => {
+      render(
+        renderSettingsSidebar({
+          basePath: "",
+          activeRouteId: "appearance",
+          offline: false,
+          lastError: null,
+          gatewayVersion: "",
+          updateAvailable: null,
+          updateBusy: false,
+          onUpdate: vi.fn(),
+          ...inactiveRefresh,
+          searchQuery,
+          onExit,
+          onRetryConnect: vi.fn(),
+          onNavigate: vi.fn(),
+          onSearchQueryChange: (nextQuery) => {
+            searchQuery = nextQuery;
+            rerender();
+          },
+          preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
+        }),
+        container,
+      );
+    };
+
+    rerender();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input");
+    expect(input).not.toBeNull();
+    input?.focus();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(searchQuery).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
   });
 
   it("renders refreshed settings route titles from the active locale", async () => {
@@ -415,7 +508,7 @@ describe("settings sidebar search", () => {
         lastError: null,
         gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
         ...inactiveRefresh,
         searchQuery: "",
@@ -437,74 +530,25 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("keeps the refresh card above the settings footer and forwards its action", async () => {
-    const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
-    const onNavigate = vi.fn();
-    render(
-      renderSettingsSidebar({
-        basePath: "",
-        activeRouteId: "appearance",
-        offline: false,
-        lastError: null,
-        gatewayVersion: "1.0.0",
-        updateAvailable: {
-          currentVersion: "1.0.0",
-          latestVersion: "2.0.0",
-          channel: "stable",
-        },
-        updateRunning: false,
-        canUpdate: true,
-        onUpdate,
-        refreshRequired: true,
-        onRefresh,
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate,
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: saveIndicator(),
-      }),
-      container,
-    );
-
-    const card = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await card?.updateComplete;
-    expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onUpdate).not.toHaveBeenCalled();
-
-    const buildChip = container.querySelector<
-      HTMLElement & {
-        gatewayVersion: string | null;
-        variant: string;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-sidebar-build-chip");
-    await buildChip?.updateComplete;
-    expect(buildChip?.gatewayVersion).toBe("1.0.0");
-    expect(buildChip?.variant).toBe("settings");
-    buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
-    expect(onNavigate).toHaveBeenCalledWith("about");
-  });
-
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
-    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
+    const renderSidebar = (
+      offline: boolean,
+      lastError: string | null,
+      queuedOutboxCount = 0,
+      restartPending = false,
+    ) =>
       render(
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "appearance",
           offline,
+          restartPending,
           queuedOutboxCount,
           lastError,
           gatewayVersion: "1.0.0",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
           ...inactiveRefresh,
           searchQuery: "",
@@ -533,5 +577,11 @@ describe("settings sidebar search", () => {
     expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     button?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
+
+    renderSidebar(true, null, 3, true);
+    expect(container.querySelector(".sidebar-footer-bar__status--restarting")?.textContent).toBe(
+      "Restarting…",
+    );
+    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
   });
 });

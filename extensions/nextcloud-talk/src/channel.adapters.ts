@@ -8,6 +8,7 @@ import {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  inspectNextcloudTalkAccount,
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
@@ -23,6 +24,11 @@ export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
   sectionKey: "nextcloud-talk",
   listAccountIds: listNextcloudTalkAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
+  inspectAccount: (cfg, accountId) => {
+    const account = inspectNextcloudTalkAccount({ cfg, accountId });
+    // Diagnostics expose presence only; operational callers retain the actual server URL.
+    return { ...account, baseUrl: account.baseUrl ? "[set]" : "[missing]" };
+  },
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

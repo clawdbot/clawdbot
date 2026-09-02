@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "./global-singleton.js";
+import { notifyListeners } from "./listeners.js";
 
 const { runListeners, runLastActivityMs } = resolveGlobalSingleton(
   Symbol.for("openclaw.toolActivityHeartbeat"),
@@ -8,13 +9,7 @@ const { runListeners, runLastActivityMs } = resolveGlobalSingleton(
   }),
   (state) => {
     for (const listeners of state.runListeners.values()) {
-      for (const listener of listeners) {
-        try {
-          listener();
-        } catch {
-          // Shutdown wakeups are best-effort; one observer cannot strand the rest.
-        }
-      }
+      notifyListeners(listeners, undefined);
     }
     state.runListeners.clear();
     state.runLastActivityMs.clear();

@@ -10,18 +10,23 @@ import {
   type ExecSessionDefaults,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { loadSkillLibrarySelection } from "../library/selection.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
 export {
+  expandBundleCommandPromptTemplate,
+  expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
-  resolveSkillReferenceInvocations,
 } from "./chat-command-invocation.js";
 
 export function listSkillCommandsForWorkspace(params: {
@@ -29,9 +34,12 @@ export function listSkillCommandsForWorkspace(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
-  sessionEntry?: ExecSessionDefaults;
+  sessionEntry?: ExecSessionDefaults &
+    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
+  includeAllowlistHidden?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): SkillCommandSpec[] {
   const nodeSkills = resolveNodeExecEligibility({
     cfg: params.cfg,
@@ -40,16 +48,29 @@ export function listSkillCommandsForWorkspace(params: {
     sessionKey: params.sessionKey,
     execOverrides: params.execOverrides,
   });
+  const eligibility = {
+    nodeSkills,
+    remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
+  };
+  const entries =
+    params.includeAllowlistHidden || params.sessionEntry?.skillLibrarySelections?.length
+      ? loadWorkspaceSkills(params.workspaceDir, {
+          config: params.cfg,
+          eligibility,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+        })
+      : undefined;
+  if (entries && params.sessionEntry?.skillLibrarySelections?.length) {
+    entries.push(...loadSkillLibrarySelection(params.sessionEntry.skillLibrarySelections));
+  }
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     agentId: params.agentId,
     skillFilter: params.skillFilter,
-    eligibility: {
-      nodeSkills,
-      remote: getRemoteSkillEligibility({
-        advertiseExecNode: nodeSkills.canExec,
-      }),
-    },
+    includeAllowlistHidden: params.includeAllowlistHidden,
+    eligibility,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    ...(entries ? { entries } : {}),
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -73,7 +94,8 @@ function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
 export function listSkillCommandsForAgents(params: {
   cfg: OpenClawConfig;
   agentIds?: string[];
-  sessionEntry?: ExecSessionDefaults;
+  sessionEntry?: ExecSessionDefaults &
+    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
 }): SkillCommandSpec[] {
@@ -106,6 +128,12 @@ export function listSkillCommandsForAgents(params: {
   }
 
   for (const { agentId, workspaceDir, skillFilter } of workspaceAgents) {
+    if (hasSingleAgentContext && params.sessionEntry?.skillLibrarySelections?.length) {
+      entries.push(
+        ...listSkillCommandsForWorkspace({ ...params, workspaceDir, agentId, skillFilter }),
+      );
+      continue;
+    }
     const nodeSkills = resolveNodeExecEligibility({
       cfg: params.cfg,
       agentId,

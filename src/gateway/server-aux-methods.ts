@@ -7,6 +7,8 @@ export const GATEWAY_AUX_METHODS = [
   "exec.approval.request",
   "exec.approval.waitDecision",
   "exec.approval.resolve",
+  "exec.approval.grants.list",
+  "exec.approval.grants.revoke",
   "plugin.approval.list",
   "plugin.approval.request",
   "plugin.approval.waitDecision",
@@ -21,4 +23,7 @@ export const GATEWAY_AUX_METHODS = [
   "question.list",
   "secrets.reload",
   "secrets.resolve",
+  "secrets.store.list",
+  "secrets.store.set",
+  "secrets.store.delete",
 ] as const;

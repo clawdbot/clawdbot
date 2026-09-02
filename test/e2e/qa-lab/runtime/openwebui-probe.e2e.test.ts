@@ -1,21 +1,13 @@
 // OpenWebUI probe tests cover QA Lab OpenAI-compatible API evidence.
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
+import { runNodeScript } from "../../../helpers/run-node-script.js";
 
 const probePath = path.resolve("scripts/e2e/openwebui-probe.mjs");
-
-interface ProbeResult {
-  error?: Error;
-  status: number | null;
-  stderr: string;
-  stdout: string;
-}
 
 async function listen(server: HttpServer | TcpServer): Promise<string> {
   await new Promise<void>((resolve, reject) => {
@@ -33,52 +25,23 @@ async function listen(server: HttpServer | TcpServer): Promise<string> {
 }
 
 function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3_000) {
-  return new Promise<ProbeResult>((resolve) => {
-    const child = spawn(process.execPath, [probePath], {
-      env: {
-        ...process.env,
-        OPENWEBUI_ADMIN_EMAIL: "openwebui-e2e@example.com",
-        OPENWEBUI_ADMIN_PASSWORD: "test-password",
-        OPENWEBUI_BASE_URL: baseUrl,
-        OPENWEBUI_CONTROL_TIMEOUT_MS: "250",
-        OPENWEBUI_EXPECTED_NONCE: "nonce-123",
-        OPENWEBUI_MODEL_ATTEMPTS: "1",
-        OPENWEBUI_MODEL_RETRY_MS: "0",
-        OPENWEBUI_PROMPT: "reply with nonce-123",
-        OPENWEBUI_SMOKE_MODE: "models",
-        ...env,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = createBoundedChildOutput();
-    const stderr = createBoundedChildOutput();
-    let timedOut = false;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout.append(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.append(chunk);
-    });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeout);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
-    });
-    child.on("exit", (status) => {
-      clearTimeout(timer);
-      resolve({
-        error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
-        status,
-        stderr: stderr.text(),
-        stdout: stdout.text(),
-      });
-    });
-  });
+  return runNodeScript(
+    probePath,
+    {
+      ...process.env,
+      OPENWEBUI_ADMIN_EMAIL: "openwebui-e2e@example.com",
+      OPENWEBUI_ADMIN_PASSWORD: "test-password",
+      OPENWEBUI_BASE_URL: baseUrl,
+      OPENWEBUI_CONTROL_TIMEOUT_MS: "250",
+      OPENWEBUI_EXPECTED_NONCE: "nonce-123",
+      OPENWEBUI_MODEL_ATTEMPTS: "1",
+      OPENWEBUI_MODEL_RETRY_MS: "0",
+      OPENWEBUI_PROMPT: "reply with nonce-123",
+      OPENWEBUI_SMOKE_MODE: "models",
+      ...env,
+    },
+    timeout,
+  );
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<string> {

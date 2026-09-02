@@ -4,7 +4,10 @@ import type {
   TurnAdoptionLifecycle,
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
+import type {
+  DispatchFromConfigResult,
+  DispatchReplyFromConfig,
+} from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
@@ -26,6 +29,7 @@ import type {
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
 import type { MediaFact } from "../../media/media-facts.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
@@ -79,6 +83,7 @@ export type ConversationFacts = {
   parentId?: string;
   threadId?: string;
   nativeChannelId?: string;
+  avatar?: string;
   routePeer?: {
     kind: "direct" | "group" | "channel";
     id: string;
@@ -159,10 +164,11 @@ export type ChannelDeliveryInfo = ReplyDispatchRuntimeInfo;
 
 type ChannelCoreManagedDeliveryInfo = Omit<
   ChannelDeliveryInfo,
-  "bindPendingFinalDelivery" | "onPlatformSendDispatch"
+  "assertPlatformSendAuthorized" | "bindPendingFinalDelivery" | "onPlatformSendDispatch"
 >;
 
 type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
+  assertPlatformSendAuthorized: () => void;
   onPlatformSendDispatch: () => Promise<void>;
 };
 
@@ -189,7 +195,7 @@ export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
   /** Intentional no-send outcome after payload policy or modifying hooks settle. */
   suppression?: {
-    reason: OutboundPayloadDeliverySuppressionReason | "no_visible_result";
+    reason: OutboundPayloadDeliverySuppressionReason | "channel_transform" | "no_visible_result";
     cancelReason?: string;
     metadata?: Record<string, unknown>;
   };
@@ -299,6 +305,9 @@ export type ChannelTurnDroppedHistoryOptions = {
 /** Dispatcher options excluding delivery hooks owned by the channel turn adapter. */
 type ChannelTurnDispatcherOptions = Omit<ReplyDispatcherWithTypingOptions, "deliver" | "onError">;
 
+/** Reply options plus the opaque native command ownership decision carried by channel turns. */
+type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply"> & PluginCommandReplyOptions;
+
 /** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
 type ChannelTurnReplyPipelineOptions = Omit<
   CreateChannelReplyPipelineParams,
@@ -321,8 +330,10 @@ export type AssembledChannelTurn = {
   replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
   toolsAllow?: string[];
-  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
+  replyOptions?: ChannelTurnReplyOptions;
   replyResolver?: GetReplyFromConfig;
+  /** Instance-bound reply dispatcher supplied by the owning plugin runtime. */
+  dispatchReplyFromConfig?: DispatchReplyFromConfig;
   sessionInitRetry?: {
     delaysMs: readonly number[];
     signal?: AbortSignal;

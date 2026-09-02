@@ -41,7 +41,6 @@ export {
 export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";
 
 export {
-  testing,
   createNoopThreadBindingManager,
   createThreadBindingManager,
   getThreadBindingManager,

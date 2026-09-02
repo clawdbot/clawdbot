@@ -72,17 +72,17 @@ describe("prepared OpenClaw AI dependency", () => {
 });
 
 describe("workspace template package paths", () => {
-  it("keeps the runtime heartbeat template in the npm pack guard", () => {
-    expect(WORKSPACE_TEMPLATE_PACK_PATHS).toContain("src/agents/templates/HEARTBEAT.md");
+  it("does not require the retired heartbeat file in the npm pack guard", () => {
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("src/agents/templates/HEARTBEAT.md");
     expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("docs/reference/templates/HEARTBEAT.md");
   });
 
-  it("keeps runtime heartbeat templates allowlisted in package.json", () => {
+  it("does not package retired runtime heartbeat templates", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
       files?: unknown;
     };
 
-    expect(packageJson.files).toContain("src/agents/templates/");
+    expect(packageJson.files).not.toContain("src/agents/templates/");
   });
 });
 
@@ -873,36 +873,6 @@ describe("collectReleasePackageMetadataErrors", () => {
     ).toStrictEqual([]);
   });
 
-  it("rejects node-llama-cpp as a peer dependency", () => {
-    expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
-        license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.18.1" },
-        peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
-      }),
-    ).toEqual([
-      'package.json peerDependencies["node-llama-cpp"] must be omitted; keep it optional.',
-      'package.json peerDependenciesMeta["node-llama-cpp"] must be omitted; keep it optional.',
-    ]);
-  });
-
-  it("rejects node-llama-cpp as a direct runtime dependency", () => {
-    expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
-        license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        dependencies: { "node-llama-cpp": "3.18.1" },
-      }),
-    ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
-  });
-
   it("rejects local fs-safe dependency specs for npm release", () => {
     expect(
       collectReleasePackageMetadataErrors({
@@ -915,21 +885,6 @@ describe("collectReleasePackageMetadataErrors", () => {
       }),
     ).toContain(
       'package.json dependencies["@openclaw/fs-safe"] must use a published semver range before npm release; found "link:../fs-safe".',
-    );
-  });
-
-  it("rejects node-llama-cpp as an optional dependency", () => {
-    expect(
-      collectReleasePackageMetadataErrors({
-        name: "openclaw",
-        description: "Multi-channel AI gateway with extensible messaging integrations",
-        license: "MIT",
-        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
-        bin: { openclaw: "openclaw.mjs" },
-        optionalDependencies: { "node-llama-cpp": "3.18.1" },
-      }),
-    ).toContain(
-      'package.json optionalDependencies["node-llama-cpp"] must be omitted; keep it operator-installed.',
     );
   });
 });

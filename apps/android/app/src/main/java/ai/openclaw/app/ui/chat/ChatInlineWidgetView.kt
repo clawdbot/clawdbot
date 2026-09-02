@@ -225,16 +225,20 @@ internal fun ChatInlineWidget(
           }
         }
       }
-      unavailable || resolvedResource != null ->
+
+      unavailable || resolvedResource != null -> {
         Text(
           text = nativeString("Widget unavailable"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
-      else ->
+      }
+
+      else -> {
         Box(modifier = Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
           CircularProgressIndicator(color = ClawTheme.colors.textMuted)
         }
+      }
     }
   }
 }
@@ -335,6 +339,8 @@ private fun deleteInlineWidgetProfile(profileName: String) {
   }
 }
 
+// WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
+@SuppressLint("MissingOnRenderProcessGone")
 private class InlineWidgetWebViewClient(
   private val resource: ChatWidgetResource,
   private val onFailure: () -> Unit,
@@ -349,7 +355,6 @@ private class InlineWidgetWebViewClient(
     view.setOnLongClickListener(null)
     view.stopLoading()
     closePinnedClient()
-    view.webViewClient = WebViewClient()
     view.removeAllViews()
     view.destroy()
   }

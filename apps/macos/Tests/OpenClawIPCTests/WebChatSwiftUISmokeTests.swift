@@ -125,28 +125,11 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `window controller merges titlebar and keeps toolbar controls`() throws {
-        let traceKeys = [
-            OpenClawChatWindowShell.assistantTraceDefaultsKey,
-            OpenClawChatWindowShell.assistantReasoningDefaultsKey,
-            OpenClawChatWindowShell.assistantToolActivityDefaultsKey,
-        ]
-        let previousTraceValues = traceKeys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        traceKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
-        defer {
-            for (key, value) in previousTraceValues {
-                if let value {
-                    UserDefaults.standard.set(value, forKey: key)
-                } else {
-                    UserDefaults.standard.removeObject(forKey: key)
-                }
-            }
-        }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             transport: TestTransport(),
             windowTitle: "Studio — OpenClaw")
         let window = try #require(controller._testWindow)
-        let capabilities = try #require(controller._testChatCapabilities)
 
         #expect(window.styleMask.contains(.fullSizeContentView))
         #expect(window.titleVisibility == .hidden)
@@ -160,10 +143,6 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.title == "Studio — OpenClaw")
         #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
         #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
-        #expect(capabilities.hasTalkControl)
-        #expect(capabilities.hasSpeech)
-        #expect(capabilities.hasVoiceNoteControl)
-        #expect(capabilities.displayOptions == .assistantTrace)
 
         controller.show()
         #expect(window.titleVisibility == .hidden)
@@ -218,26 +197,13 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func `controller explicit agent wins and nil falls back to cached default`() throws {
-        let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
-            scope: "global",
-            mainSessionKey: "main",
-            defaultAgentID: "main"))
-        let explicit = WebChatSwiftUIWindowController(
-            sessionKey: "global",
-            agentID: " Work ",
-            cachedRoutingIdentity: cachedIdentity,
-            store: nil)
-        let fallback = WebChatSwiftUIWindowController(
-            sessionKey: "global",
-            agentID: nil,
-            cachedRoutingIdentity: cachedIdentity,
-            store: nil)
-
-        #expect(explicit._testActiveAgentID == "work")
-        #expect(fallback._testActiveAgentID == "main")
-        explicit.close()
-        fallback.close()
+    @Test func `controller explicit agent wins and nil falls back to cached default`() {
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: " Work ", cachedDefaultAgentID: "main") == "work")
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: nil, cachedDefaultAgentID: "main") == "main")
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: "  ", cachedDefaultAgentID: " MAIN ") == "main")
     }
 
     @Test func `max and Ultra thinking preferences survive reopen`() throws {

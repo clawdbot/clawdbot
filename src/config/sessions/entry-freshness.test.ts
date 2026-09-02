@@ -4,7 +4,11 @@ import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
-import { appendTranscriptEvent, upsertSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "./session-accessor.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -49,7 +53,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("uses the configured default agent for an unqualified session key", async () => {
     const sessionKey = "global";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "ops", defaultAgentId: "ops", sessionKey, storePath },
       {
         sessionId: "session-global-ops",
@@ -75,7 +79,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("resolves stale daily freshness from lifecycle timestamps instead of activity", async () => {
     const sessionKey = "agent:main:main:thread:100.000";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-stale-thread",
@@ -105,7 +109,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("keeps provider-owned sessions fresh when reset policy is implicit", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-provider-owned",
@@ -134,7 +138,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("applies configured reset policies to provider-owned sessions", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned-configured";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-provider-owned-configured",
@@ -166,7 +170,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("resolves fresh daily freshness for active lifecycle timestamps", async () => {
     const sessionKey = "agent:main:main";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-fresh",
@@ -193,7 +197,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("honors reset overrides when resolving entry freshness", async () => {
     const sessionKey = "agent:main:main:thread:idle";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-idle-stale",
@@ -227,7 +231,7 @@ describe("resolveSessionEntryResetFreshness", () => {
     const sessionKey = "agent:main:main:thread:configured-store";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
     const configuredStorePath = path.join(tempDir, "configured-sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath: configuredStorePath },
       {
         sessionId: "session-configured-store",
@@ -262,7 +266,8 @@ describe("resolveSessionEntryResetFreshness", () => {
     const now = new Date("2026-01-02T12:00:00Z").getTime();
     const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
     const target = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(target, { sessionId, updatedAt: now });
+    const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
+    expect(entry?.sessionStartedAt).toBeUndefined();
     await appendTranscriptEvent(target, {
       type: "session",
       version: 3,

@@ -96,41 +96,64 @@ and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
-| Method                                           | What it registers                                                                                                                         |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                                                                                                                      |
-| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                                                                             |
-| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                                                                          |
-| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot)                                                         |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                                                                               |
-| `api.registerChannel(...)`                       | Messaging channel                                                                                                                         |
-| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                                                                        |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                                                                            |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                                                                          |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                                                                            |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                                                                                |
-| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source; meeting plugins can use `createMeetingTranscriptSourceProvider` from `plugin-sdk/transcripts` |
-| `api.registerImageGenerationProvider(...)`       | Image generation                                                                                                                          |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                                                                          |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                                                                          |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                                                                               |
-| `api.registerWebSearchProvider(...)`             | Web search                                                                                                                                |
-| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                                                                                   |
+| Method                                           | What it registers                                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
+| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
+| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
+| `api.registerChannel(...)`                       | Messaging channel                                                                 |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                    |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                  |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                    |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                        |
+| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source                                        |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                                  |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                  |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                  |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
+| `api.registerWebSearchProvider(...)`             | Web search                                                                        |
+| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+
+Transcript source providers that share an account namespace with an inbound
+channel declare an `accountOwnership` descriptor with that channel id and a
+canonical account resolver. OpenClaw then
+ignores model-selected account ids for same-channel capture, binds the trusted
+inbound account, and records it as the session owner for later lifecycle
+actions. The resolver also selects an omitted account before OpenClaw starts or
+persists live capture. It validates an already-bound trusted account without
+redirecting it and returns an actionable typed error when no unique capable
+account exists. Configured auto-start must supply a nonempty source account or
+resolve one with this descriptor. OpenClaw rejects ambiguous or unresolved ownership before it
+persists the start or invokes the provider. Provider aliases are lookup names
+only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
-Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
-Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
-`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The Gateway reads the password file over the provider's SSH endpoint when needed and never persists the password.
+Providers may implement `maintain({ profiles, signal, assertCurrent })` for bounded cleanup that must continue with no active leases. The Gateway invokes it for enabled, configured providers from its existing periodic worker sweep, separately from allocation and reconciliation waits. `profiles` contains cloned settings for the provider's current configured profiles. Call `assertCurrent()` immediately before external effects and after awaited work before durable mutations; authority ends when the invocation settles, its configuration or registration changes, or the Gateway stops. Honor `signal` and settle only after owned commands stop. A provider's plugin service must also cancel and drain maintenance during generation replacement. The hook must not allocate running capacity or treat maintenance as user demand; retention and cleanup policy remain provider-owned.
+
+Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` and `options.executionMode` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease for the same operation id and selected execution mode; a retry cannot silently change modes. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare one or both current `supportedExecutionModes` values in deterministic canonical order: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicate values, unknown modes, and noncanonical order are rejected. `worker-turn` requires a node lease; `remote-exec` accepts either a node lease or an existing SSH lease. Omission advertises no placement modes while preserving direct environment lifecycle calls. Direct environment creation without a session supplies no execution mode, so providers retain their intentional default setup; the bundled Crabbox provider defaults to `worker-turn`. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound. `resolveDestroyTimeoutMs(profile)` declares the equivalent budget for teardown, including snapshot capture or other provider-owned work before confirmed release. Core uses that budget for both requested teardown and bootstrap-failure cleanup; an explicit service timeout override takes precedence. Budgets must be positive safe integers within the platform timer limit.
+An optional `options.signal` cancels the current provisioning attempt. Forward it to acquisition, project preparation, setup, readiness, and enrollment waits, and settle active commands before rejecting; a caller-visible timeout or abort is not proof that a provider child exited or a lease was released. Compose it with project, runtime-preparation, and enrollment signals instead of replacing it with a narrower grant's signal. Keep cleanup on its independent, uncancelled lifecycle authority. Core records destroy intent for the exact operation and resolves its allocation before canonical teardown; providers that cannot cancel promptly remain owned until their real operation settles. Gateway shutdown is distinct: enrollment closure alone retains a fixed allocation for restart adoption, while an aborted provisioning signal means explicit cancellation.
+
+Every worker provider must implement `resolveAllocation(profile, operationId)`, returning `{ leaseId: string; sharedHost: boolean }` for the exact operation. Core passes the frozen settings snapshot, even after the named profile changes or is removed. The handle identifies the cleanup target; it does not prove a machine was created or a transport is ready. Resolution must not allocate, start, renew, run setup, read setup secrets, enroll nodes, or wait for availability. Throw if the identity cannot be resolved safely. When destruction is requested before a provision result is recorded, core persists this handle with the existing teardown state and calls `destroy`, without replaying `provision`. `destroy` still must prove release or authoritative absence. Both calls remain serialized behind any earlier provider operation until it actually settles, including after a caller-visible timeout.
+
+Providers that enroll cloud nodes set `requiresNodeEnrollment: true` and call `options.beginNodeEnrollment()` after allocating the machine. The returned `WorkerNodeEnrollment` supplies `displayName`, `openclawVersion`, an optional enrollment-lifetime `signal`, `waitForDeviceId()`, and either `mode: "connect"` with `setupCode` and `setupId`, or `mode: "resume"` with the bound `deviceId`. Its required `nodeBootstrap` contains the Gateway-prepared runtime archive's `url`, secret bearer `token`, `sha256`, `bytes`, `openclawVersion`, `enabledPluginIds`, and optional `tlsFingerprint`. Download that exact archive, verify its size and digest, install its target-platform dependencies, and enable the listed plugins in the node's isolated state before connecting. Do not substitute a global or registry package based only on a matching version. Keep download and enrollment credentials out of command arguments, logs, npm, and the launched node's environment; cancel work when `signal` aborts. Download authority belongs to the live enrollment attempt, not the URL or digest alone. After connection, return the device identity from `waitForDeviceId()` in the node lease. See [Bundle installation](/gateway/cloud-workers#bundle-installation) for source builds, artifact reuse, and proxy requirements. Bootstrap installation does not authorize node commands or replace invocation policy.
+
+Providers that capture reusable project images can declare `supportsProjectPreparation(profile, machineClass)`. For eligible Git placements, core persists a project identity and pinned base commit before allocation, then supplies `options.project`. Call its `prepare({ runScript, upload })` adapter on the allocated machine; core owns the bounded Git pack, clean checkout verification, and cache layout, while the provider owns command and file transport. Honor `project.signal` and call `project.assertCurrent()` around awaited provider work. Retained callbacks reject after the provision attempt closes. Project keys are scoped to the Gateway and repository, including linked worktrees; session edits and Git credentials are excluded from the prepared base.
+
+Before capturing, call `options.prepareNodeRuntime()` to obtain artifact access without creating a node identity or enrollment code. The result includes `nodeBootstrap`, `workerBundle`, and the operation's cancellation `signal`. The worker archive descriptor supplies `url`, secret `token`, `sha256`, `bytes`, optional `tlsFingerprint`, and the core-owned `packageRelativePath` within the installed node package. Download and verify both archives, install the runtime, and publish the compressed worker archive at that exact contained location before capture. Keep one published worker archive per runtime package, exclude credentials and receipts, and never add the standalone payload to the slim runtime archive. The normal authenticated installer validates the prepared bytes and creates a fresh installation after enrollment; the raw archive grants no admission authority. Finish capture before calling `beginNodeEnrollment()`. Beginning enrollment, cancellation, replacement, or closure revokes both preparation grants. A native capture with an uncertain outcome must settle or be explicitly recovered before enrollment can introduce credentials into its source machine. Persist the original cold/checkpoint allocation decision before contacting the provider, retain checkpoint references until confirmed release, and never switch images when replaying the same operation.
+
+Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `dormant`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
+`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
-`inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
+`inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core fences the environment and invokes canonical teardown; shared or unknown host isolation still requires acknowledgment that the exact worker stopped. A shared host must not be stopped or unpaired merely to release its logical lease.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
 is the generic embedding surface for reusable vector generation. Memory search
-can consume this generic provider surface. The older
-`api.registerMemoryEmbeddingProvider(...)` and
-`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
-existing memory-specific providers migrate.
+consumes this generic provider surface. The older memory-specific registrar and
+manifest contract were removed after their August 2026 migration window.
 
 Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
 the existing per-file batching contract unless their runtime explicitly sets
@@ -148,15 +171,43 @@ Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
 with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
 or fully dynamic tool registration.
 
-| Method                                 | What it registers                                                                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
-| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
-| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| Method                                   | What it registers                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`               | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)`   | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| `api.registerWidgetPresenter(presenter)` | Explicit or current-channel destination behind the core `show_widget` tool                                                               |
+
+Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
+
+Core validates the canonical `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
+
+Computer Use providers use `registerComputerUseProvider(api, provider)` from
+`openclaw/plugin-sdk/computer-use`. It registers the shared
+`screen.snapshot`/`computer.act` node-host envelope once while the provider
+keeps its driver, frame, availability, and execution lifecycle local.
+Its optional `prepare(context)` hook settles native startup before the node's
+first capability declaration, without opening a Computer Use execution.
 
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Commands may also declare a bounded client presentation action for parsed no-argument
+invocations:
+
+```ts
+clientPresentation: {
+  when: "no-arguments",
+  action: { kind: "device-pairing" },
+}
+```
+
+The action union is closed and intentionally does not accept routes, callbacks,
+URLs, or arbitrary client data. Supporting clients handle the action only when
+they can complete it; otherwise the command follows its normal remote path.
+This metadata expresses presentation intent, not authorization: the Gateway
+remains authoritative for every RPC the client flow performs.
 
 Guidance entries may be legacy strings, which apply to every prompt surface, or
 structured entries:
@@ -194,30 +245,64 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                          | What it registers                                                      |
-| ----------------------------------------------- | ---------------------------------------------------------------------- |
-| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
-| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
-| `api.registerService(service)`                  | Background service                                                     |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
-| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
-| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
-| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
-| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
-| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
-| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
-| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+| Method                                            | What it registers                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`        | Event hook                                                             |
+| `api.registerHttpRoute(params)`                   | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler, opts?)` | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`    | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`               | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`    | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                    | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`    | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`      | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
+| `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+
+Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+#### Webhook body rejection
+
+Use `readWebhookBodyOrReject` or `readJsonWebhookBodyOrReject` from
+`openclaw/plugin-sdk/webhook-request-guards` for bounded body reads. Return when
+the result is `{ ok: false }`; the helper owns the error response and connection
+cleanup. Body byte limits and read timeouts remain separate from transport cleanup.
+
+For a custom error representation after a response-first body read, await
+`sendHttpRequestRejection(req, res, statusCode, body, contentType?)` instead of
+calling `res.end()` and destroying the request. It preserves security headers,
+frames the complete error, then on Node closes the write side while keeping application
+body readers paused. Node's request backpressure bounds residual input buffering;
+cleanup allows at most one second, not another body-read timeout. A disconnected peer, malformed HTTP, or an
+exhausted cleanup budget can prevent delivery. Committed responses are closed
+without appending a replacement error or completing a partial successful body.
+
+On Node, transport-owned rejections emit response `close` without `finish`.
+Use `close` for terminal cleanup or selected-error diagnostics; it does not prove
+delivery. Keep successful-response activity on `finish`, with the caller's
+success-status check, so an aborted request cannot report healthy activity.
+
+Bun uses its native HTTP response completion because its raw socket operations
+do not flush the HTTP response. Bun can still report client connection resets
+during large outstanding uploads, even after delivering the complete error.
+
+Gateway HTTP requests run in order on each connection, including their response
+lifetimes. A closing connection cannot admit later requests or upgrades. Queued
+requests apply input backpressure until earlier responses finish; finite pipelines
+drain in order. Use separate connections for concurrent requests. Keep the release hook returned by
+`beginWebhookRequestPipelineOrReject` in `finally`; it retains any selected
+rejection cleanup before releasing the in-flight slot.
 
 #### Post-ack webhook work
 
@@ -356,6 +441,17 @@ plugins.
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+
+`registerBoardWidgetContentKind(...)` is for plugins that own a declarative
+widget source format. The registration supplies a globally unique lowercase
+`kind`, a short label, one capability-scoped plugin surface plus its renderer
+resource paths, a synchronous `validateSource(source)` callback, and a
+synchronous `composeDocument(...)` callback. Core adds the document shell,
+sandbox, theme, and ticket-bound action bridge. Registrations exist only while
+their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
+Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
+not for renderer registration.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
@@ -366,6 +462,12 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+Bundled plugins whose page already has a matching native Control UI route can set
+`placement: "route:<pluginId>"`. The host rejects native-route claims from external
+plugins or from bundled plugins whose ID does not own that route. The sidebar opens
+the native route while the descriptor is present instead of mounting the generic
+plugin-tab page.
 
 For a gateway-protected external tab, register the descriptor `path` under a
 same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
@@ -521,6 +623,18 @@ For paired-node features, prefer
 `api.registerCli(..., { parentPath: ["nodes"] })` and makes commands such as
 `openclaw nodes canvas` explicit plugin-owned node features.
 
+Reuse the core node CLI owners when a plugin-owned node command needs the same
+Gateway flags, invoke envelope, terminal presentation, and authorization hints:
+
+```typescript
+import {
+  buildNodeInvokeParams,
+  getNodesTheme,
+  nodesCallOpts,
+  runNodesCommand,
+} from "openclaw/plugin-sdk/node-cli-runtime";
+```
+
 If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
 registrar.
@@ -569,7 +683,7 @@ api.registerCli(
     descriptors: [
       {
         name: "canvas",
-        description: "Capture or render canvas content from a paired node",
+        description: "Present hosted widgets on a paired Mac",
         hasSubcommands: true,
       },
     ],
@@ -602,8 +716,11 @@ AI CLI backend such as `claude-cli` or `my-cli`.
 - Use `prepareExecution` for backend-owned launch environment or temporary
   auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
   limit selected for the run, so native-compaction backends can align their
-  own threshold without provider-specific core branches. It also receives the
-  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
+  own threshold without provider-specific core branches. Its optional
+  `ctx.thinkingLevel` is the effective `off`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `adaptive`, or `max` selection for backends that apply the
+  level through launch environment or staged configuration. It also receives
+  the core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
   `ctx.toolAvailability.native` list plus canonical
@@ -619,25 +736,23 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                                             |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
+| Method                                     | What it registers                                                                                                                                                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and
 `turnAdvancementIdempotency: "atomic-idempotent-v1"` under
 `info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
-idempotent write keyed by `advancementKey`. Without the full contract, OpenClaw
-uses the legacy context path for the whole logical turn and its retries, leaves
-the configured engine unchanged, and tries that engine again on the next
-logical turn.
+idempotent write keyed by `advancementKey`. OpenClaw supplies only the inclusive
+accepted turn, from its admitted user entry through its terminal entry; use the
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
+rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+context path for the whole logical turn and its retries, leaves the configured
+engine unchanged, and tries that engine again on the next logical turn.
 
-### Deprecated memory embedding adapters
-
-| Method                                         | What it registers                              |
-| ---------------------------------------------- | ---------------------------------------------- |
-| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+### Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
@@ -656,12 +771,8 @@ logical turn.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
-  should use `api.registerEmbeddingProvider(...)` and
-  `contracts.embeddingProviders`.
-- Existing memory-specific providers continue to work during the migration
-  window, but plugin inspection reports this as compatibility debt for
-  non-bundled plugins.
+- Embedding providers use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`; there is no separate memory-only registry.
 
 ### Events and lifecycle
 
@@ -676,7 +787,7 @@ semantics.
 ### Hook decision semantics
 
 `before_install` is a plugin-runtime lifecycle hook, not the operator install
-policy surface. Use `security.installPolicy` when an allow/block decision must
+policy surface. Use `security.installPolicy` when an allow/warn/block decision must
 cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.

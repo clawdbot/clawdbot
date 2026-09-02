@@ -116,11 +116,13 @@ export function openNodeSqliteDatabase(
 /** Hold a raw exclusive transaction until release for cross-process coordination. */
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
+  options: { busyTimeoutMs?: number } = {},
 ): { release: () => void } | null {
+  const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const database = openNodeSqliteDatabase(location);
   try {
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
-    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN EXCLUSIVE;`);
   } catch (error) {
     database.close();
     if (isSqliteLockError(error)) {
@@ -130,10 +132,22 @@ export function tryAcquireExclusiveSqliteCoordinator(
   }
   return {
     release: () => {
+      const errors: unknown[] = [];
       try {
         database.exec("ROLLBACK");
-      } finally {
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
         database.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "SQLite coordinator rollback and close both failed");
       }
     },
   };

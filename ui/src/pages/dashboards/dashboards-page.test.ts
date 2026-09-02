@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { page as dashboardsRoute } from "./route.ts";
 import type { DashboardsRouteData } from "./view.ts";
 import "./dashboards-page.ts";
 
@@ -13,13 +14,6 @@ type DashboardsPageElement = HTMLElement & {
   routeData?: DashboardsRouteData;
   updateComplete: Promise<boolean>;
 };
-
-async function loadDashboards(
-  context: ApplicationContext,
-  options: Parameters<NonNullable<typeof dashboardsRoute.loader>>[1],
-): Promise<DashboardsRouteData> {
-  return (await Promise.resolve(dashboardsRoute.loader!(context, options))) as DashboardsRouteData;
-}
 
 function result(sessionRow: GatewaySessionRow): SessionsListResult {
   return {
@@ -41,6 +35,16 @@ function row(key: string, displayName: string): GatewaySessionRow {
   };
 }
 
+function routeData(sessionRow: GatewaySessionRow): DashboardsRouteData {
+  return {
+    result: result(sessionRow),
+    error: null,
+    basePath: "",
+    fallbackAgentId: "main",
+    mainKey: "main",
+  };
+}
+
 describe("DashboardsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -51,30 +55,32 @@ describe("DashboardsPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("reloads rendered rows once per canonical revision or agent scope change", async () => {
-    const sessionListeners = new Set<() => void>();
+  it("subscribes to the exact query and preserves rows while a new agent scope loads", async () => {
     const selectionListeners = new Set<() => void>();
-    let canonicalListRevision = 1;
+    const listListeners = new Map<string, (snapshot: SessionListSnapshot) => void>();
+    const snapshots = new Map<string, SessionListSnapshot>();
+    const queryKey = (options: SessionListOptions) => options.agentId ?? "all";
+    const allResult = result(row("agent:main:before", "Before"));
+    snapshots.set("all", { result: allResult, agentId: null, loading: false, error: null });
+    snapshots.set("writer", { result: null, agentId: null, loading: false, error: null });
+    const refreshList = vi.fn(async () => undefined);
+    const subscribeList = vi.fn(
+      (query: SessionListOptions, listener: (snapshot: SessionListSnapshot) => void) => {
+        const key = queryKey(query);
+        listListeners.set(key, listener);
+        return () => listListeners.delete(key);
+      },
+    );
     const selectionState = { selectedId: "main", scopeId: null as string | null };
-    const client = {};
-    const gateway = { snapshot: { client, phase: "connected", hello: null } };
-    const list = vi
-      .fn<() => Promise<SessionsListResult | null>>()
-      .mockResolvedValueOnce(result(row("agent:main:before", "Before")))
-      .mockResolvedValueOnce(result(row("agent:main:after", "After")))
-      .mockResolvedValueOnce(result(row("agent:writer:scoped", "Writer dashboard")));
     const context = {
       basePath: "",
-      gateway,
+      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
       sessions: {
-        get canonicalListRevision() {
-          return canonicalListRevision;
+        listSnapshot(query: SessionListOptions) {
+          return snapshots.get(queryKey(query))!;
         },
-        list,
-        subscribe(listener: () => void) {
-          sessionListeners.add(listener);
-          return () => sessionListeners.delete(listener);
-        },
+        subscribeList,
+        refreshList,
       },
       agentSelection: {
         state: selectionState,
@@ -85,106 +91,77 @@ describe("DashboardsPage", () => {
       },
       agents: { state: { agentsList: null } },
     } as unknown as ApplicationContext;
-    if (!dashboardsRoute.loader) {
-      throw new Error("dashboards route has no loader");
-    }
-    const loaderOptions = {
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      location: { pathname: "/dashboards", search: "", hash: "" },
-      deps: "",
-      cause: "navigation" as const,
-    };
     const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = await loadDashboards(context, loaderOptions);
+    element.routeData = routeData(row("agent:main:before", "Before"));
     const provider = createApplicationContextProvider(context);
     provider.append(element);
     document.body.append(provider);
     await element.updateComplete;
 
-    expect(list).toHaveBeenCalledTimes(1);
-    expect(element.textContent).toContain("Before");
-
-    canonicalListRevision += 1;
-    sessionListeners.forEach((listener) => listener());
-    await vi.waitFor(() => expect(element.textContent).toContain("After"));
-    expect(list).toHaveBeenCalledTimes(2);
-
-    sessionListeners.forEach((listener) => listener());
-    await Promise.resolve();
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(subscribeList).toHaveBeenCalledWith(
+      { limit: SIDEBAR_SESSION_ROSTER_LIMIT, boardFace: "dashboard", archivedFilter: "all" },
+      expect.any(Function),
+    );
+    expect(refreshList).not.toHaveBeenCalled();
+    const retiredListener = listListeners.get("all")!;
 
     selectionState.scopeId = "writer";
     selectionListeners.forEach((listener) => listener());
-    await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
-    expect(list).toHaveBeenCalledTimes(3);
-    expect(list).toHaveBeenLastCalledWith({
-      limit: 50,
+    await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(1));
+    expect(refreshList).toHaveBeenCalledWith({
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
       boardFace: "dashboard",
       archivedFilter: "all",
       agentId: "writer",
+      force: true,
     });
-  });
+    expect(element.textContent).toContain("Before");
 
-  it("ignores a retired refresh after the replacement connection renders", async () => {
-    const sessionListeners = new Set<() => void>();
-    let canonicalListRevision = 1;
-    const clientA = {};
-    const clientB = {};
-    const gateway = { snapshot: { client: clientA, phase: "connected", hello: null } };
-    let resolveRetired!: (value: SessionsListResult | null) => void;
-    const retiredResult = new Promise<SessionsListResult | null>((resolve) => {
-      resolveRetired = resolve;
-    });
-    const list = vi
-      .fn<() => Promise<SessionsListResult | null>>()
-      .mockImplementationOnce(() => retiredResult)
-      .mockResolvedValueOnce(result(row("agent:main:current", "Current")));
-    const context = {
-      basePath: "",
-      gateway,
-      sessions: {
-        get canonicalListRevision() {
-          return canonicalListRevision;
-        },
-        list,
-        subscribe(listener: () => void) {
-          sessionListeners.add(listener);
-          return () => sessionListeners.delete(listener);
-        },
-      },
-      agentSelection: {
-        state: { selectedId: "main", scopeId: null },
-        subscribe: () => () => undefined,
-      },
-      agents: { state: { agentsList: null } },
-    } as unknown as ApplicationContext;
-    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = {
-      result: result(row("agent:main:before", "Before")),
+    listListeners.get("writer")?.({
+      result: result(row("agent:writer:current", "Writer dashboard")),
+      agentId: "writer",
+      loading: false,
       error: null,
-      basePath: "",
-      fallbackAgentId: "main",
-      mainKey: "main",
-    };
-    const provider = createApplicationContextProvider(context);
-    provider.append(element);
-    document.body.append(provider);
+    });
+    await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
+    retiredListener({
+      result: result(row("agent:main:retired", "Retired")),
+      agentId: null,
+      loading: false,
+      error: "Retired scope refresh failed",
+    });
     await element.updateComplete;
-
-    canonicalListRevision = 2;
-    sessionListeners.forEach((listener) => listener());
-    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
-    gateway.snapshot = { client: clientB, phase: "connected", hello: null };
-    canonicalListRevision = 3;
-    sessionListeners.forEach((listener) => listener());
-    await vi.waitFor(() => expect(element.textContent).toContain("Current"));
-
-    resolveRetired(result(row("agent:main:retired", "Retired")));
-    await Promise.resolve();
-    await element.updateComplete;
-    expect(element.textContent).toContain("Current");
     expect(element.textContent).not.toContain("Retired");
+
+    const writerListener = listListeners.get("writer")!;
+    writerListener({
+      result: result(row("agent:writer:current", "Writer dashboard")),
+      agentId: "writer",
+      loading: false,
+      error: "Writer refresh failed",
+    });
+    await element.updateComplete;
+    expect(element.textContent).toContain("Writer dashboard");
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
+    refreshList.mockClear();
+    element.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(refreshList).toHaveBeenCalledOnce();
+    expect(refreshList).toHaveBeenLastCalledWith({
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      boardFace: "dashboard",
+      archivedFilter: "all",
+      agentId: "writer",
+      force: true,
+    });
+
+    element.remove();
+    writerListener({
+      result: null,
+      agentId: "writer",
+      loading: false,
+      error: "Detached refresh failed",
+    });
+    await element.updateComplete;
+    expect(element.textContent).not.toContain("Detached refresh failed");
   });
 });

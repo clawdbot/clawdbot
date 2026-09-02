@@ -25,6 +25,14 @@ export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
+/** Orders the configured Dev upstream before any detached-checkout fallbacks. */
+export function resolveDevUpstreamRefs(
+  detached: boolean,
+  fallbacks: readonly string[] = [],
+): string[] {
+  return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
+}
+
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -116,18 +124,13 @@ export function resolveEffectiveUpdateChannel(params: {
   installKind: "git" | "package" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
-  if (
-    params.currentVersion &&
-    isBetaTag(params.currentVersion) &&
-    params.configChannel !== "extended-stable" &&
-    params.configChannel !== "beta" &&
-    params.configChannel !== "dev"
-  ) {
-    return { channel: "beta", source: "installed-version" };
-  }
-
+  // A one-off package tag does not replace the operator's saved update policy.
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.currentVersion && isBetaTag(params.currentVersion)) {
+    return { channel: "beta", source: "installed-version" };
   }
 
   if (params.installKind === "package" && params.currentVersion) {
@@ -159,7 +162,7 @@ export function resolveEffectiveUpdateChannel(params: {
 }
 
 /** Formats an operator-facing channel label that includes the deciding source. */
-export function formatUpdateChannelLabel(params: {
+function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
   gitTag?: string | null;

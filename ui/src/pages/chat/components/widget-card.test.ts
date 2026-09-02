@@ -58,7 +58,38 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
-  it("keeps a reported frame height across a capability rotation", () => {
+  it("fits a tall widget instead of scrolling it inside the frame", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_tall_widget",
+          url: "/__openclaw__/canvas/documents/cv_tall_widget/index.html",
+          sandbox: "scripts",
+        } as const,
+        "chat_message",
+        { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one" },
+      ),
+      host,
+    );
+    const frame = host.querySelector<HTMLIFrameElement>("iframe");
+    frame?.dispatchEvent(new Event("load"));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "openclaw:widget-size", height: 3000 },
+        source: frame?.contentWindow,
+      }),
+    );
+    expect(frame?.style.height).toBe("3000px");
+    expect(frame?.style.minHeight).toBe("3000px");
+    host.remove();
+  });
+
+  it("keeps a short reported frame height across a capability rotation", () => {
     const preview = {
       kind: "canvas",
       surface: "assistant_message",
@@ -79,11 +110,11 @@ describe("widget-card", () => {
     frame?.dispatchEvent(new Event("load"));
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: "openclaw:widget-size", height: 640 },
+        data: { type: "openclaw:widget-size", height: 48 },
         source: frame?.contentWindow,
       }),
     );
-    expect(frame?.style.height).toBe("640px");
+    expect(frame?.style.height).toBe("48px");
 
     // Re-render at the same URL so the style binding itself carries the
     // remembered height; only then can a later rotation clear it.
@@ -93,7 +124,7 @@ describe("widget-card", () => {
       }),
       host,
     );
-    expect(frame?.getAttribute("style")).toContain("640px");
+    expect(frame?.getAttribute("style")).toContain("48px");
 
     // The in-frame reporter only posts when its own height changes, so a
     // rotation that lost the remembered height would strand the frame at its
@@ -105,7 +136,7 @@ describe("widget-card", () => {
       host,
     );
     expect(host.querySelector("iframe")).toBe(frame);
-    expect(frame?.getAttribute("style")).toContain("640px");
+    expect(frame?.getAttribute("style")).toContain("48px");
     host.remove();
   });
 
@@ -189,7 +220,7 @@ describe("widget-card", () => {
     expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
       Array.from(canvas.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
-    ).toEqual(["Copy to clipboard", "Download file"]);
+    ).toEqual(["Copy as image", "Download as image"]);
 
     const app = document.createElement("div");
     render(
@@ -213,6 +244,44 @@ describe("widget-card", () => {
     );
     expect(app.querySelector("iframe")).toBeNull();
     expect(app.querySelector('button[aria-label="Widget actions"]')).toBeNull();
+
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          title: "App",
+          preferredHeight: 480,
+          mcpApp: { viewId: "view-dispatch" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main", rawText: "raw app payload" },
+      ),
+      app,
+    );
+    expect(app.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
+    expect(
+      Array.from(app.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["Show raw details"]);
+
+    const external = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          url: "https://example.test/widget",
+        },
+        "chat_message",
+        { allowExternalEmbedUrls: true, rawText: "external raw payload" },
+      ),
+      external,
+    );
+    expect(
+      Array.from(external.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["Show raw details"]);
 
     const unknown = document.createElement("div");
     render(renderToolPreview({ kind: "unknown" } as never, "chat_message"), unknown);
@@ -253,7 +322,6 @@ describe("widget-card", () => {
       ),
       canvas,
     );
-
     canvas.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -485,19 +553,17 @@ describe("widget-card presentation", () => {
     } as unknown as BoardProvider;
   }
 
-  it("drops the panel inset for non-card pinned presentations", () => {
+  it("keeps widget content edge-to-edge with controls outside a visible header", () => {
     const host = document.createElement("div");
     render(
       renderToolPreview(preview, "chat_message", { boardProvider: providerWith("full-bleed") }),
       host,
     );
-    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
-      true,
-    );
-
-    render(renderToolPreview(preview, "chat_message", { boardProvider: providerWith() }), host);
-    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
-      false,
+    expect(host.querySelector(".chat-tool-card__preview-header")).toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-label")).toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-actions")).not.toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-frame")?.getAttribute("title")).toBe(
+      "Clock",
     );
   });
 });

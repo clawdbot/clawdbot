@@ -1,3 +1,5 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
@@ -25,6 +27,11 @@ export type NodeHostInvokeRuntime = {
   installedAppsSharingEnabled?: boolean;
   installedAppsPlatform?: NodeJS.Platform;
   scanInstalledApps?: typeof scanInstalledApps;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
+  desktopHostConfig?: DesktopHostConfig;
+  emitProgress?: (text: string) => Promise<void>;
 };
 
 type ClaudeCliNodeInvokeDeps = Pick<
@@ -87,7 +94,12 @@ function prepareClaudeNodeSecretInput(params: {
   ]) {
     delete params.childEnv[key];
   }
-  const source = Buffer.from(params.requestEnv?.[selected.requestEnv] ?? "", "utf8");
+  const value = params.requestEnv?.[selected.requestEnv]?.trim();
+  // An empty descriptor suppresses Claude's healthy native login.
+  if (!value) {
+    return { cleanup: () => {} };
+  }
+  const source = Buffer.from(value, "utf8");
   params.childEnv[selected.descriptorEnv] = "3";
   return {
     secretInput: {
@@ -157,7 +169,8 @@ export async function handleClaudeCliNodeInvoke(params: {
   await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
     client: params.client,
     // The command-specific validator is the execution boundary. Approval sees
-    // every executable argument; prompt/stdin content remains request input.
+    // every caller-supplied executable argument. The node adds its own prompt,
+    // verified resources, and invocation-only MCP proxy after approval.
     params: {
       command: approvalCommand,
       ...(request.cwd ? { cwd: request.cwd } : {}),
@@ -197,6 +210,7 @@ export async function handleClaudeCliNodeInvoke(params: {
           secretInput: preparedSecret.secretInput,
           timeoutMs,
           signal: params.runtime.signal,
+          skillIo: params.runtime.pluginCommandIo,
         });
       } finally {
         preparedSecret.cleanup();

@@ -5,10 +5,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### Current App Surface
 
 - [x] New 4-step onboarding flow
-- [x] Connect tab with `Setup Code` + `Manual` modes
+- [x] Gateway setup through QR/setup codes or manual connection fields
 - [x] Encrypted persistence for gateway setup/auth state
 - [x] Chat UI restyled
-- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
+- [x] Settings UI with gateway connection controls under **Gateway**
 - [x] QR code scanning in onboarding
 - [x] Performance improvements
 - [x] Streaming support in chat UI
@@ -17,9 +17,8 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
-- [x] Voice tab full functionality
-- [x] Foreground on-device Voice Wake with Gateway-synced wake words
-- [x] Screen tab full functionality
+- [x] Chat composer dictation, voice-note recording, and continuous Talk
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words, configured in **Settings → Voice**
 - [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
 - [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
 - [x] Per-app language selection for translated resources follows Android system settings and persistence
@@ -28,8 +27,11 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 ## Open in Android Studio
 
-- Run `pnpm install` from the repository root so native Canvas resources can be generated.
 - Open the folder `apps/android`.
+
+## Session colors
+
+Long-press a row on the Sessions screen and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Sessions screen, plus a dot beside the open chat title. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
 ## Wear OS companion
 
@@ -44,7 +46,12 @@ cd apps/android
 
 ## Build / Run
 
+Install the repository's Node.js and pnpm dependencies before building. Gradle
+builds the shared Mermaid renderer automatically and packages its local assets
+with the app; no CDN or Gateway renderer is needed.
+
 ```bash
+pnpm install
 cd apps/android
 ./gradlew :app:assemblePlayDebug
 ./gradlew :app:installPlayDebug
@@ -61,6 +68,20 @@ cd apps/android
 ./gradlew :app:installThirdPartyDebug
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
+
+## Mermaid diagrams
+
+Chat renders completed `mermaid` code blocks inline. Tap a diagram for a
+full-screen view with pinch-to-zoom and panning. The corner menu switches to
+source or retries a temporary failure, and the copy button copies the original
+Mermaid source. Incomplete streaming blocks remain readable code.
+
+The renderer shares its pinned Mermaid version, sandbox, and SVG sanitizer with
+the Control UI. Android keeps bounded bitmap previews in memory and retains the
+sanitized SVG for zooming. Math and diagrams share the render queue and lifecycle
+owner, with separate lazy WebViews and resource limits. See
+[`packages/mermaid-renderer`](../../packages/mermaid-renderer/README.md) for the
+shared runtime and build contract.
 
 Repository-backed debug Gradle invocations, including `pnpm android:run` and
 `pnpm android:screenshots`, stamp the full checkout commit and capture one UTC
@@ -164,7 +185,7 @@ cd apps/android
 ./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
-`gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
+Set `ANDROID_HOME` to your installed Android SDK, or set `sdk.dir` in the local `apps/android/local.properties` file. For Homebrew's command-line tools, the SDK may be at `/opt/homebrew/share/android-commandlinetools`.
 
 ## Macrobenchmark (Startup + Frame Timing)
 
@@ -235,7 +256,7 @@ Terminal B (USB tunnel):
 adb reverse tcp:18789 tcp:18789
 ```
 
-Then in app **Connect → Manual**:
+Then in app **Settings → Gateway → Manual Gateway**:
 
 - Host: `127.0.0.1`
 - Port: `18789`
@@ -248,7 +269,6 @@ This app is native Kotlin + Jetpack Compose.
 - For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
 - For many non-structural code/resource changes: use Android Studio **Apply Changes**.
 - For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
-- Canvas web content already supports live reload when loaded from Gateway `__openclaw__/canvas/` (see `docs/platforms/android.md`).
 
 ## Connect / Pair
 
@@ -260,8 +280,8 @@ pnpm openclaw gateway --port 18789 --verbose
 
 2) In the Android app:
 
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode to connect.
+- Open **Settings → Gateway**.
+- Scan a QR code, paste a **Setup code**, or use the **Manual Gateway** fields to connect.
 
 3) Approve pairing (on the gateway machine):
 
@@ -338,12 +358,9 @@ Pre-req checklist:
 1) Gateway is running and reachable from the Android app.
 2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
 3) App stays unlocked and in foreground for the whole run.
-4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
-5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
-6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
+4) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
+5) No interactive system dialogs should be pending before test start.
+6) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
 
 ```bash
 openclaw devices list
@@ -377,11 +394,6 @@ Common failure quick-fixes:
 
 - `pairing required` before tests start:
   - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
-- `A2UI host not reachable` / `A2UI_HOST_UNAVAILABLE`:
-  - keep the app foregrounded on the **Screen** tab and rerun. A2UI commands use the bundled app-owned A2UI page; the Gateway Canvas host is still needed for remote Canvas checks, but not for A2UI message application.
-- `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
-  - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
-
 ## Contributions
 
 Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.

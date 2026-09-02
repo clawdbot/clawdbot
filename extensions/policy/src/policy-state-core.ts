@@ -1,7 +1,11 @@
 // Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ocPathSegment, readBooleanPath } from "./policy-state-helpers.js";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  collectPolicyConfiguredAgents,
+  ocPathSegment,
+  readBooleanPath,
+} from "./policy-state-helpers.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
 import type {
   PolicyChannelEvidence,
@@ -128,11 +132,11 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
 }
 
 export function configuredChannels(cfg: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(cfg.channels) ? cfg.channels : {};
+  return asNonArrayRecord(cfg.channels);
 }
 
 function configuredMcpServers(cfg: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(cfg.mcp) && isRecord(cfg.mcp.servers) ? cfg.mcp.servers : {};
+  return asNonArrayRecord(asNonArrayRecord(cfg.mcp).servers);
 }
 
 function mcpServerTransport(value: unknown): PolicyMcpServerEvidence["transport"] {
@@ -161,7 +165,7 @@ function redactMcpUrlForEvidence(raw: string): string {
 }
 
 function configuredModelProviders(cfg: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(cfg.models) && isRecord(cfg.models.providers) ? cfg.models.providers : {};
+  return asNonArrayRecord(asNonArrayRecord(cfg.models).providers);
 }
 
 function networkBooleanEvidence(
@@ -236,19 +240,12 @@ function collectModelRefsFromAgentAllowlist(
     );
   }
 
-  const list = agents.list;
-  if (!Array.isArray(list)) {
-    return;
-  }
-  for (const [index, agent] of list.entries()) {
+  for (const configured of collectPolicyConfiguredAgents(agents)) {
+    const agent = configured.value;
     if (!isRecord(agent) || !isRecord(agent.models)) {
       continue;
     }
-    collectModelRefsFromModelMap(
-      refs,
-      agent.models,
-      `oc://openclaw.config/agents/list/#${index}/models`,
-    );
+    collectModelRefsFromModelMap(refs, agent.models, `${configured.sourceBase}/models`);
   }
 }
 

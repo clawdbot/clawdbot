@@ -3,10 +3,11 @@ import type { Server as HttpServer } from "node:http";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
+import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -66,7 +67,7 @@ async function openDashboard(page: Page): Promise<void> {
     },
     { key: sessionKey, storageKey: settingsKey },
   );
-  await page.goto(`${controlUi.baseUrl}dashboard`);
+  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
   await page.locator(".board-session-surface").waitFor();
 }
 
@@ -88,6 +89,22 @@ async function waitForMountedApp(page: Page): Promise<void> {
     undefined,
     { timeout: 15_000 },
   );
+}
+
+async function cycleBoardProviderConnection(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const surface = document.querySelector(".board-session-surface");
+    const pane = surface?.closest("openclaw-chat-pane");
+    const lease = pane ? Reflect.get(pane, "boardProviderLease") : undefined;
+    const scopedProvider = lease?.provider;
+    const transport = scopedProvider ? Reflect.get(scopedProvider, "transport") : undefined;
+    const client = transport ? Reflect.get(transport, "client") : undefined;
+    if (!transport || !client || typeof transport.attachClient !== "function") {
+      throw new Error("Dashboard Gateway provider is unavailable");
+    }
+    transport.attachClient(client, false);
+    transport.attachClient(client, true);
+  });
 }
 
 async function captureBoardIdentity(page: Page): Promise<void> {
@@ -173,7 +190,7 @@ async function waitForCachedBoardFace(page: Page, face: "chat" | "dashboard"): P
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getFreeGatewayPort();
+    sandboxPort = await getGatewayE2ePortBlock();
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -227,9 +244,16 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await openDashboard(page);
     await expect
       .poll(async () => (await gateway.getRequests("board.widget.appView")).length, {
-        timeout: 10_000,
+        timeout: 15_000,
       })
-      .toBeGreaterThan(0);
+      .toBe(2);
+    // Renewal replaces the iframe. The new-binding request follows teardown,
+    // so wait for it before sampling the replacement's rendered background.
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("mcp.app.view")).map((request) => request.params),
+      )
+      .toContainEqual({ sessionKey, viewId: "renewed-view" });
     await waitForMountedApp(page);
     const widgetBackgrounds = await page.evaluate(() => {
       const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
@@ -246,17 +270,85 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     });
     expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
     expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
-    await expect
-      .poll(async () => (await gateway.getRequests("board.widget.appView")).length, {
-        timeout: 15_000,
-      })
-      .toBe(2);
     expect((await gateway.getRequests("board.widget.appView"))[0]?.params).toEqual({
       sessionKey,
+      agentId: "main",
       name: "app-0",
       revision: 1,
       instanceId: "instance-0",
     });
+  });
+
+  it("drops a pending app view across reconnect and mounts the current lease", async () => {
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+      viewport: { width: 1280, height: 800 },
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["board.widget.appView"],
+      sessionKey,
+      featureMethods: [
+        "board.get",
+        "board.widget.appView",
+        "chat.history",
+        "chat.metadata",
+        "chat.startup",
+        "mcp.app.view",
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot(1),
+        "board.widget.appView": {
+          viewId: "current-view",
+          expiresAtMs: Date.now() + 3_600_000,
+        },
+        "mcp.app.view": appViewPayload(),
+      },
+    });
+
+    await openDashboard(page);
+    await gateway.waitForRequest("board.widget.appView");
+    await gateway.deferNext("board.widget.appView");
+    const boardGetCount = (await gateway.getRequests("board.get")).length;
+    await cycleBoardProviderConnection(page);
+    await expect
+      .poll(async () => (await gateway.getRequests("board.get")).length)
+      .toBeGreaterThan(boardGetCount);
+
+    await gateway.resolveDeferred("board.widget.appView", {
+      viewId: "retired-view",
+      expiresAtMs: Date.now() + 3_600_000,
+    });
+    await page.evaluate(
+      async () =>
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    expect(await gateway.getRequests("mcp.app.view")).toEqual([]);
+
+    await expect
+      .poll(async () => (await gateway.getRequests("board.widget.appView")).length)
+      .toBe(2);
+    await gateway.resolveDeferred("board.widget.appView", {
+      viewId: "current-view",
+      expiresAtMs: Date.now() + 3_600_000,
+    });
+    await waitForMountedApp(page);
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("mcp.app.view")).map((request) => request.params),
+      )
+      .toContainEqual({
+        sessionKey,
+        viewId: "current-view",
+      });
+    expect(await gateway.getRequests("mcp.app.view")).not.toContainEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({ viewId: "retired-view" }),
+      }),
+    );
   });
 
   it("retains one board runtime across Chat, Split, and Dashboard", async () => {
@@ -345,9 +437,21 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     expect(await gateway.getRequests("sessions.list")).toHaveLength(faceListCount);
     await expectRetainedBoardMode(page, "split");
     expect((await gateway.getRequests("board.update")).map((request) => request.params)).toEqual([
-      { sessionKey, ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }] },
-      { sessionKey, ops: [{ kind: "tab_update", tabId: "main", chatDock: "hidden" }] },
-      { sessionKey, ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }] },
+      {
+        sessionKey,
+        agentId: "main",
+        ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }],
+      },
+      {
+        sessionKey,
+        agentId: "main",
+        ops: [{ kind: "tab_update", tabId: "main", chatDock: "hidden" }],
+      },
+      {
+        sessionKey,
+        agentId: "main",
+        ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }],
+      },
     ]);
     expect(await gateway.getRequests("board.get")).toHaveLength(stableCounts.boardGet);
     expect(await gateway.getRequests("board.widget.appView")).toHaveLength(stableCounts.appView);

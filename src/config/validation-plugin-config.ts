@@ -6,13 +6,14 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
-  resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
-import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
@@ -118,11 +119,7 @@ function formatMissingOfficialExternalPluginWarning(
   if (!catalogEntry) {
     return null;
   }
-  const install = resolveOfficialExternalPluginInstall(catalogEntry);
-  const npmSpec = install?.npmSpec?.trim();
-  const clawhubSpec = install?.clawhubSpec?.trim();
-  const installSpec =
-    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  const installSpec = resolveOfficialExternalPluginInstallSources(catalogEntry)[0]?.spec;
   if (!installSpec) {
     return null;
   }
@@ -135,7 +132,6 @@ function formatMissingOfficialExternalPluginWarning(
 export function validateExplicitPluginConfig(params: {
   raw: unknown;
   config: OpenClawConfig;
-  effectiveConfig: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
   registry: PluginManifestRegistry;
@@ -150,7 +146,6 @@ export function validateExplicitPluginConfig(params: {
   const {
     raw,
     config,
-    effectiveConfig,
     env,
     applyDefaults,
     registry,
@@ -364,7 +359,8 @@ export function validateExplicitPluginConfig(params: {
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: effectiveConfig,
+      rootConfig: config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;
@@ -387,7 +383,8 @@ export function validateExplicitPluginConfig(params: {
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
-        const result = validateJsonSchemaValue({
+        const result = validatePluginSchemaValue({
+          origin: record.origin,
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},

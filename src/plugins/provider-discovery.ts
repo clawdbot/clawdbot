@@ -4,7 +4,11 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
+import {
+  copyProviderCatalogOutcomes,
+  copyProviderCatalogResultProjection,
+} from "./provider-catalog-result.js";
+import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
@@ -140,8 +144,9 @@ export function normalizePluginDiscoveryResult(params: {
   return normalized;
 }
 
-export function runProviderCatalog(params: {
+export async function runProviderCatalog(params: {
   provider: ProviderPlugin;
+  providerIds?: readonly string[];
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -160,15 +165,33 @@ export function runProviderCatalog(params: {
     source: "env" | "profile" | "none";
     profileId?: string;
   };
+  reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 }) {
-  return resolveProviderCatalogHook(params.provider)?.run({
+  const hook = resolveProviderCatalogHook(params.provider);
+  if (!hook) {
+    return undefined;
+  }
+  const result = await hook.run({
     config: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
   });
+  for (const outcome of copyProviderCatalogOutcomes(result)) {
+    if (
+      params.providerIds !== undefined &&
+      !params.providerIds.some(
+        (providerId) => normalizeProviderId(providerId) === normalizeProviderId(outcome.provider),
+      )
+    ) {
+      continue;
+    }
+    params.reportCatalogOutcome?.(outcome);
+  }
+  return result;
 }
 
 export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {

@@ -4,21 +4,31 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
-import { normalizeXaiModelId } from "./model-id.js";
+import {
+  isXaiFrontierModelId,
+  isXaiGrok46ModelId,
+  normalizeXaiModelId,
+  resolveXaiOAuthAutoModelId,
+} from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderThinkingProfile {
-  const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(ctx.modelId)?.reasoning;
+  // OAuth catalog rows keep the "auto" alias id and carry the provider-selected
+  // target in params.canonicalModelId. Judge that concrete target here too.
+  const rawModelId = resolveXaiOAuthAutoModelId(ctx.modelId, ctx.params);
+  const modelId = normalizeXaiModelId(rawModelId.trim().toLowerCase());
+  const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(modelId)?.reasoning;
   if (!isXaiProviderId(ctx.provider) || !reasoning) {
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }
-  const modelId = normalizeXaiModelId(ctx.modelId.trim().toLowerCase());
-  const isGrok45 = modelId === "grok-4.5" || modelId.startsWith("grok-4.5-");
-  if (isGrok45) {
+  if (isXaiFrontierModelId(modelId)) {
+    const levels: ProviderThinkingProfile["levels"] = isXaiGrok46ModelId(modelId)
+      ? [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }]
+      : [{ id: "low" }, { id: "medium" }, { id: "high" }];
     return {
-      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      levels,
       defaultLevel: "high",
     };
   }

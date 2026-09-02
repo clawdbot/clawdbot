@@ -188,7 +188,7 @@ vi.mock("../../agents/thinking-runtime.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: (value: string) => value,
+  normalizeAgentId: vi.fn((value: string) => value),
 }));
 
 vi.mock("../commands-text-routing.js", () => ({
@@ -216,7 +216,7 @@ vi.mock("./directive-handling.parse.js", async () => {
   const { parseInlineDirectivesForTargetSessionTest } =
     await import("./get-reply-directives.target-session.test-helpers.js");
   return {
-    parseInlineDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
+    parseInlineSessionDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
   };
 });
 

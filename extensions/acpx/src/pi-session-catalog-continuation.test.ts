@@ -90,6 +90,33 @@ afterEach(async () => {
 });
 
 describe("Pi session catalog continuation", () => {
+  it("projects only adopted Pi rows with their OpenClaw session key", async () => {
+    await createPiStoreFixture(
+      temporaryDirectories,
+      "hi",
+      "Pi catalog session",
+      { command: "pwd" },
+      true,
+    );
+    await installFakePiFixture(temporaryDirectories, originalPath);
+    const { entries, provider } = capturePiContinuationCatalog();
+    const sessionEntries = { entriesForAgent: () => entries } as never;
+
+    const before = await provider.list({ hostIds: ["gateway"], sessionEntries });
+    expect(before[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+
+    const adopted = await provider.continueSession!({
+      hostId: "gateway",
+      threadId: "pi-session",
+    });
+    const after = await provider.list({ hostIds: ["gateway"], sessionEntries });
+
+    expect(after[0]?.sessions[0]).toMatchObject({
+      threadId: "pi-session",
+      sessionKey: adopted.sessionKey,
+    });
+  });
+
   it("adopts once with the native ACP binding and an exact file baseline", async () => {
     const sessionDirectory = await createPiStoreFixture(
       temporaryDirectories,
@@ -117,9 +144,10 @@ describe("Pi session catalog continuation", () => {
       marker: expect.objectContaining({ offset: sessionStats.size }),
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Pi catalog session",
+        displayName: "Pi catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",

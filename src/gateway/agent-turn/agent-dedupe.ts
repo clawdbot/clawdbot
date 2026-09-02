@@ -36,6 +36,7 @@ export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   ownerDeviceId?: unknown;
   reservationId?: unknown;
   runId?: unknown;
+  runtime?: unknown;
   sessionKey?: unknown;
   status: "accepted";
 } {
@@ -67,6 +68,7 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
   runId: string;
   sessionKey?: string;
   alternateSessionKeys?: Array<string | undefined>;
+  agentId?: string;
 }): boolean {
   if (!params.entry?.ok || !isPreRegistrationAbortedAgentDedupePayload(params.entry.payload)) {
     return false;
@@ -80,6 +82,13 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
     typeof payload.sessionKey === "string" && payload.sessionKey.trim()
       ? payload.sessionKey.trim()
       : undefined;
+  const payloadAgentId =
+    typeof payload.agentId === "string" && payload.agentId.trim()
+      ? payload.agentId.trim()
+      : undefined;
+  if (params.agentId && payloadAgentId !== params.agentId) {
+    return false;
+  }
   const expectedSessionKeys = new Set(
     [params.sessionKey, ...(params.alternateSessionKeys ?? [])].filter((value): value is string =>
       Boolean(value?.trim()),

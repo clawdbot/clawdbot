@@ -12,24 +12,24 @@ OpenClaw runs shell commands through the `exec` tool and keeps long-running task
 
 Parameters:
 
-| Parameter    | Description                                                                                                                                                |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`    | Required. Shell command to run.                                                                                                                            |
-| `workdir`    | Working directory; omit to use the default cwd.                                                                                                            |
-| `env`        | Extra environment variables for the command.                                                                                                               |
-| `yieldMs`    | Milliseconds to wait before backgrounding (default 10000).                                                                                                 |
-| `background` | Run in background immediately.                                                                                                                             |
-| `timeout`    | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeout: 0` to disable the exec process timeout for that call. |
-| `pty`        | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                |
-| `elevated`   | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                              |
-| `host`       | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                      |
-| `node`       | Node id/name, used with `host: "node"`.                                                                                                                    |
+| Parameter        | Description                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`        | Required. Shell command to run.                                                                                                                                   |
+| `workdir`        | Working directory; omit to use the default cwd.                                                                                                                   |
+| `env`            | Extra environment variables for the command.                                                                                                                      |
+| `yieldMs`        | Milliseconds to wait before backgrounding (default 10000).                                                                                                        |
+| `background`     | Run in background immediately.                                                                                                                                    |
+| `timeoutSeconds` | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeoutSeconds: 0` to disable the exec process timeout for that call. |
+| `pty`            | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                       |
+| `elevated`       | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                                     |
+| `host`           | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                             |
+| `node`           | Node id/name, used with `host: "node"`.                                                                                                                           |
 
 Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
-- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeout`.
+- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
 - Output stays in memory up to the per-session aggregate cap until the session is polled or cleared.
 - Finished sessions expire after their configured TTL. The registry also retains at most 50 finished sessions and 2,000,000 total retained output characters, evicting the oldest records first. The newest completed session retains its capped per-session aggregate even when that record alone exceeds the global limit.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
@@ -58,9 +58,32 @@ Behavior:
 | `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
 | `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
 
+## Worker environments
+
+On a paired-node or node-backed cloud worker, background processes belong to the
+session's environment. Finishing or cancelling a turn leaves already-backgrounded
+commands running. A later turn in the same environment can use `process` to poll,
+send input, or stop them; foreground commands still stop when their turn is cancelled.
+
+The retained worker occupies one node worker slot. Reusing it needs no additional
+slot. If a command finishes between turns, its retained output remains available
+to the next turn, subject to the normal process output limits and TTL. Once a turn
+finishes with no live background commands, the worker exits. Moving or retiring
+the environment, replacing its ownership, or stopping the node also stops its
+processes. Process handles do not survive a worker or node restart.
+
+If the node's pairing is revoked or its provider no longer recognizes the lease,
+the session placement fails. Physical cleanup can remain pending until OpenClaw
+confirms that the exact worker has stopped; an unconfirmed stop does not release
+its ownership record.
+
+Worker completion does not currently wake the Gateway session automatically;
+use `process poll` in a later turn to inspect the result. Closing a portal closes
+its proxy, not the development server: stop the server with `process kill`.
+
 ## Child process bridging
 
-When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/error. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
+When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
 ## process tool
 

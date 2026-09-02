@@ -115,4 +115,47 @@ describe("argv-invocation", () => {
         .commandPath,
     ).toEqual(["models", "status"]);
   });
+
+  it.each(["cleanup", "status", "repair", "finalize", "wizard"])(
+    "resolves update %s after parent options and interleaved root options",
+    (child) => {
+      for (const args of [
+        ["--channel", "beta", "--tag", "latest", "--timeout", "5", child],
+        ["--channel=beta", "--no-color", "--timeout=5", "--yes", child],
+        ["--", child],
+      ]) {
+        expect(
+          resolveCliArgvInvocation(["node", "openclaw", "--profile", "work", "update", ...args])
+            .commandPath,
+        ).toEqual(["update", child]);
+      }
+    },
+  );
+
+  it.each(["--channel", "--tag", "--timeout"])(
+    "does not mistake a cleanup-valued %s for a child command",
+    (flag) => {
+      for (const args of [[flag, "cleanup"], [`${flag}=cleanup`], [flag]]) {
+        expect(
+          resolveCliArgvInvocation(["node", "openclaw", "update", ...args]).commandPath,
+        ).toEqual(["update"]);
+      }
+    },
+  );
+
+  it.each([
+    ["update", "--channel=beta", "cleanup", "--help"],
+    ["update", "--help", "cleanup"],
+    ["help", "update", "cleanup"],
+  ])("recognizes update help without promoting scoped version flags: %j", (...args) => {
+    expect(resolveCliArgvInvocation(["node", "openclaw", ...args]).hasHelpOrVersion).toBe(true);
+  });
+
+  it.each([
+    ["update", "cleanup", "--version"],
+    ["update", "cleanup", "--", "--help"],
+    ["update", "--channel=--help", "cleanup"],
+  ])("leaves scoped or literal help/version tokens to Commander: %j", (...args) => {
+    expect(resolveCliArgvInvocation(["node", "openclaw", ...args]).hasHelpOrVersion).toBe(false);
+  });
 });

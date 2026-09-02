@@ -28,13 +28,7 @@ export {
 } from "./embedded-agent-helpers/image-errors.js";
 export { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
 export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
-export {
-  BILLING_ERROR_USER_MESSAGE,
-  formatBillingErrorMessage,
-  formatRateLimitOrOverloadedErrorCopy,
-  getApiErrorPayloadFingerprint,
-  isRawApiErrorPayload,
-} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+export { formatBillingErrorMessage, getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 export {
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,
@@ -42,15 +36,11 @@ export {
 export {
   classifyFailoverReason,
   isAuthErrorMessage,
-  isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
-  isTransientHttpError,
+  isProviderRequestSizeCeilingError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
 export type { FailoverReason } from "./failover/signal.js";

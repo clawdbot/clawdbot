@@ -1,3 +1,4 @@
+import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -8,9 +9,22 @@ import type {
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
 
+export type CodexCatalogHome = {
+  sourceHomeId: string;
+  hostId: string;
+  label: string;
+  agentDir: string;
+  appServer: CodexAppServerRuntimeOptions;
+  /** Trusted local root for rollout provenance reads; absent for remote app-server connections. */
+  localSessionsRoot?: string;
+  usesProcessHomeFallback: boolean;
+};
+
 /** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
+  /** Opaque connection identity; never exposes the underlying Codex home path. */
+  sourceHomeId?: string;
   sessionId?: string;
   name?: string | null;
   /** Display-only fallback kept separate so title search never scans prompt previews. */
@@ -32,6 +46,8 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Internal provenance filtered before this page reaches the provider catalog. */
+  managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
   backwardsCursor?: string;
 };
@@ -41,20 +57,41 @@ export type CodexSessionCatalogPageParams = {
   limit?: number;
   searchTerm?: string;
   cwd?: string;
-  /** Bypasses the brief list memo after a specific thread lookup misses. */
-  forceRefresh?: boolean;
 };
 
 export type CodexSessionCatalogControl = {
+  /** Available only inside the exact physical client's pinned catalog lease. */
+  forkContext?: {
+    client: import("./app-server/client.js").CodexAppServerClient;
+    appServer: CodexAppServerRuntimeOptions;
+    pluginConfig: unknown;
+    agentDir: string;
+    localSessionsRoot?: string;
+  };
+  /** Retire only this pinned physical client, preserving unrelated active leases. */
+  retireConnection?: () => void;
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
+  requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
+  forkThread(
+    params: CodexThreadForkParams,
+    assertCurrent?: () => void,
+  ): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
+  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
+};
+
+export type CodexSessionCatalogControlFactory = {
+  forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
+  homesForAgent(agentId: string): readonly CodexCatalogHome[];
+  forUpstream(
+    agentId: string,
+    connectionFingerprint: string,
+  ): CodexSessionCatalogControl | undefined;
 };
 
 export type CodexSessionCatalogError = {
@@ -90,6 +127,7 @@ export type CodexSessionTranscriptPage = {
 };
 
 export type CodexSessionCatalogParams = {
+  agentId?: string;
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];

@@ -22,12 +22,9 @@ import {
   classifyFailoverReasonFromCode,
   failoverReasonFromClassification,
   inferSignalStatus,
-  isClaudeCliLoggedOutError,
+  isClaudeCliAuthError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
-  isOpenRouterKeyBudgetLimitExceededError,
-  isOpenRouterKeyLimitExceededError,
-  isOpenRouterProviderReturnedError,
   isTransientHttpError,
   isUnsupportedImageInputErrorMessage,
   toPluginClassification,
@@ -51,16 +48,10 @@ import {
   classifyLegacyProviderSpecificError,
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-export {
-  isBilling429MessageForProvider,
-  isGenericUnknownStreamErrorMessage,
-  isOpenRouterKeyBudgetLimitExceededError,
-  isOpenRouterKeyLimitExceededError,
-  isTransientHttpError,
-  isUnclassifiedNoBodyHttpSignal,
-} from "./classification-rules.js";
+export { isUnclassifiedNoBodyHttpSignal } from "./classification-rules.js";
 export {
   isContextOverflowError,
   isLikelyContextOverflowError,
@@ -68,21 +59,15 @@ export {
 } from "./context-overflow.js";
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-  matchesFormatErrorPattern,
 } from "./message-patterns.js";
-export {
-  classifyProviderPluginError,
-  classifyProviderSpecificError,
-  matchesProviderContextOverflow,
-} from "./provider-patterns.js";
 export { extractFailoverSignalDetails } from "./signal-details.js";
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
@@ -134,6 +119,9 @@ function classifyFailoverClassificationFromMessage(
   if (isUnsupportedImageInputErrorMessage(raw)) {
     return toReasonClassification("format");
   }
+  if (isClaudeCliAuthError(raw, provider)) {
+    return toReasonClassification("auth");
+  }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
   }
@@ -156,12 +144,6 @@ function classifyFailoverClassificationFromMessage(
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
-  }
-  if (
-    isOpenRouterKeyLimitExceededError(raw, provider) ||
-    isOpenRouterKeyBudgetLimitExceededError(raw, provider)
-  ) {
-    return toReasonClassification("billing");
   }
   const leadingStatus = extractLeadingHttpStatus(raw.trim());
   if (leadingStatus?.code !== 429 && isBillingErrorMessage(raw)) {
@@ -209,9 +191,6 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
-  if (isClaudeCliLoggedOutError(raw, provider)) {
-    return toReasonClassification("auth");
-  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -223,9 +202,6 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("auth");
   }
   if (isGenericUnknownStreamErrorMessage(raw)) {
-    return toReasonClassification("timeout");
-  }
-  if (isOpenRouterProviderReturnedError(raw, provider)) {
     return toReasonClassification("timeout");
   }
   if (isServerErrorMessage(raw)) {
@@ -296,7 +272,10 @@ function mergeMessageAndDetailClassification(
     : messageClassification;
 }
 
-export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
+export function classifyFailoverSignal(
+  signal: FailoverSignal,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
+): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
@@ -309,6 +288,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     detailClassification,
   );
   const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  // Provider-attributed 401/403/429 text is ambiguous enough to consult only the
+  // scoped owner hook. Passing the inferred status also fences unresolved ids
+  // from the descriptor-free broad scan in provider-runtime.
+  const providerHookStatus =
+    explicitStatus ??
+    (signal.provider && (inferredStatus === 401 || inferredStatus === 403 || inferredStatus === 429)
+      ? inferredStatus
+      : undefined);
   // Pure table matches are also the cheap runtime-load gate. Structured,
   // context-shaped, and otherwise-unclassified signals still consult the
   // provider once; its result remains authoritative over the prepared tables.
@@ -316,7 +303,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     signal.message || signal.code || signal.errorType || typeof inferredStatus === "number",
   );
   const hasStructuredDescriptor =
-    explicitStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;
+    providerHookStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;
   const hasContextCandidate = Boolean(
     signal.message && looksLikeProviderContextOverflowCandidate(signal.message),
   );
@@ -327,9 +314,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     ? classifyProviderPluginError({
         errorMessage: signal.message ?? "",
         provider: signal.provider,
-        status: explicitStatus,
+        status: providerHookStatus,
         code: signal.code,
         errorType: signal.errorType,
+        providerPlugin: opts?.providerPlugin,
       })
     : null;
   const tlsCertificateError = inspectTlsCertificateError(signal);
@@ -346,10 +334,13 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
   const effectiveMessageClassification = providerPluginReason
     ? toPluginClassification(providerPluginReason)
-    : (messageOrDetailClassification ?? errorTypeClassification);
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
+    : mergeMessageAndDetailClassification(
+        messageOrDetailClassification ?? errorTypeClassification,
+        codeReason ? toReasonClassification(codeReason) : null,
+      );
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }
@@ -428,13 +419,16 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 
 export function classifyFailoverReason(
   raw: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   return failoverReasonFromClassification(
-    classifyFailoverSignal({
-      message: raw,
-      provider: opts?.provider,
-    }),
+    classifyFailoverSignal(
+      {
+        message: raw,
+        provider: opts?.provider,
+      },
+      opts,
+    ),
   );
 }
 

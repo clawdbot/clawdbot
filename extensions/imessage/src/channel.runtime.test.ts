@@ -1,7 +1,11 @@
 // Imessage tests cover channel plugin behavior.
+import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
+import { IMessageRpcClient } from "./client.js";
+import { sendMessageIMessage } from "./send.js";
 
 const monitorMock = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -348,5 +352,63 @@ describe("sendIMessageOutbound approval identity", () => {
     ).rejects.toBe(captionError);
 
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(accepted);
+  });
+});
+
+describe("iMessage account media limits", () => {
+  it.each(["work", undefined])("enforces the resolved account cap for %s", async (accountId) => {
+    const state = await createOpenClawTestState({ prefix: "imessage-account-media-" });
+    const client = new IMessageRpcClient();
+    const delivered: Buffer[] = [];
+    const request = vi.spyOn(client, "request").mockImplementation(async (_method, params) => {
+      if (typeof params?.file !== "string") {
+        throw new Error("Missing native attachment path");
+      }
+      delivered.push(await readFile(params.file));
+      return { guid: "p:0/account-media" };
+    });
+    try {
+      const smallBytes = Buffer.from("%PDF-1.4\nsmall attachment");
+      const largeBytes = Buffer.alloc(2 * 1024 * 1024, 0x61);
+      const small = state.path("small.pdf");
+      const large = state.path("large.pdf");
+      await writeFile(small, smallBytes);
+      await writeFile(large, largeBytes);
+      const send: typeof sendMessageIMessage = (to, text, options) =>
+        sendMessageIMessage(to, text, { ...options, client });
+      const params = {
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: state.path("fixture-imsg"),
+              dbPath: state.path("fixture-chat.db"),
+              mediaMaxMb: 8,
+              defaultAccount: "work",
+              accounts: { Work: { mediaMaxMb: 1 } },
+            },
+          },
+        },
+        accountId,
+        to: "imessage:+15555550123",
+        text: "",
+        mediaLocalRoots: [state.root],
+        deps: { imessage: send },
+      };
+      await expect(sendIMessageOutbound({ ...params, mediaUrl: large })).rejects.toThrow(
+        /exceeds.*limit/i,
+      );
+      expect(request).not.toHaveBeenCalled();
+      const result = await sendIMessageOutbound({ ...params, mediaUrl: small });
+      expect(result.receipt.platformMessageIds).toEqual(["p:0/account-media"]);
+      expect(delivered).toEqual([smallBytes]);
+      await sendIMessageOutbound({ ...params, accountId: "default", mediaUrl: large });
+      expect(delivered).toHaveLength(2);
+      expect(delivered[0]?.equals(smallBytes)).toBe(true);
+      expect(delivered[1]?.equals(largeBytes)).toBe(true);
+    } finally {
+      request.mockRestore();
+      await client.stop();
+      await state.cleanup();
+    }
   });
 });

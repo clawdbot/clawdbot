@@ -96,18 +96,6 @@ extension PresenceReporter {
         self.composePresenceSummary(mode: mode, reason: reason)
     }
 
-    static func _testAppVersionString() -> String {
-        self.appVersionString()
-    }
-
-    static func _testPlatformString() -> String {
-        self.platformString()
-    }
-
-    static func _testPrimaryIPv4Address() -> String? {
-        SystemPresenceInfo.primaryIPv4Address()
-    }
-
     static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
         [
             "lastInputSeconds": AnyHashable(self.legacyClearedLastInputSeconds),

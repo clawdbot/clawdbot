@@ -1,6 +1,11 @@
 /** Shared Computer Use plugin cache reconciliation for isolated Codex homes. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  assertDirectoryIdentityStable,
+  directoryIdentityIsStable,
+  prepareOwnedServiceParent,
+} from "./computer-use-service-path.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import {
   resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
@@ -30,12 +35,14 @@ const DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH =
   resolveMacOSDesktopCodexBundledMarketplaceCandidates("darwin")[0] ?? "";
 
 const DEFAULT_BUNDLED_MARKETPLACE_NAME = "openai-bundled";
-
 export async function ensureCodexComputerUseSharedPluginCache(params: {
   codexHome: string;
   config: ResolvedCodexComputerUseConfig;
   bundledMarketplacePath?: string;
   bundledMarketplacePathCandidates?: readonly string[];
+  ownershipRoot?: string;
+  assertCurrent?: () => void;
+  forceRefresh?: boolean;
 }): Promise<CodexComputerUsePluginCacheRepairResult> {
   if (!params.config.enabled) {
     return skippedCacheResult(
@@ -75,7 +82,12 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     params.config.pluginName,
   );
   const cachePath = path.join(cacheRoot, version);
-  const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version);
+  const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version, {
+    codexHome: params.codexHome,
+    ownershipRoot: params.ownershipRoot,
+    assertCurrent: params.assertCurrent,
+    forceRefresh: params.forceRefresh,
+  });
   return {
     status: "shared",
     changed,
@@ -124,33 +136,66 @@ async function ensureRealDirectoryCopy(
   cachePath: string,
   sourcePluginRoot: string,
   version: string,
+  boundary: {
+    codexHome: string;
+    ownershipRoot?: string;
+    assertCurrent?: () => void;
+    forceRefresh?: boolean;
+  },
 ): Promise<boolean> {
-  await fs.mkdir(path.dirname(cachePath), { recursive: true });
-  const stat = await fs.lstat(cachePath).catch(() => undefined);
+  const cacheRoot = path.dirname(cachePath);
+  const ownedParent = boundary.ownershipRoot
+    ? await prepareOwnedServiceParent({
+        ownershipRoot: boundary.ownershipRoot,
+        codexHome: boundary.codexHome,
+        targetParent: cacheRoot,
+      })
+    : undefined;
+  if (!ownedParent) {
+    await fs.mkdir(cacheRoot, { recursive: true });
+  }
+  const physicalCachePath = ownedParent
+    ? path.join(ownedParent.realPath, path.basename(cachePath))
+    : cachePath;
+  const stat = await fs.lstat(physicalCachePath).catch(() => undefined);
   if (stat?.isDirectory() && !stat.isSymbolicLink()) {
-    const cachedVersion = await readBundledPluginVersion(cachePath);
-    if (cachedVersion === version) {
+    const cachedVersion = await readBundledPluginVersion(physicalCachePath);
+    if (cachedVersion === version && !boundary.forceRefresh) {
       return false;
     }
   }
-  const cacheRoot = path.dirname(cachePath);
   const cacheName = path.basename(cachePath);
-  const stagingRoot = await fs.mkdtemp(path.join(cacheRoot, `.${cacheName}.staging-`));
+  const physicalCacheRoot = path.dirname(physicalCachePath);
+  const stagingRoot = await fs.mkdtemp(path.join(physicalCacheRoot, `.${cacheName}.staging-`));
   const stagedPath = path.join(stagingRoot, cacheName);
-  const backupPath = path.join(cacheRoot, `.${cacheName}.backup-${process.pid}-${Date.now()}`);
+  const backupPath = path.join(
+    physicalCacheRoot,
+    `.${cacheName}.backup-${process.pid}-${Date.now()}`,
+  );
   let backupCreated = false;
   try {
     await fs.cp(sourcePluginRoot, stagedPath, { recursive: true });
+    if (ownedParent) {
+      await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+    }
     if (stat) {
-      await fs.rename(cachePath, backupPath);
+      boundary.assertCurrent?.();
+      await fs.rename(physicalCachePath, backupPath);
       backupCreated = true;
     }
     try {
-      await fs.rename(stagedPath, cachePath);
+      if (ownedParent) {
+        await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+      }
+      boundary.assertCurrent?.();
+      await fs.rename(stagedPath, physicalCachePath);
     } catch (error) {
       if (backupCreated) {
         try {
-          await fs.rename(backupPath, cachePath);
+          if (ownedParent) {
+            await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+          }
+          await fs.rename(backupPath, physicalCachePath);
           backupCreated = false;
         } catch (restoreError) {
           throw new Error(
@@ -162,11 +207,16 @@ async function ensureRealDirectoryCopy(
       throw error;
     }
     if (backupCreated) {
+      if (ownedParent) {
+        await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+      }
       await fs.rm(backupPath, { recursive: true, force: true });
     }
     return true;
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    if (!ownedParent || (await directoryIdentityIsStable(ownedParent))) {
+      await fs.rm(stagingRoot, { recursive: true, force: true });
+    }
   }
 }
 

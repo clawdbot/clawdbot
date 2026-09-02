@@ -1,4 +1,7 @@
-import type { WebSocket } from "ws";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ClientOptions, WebSocket } from "ws";
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,
@@ -6,14 +9,14 @@ import type {
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
-import { toErrorObject } from "../infra/errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
+import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "credential-replaced",
   "owner-epoch-mismatch",
 ]);
-const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
-const PROTOTYPE_MUTATING_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
@@ -39,14 +42,15 @@ export type WorkerConnectionExit =
   | { kind: "stopped" };
 
 export type WorkerConnectionOptions = {
-  socketPath: string;
+  endpoint: WorkerConnectionEndpoint;
   connectParams: WorkerConnectParams;
   reconnectBackoff?: BackoffPolicy;
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string) => WebSocket;
+  createSocket?: (url: string, options: ClientOptions) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
+  onConnectionFailure?: (error: Error | undefined) => void;
 };
 
 export class WorkerConnectionInterruptedError extends Error {
@@ -73,11 +77,41 @@ export class WorkerAdmissionError extends Error {
   }
 }
 
+// One worker admission window; the launch adapter also uses it to cap re-arms
+// within the minted credential's lifetime.
+export const WORKER_ADMISSION_DEADLINE_MS = 120_000;
+
 export class WorkerAdmissionDeadlineExceededError extends Error {
-  constructor() {
-    super("worker admission deadline exceeded");
+  constructor(diagnosis: string) {
+    super(diagnosis);
     this.name = "WorkerAdmissionDeadlineExceededError";
   }
+}
+
+// Only the initial admission boundary can author this result. A reconnect deadline
+// after execution started cannot prove that replaying the turn is safe.
+export type WorkerAdmissionDeadlineResult = {
+  status: "not-started";
+  reason: "admission-deadline";
+  errorText: string;
+};
+
+export function parseWorkerAdmissionDeadlineResult(
+  value: unknown,
+): WorkerAdmissionDeadlineResult | undefined {
+  if (
+    isRecord(value) &&
+    hasExactOwnKeys(value, ["status", "reason", "errorText"]) &&
+    value.status === "not-started" &&
+    value.reason === "admission-deadline" &&
+    typeof value.errorText === "string" &&
+    value.errorText.length > 0 &&
+    Buffer.byteLength(value.errorText, "utf8") <= 4_096 &&
+    !/[\r\n\0]/u.test(value.errorText)
+  ) {
+    return { status: value.status, reason: value.reason, errorText: value.errorText };
+  }
+  return undefined;
 }
 
 export class WorkerFencedError extends Error {
@@ -97,37 +131,56 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
+export function toWorkerConnectionError(error: unknown): Error {
+  return toStructuredErrorObject(error);
+}
+
+export function formatWorkerConnectionFailure(
+  options: WorkerConnectionOptions,
+  error: unknown,
+  attempts?: number,
+): string {
+  const endpoint = options.endpoint;
+  let address: string;
+  if (endpoint.kind === "websocket") {
+    const url = new URL(endpoint.url);
+    address = `${url.hostname}:${url.port || (url.protocol === "wss:" ? "443" : "80")}`;
+  } else {
+    address = endpoint.socketPath;
   }
-  const message = String(error);
-  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
-    return toErrorObject(error, message);
-  }
-  const normalized = toErrorObject({}, message);
-  normalized.cause = error;
-  try {
-    const detailKeys = Reflect.ownKeys(error).filter(
-      (key) =>
-        (typeof key !== "string" ||
-          (!ERROR_OWNED_FIELDS.has(key) && !PROTOTYPE_MUTATING_FIELDS.has(key))) &&
-        Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
-    );
-    for (const key of detailKeys) {
-      try {
-        Object.defineProperty(normalized, key, {
-          value: Reflect.get(error, key),
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-      } catch {
-        // Skip fields whose getters or property definitions reject access.
+  const target = truncateUtf16Safe(address, 128);
+  let detail = toWorkerConnectionError(error).message;
+  const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
+  const credentials = [
+    options.connectParams.admission.credential,
+    ...(access ? [access.clientId, access.clientSecret] : []),
+  ];
+  // Scrub before truncating so a cut credential cannot escape into stderr or IPC.
+  for (const credential of credentials) {
+    for (const value of [
+      credential,
+      encodeURIComponent(credential),
+      JSON.stringify(credential).slice(1, -1),
+    ]) {
+      if (value) {
+        detail = detail.replaceAll(value, "[REDACTED]");
       }
     }
-  } catch {
-    // Opaque proxies may reject enumeration; preserve the original failure as the cause.
   }
-  return normalized;
+  if (endpoint.kind === "websocket") {
+    detail = detail.replaceAll(endpoint.url, target);
+  }
+  const cause =
+    truncateUtf16Safe(
+      redactSensitiveText(detail, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      160,
+    ) || "connection failed";
+  if (attempts !== undefined) {
+    return `worker admission deadline exceeded after ${attempts} attempts to ${target}: ${cause}`;
+  }
+  const hint =
+    endpoint.kind === "websocket"
+      ? "check TLS pin/publicUrl configuration"
+      : "check the local gateway socket";
+  return `worker could not reach gateway ${target}: ${cause}; ${hint}`;
 }

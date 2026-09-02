@@ -18,6 +18,7 @@ export {
   sha256File,
   syncDirectory,
   syncDirectoryBestEffortSync,
+  syncDirectorySync,
   type DirectorySyncOutcome,
   type DirectoryReceipt,
   type DurableDirectoryReceipt,

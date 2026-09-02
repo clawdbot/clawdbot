@@ -1,10 +1,11 @@
 // Matrix helper module resolves spoiler delimiters in ordinary Markdown inline blocks.
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type Env } from "markdown-it";
 import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { isMarkdownEscaped, projectMatrixMarkdown } from "./format-profile.js";
 import { findMatrixTableSourceRanges } from "./format-table-ranges.js";
 
 const spoilerParser = new MarkdownIt({ html: false, linkify: true, typographer: false });
+spoilerParser.linkify.set({ fuzzyLink: true });
 
 function findInlineMetadataRanges(
   markdown: string,
@@ -106,7 +107,7 @@ function findInlineMetadataRanges(
 export function findMatrixMarkdownMetadataRanges(
   markdown: string,
 ): Array<{ start: number; end: number }> {
-  const env: { references?: Record<string, unknown> } = {};
+  const env: Env = {};
   const tokens = spoilerParser.parse(markdown, env);
   const references = new Set(Object.keys(env.references ?? {}));
   const lineStarts = [0];
@@ -195,7 +196,17 @@ export function findMatrixSpoilerDelimiterOffsets(markdown: string): number[] {
 export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
   const projected = projectMatrixMarkdown(markdown);
   const ordinary = new Set(findMatrixSpoilerDelimiterOffsets(projected));
-  const tables = findMatrixTableSourceRanges(projected);
+  const underlineTags = [...tokenizeHtmlTags(projected)].filter(
+    (tag) => (tag.name === "u" || tag.name === "ins") && !isMarkdownEscaped(projected, tag.start),
+  );
+  // Matrix consumes underline tags before parsing inline code, so backticks
+  // inside their attributes cannot make a literal code region.
+  const literalRanges = [
+    ...findMatrixTableSourceRanges(projected),
+    ...findCodeRegions(projected).filter(
+      (code) => !underlineTags.some((tag) => code.start > tag.start && code.start < tag.end),
+    ),
+  ];
   for (let index = 0; index < projected.length - 1; index += 1) {
     if (projected[index] !== "|" || projected[index + 1] !== "|") {
       continue;
@@ -203,7 +214,7 @@ export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
     if (ordinary.has(index) || isMarkdownEscaped(projected, index)) {
       continue;
     }
-    if (tables.some((range) => index >= range.start && index < range.end)) {
+    if (literalRanges.some((range) => index >= range.start && index < range.end)) {
       continue;
     }
     return true;

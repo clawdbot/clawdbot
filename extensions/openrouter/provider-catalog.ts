@@ -1,4 +1,5 @@
 // Openrouter provider module implements model/runtime integration.
+import { normalizeOpenRouterModelPricing } from "openclaw/plugin-sdk/model-catalog-pricing";
 import {
   buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
@@ -19,6 +20,7 @@ import {
 import {
   asOptionalRecord,
   asPositiveSafeInteger,
+  filterStringEntries,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -140,17 +142,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
 }
 
 function readStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
-  const value = record?.[key];
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
-}
-
-function readTokenPrice(record: Record<string, unknown> | undefined, key: string): number {
-  const value = record?.[key];
-  const parsed =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed * 1_000_000 : 0;
+  return filterStringEntries(record?.[key]);
 }
 
 function readOpenRouterModalities(
@@ -180,7 +172,6 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
   const inputModalities = readOpenRouterModalities(architecture, "input");
   const supportedParameters = readStringArray(record, "supported_parameters");
   const topProvider = asOptionalRecord(record?.top_provider);
-  const pricing = asOptionalRecord(record?.pricing);
   return {
     id,
     name: normalizeOptionalString(record?.name) ?? id,
@@ -188,12 +179,7 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
       supportedParameters.includes("reasoning") ||
       supportedParameters.includes("include_reasoning"),
     input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
-    cost: {
-      input: readTokenPrice(pricing, "prompt"),
-      output: readTokenPrice(pricing, "completion"),
-      cacheRead: readTokenPrice(pricing, "input_cache_read"),
-      cacheWrite: readTokenPrice(pricing, "input_cache_write"),
-    },
+    cost: normalizeOpenRouterModelPricing(record?.pricing) ?? { ...OPENROUTER_DEFAULT_COST },
     contextWindow:
       asPositiveSafeInteger(topProvider?.context_length) ??
       asPositiveSafeInteger(record?.context_length) ??

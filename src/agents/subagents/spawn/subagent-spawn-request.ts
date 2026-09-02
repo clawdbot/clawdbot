@@ -2,16 +2,12 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
-import {
-  isValidAgentId,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { listAgentIds } from "../../agent-scope-config.js";
+import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
-import { listSwarmRunsForGroup } from "../../subagent-registry.js";
-import { normalizeSubagentTaskName } from "../../subagent-task-name.js";
+import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { reserveSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -26,6 +22,7 @@ import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import { loadSubagentConfig } from "./subagent-spawn-session-patch.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./subagent-spawn.runtime.js";
+import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
 type ResolvedSubagentSpawnRequest = {
   request: {
@@ -94,7 +91,7 @@ export function resolveSubagentSpawnRequest(
   if (requestedAgentId && !isValidAgentId(requestedAgentId)) {
     return rejectSubagentSpawnRequest(
       "error",
-      `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}. Use agents_list to discover valid targets.`,
+      `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}.`,
     );
   }
   const requestThreadBinding = params.thread === true;
@@ -112,7 +109,7 @@ export function resolveSubagentSpawnRequest(
     return rejectSubagentSpawnRequest(
       "error",
       'sessions_spawn(mode="session") requires thread=true so the subagent can stay bound to a channel thread. ' +
-        'Retry with { mode: "session", thread: true } on a channel that supports threads, use mode="run" for one-shot work, or use sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.',
+        'Retry with { mode: "session", thread: true } on a channel that supports threads, or use mode="run" for one-shot work.',
     );
   }
   const cleanup =
@@ -158,9 +155,11 @@ export function resolveSubagentSpawnRequest(
     completionOwnerKey: ctx.completionOwnerKey,
   });
 
-  const requesterAgentId = normalizeAgentId(
-    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
-  );
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterInternalKey,
+    agentId: ctx.requesterAgentIdOverride,
+  });
   const swarmConfig = resolveSwarmConfig(cfg, requesterAgentId);
   const hasSwarmParams =
     params.collect !== undefined ||
@@ -218,7 +217,7 @@ export function resolveSubagentSpawnRequest(
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
-        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
+        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId)
         : []
       : undefined;
     return resolveSpawnAdmission({
@@ -273,7 +272,7 @@ export function resolveSubagentSpawnRequest(
     : crypto.randomUUID();
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
+    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey, requesterAgentId);
     if (
       !reserveSwarmRun({
         groupId: swarmSchedulerGroupKey,

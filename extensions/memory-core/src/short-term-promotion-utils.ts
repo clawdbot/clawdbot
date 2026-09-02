@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
@@ -215,27 +216,6 @@ export function hashQuery(query: string): string {
     .slice(0, 12);
 }
 
-export function mergeQueryHashes(existing: string[], queryHash: string): string[] {
-  if (!queryHash) {
-    return existing;
-  }
-  const seen = new Set<string>();
-  const next = existing.filter((value) => {
-    if (!value || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
-  if (!seen.has(queryHash)) {
-    next.push(queryHash);
-  }
-  if (next.length <= MAX_QUERY_HASHES) {
-    return next;
-  }
-  return next.slice(next.length - MAX_QUERY_HASHES);
-}
-
 export function mergeRecentDistinct(
   existing: string[],
   nextValue: string,
@@ -441,11 +421,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
 }
 
 export function parseStoreTimestampMs(value: string | undefined): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
 export function compareStoreTimestampDesc(

@@ -47,7 +47,6 @@ class ChatContextMeterTest {
 
     assertEquals(ChatContextUsage(totalTokens = 1_250L, totalTokensFresh = true, contextTokens = 5_000L), usage)
     assertEquals(0.25f, contextMeterWidth(usage))
-    assertEquals("Context 25% · High", contextMeterLabel(usage, "high"))
   }
 
   @Test
@@ -72,7 +71,6 @@ class ChatContextMeterTest {
       )
 
     assertEquals(ChatContextUsage(totalTokens = 41_000L, totalTokensFresh = true, contextTokens = 100_000L), usage)
-    assertEquals("Context 41% · Off", contextMeterLabel(usage, "off"))
   }
 
   @Test
@@ -80,7 +78,6 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 8_200L, totalTokensFresh = true, contextTokens = null)
 
     assertNull(contextMeterWidth(usage))
-    assertEquals("Context -- · Medium", contextMeterLabel(usage, "medium"))
   }
 
   @Test
@@ -88,7 +85,6 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 150_000L, totalTokensFresh = true, contextTokens = 100_000L)
 
     assertEquals(1.0f, contextMeterWidth(usage))
-    assertEquals("Context 100% · Low", contextMeterLabel(usage, "low"))
   }
 
   @Test
@@ -96,23 +92,6 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 82_000L, totalTokensFresh = false, contextTokens = 100_000L)
 
     assertNull(contextMeterWidth(usage))
-    assertEquals("Context -- · High", contextMeterLabel(usage, "high"))
-  }
-
-  @Test
-  fun contextMeterHidesThinkingLabelWhenUnsupported() {
-    val usage = ChatContextUsage(totalTokens = 2_500L, totalTokensFresh = true, contextTokens = 10_000L)
-
-    assertEquals("Context 25%", contextMeterLabel(usage, "high", thinkingSupported = false))
-  }
-
-  @Test
-  fun contextMeterPreservesGatewayThinkingLevelIds() {
-    val usage = ChatContextUsage(totalTokens = null, totalTokensFresh = null, contextTokens = null)
-
-    assertEquals("Context -- · xhigh", contextMeterLabel(usage, "xhigh"))
-    assertEquals("Context -- · adaptive", contextMeterLabel(usage, "adaptive"))
-    assertEquals("Context -- · ultra", contextMeterLabel(usage, "ultra"))
   }
 
   @Test
@@ -143,17 +122,10 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun largeThinkingProfilesSplitIntoBalancedInlineRows() {
-    val options =
-      listOf("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max")
-        .map { ChatThinkingLevelOption(id = it, label = it) }
-
-    val rows = chatThinkingOptionRows(options)
-
-    assertEquals(listOf(4, 4), rows.map { it.size })
-    assertEquals("Minimal", chatThinkingOptionLabel(options[1]))
-    assertEquals("Xhigh", chatThinkingOptionLabel(options[5]))
-    assertEquals("Adaptive", chatThinkingOptionLabel(options[6]))
-    assertEquals("Max", chatThinkingOptionLabel(options.last()))
+  fun thinkingOptionsKeepLocalizedKnownLevelsAndGatewayLabels() {
+    listOf("Off", "Minimal", "Low", "Medium", "High", "Xhigh", "Adaptive", "Max", "Ultra").forEach { label ->
+      assertEquals(label, chatThinkingOptionLabel(ChatThinkingLevelOption(id = label.lowercase(), label = label.lowercase())))
+    }
+    assertEquals("Custom effort", chatThinkingOptionLabel(ChatThinkingLevelOption(id = "custom", label = "Custom effort")))
   }
 }

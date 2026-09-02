@@ -1,11 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
+import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
-import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
-import { transitionMainSessionRecovery } from "../agents/main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
+  type HeartbeatTerminalToolFailure,
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
@@ -13,7 +13,8 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -25,7 +26,7 @@ import {
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
@@ -34,8 +35,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasActiveCronJobs,
-  hasActiveCronJobsExceptMarker,
+  hasActiveCronJobsExceptMarkers,
   isCronActiveJobMarkerCurrent,
+  listCronHeartbeatWaitOwners,
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
@@ -44,7 +46,6 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import {
   getQueueSize,
   isCommandLaneTaskMarkerCurrent,
-  type CommandLaneSnapshot,
   type CommandLaneTaskMarker,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -57,10 +58,10 @@ import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   heartbeatLog,
-  resolveHeartbeatAckMaxChars,
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
   shouldUseHeartbeatResponseToolPrompt,
+  tryResolveAmbientHeartbeatAgentId,
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import {
@@ -79,7 +80,7 @@ import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
+  isTargetedUnscheduledWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
@@ -95,16 +96,15 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
 
 const log = heartbeatLog;
+const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
-    getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
@@ -131,6 +131,15 @@ function hasActiveRunForSession(
   return Boolean(normalizedSessionKey) && listSessionKeys().includes(normalizedSessionKey);
 }
 
+function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
+  emitHeartbeatEvent({
+    status: "skipped",
+    reason,
+    durationMs: Date.now() - startedAt,
+  });
+  return { kind: "skipped", reason } as const;
+}
+
 export type HeartbeatRunOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -153,9 +162,12 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
-  const agentId = normalizeAgentId(
-    explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
-  );
+  const resolvedAgentId =
+    explicitAgentId || forcedSessionAgentId || tryResolveAmbientHeartbeatAgentId(cfg);
+  if (!resolvedAgentId) {
+    return { kind: "skipped", reason: "disabled" } as const;
+  }
+  const agentId = normalizeAgentId(resolvedAgentId);
   const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
   const heartbeat = resolveHeartbeatForWake({
     cfg,
@@ -168,7 +180,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     left.jobId.localeCompare(right.jobId),
   );
   const allowsUnscheduledTarget =
-    isTargetedImmediateUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
+    isTargetedUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { kind: "skipped", reason: "disabled" } as const;
   }
@@ -186,7 +198,10 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     wakeSource !== "cron" &&
     !isWithinActiveHours(cfg, heartbeat, startedAt)
   ) {
-    return { kind: "skipped", reason: "quiet-hours" } as const;
+    // Documented observable skip (`system heartbeat last` / troubleshooting
+    // docs promise reason=quiet-hours); every sibling skip past this point
+    // emits, so a silent return here hides the window from operators.
+    return skippedHeartbeatStage("quiet-hours", startedAt);
   }
 
   const shouldInspectExecWakeBeforeBusy = shouldPreflightExecEventWake(
@@ -205,49 +220,50 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     });
   let preflight = shouldInspectExecWakeBeforeBusy ? await resolvePreflight() : undefined;
   if (preflight?.skipReason) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: preflight.skipReason,
-      durationMs: Date.now() - startedAt,
-    });
-    return { kind: "skipped", reason: preflight.skipReason } as const;
+    return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
   if (getSize(CommandLane.Main) > 0) {
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
-  // Ignore only the exact Cron lane task that owns this wake. Other queued or active
-  // Cron work and all CronNested work remain busy signals.
-  const owningCronJobMarker = opts.owningCronJobMarker;
-  const ownsActiveCronRun = owningCronJobMarker
-    ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
-    : false;
+  // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
+  // Keep unrelated Cron work and all CronNested work as busy signals.
+  const heartbeatWaitOwners = listCronHeartbeatWaitOwners();
+  const directOwner =
+    opts.owningCronJobMarker && isCronActiveJobMarkerCurrent(opts.owningCronJobMarker)
+      ? opts.owningCronJobMarker
+      : undefined;
+  const owningCronJobMarkers = [
+    ...heartbeatWaitOwners.activeJobMarkers,
+    ...(directOwner ? [directOwner] : []),
+  ];
   const cronBusy =
-    ownsActiveCronRun && owningCronJobMarker
-      ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
+    owningCronJobMarkers.length > 0
+      ? hasActiveCronJobsExceptMarkers(owningCronJobMarkers)
       : hasActiveCronJobs();
-  const owningCronLaneTaskMarker = opts.owningCronLaneTaskMarker;
-  const ownsCronLaneTask =
-    ownsActiveCronRun &&
-    owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
-    isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
+  const owningCronLaneTaskIds = new Set(
+    [
+      ...heartbeatWaitOwners.owningCronLaneTaskMarkers,
+      ...(directOwner && opts.owningCronLaneTaskMarker ? [opts.owningCronLaneTaskMarker] : []),
+    ]
+      .filter(
+        (marker): marker is CommandLaneTaskMarker =>
+          marker?.lane === CRON_COMMAND_LANE && isCommandLaneTaskMarkerCurrent(marker),
+      )
+      .map((marker) => marker.taskId),
+  );
   const cronLaneDepth = getSize(CommandLane.Cron);
   // HookDispatch is included so moving hook agent runs off `cron-nested` onto
   // their own lane does not silently stop them from suppressing heartbeats.
   // They are still active agent work; only the lane they occupy changed.
   const cronLaneBusy =
-    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) ||
+    cronLaneDepth > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
     getSize(CommandLane.HookDispatch) > 0;
   if (cronBusy || cronLaneBusy) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-      durationMs: Date.now() - startedAt,
-    });
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_CRON_IN_PROGRESS, startedAt);
   }
 
   const shouldHonorActiveReplyRuns = opts.intent !== "immediate" && opts.intent !== "manual";
@@ -263,12 +279,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     (hasActiveRunForAgent(agentId, listActiveReplyRuns) ||
       hasActiveRunForAgent(agentId, listActiveEmbeddedRuns))
   ) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-      durationMs: Date.now() - startedAt,
-    });
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
@@ -309,7 +320,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
         mainSessionRecovery.view.status === "recoverable")) ||
     hasCurrentRestartRecoveryDelivery
   ) {
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
   const pendingFinalDeliveryText =
@@ -318,17 +329,14 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       : undefined;
   const pendingFinalDeliveryIsHeartbeatAck =
     typeof pendingFinalDeliveryText === "string" &&
-    stripHeartbeatToken(pendingFinalDeliveryText, {
-      mode: "heartbeat",
-      maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
-    }).shouldSkip;
+    isHeartbeatAcknowledgementText(pendingFinalDeliveryText);
   if (
     recentSessionEntry?.pendingFinalDelivery !== undefined &&
     !pendingFinalDeliveryIsHeartbeatAck &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
   // Preflight centralizes trigger classification, event inspection, and monitor-scratch gating.
@@ -336,23 +344,13 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     preflight = await resolvePreflight();
   }
   if (preflight.skipReason) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: preflight.skipReason,
-      durationMs: Date.now() - startedAt,
-    });
-    return { kind: "skipped", reason: preflight.skipReason } as const;
+    return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
   const { sessionKey } = preflight.session;
   const isReplyRunActive =
     opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
   if (isReplyRunActive(sessionKey) || hasActiveRunForSession(sessionKey, listActiveEmbeddedRuns)) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-      durationMs: Date.now() - startedAt,
-    });
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
@@ -360,12 +358,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // re-schedule this wake automatically.  See #14396 (closed without merge).
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
   if (getSize(sessionLaneKey) > 0) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-      durationMs: Date.now() - startedAt,
-    });
-    return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
   return {
@@ -410,16 +403,29 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // to stale channels/threads because that base-session event context remains queued.
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
+  // Routeless ambient polls are pure model burn, but only they may skip:
+  // triggered wakes (hook/manual/cron/exec), polls with queued events, and
+  // scheduled-task wakes must still run to process their payloads even when
+  // the reply cannot deliver. An absent source is the plain scheduled poll.
+  if (
+    delivery.channel === "none" &&
+    delivery.reason === "no-route" &&
+    (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
+    preflight.pendingEventEntries.length === 0 &&
+    scheduledTasks.length === 0
+  ) {
+    return skippedHeartbeatStage("no-route", startedAt);
+  }
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId ?? null,
-      target: heartbeat?.target ?? "none",
+      target: heartbeat?.target ?? "owner",
     });
   } else if (heartbeatAccountId) {
     log.info("heartbeat: using explicit accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId,
-      target: heartbeat?.target ?? "none",
+      target: heartbeat?.target ?? "owner",
       channel: delivery.channel,
     });
   }
@@ -460,21 +466,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
   });
 
-  if (heartbeatRunPrompt.prompt === null) {
-    // Wake-triggered events should stay queued when the run short-circuits:
-    // no reply turn ran, so there is nothing that actually consumed that wake payload.
-    const shouldConsumeInspectedEvents =
-      !preflight.isWakePayload && preflight.shouldInspectPendingEvents;
-    const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
-      preflight,
-      hasExecCompletion: heartbeatRunPrompt.hasExecCompletion,
-      hasCronEvents: heartbeatRunPrompt.hasCronEvents,
-    });
-    if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
-      consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
-    }
-    return { kind: "skipped", reason: "not-due" } as const;
-  }
   let runSessionKey = sessionKey;
   let runSessionEntry = entry;
   let outboundPolicySessionKey: string | undefined;
@@ -489,7 +480,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
+    const isolatedStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
@@ -499,12 +490,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       isReplyRunActive(isolatedSessionKey) ||
       hasActiveRunForSession(isolatedSessionKey, listActiveEmbeddedRuns)
     ) {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-        durationMs: Date.now() - startedAt,
-      });
-      return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+      return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
     }
     const staleIsolatedEntry = staleIsolatedSessionKey
       ? loadExactSessionEntry({
@@ -531,14 +517,14 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       upserts: [
         {
           sessionKey: isolatedSessionKey,
-          buildEntry: ({ store }) => {
+          buildEntry: ({ currentEntry }) => {
             const cronSession = resolveCronSession({
               cfg,
               sessionKey: isolatedSessionKey,
               agentId,
               nowMs: startedAt,
               forceNew: true,
-              store,
+              store: currentEntry ? { [isolatedSessionKey]: currentEntry } : {},
             });
             const nextEntry = {
               ...cronSession.sessionEntry,
@@ -583,10 +569,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     }
   }
   const { hasExecCompletion, hasCronEvents } = heartbeatRunPrompt;
-  const prompt = heartbeatRunPrompt.prompt;
-  if (prompt === null) {
-    return { kind: "skipped", reason: "not-due" } as const;
-  }
   return {
     kind: "ready",
     ...preflight.session,
@@ -598,7 +580,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     runSessionKey,
     outboundPolicySessionKey,
     ...heartbeatRunPrompt,
-    prompt,
     inspectedSystemEventsToConsume: selectSystemEventsConsumedByHeartbeat({
       preflight,
       hasExecCompletion,
@@ -649,18 +630,23 @@ export async function invokeHeartbeatAgentRun(
       OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
       AccountId: delivery.accountId,
       MessageThreadId: delivery.threadId,
-      Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+      InternalTurnSource: hasExecCompletion ? "exec" : hasCronEvents ? "cron" : "heartbeat",
       SessionKey: runSessionKey,
       AgentId: agentId,
     },
     replyOpts,
     cfg,
   );
+  const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
+  if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
+    return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;
+  }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
-  const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
-  const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
-  const replyPayload = selectedReplyPayload;
+  const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
+    resolveHeartbeatTerminalToolFailure(replyResult);
+  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+  const agentRunFailed = agentTurnStatus === "failed";
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&
@@ -696,6 +682,7 @@ export async function invokeHeartbeatAgentRun(
     kind: "completed",
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
+    agentRunFailed,
     replyPayload,
   } as const;
 }

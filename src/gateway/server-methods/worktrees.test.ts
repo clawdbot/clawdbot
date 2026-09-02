@@ -1,8 +1,34 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createWorktreesHandlers } from "./worktrees.js";
+
+const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
+
+async function initializeRepository(root: string, name: string): Promise<string> {
+  const repo = path.join(root, name);
+  await fs.mkdir(repo, { recursive: true });
+  await execFileAsync("git", ["init", "-b", "main", repo]);
+  await execFileAsync("git", ["-C", repo, "config", "user.name", "OpenClaw Tests"]);
+  await execFileAsync("git", ["-C", repo, "config", "user.email", "tests@openclaw.invalid"]);
+  await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
+  await execFileAsync("git", ["-C", repo, "add", "README.md"]);
+  await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
+  return await fs.realpath(repo);
+}
 
 const record: ManagedWorktreeRecord = {
   id: "worktree-id",
@@ -49,11 +75,16 @@ describe("worktrees gateway methods", () => {
       undefined,
     ]);
     expect(
-      await call(handlers, "worktrees.create", {
-        repoRoot: "/repo",
-        name: "task-one",
-        baseRef: "main",
-      }),
+      await call(
+        handlers,
+        "worktrees.create",
+        {
+          repoRoot: "/repo",
+          name: "task-one",
+          baseRef: "main",
+        },
+        { client: adminClient, context: emptyConfigContext },
+      ),
     ).toEqual([true, record, undefined]);
     expect(await call(handlers, "worktrees.remove", { id: record.id, force: true })).toEqual([
       true,
@@ -71,8 +102,9 @@ describe("worktrees gateway methods", () => {
       undefined,
     ]);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 30 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
 
     expect(service.create).toHaveBeenCalledWith({
@@ -80,11 +112,12 @@ describe("worktrees gateway methods", () => {
       name: "task-one",
       baseRef: "main",
       ownerKind: "manual",
+      runSetupScript: true,
     });
     expect(service.remove).toHaveBeenCalledWith({
       id: record.id,
       reason: "manual-delete",
-      force: true,
+      allowSnapshotLoss: true,
     });
   });
 
@@ -130,8 +163,6 @@ describe("worktrees gateway methods", () => {
 
   it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
     const os = await import("node:os");
-    const path = await import("node:path");
-    const fs = await import("node:fs/promises");
     const workspace = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
     );
@@ -162,6 +193,57 @@ describe("worktrees gateway methods", () => {
     }
   });
 
+  it("allows a write-scoped registered project root but still rejects other outside paths", async () => {
+    const root = tempDirs.make("openclaw-branches-project-");
+    const repoRoot = await initializeRepository(root, "registered");
+    const alias = path.join(root, "registered-link");
+    const outside = path.join(root, "outside");
+    await fs.symlink(repoRoot, alias, "dir");
+    await fs.mkdir(outside);
+    const project = await registerProjectRegistry({ path: repoRoot, name: "Registered" });
+    const service = {
+      create: vi.fn(async () => record),
+      listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    try {
+      const allowed = await call(
+        handlers,
+        "worktrees.branches",
+        { repoRoot: alias },
+        { client: writeClient, context: emptyConfigContext },
+      );
+      expect(allowed?.[0]).toBe(true);
+      expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
+
+      const created = await call(
+        handlers,
+        "worktrees.create",
+        { repoRoot: alias, name: "registered-task" },
+        { client: writeClient, context: emptyConfigContext },
+      );
+      expect(created?.[0]).toBe(true);
+      expect(service.create).toHaveBeenCalledWith({
+        repoRoot,
+        name: "registered-task",
+        baseRef: undefined,
+        ownerKind: "manual",
+        runSetupScript: false,
+      });
+
+      const denied = await call(
+        handlers,
+        "worktrees.branches",
+        { repoRoot: outside },
+        { client: writeClient, context: emptyConfigContext },
+      );
+      expect(denied?.[0]).toBe(false);
+      expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+    } finally {
+      removeProjectRegistry(project.id);
+    }
+  });
+
   it("uses the built-in cleanup policy for gc", async () => {
     const service = {
       gc: vi.fn(async () => ({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 })),
@@ -171,8 +253,9 @@ describe("worktrees gateway methods", () => {
     const response = await call(handlers, "worktrees.gc", {}, { context });
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 30 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
   });
 

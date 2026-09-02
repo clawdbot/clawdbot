@@ -5,6 +5,11 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
 import { testing } from "./agent-step.test-support.js";
 
+const recordParticipant = vi.hoisted(() => vi.fn());
+vi.mock("../../sessions/session-participant-recording.js", () => ({
+  recordSessionParticipantBestEffort: recordParticipant,
+}));
+
 const runWaitMocks = vi.hoisted(() => ({
   waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
 }));
@@ -44,6 +49,8 @@ describe("runAgentStep", () => {
     await expect(
       runAgentStep({
         sessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        sourceAgentId: "research",
         message: "hello",
         extraSystemPrompt: "reply briefly",
         timeoutMs: 10_000,
@@ -70,6 +77,15 @@ describe("runAgentStep", () => {
     expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
     expect(params?.message).toContain("isUser=false");
     expect(params?.message).toContain("hello");
+    expect(recordParticipant).toHaveBeenCalledOnce();
+    expect(recordParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identity: { type: "agent", id: "research" },
+        agentId: "main",
+        sessionKey: "agent:main:subagent:child",
+        promptedAt: expect.any(Number),
+      }),
+    );
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
       sessionKey: "agent:main:subagent:child",
       reason: "nested-agent-step-complete",

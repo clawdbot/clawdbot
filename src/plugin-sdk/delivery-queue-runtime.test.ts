@@ -16,8 +16,8 @@ const mocks = vi.hoisted(() => ({
   deliverRuntimeModuleLoads: 0,
 }));
 
-vi.mock("../infra/outbound/delivery-queue.js", () => ({
-  drainPendingDeliveries: mocks.coreDrainPendingDeliveries,
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
+  drainPendingDeliveriesCore: mocks.coreDrainPendingDeliveries,
 }));
 
 vi.mock("../infra/outbound/deliver-runtime.js", () => {

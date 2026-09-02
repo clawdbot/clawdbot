@@ -100,6 +100,6 @@ Local image and video references are supported via data URIs.
     Shared tool parameters, provider selection, and async behavior.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
-    Agent default settings including video generation model.
+    Agent default settings including `mediaModels.video`.
   </Card>
 </CardGroup>

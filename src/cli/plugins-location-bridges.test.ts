@@ -116,7 +116,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "diagnostics-otel",
         pluginId: "diagnostics-otel",
-        preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
@@ -155,10 +154,38 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "diagnostics-otel",
         pluginId: "diagnostics-otel",
-        preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
+      },
+    ]);
+  });
+
+  it("targets the renamed official plugin id when externalizing a bundled plugin", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "qqbot",
+        manifestPath: "/app/dist/extensions/qqbot/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/qqbot/index.js",
+        rootDir: "/app/dist/extensions/qqbot",
+        origin: "bundled",
+        enabled: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: { warnings: [] },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("qqbot"));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "qqbot",
+        pluginId: "openclaw-qqbot",
+        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        expectedIntegrity:
+          "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+        channelIds: ["qqbot"],
       },
     ]);
   });
@@ -203,7 +230,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         {
           bundledPluginId: pluginId,
           pluginId,
-          preferredSource: "npm",
           npmSpec,
           clawhubSpec: `clawhub:${npmSpec}`,
           ...(enabledByDefault ? { enabledByDefault: true } : {}),
@@ -236,7 +262,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "comfy",
         pluginId: "comfy",
-        preferredSource: "npm",
         npmSpec: "@openclaw/comfy-provider",
         clawhubSpec: "clawhub:@openclaw/comfy-provider",
         enabledByDefault: true,
@@ -268,7 +293,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "imessage",
         pluginId: "imessage",
-        preferredSource: "npm",
         npmSpec: "@openclaw/imessage",
         clawhubSpec: "clawhub:@openclaw/imessage",
         enabledByDefault: true,

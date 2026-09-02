@@ -1,7 +1,7 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
-import type { Context, Model, Tool } from "../types.js";
+import type { AssistantMessage, Context, Model, Tool } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const anthropicMockState = vi.hoisted(() => ({
@@ -62,10 +62,44 @@ function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}
   } satisfies Model<"anthropic-messages">;
 }
 
+function makeAnthropicAssistantMessage(
+  content: AssistantMessage["content"],
+  overrides: Partial<AssistantMessage> = {},
+): AssistantMessage {
+  return {
+    role: "assistant",
+    provider: "anthropic",
+    api: "anthropic-messages",
+    model: "claude-sonnet-4-6",
+    stopReason: "stop",
+    timestamp: 0,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    content,
+    ...overrides,
+  };
+}
+
 type SimpleAnthropicTestOptions = Omit<
   NonNullable<Parameters<typeof streamSimpleAnthropic>[2]>,
   "onPayload"
 > & {
+  mode?: "simple";
+  injectPayload?: Record<string, unknown>;
+  stopBeforeNetwork?: boolean;
+};
+
+type RawAnthropicTestOptions = Omit<
+  NonNullable<Parameters<typeof streamAnthropic>[2]>,
+  "onPayload"
+> & {
+  mode: "raw";
   injectPayload?: Record<string, unknown>;
   stopBeforeNetwork?: boolean;
 };
@@ -92,15 +126,15 @@ type AnthropicAdaptiveThinkingTestCase = {
 
 async function captureSimpleAnthropicPayload(
   model: Partial<Model<"anthropic-messages">>,
-  options: SimpleAnthropicTestOptions = {},
+  options: SimpleAnthropicTestOptions | RawAnthropicTestOptions = {},
   context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
 ) {
-  const { injectPayload, stopBeforeNetwork, ...streamOptions } = options;
+  const { injectPayload, stopBeforeNetwork, mode, ...streamOptions } = options;
   let capturedPayload: unknown;
-  const result = await streamSimpleAnthropic(makeAnthropicModel(model), context, {
+  const requestOptions = {
     apiKey: "sk-ant-provider",
     ...streamOptions,
-    onPayload: (payload) => {
+    onPayload: (payload: unknown) => {
       capturedPayload = injectPayload
         ? { ...(payload as Record<string, unknown>), ...injectPayload }
         : payload;
@@ -109,7 +143,13 @@ async function captureSimpleAnthropicPayload(
       }
       return capturedPayload;
     },
-  }).result();
+  };
+  const resolvedModel = makeAnthropicModel(model);
+  const stream =
+    mode === "raw"
+      ? streamAnthropic(resolvedModel, context, requestOptions)
+      : streamSimpleAnthropic(resolvedModel, context, requestOptions);
+  const result = await stream.result();
   return { payload: capturedPayload as Record<string, unknown>, result };
 }
 
@@ -117,23 +157,10 @@ function makeSonnet5PrefillContext(): Context {
   return {
     messages: [
       { role: "user", content: "Return JSON.", timestamp: 0 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "{" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
+      makeAnthropicAssistantMessage([{ type: "text", text: "{" }], {
         model: "claude-sonnet-5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
         timestamp: 1,
-      },
+      }),
     ],
     tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
   };
@@ -253,21 +280,11 @@ describe("Anthropic provider", () => {
   });
 
   it("puts Claude subscription billing identity first for OAuth requests", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel(),
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      },
-      {
-        apiKey: "sk-ant-oat01-test-token",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
-      },
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { apiKey: "sk-ant-oat01-test-token" },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
     );
-
-    const result = await stream.result();
 
     expect(result.stopReason).toBe("error");
     expect((capturedPayload as { system?: unknown }).system).toEqual([
@@ -283,7 +300,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("keeps aggregate cache billing buckets out of the context total", async () => {
+  it("includes compaction iterations in billed usage while keeping final context usage", async () => {
     const client = createAnthropicSseClient([
       {
         type: "message_start",
@@ -339,23 +356,130 @@ describe("Anthropic provider", () => {
     ]);
 
     const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { apiKey: "sk-ant-provider", client: client as never },
     ).result();
 
     expect(result.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
+      input: 24,
+      output: 16_104,
+      cacheRead: 968_523,
       cacheWrite: 93_130,
       contextUsage: {
         state: "available",
         promptTokens: 148_874,
         totalTokens: 163_978,
       },
-      totalTokens: 927_907,
+      totalTokens: 1_077_781,
     });
+    expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
+  });
+
+  it("captures and replays streamed Anthropic compaction blocks", async () => {
+    const firstClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_compaction",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 50_001, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "compaction", content: null },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "compaction_delta", content: "summary checkpoint" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Done." },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "compaction" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const replayOptions = {
+      anthropicServerCompaction: true,
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    } as const;
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+    const first = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [firstUser] },
+      {
+        apiKey: "sk-ant-provider",
+        client: firstClient as never,
+        ...replayOptions,
+      },
+    ).result();
+
+    expect(first.stopReason).toBe("stop");
+    expect(first.providerReplay).toMatchObject({
+      type: "anthropic-compaction",
+      data: "summary checkpoint",
+      replayIndex: 0,
+    });
+
+    let replayPayload: Record<string, unknown> | undefined;
+    const secondClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_replay",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    await streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        client: secondClient as never,
+        ...replayOptions,
+        onPayload: (payload) => {
+          replayPayload = payload as Record<string, unknown>;
+        },
+      },
+    ).result();
+
+    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages[0]?.content).toEqual([
+      { type: "compaction", content: "summary checkpoint" },
+      { type: "text", text: "Done." },
+    ]);
   });
 
   it("ignores a message_delta whose usage object is omitted", async () => {
@@ -439,20 +563,14 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("uses Anthropic SDK maxRetries=%s", async (maxRetries, expected) => {
+  it("pins Anthropic SDK retries to zero", async () => {
     const model = makeAnthropicModel();
-    await streamAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { maxRetries },
-    ).result();
+    await streamAnthropic(model, {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    }).result();
 
-    expect(anthropicMockState.requestOptions).toEqual([
-      expect.objectContaining({ maxRetries: expected }),
-    ]);
+    expect(anthropicMockState.requestOptions).toEqual([expect.objectContaining({ maxRetries: 0 })]);
+    expect(anthropicMockState.configs.at(-1)).toMatchObject({ maxRetries: 0 });
   });
 
   it.each([
@@ -465,25 +583,10 @@ describe("Anthropic provider", () => {
       const model = makeAnthropicModel(
         allowEmptySignature === undefined ? {} : { compat: { allowEmptySignature } },
       );
-      const assistantMessage = {
-        role: "assistant" as const,
-        provider: "anthropic",
-        api: "anthropic-messages" as const,
-        model: model.id,
-        stopReason: "stop" as const,
-        timestamp: 0,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        content: [
-          { type: "thinking" as const, thinking: "private analysis", thinkingSignature: " " },
-        ],
-      };
+      const assistantMessage = makeAnthropicAssistantMessage(
+        [{ type: "thinking", thinking: "private analysis", thinkingSignature: " " }],
+        { model: model.id },
+      );
 
       await streamAnthropic(
         model,
@@ -656,22 +759,8 @@ describe("Anthropic provider", () => {
       {
         messages: [
           { role: "user", content: "hello", timestamp: 0 },
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-fable-5",
-            stopReason: "stop",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [
+          makeAnthropicAssistantMessage(
+            [
               {
                 type: "thinking",
                 thinking: signedThinking,
@@ -688,7 +777,8 @@ describe("Anthropic provider", () => {
                 thinkingSignature: "reasoning_content",
               },
             ],
-          },
+            { model: "claude-fable-5" },
+          ),
           { role: "user", content: "again", timestamp: 0 },
         ],
       },
@@ -739,56 +829,30 @@ describe("Anthropic provider", () => {
   ])(
     "omits completed-turn thinking when thinking is $label",
     async ({ thinkingEnabled, expectedThinking, visibleText, expectedContent }) => {
-      let capturedPayload: unknown;
-      const stream = streamAnthropic(
-        makeAnthropicModel(),
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+        {},
+        { mode: "raw", thinkingEnabled, stopBeforeNetwork: true },
         {
           messages: [
             { role: "user", content: "hello", timestamp: 0 },
-            {
-              role: "assistant",
-              provider: "anthropic",
-              api: "anthropic-messages",
-              model: "claude-sonnet-4-6",
-              stopReason: "stop",
-              timestamp: 0,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            makeAnthropicAssistantMessage([
+              {
+                type: "thinking",
+                thinking: "private reasoning",
+                thinkingSignature: "sig_1",
               },
-              content: [
-                {
-                  type: "thinking",
-                  thinking: "private reasoning",
-                  thinkingSignature: "sig_1",
-                },
-                {
-                  type: "thinking",
-                  thinking: "[Reasoning redacted]",
-                  thinkingSignature: "opaque_1",
-                  redacted: true,
-                },
-                ...(visibleText ? [{ type: "text" as const, text: visibleText }] : []),
-              ],
-            },
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "opaque_1",
+                redacted: true,
+              },
+              ...(visibleText ? [{ type: "text" as const, text: visibleText }] : []),
+            ]),
             { role: "user", content: "again", timestamp: 0 },
           ],
         },
-        {
-          apiKey: "sk-ant-provider",
-          thinkingEnabled,
-          onPayload: (payload) => {
-            capturedPayload = payload;
-            throw new Error("stop before network");
-          },
-        },
       );
-
-      await stream.result();
 
       const payload = capturedPayload as {
         messages: Array<{ role: string; content: unknown[] }>;
@@ -802,28 +866,14 @@ describe("Anthropic provider", () => {
   );
 
   it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel(),
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      {},
+      { mode: "raw", thinkingEnabled: false, stopBeforeNetwork: true },
       {
         messages: [
           { role: "user", content: "look it up", timestamp: 0 },
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [
+          makeAnthropicAssistantMessage(
+            [
               {
                 type: "thinking",
                 thinking: "call lookup",
@@ -831,7 +881,8 @@ describe("Anthropic provider", () => {
               },
               { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
             ],
-          },
+            { stopReason: "toolUse" },
+          ),
           {
             role: "toolResult",
             toolCallId: "call_1",
@@ -842,17 +893,7 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "sk-ant-provider",
-        thinkingEnabled: false,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     const payload = capturedPayload as {
       messages: Array<{ role: string; content: unknown[] }>;
@@ -864,33 +905,24 @@ describe("Anthropic provider", () => {
   });
 
   it("does not infer prompt tokens when clamping the output limit", async () => {
-    let capturedPayload: unknown;
     const model = makeAnthropicModel({
       id: "claude-haiku-4-5",
       name: "Claude Haiku 4.5",
       contextWindow: 4_000,
       maxTokens: 512,
     });
-    const stream = streamSimpleAnthropic(
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
       model,
       {
+        apiKey: "test-api-key",
+        maxTokens: model.maxTokens,
+        reasoning: "off",
+        stopBeforeNetwork: true,
+      },
+      {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: model.id,
-            stopReason: "stop",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [
+          makeAnthropicAssistantMessage(
+            [
               {
                 type: "thinking",
                 thinking: "private reasoning ".repeat(1_000),
@@ -898,54 +930,30 @@ describe("Anthropic provider", () => {
               },
               { type: "text", text: "Visible answer." },
             ],
-          },
+            { model: model.id },
+          ),
           { role: "user", content: "again", timestamp: 0 },
         ],
       },
-      {
-        apiKey: "test-api-key",
-        maxTokens: model.maxTokens,
-        reasoning: "off",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
   });
 
   it("clamps an excessive output request to the model limit", async () => {
-    let capturedPayload: unknown;
     const model = makeAnthropicModel({
       id: "claude-opus-4-5",
       name: "Claude Opus 4.5",
       contextWindow: 4_000,
       maxTokens: 512,
     });
-    const stream = streamSimpleAnthropic(
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
       model,
+      { apiKey: "test-api-key", maxTokens: 5_000, reasoning: "off", stopBeforeNetwork: true },
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: model.id,
-            stopReason: "stop",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [
+          makeAnthropicAssistantMessage(
+            [
               {
                 type: "thinking",
                 thinking: "private reasoning ".repeat(1_000),
@@ -953,54 +961,30 @@ describe("Anthropic provider", () => {
               },
               { type: "text", text: "Visible answer." },
             ],
-          },
+            { model: model.id },
+          ),
           { role: "user", content: "again", timestamp: 0 },
         ],
       },
-      {
-        apiKey: "test-api-key",
-        maxTokens: 5_000,
-        reasoning: "off",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
   });
 
   it("restores the caller output cap when thinking cannot fit", async () => {
-    let capturedPayload: unknown;
     const model = makeAnthropicModel({
       id: "claude-haiku-4-5",
       name: "Claude Haiku 4.5",
       contextWindow: 4_000,
       maxTokens: 500,
     });
-    const stream = streamSimpleAnthropic(
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
       model,
+      { apiKey: "test-api-key", maxTokens: 32, reasoning: "low", stopBeforeNetwork: true },
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: model.id,
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [
+          makeAnthropicAssistantMessage(
+            [
               {
                 type: "thinking",
                 thinking: "private reasoning ".repeat(1_000),
@@ -1008,7 +992,8 @@ describe("Anthropic provider", () => {
               },
               { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
             ],
-          },
+            { model: model.id, stopReason: "toolUse" },
+          ),
           {
             role: "toolResult",
             toolCallId: "call_1",
@@ -1019,18 +1004,7 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "test-api-key",
-        maxTokens: 32,
-        reasoning: "low",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     expect(capturedPayload as { max_tokens?: number; thinking?: unknown }).toMatchObject({
       max_tokens: 32,
@@ -1039,29 +1013,16 @@ describe("Anthropic provider", () => {
   });
 
   it("preserves mixed text and image tool-result order", async () => {
-    let capturedPayload: unknown;
     const imageData = Buffer.from("image").toString("base64");
-    const stream = streamAnthropic(
-      makeAnthropicModel({ input: ["text", "image"] }),
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { input: ["text", "image"] },
+      { mode: "raw", stopBeforeNetwork: true },
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
-          },
+          makeAnthropicAssistantMessage(
+            [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+            { stopReason: "toolUse" },
+          ),
           {
             role: "toolResult",
             toolCallId: "call_1",
@@ -1080,16 +1041,7 @@ describe("Anthropic provider", () => {
           },
         ],
       } as unknown as Context,
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     const payload = capturedPayload as {
       messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
@@ -1116,10 +1068,10 @@ describe("Anthropic provider", () => {
 
   it("normalizes unsupported user image blocks before Anthropic payloads", async () => {
     configureTestAnthropicImageNormalizer();
-    let capturedPayload: unknown;
     const imageData = tinyJpegBase64();
-    const stream = streamAnthropic(
-      makeAnthropicModel({ input: ["text", "image"] }),
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      { input: ["text", "image"] },
+      { mode: "raw", apiKey: "test-api-key", stopBeforeNetwork: true },
       {
         messages: [
           {
@@ -1132,16 +1084,8 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "test-api-key",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
 
-    const result = await stream.result();
     expect(result.stopReason).toBe("error");
     const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
     const imageBlock = (userMessage.content as Array<Record<string, unknown>>)[1];
@@ -1157,9 +1101,9 @@ describe("Anthropic provider", () => {
         throw new Error("non-vision images should be downgraded before normalization");
       },
     });
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({ input: ["text"] }),
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      { input: ["text"] },
+      { mode: "raw", apiKey: "test-api-key", stopBeforeNetwork: true },
       {
         messages: [
           {
@@ -1172,16 +1116,8 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "test-api-key",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
 
-    const result = await stream.result();
     expect(result.stopReason).toBe("error");
     const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
     expect(userMessage.content).toMatchObject([
@@ -1192,29 +1128,16 @@ describe("Anthropic provider", () => {
 
   it("normalizes unsupported tool result image blocks before Anthropic payloads", async () => {
     configureTestAnthropicImageNormalizer();
-    let capturedPayload: unknown;
     const imageData = tinyJpegBase64();
-    const stream = streamAnthropic(
-      makeAnthropicModel({ input: ["text", "image"] }),
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      { input: ["text", "image"] },
+      { mode: "raw", apiKey: "test-api-key", stopBeforeNetwork: true },
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
-          },
+          makeAnthropicAssistantMessage(
+            [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+            { stopReason: "toolUse" },
+          ),
           {
             role: "toolResult",
             toolCallId: "tool_1",
@@ -1225,16 +1148,8 @@ describe("Anthropic provider", () => {
           },
         ],
       } as unknown as Context,
-      {
-        apiKey: "test-api-key",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
 
-    const result = await stream.result();
     expect(result.stopReason).toBe("error");
     const [, userMessage] = (
       capturedPayload as { messages: [Record<string, unknown>, Record<string, unknown>] }
@@ -1248,28 +1163,15 @@ describe("Anthropic provider", () => {
   });
 
   it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({ input: ["text", "image"] }),
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { input: ["text", "image"] },
+      { mode: "raw", apiKey: "fixture", stopBeforeNetwork: true },
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
-          },
+          makeAnthropicAssistantMessage(
+            [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+            { stopReason: "toolUse" },
+          ),
           {
             role: "toolResult",
             toolCallId: "call_husk",
@@ -1280,16 +1182,7 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "fixture",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     const payload = capturedPayload as {
       messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
@@ -1306,28 +1199,15 @@ describe("Anthropic provider", () => {
     ["whitespace-only", " \n\t "],
     ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
   ])("replaces %s error tool results with non-empty content", async (_label, text) => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({ provider: "github-copilot" }),
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { provider: "github-copilot" },
+      { mode: "raw", apiKey: "copilot-token", stopBeforeNetwork: true },
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "github-copilot",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
-          },
+          makeAnthropicAssistantMessage(
+            [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+            { provider: "github-copilot", stopReason: "toolUse" },
+          ),
           {
             role: "toolResult",
             toolCallId: "call_1",
@@ -1338,16 +1218,7 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "copilot-token",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    await stream.result();
 
     const payload = capturedPayload as {
       messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
@@ -1440,19 +1311,10 @@ describe("Anthropic provider", () => {
   ])(
     "sends default server-side fallback params for direct $name API-key requests",
     async (model) => {
-      let capturedPayload: unknown;
-      const stream = streamAnthropic(
-        makeAnthropicModel(model),
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        {
-          apiKey: "sk-ant-provider",
-          onPayload: (payload) => {
-            capturedPayload = payload;
-            throw new Error("stop before network");
-          },
-        },
-      );
-      await stream.result();
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
+        mode: "raw",
+        stopBeforeNetwork: true,
+      });
 
       expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
       await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
@@ -1483,19 +1345,10 @@ describe("Anthropic provider", () => {
       apiKey: "sk-ant-provider",
     },
   ])("omits server-side fallback params for $label", async ({ overrides, apiKey }) => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5", ...overrides }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { id: "claude-fable-5", name: "Claude Fable 5", ...overrides },
+      { mode: "raw", apiKey, stopBeforeNetwork: true },
     );
-    await stream.result();
 
     expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBeUndefined();
   });
@@ -1720,6 +1573,136 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("rejects a malformed later tool before any sibling becomes executable", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_tools", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_valid", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"README.md"}' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "call_invalid", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"path":"SECRET.md"' },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
+    expect(result.errorMessage).not.toContain("SECRET.md");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+  });
+
+  it("rejects an active tool call that never receives content_block_stop", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_unsealed", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_unsealed", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"README.md"' },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(eventTypes.at(-1)).toBe("error");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+  });
+
+  it("uses a complete tool input seeded at block start when no deltas arrive", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_seeded", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "call_seeded",
+          name: "read",
+          input: { path: "README.md" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", arguments: { path: "README.md" } }),
+    );
+  });
+
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
     const client = createAnthropicSseClient([
       {
@@ -1778,14 +1761,57 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("error");
     // Keep salient transport fields while replacing the cycle, so the terminal
     // diagnostic remains actionable without stranding the stream.
-    expect(result.errorMessage).toBeTruthy();
     expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
   });
 
+  it("terminates the stream when provider terminal accessors throw", async () => {
+    const hostile = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(hostile, {
+      code: { enumerable: true, value: "ECONNRESET" },
+      safe: { enumerable: true, value: "socket failed" },
+      status: {
+        enumerable: true,
+        get: () => {
+          throw new Error("status getter");
+        },
+      },
+      body: {
+        enumerable: true,
+        get: () => {
+          throw new Error("body getter");
+        },
+      },
+      message: {
+        enumerable: true,
+        get: () => {
+          throw new Error("message getter");
+        },
+      },
+    });
+    const asResponse = vi.fn().mockRejectedValue(hostile);
+    const client = { messages: { create: vi.fn(() => ({ asResponse })) } };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "ECONNRESET",
+    });
+    expect(result.errorMessage).toContain("socket failed");
+  });
+
   it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
-    // formatProviderError only substitutes status+body when a body is present, so
-    // ordinary Error rejections must still surface error.message — retry
-    // classification in src/llm/utils/retry.ts parses this string.
+    // Ordinary Error rejections with no body must still surface error.message;
+    // retry classification in src/llm/utils/retry.ts parses this string.
     const asResponse = vi
       .fn()
       .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
@@ -1806,7 +1832,7 @@ describe("Anthropic provider", () => {
     const result = await stream.result();
 
     expect(eventTypes).toEqual(["error"]);
-    expect(result.errorMessage).toBe("Overloaded");
+    expect(result.errorMessage).toBe("529: Overloaded");
   });
 
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
@@ -2037,28 +2063,22 @@ describe("Anthropic provider", () => {
         name: "Claude Haiku 4.5",
         maxTokens: 8192,
       });
-      let capturedPayload: unknown;
-      const stream = streamAnthropic(
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
         model,
         {
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-          tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
-        },
-        {
-          apiKey: "sk-ant-provider",
+          mode: "raw",
           maxTokens,
           temperature: 0.2,
           thinkingEnabled: true,
           thinkingBudgetTokens: budgetTokens,
           toolChoice: "any",
-          onPayload: (payload) => {
-            capturedPayload = payload;
-            throw new Error("stop before network");
-          },
+          stopBeforeNetwork: true,
+        },
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
         },
       );
-
-      await stream.result();
 
       expect(capturedPayload).toMatchObject({
         thinking: { type: "disabled" },
@@ -2071,31 +2091,18 @@ describe("Anthropic provider", () => {
   it.each(["claude-opus-5", "claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {
-      let capturedPayload: unknown;
-      const stream = streamSimpleAnthropic(
-        makeAnthropicModel({
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+        {
           id: modelId,
           name: modelId,
           maxTokens: 128_000,
-        }),
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        },
         {
-          apiKey: "sk-ant-provider",
           reasoning: "high",
           temperature: 0.2,
-          onPayload: (payload) => {
-            capturedPayload = {
-              ...(payload as Record<string, unknown>),
-              temperature: 0.2,
-              top_p: 0.9,
-              top_k: 40,
-            };
-            return capturedPayload;
-          },
+          injectPayload: { temperature: 0.2, top_p: 0.9, top_k: 40 },
         },
       );
-
-      await stream.result();
 
       expect(capturedPayload).not.toHaveProperty("temperature");
       expect(capturedPayload).not.toHaveProperty("top_p");
@@ -2110,23 +2117,10 @@ describe("Anthropic provider", () => {
       params: undefined,
     },
   ])("does not infer the Fable contract from noncanonical metadata", async (overrides) => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel({
-        ...overrides,
-        reasoning: false,
-      }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "sk-ant-provider",
-        temperature: 0.2,
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
-      },
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { ...overrides, reasoning: false },
+      { temperature: 0.2 },
     );
-
-    await stream.result();
 
     expect(capturedPayload).toMatchObject({ temperature: 0.2 });
     expect(capturedPayload).not.toHaveProperty("thinking");
@@ -2172,27 +2166,16 @@ describe("Anthropic provider", () => {
   );
 
   it("normalizes forced Fable tool choice to auto", async () => {
-    let capturedPayload: unknown;
-    const stream = streamAnthropic(
-      makeAnthropicModel({
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-      }),
+    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+      { id: "claude-fable-5", name: "Claude Fable 5" },
       {
-        messages: [{ role: "user", content: "Use a tool.", timestamp: 0 }],
-      },
-      {
-        apiKey: "sk-ant-provider",
+        mode: "raw",
         thinkingEnabled: true,
         effort: "high",
         toolChoice: "any",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-        },
       },
+      { messages: [{ role: "user", content: "Use a tool.", timestamp: 0 }] },
     );
-
-    await stream.result();
 
     expect(capturedPayload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
@@ -2211,22 +2194,9 @@ describe("Anthropic provider", () => {
       { reasoning: "high", effort: "high" },
       { reasoning: "xhigh", effort: "xhigh" },
     ] as const) {
-      let capturedPayload: unknown;
-      const stream = streamSimpleAnthropic(
-        model,
-        {
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        },
-        {
-          apiKey: "sk-ant-provider",
-          reasoning: testCase.reasoning,
-          onPayload: (payload: unknown) => {
-            capturedPayload = payload;
-          },
-        } as unknown as Parameters<typeof streamSimpleAnthropic>[2],
-      );
-
-      await stream.result();
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
+        reasoning: testCase.reasoning,
+      });
 
       expect(capturedPayload).toMatchObject({
         thinking: { type: "adaptive", display: "summarized" },
@@ -2273,7 +2243,6 @@ describe("Anthropic provider", () => {
   });
 
   it("skips unreadable Anthropic provider tools while preserving healthy siblings", async () => {
-    let capturedPayload: unknown;
     const unreadableTool = {
       name: "unreadable_plugin_tool",
       description: "unreadable schema",
@@ -2281,8 +2250,9 @@ describe("Anthropic provider", () => {
         throw new Error("fuzz parameters getter exploded");
       },
     } as Tool;
-    const stream = streamAnthropic(
-      makeAnthropicModel(),
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { mode: "raw", stopBeforeNetwork: true },
       {
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
         tools: [
@@ -2307,16 +2277,8 @@ describe("Anthropic provider", () => {
           } as Tool,
         ],
       },
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
 
-    const result = await stream.result();
     const payload = capturedPayload as {
       tools?: Array<{ name?: string; input_schema?: unknown }>;
     };
@@ -2381,23 +2343,15 @@ describe("Anthropic provider", () => {
       },
     ] as Tool[];
     const captureTools = async (orderedTools: Tool[]) => {
-      let capturedPayload: unknown;
-      const stream = streamSimpleAnthropic(
-        makeAnthropicModel(),
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+        {},
+        { stopBeforeNetwork: true },
         {
           systemPrompt: "stable system",
           messages: [{ role: "user", content: "hello", timestamp: 0 }],
           tools: orderedTools,
         },
-        {
-          apiKey: "sk-ant-provider",
-          onPayload: (payload) => {
-            capturedPayload = payload;
-            throw new Error("stop before network");
-          },
-        },
       );
-      await stream.result();
       return (capturedPayload as { tools: unknown[] }).tools;
     };
 
@@ -2416,23 +2370,14 @@ describe("Anthropic provider", () => {
   });
 
   it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel(),
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    const result = await stream.result();
 
     expect(result.stopReason).toBe("error");
     expect((capturedPayload as { system?: unknown }).system).toEqual([
@@ -2449,9 +2394,9 @@ describe("Anthropic provider", () => {
   });
 
   it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
-    let capturedPayload: unknown;
-    const stream = streamSimpleAnthropic(
-      makeAnthropicModel(),
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
       {
         systemPrompt: "system",
         messages: [
@@ -2464,16 +2409,7 @@ describe("Anthropic provider", () => {
           },
         ],
       },
-      {
-        apiKey: "sk-ant-provider",
-        onPayload: (payload) => {
-          capturedPayload = payload;
-          throw new Error("stop before network");
-        },
-      },
     );
-
-    const result = await stream.result();
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
@@ -2484,53 +2420,6 @@ describe("Anthropic provider", () => {
     ]);
     // ...and NOT on the trailing volatile carrier, which is left uncached.
     expect(messages[1]?.content).toBe("volatile current-turn metadata");
-  });
-
-  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
-    function createSseEventResponse(lines: string): Response {
-      return new Response(lines, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    }
-
-    const client = {
-      messages: {
-        create: vi.fn(() => ({
-          asResponse: () =>
-            Promise.resolve(
-              createSseEventResponse(
-                "event: message_start\ndata: " +
-                  JSON.stringify({
-                    type: "message_start",
-                    message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-                  }) +
-                  "\n\nevent: message_stop\ndata: " +
-                  JSON.stringify({ type: "message_stop" }) +
-                  "\n\n",
-              ),
-            ),
-        })),
-      },
-    };
-
-    const stream = streamAnthropic(
-      makeAnthropicModel(),
-      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
-      { apiKey: "sk-ant-key", client: client as never },
-    );
-
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    // start must come after message_start processing, not before the loop
-    const startIndex = eventTypes.indexOf("start");
-    expect(startIndex).toBeGreaterThanOrEqual(0);
-    // No error before start — the start event should be first non-error event
-    const errorBeforeStart = eventTypes.slice(0, startIndex).some((t) => t === "error");
-    expect(errorBeforeStart).toBe(false);
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

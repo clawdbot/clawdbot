@@ -29,7 +29,7 @@ import { startGatewayServer } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getGatewayE2ePortBlock(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -268,6 +268,8 @@ export async function startGatewayWithClient(params: {
   configPath: string;
   token: string;
   clientDisplayName?: string;
+  scopes?: string[];
+  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) {
   const gatewayStartupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
@@ -278,7 +280,7 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const startedServer = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token: params.token },
@@ -289,12 +291,15 @@ export async function startGatewayWithClient(params: {
       url: `ws://127.0.0.1:${port}`,
       token: params.token,
       clientDisplayName: params.clientDisplayName,
+      scopes: params.scopes,
+      onEvent: params.onEvent,
     });
 
     return {
       port,
       client,
       server: {
+        startupSettled: startedServer.startupSettled,
         close: async (...args: Parameters<typeof startedServer.close>) => {
           try {
             await startedServer.close(...args);

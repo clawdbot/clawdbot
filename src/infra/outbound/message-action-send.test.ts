@@ -1,26 +1,24 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
-} from "../../interactive/payload.js";
-import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
-
-type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
+import {
+  createAlwaysConfiguredPluginConfig,
+  createActionHubPluginFixture,
+  createGatewayActionPlugin,
+  messageActionRunnerMocks as mocks,
+  resetMessageActionRunnerMocks,
+  runMessageAction,
+  setMessageActionTestPlugin as setTestPlugin,
+} from "./message-action-runner.test-helpers.js";
+import { ensureOutboundSessionEntry } from "./outbound-session.js";
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 const requireLabeledRecord = createRequireRecord("record", "expected-label");
@@ -57,303 +55,12 @@ function expectRecordFields(
   }
 }
 
-const mocks = vi.hoisted(() => ({
-  resolveOutboundChannelPlugin: vi.fn(),
-  executeSendAction: vi.fn(),
-  executePollAction: vi.fn(),
-  hasCorePresentationDelivery: vi.fn(),
-  materializeMessagePresentationFallback: vi.fn(),
-  callGateway: vi.fn(),
-  callGatewayLeastPrivilege: vi.fn(),
-  isGatewayTransportError: vi.fn(),
-  randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
-  maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
-  prepareOutboundMirrorRoute: vi.fn(),
-  beginTerminalSourceReplyDelivery: vi.fn(),
-  cancelTerminalSourceReplyDelivery: vi.fn(),
-  isCurrentSourceReplyActionName: vi.fn(() => false),
-  isDeliveredCurrentSourceReply: vi.fn(() => false),
-  isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
-  reconcileTerminalSourceReplyDelivery: vi.fn(),
-}));
-
-vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: (value?: string | null) =>
-    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
-  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
-  resetOutboundChannelResolutionStateForTest: vi.fn(),
-}));
-
-vi.mock("./outbound-send-service.js", () => ({
-  executeSendAction: mocks.executeSendAction,
-  executePollAction: mocks.executePollAction,
-  hasCorePresentationDelivery: mocks.hasCorePresentationDelivery,
-  materializeMessagePresentationFallback: mocks.materializeMessagePresentationFallback,
-}));
-
-vi.mock("./message.gateway.runtime.js", () => ({
-  callGateway: mocks.callGateway,
-  callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
-  isGatewayTransportError: mocks.isGatewayTransportError,
-  randomIdempotencyKey: mocks.randomIdempotencyKey,
-}));
-
-vi.mock("./source-reply-mirror.js", () => ({
-  beginTerminalSourceReplyDelivery: mocks.beginTerminalSourceReplyDelivery,
-  cancelTerminalSourceReplyDelivery: mocks.cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName: mocks.isCurrentSourceReplyActionName,
-  isDeliveredCurrentSourceReply: mocks.isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction: mocks.isDeliveredCurrentSourceReplyAction,
-  reconcileTerminalSourceReplyDelivery: mocks.reconcileTerminalSourceReplyDelivery,
-}));
-
-vi.mock("../../tts/tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: mocks.maybeApplyTtsToPayload,
-}));
-
-vi.mock("./outbound-session.js", () => ({
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
-  resolveOutboundSessionRoute: vi.fn(async () => null),
-}));
-
-vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: (id: string) =>
-    id === "actionhub"
-      ? {
-          actions: {
-            messageActionTargetAliases: {
-              pin: { aliases: ["messageId"] },
-              unpin: { aliases: ["messageId"] },
-              "list-pins": { aliases: ["chatId"] },
-            },
-          },
-        }
-      : undefined,
-}));
-
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  const threading = createOutboundThreadingMock();
-  mocks.prepareOutboundMirrorRoute.mockImplementation(threading.prepareOutboundMirrorRoute);
-  return {
-    ...threading,
-    prepareOutboundMirrorRoute: mocks.prepareOutboundMirrorRoute,
-  };
-});
-
-function setTestPlugin(plugin: unknown, pluginId: string, origin?: "bundled") {
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId, source: "test", ...(origin ? { origin } : {}), plugin }]),
-  );
-}
-
-function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
-  return {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => account,
-    isConfigured: () => true,
-  };
-}
-
-function createGatewayActionPlugin(params: {
-  pluginId: string;
-  label: string;
-  blurb: string;
-  actions: ChannelMessageActionName[];
-  gatewayActions?: ChannelMessageActionName[];
-  capabilities?: ChannelPlugin["capabilities"];
-  messaging?: ChannelPlugin["messaging"];
-  threading?: ChannelPlugin["threading"];
-  handleAction: ChannelActionHandler;
-}): ChannelPlugin {
-  const actions = new Set(params.actions);
-  const gatewayActions = new Set(params.gatewayActions ?? params.actions);
-  return {
-    id: params.pluginId,
-    meta: {
-      id: params.pluginId,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: `/channels/${params.pluginId}`,
-      blurb: params.blurb,
-    },
-    capabilities: params.capabilities ?? { chatTypes: ["direct"] },
-    config: createAlwaysConfiguredPluginConfig(),
-    messaging: params.messaging,
-    threading: params.threading,
-    actions: {
-      describeMessageTool: () => ({ actions: params.actions }),
-      supportsAction: ({ action }) => actions.has(action),
-      resolveExecutionMode: ({ action }) => (gatewayActions.has(action) ? "gateway" : "local"),
-      handleAction: params.handleAction,
-    },
-  };
-}
-
-async function executePluginAction(params: {
-  action: "send" | "poll";
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "channel"
-    | "cfg"
-    | "params"
-    | "mediaAccess"
-    | "accountId"
-    | "gateway"
-    | "toolContext"
-    | "inboundEventKind"
-  > & {
-    dryRun: boolean;
-    agentId?: string;
-  };
-}) {
-  const handled = await dispatchChannelMessageAction({
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    mediaAccess: params.ctx.mediaAccess,
-    mediaLocalRoots: params.ctx.mediaAccess?.localRoots ?? [],
-    mediaReadFile:
-      typeof params.ctx.mediaAccess?.readFile === "function"
-        ? params.ctx.mediaAccess.readFile
-        : undefined,
-    accountId: params.ctx.accountId ?? undefined,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    inboundEventKind: params.ctx.inboundEventKind,
-    dryRun: params.ctx.dryRun,
-    agentId: params.ctx.agentId,
-  });
-  if (!handled) {
-    throw new Error(`expected plugin to handle ${params.action}`);
-  }
-  return {
-    handledBy: "plugin" as const,
-    payload: extractToolPayload(handled),
-    toolResult: handled,
-  };
-}
-
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel }: { channel: string }) =>
-        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-    );
-    mocks.executeSendAction.mockReset();
-    mocks.executeSendAction.mockImplementation(
-      async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
-        await executePluginAction({ action: "send", ctx }),
-    );
-    mocks.executePollAction.mockReset();
-    mocks.executePollAction.mockImplementation(
-      async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
-        await executePluginAction({ action: "poll", ctx }),
-    );
-    mocks.hasCorePresentationDelivery.mockReset();
-    mocks.hasCorePresentationDelivery.mockImplementation(
-      (outbound?: { sendPayload?: unknown; sendText?: unknown; sendFormattedText?: unknown }) =>
-        Boolean(outbound?.sendPayload || outbound?.sendText || outbound?.sendFormattedText),
-    );
-    mocks.materializeMessagePresentationFallback.mockReset();
-    mocks.materializeMessagePresentationFallback.mockImplementation(
-      (params: { payload: { presentation?: unknown; text?: string }; text?: string }) => {
-        const presentation = normalizeMessagePresentation(params.payload.presentation);
-        const text = (params.text ?? params.payload.text ?? "").trim();
-        if (!presentation) {
-          return text;
-        }
-        const fallback = renderMessagePresentationFallbackText({ presentation });
-        return !fallback || text.includes(fallback)
-          ? text
-          : [text, fallback].filter(Boolean).join("\n\n");
-      },
-    );
-    mocks.callGateway.mockReset();
-    mocks.callGatewayLeastPrivilege.mockReset();
-    mocks.isGatewayTransportError.mockReset();
-    mocks.isGatewayTransportError.mockImplementation(
-      (value: unknown) =>
-        value instanceof Error && (value as { kind?: unknown }).kind === "timeout",
-    );
-    mocks.randomIdempotencyKey.mockClear();
-    mocks.maybeApplyTtsToPayload.mockReset();
-    mocks.maybeApplyTtsToPayload.mockImplementation(
-      async (params: { payload: unknown }) => params.payload,
-    );
-    mocks.prepareOutboundMirrorRoute.mockClear();
-    mocks.beginTerminalSourceReplyDelivery.mockReset();
-    mocks.cancelTerminalSourceReplyDelivery.mockReset();
-    mocks.reconcileTerminalSourceReplyDelivery.mockReset();
+    resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
-    );
-
-    const actionHubPlugin: ChannelPlugin = {
-      id: "actionhub",
-      meta: {
-        id: "actionhub",
-        label: "Action Hub",
-        selectionLabel: "Action Hub",
-        docsPath: "/channels/actionhub",
-        blurb: "Action Hub action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetPrefixes: ["actionhub", "actionhub-alias"],
-        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({
-          actions: [
-            "pin",
-            "unpin",
-            "list-pins",
-            "member-info",
-            "channel-info",
-            "edit",
-            "thread-create",
-            "thread-reply",
-          ],
-        }),
-        messageActionTargetAliases: {
-          edit: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          pin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          unpin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-        },
-        supportsAction: ({ action }) =>
-          action === "pin" ||
-          action === "unpin" ||
-          action === "list-pins" ||
-          action === "member-info" ||
-          action === "channel-info" ||
-          action === "edit" ||
-          action === "thread-create" ||
-          action === "thread-reply",
-        handleAction,
-      },
-    };
+    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
 
     beforeEach(() => {
       setTestPlugin(actionHubPlugin, "actionhub");
@@ -365,7 +72,10 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
-    it("preserves buffer-only send bytes for gateway-side materialization", async () => {
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway-side materialization", async ({ buffer }) => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
@@ -396,9 +106,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaychat",
           target: "user-123",
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -418,7 +128,7 @@ describe("runMessageAction plugin dispatch", () => {
           media: "buffer://message-send/attachment",
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway bytes").toString("base64"),
+          buffer,
           filename: "gateway.txt",
           contentType: "text/plain",
         },
@@ -427,7 +137,96 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
     });
 
-    it("preserves buffer-only send bytes for gateway delivery-mode channels", async () => {
+    it("stages workspace-reader media before gateway dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat sandbox media test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-sandbox-media",
+      });
+      const workspaceReadFile = vi.fn(async () => Buffer.from("remote chart"));
+      mocks.loadWebMedia.mockImplementation(async (mediaUrl, maxBytesOrOptions) => {
+        const options =
+          typeof maxBytesOrOptions === "object" && maxBytesOrOptions !== null
+            ? maxBytesOrOptions
+            : undefined;
+        const readFile = options?.readFile;
+        if (!readFile) {
+          throw new Error("expected gateway staging media reader");
+        }
+        return {
+          buffer: await readFile(mediaUrl),
+          contentType: "text/plain",
+          fileName: "chart.txt",
+          kind: "document",
+        };
+      });
+
+      await runMessageAction({
+        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          path: "/sandbox/chart.txt",
+          filePath: "/sandbox/chart.txt",
+          fileUrl: "/sandbox/chart.txt",
+          attachments: [
+            {
+              type: "file",
+              path: "/sandbox/chart.txt",
+              fileUrl: "/sandbox/chart.txt",
+              name: "chart.txt",
+              mimeType: "text/plain",
+            },
+          ],
+        },
+        sandboxRoot: "/host-mirror",
+        sandboxContainerWorkdir: "/sandbox",
+        workspaceMediaAccess: {
+          localRoots: ["/host-mirror", "/sandbox"],
+          readFile: workspaceReadFile,
+          workspaceDir: "/host-mirror",
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      const messageParams = readRecordField(gatewayParams, "params", "gateway message params");
+      const stagedPath = String(messageParams.media);
+      expect(stagedPath).not.toBe("/sandbox/chart.txt");
+      expect(messageParams.mediaUrl).toBe(stagedPath);
+      expect(messageParams.mediaUrls).toEqual([stagedPath]);
+      expect(messageParams.attachments).toEqual([
+        {
+          type: "file",
+          path: stagedPath,
+          name: "chart.txt",
+          mimeType: "text/plain",
+        },
+      ]);
+      expect(messageParams).not.toHaveProperty("path");
+      expect(messageParams).not.toHaveProperty("filePath");
+      expect(messageParams).not.toHaveProperty("fileUrl");
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("remote chart");
+      expect(workspaceReadFile).toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "raw base64", buffer: "SGVsbG8=" },
+      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
+    ])("preserves $name bytes and MIME for gateway delivery-mode channels", async ({ buffer }) => {
       const gatewayDeliveryPlugin: ChannelPlugin = {
         id: "gatewaydeliver",
         meta: {
@@ -470,9 +269,9 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "gatewaydeliver",
           target: "user-123",
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
-          contentType: "text/plain",
+          mimeType: "text/plain",
         },
         gateway: {
           clientName: "cli",
@@ -486,7 +285,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           mediaUrl: "buffer://message-send/attachment",
           mediaUrls: ["buffer://message-send/attachment"],
-          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          buffer,
           filename: "delivery.txt",
           contentType: "text/plain",
         },
@@ -832,6 +631,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes local chart presentations through core delivery", async () => {
+      const sourceSessionKey = "agent:main:cardchat:direct:restricted-creator";
       const presentation = {
         blocks: [
           {
@@ -893,6 +693,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        sessionKey: sourceSessionKey,
         suppressTranscriptMirror: true,
         dryRun: false,
       });
@@ -911,6 +712,58 @@ describe("runMessageAction plugin dispatch", () => {
         { text: "Deployment trend", presentation },
         "execute send payload",
       );
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceSessionKey }),
+      );
+    });
+
+    it.each([
+      ["model-authored message-tool sends", "message-tool" as const, "caller"],
+      ["operator CLI and gateway sends", undefined, undefined],
+    ])("marks the delivery retry owner for %s", async (_label, actionOrigin, expected) => {
+      const presentation = {
+        blocks: [
+          {
+            type: "chart",
+            chartType: "line",
+            title: "Trend",
+            categories: ["Mon"],
+            series: [{ name: "Prod", values: [1] }],
+          },
+        ],
+      };
+      mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
+      setTestPlugin(
+        {
+          ...cardPlugin,
+          actions: { ...cardPlugin.actions, resolveExecutionMode: () => "local" },
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
+          },
+        },
+        "cardchat",
+      );
+
+      await runMessageAction({
+        cfg: { channels: { cardchat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        ...(actionOrigin ? { actionOrigin } : {}),
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "Deployment trend",
+          presentation,
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+        agentId: "main",
+        suppressTranscriptMirror: true,
+        dryRun: false,
+      });
+
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      const executeContext = readRecordField(executeCall, "ctx", "execute send context");
+      expect(executeContext.deliveryRetryOwner).toBe(expected);
     });
 
     it("keeps non-presentation sends on plugin-owned handling", async () => {

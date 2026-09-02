@@ -208,9 +208,35 @@ describe("logs cli", () => {
 
     expect(stdoutWrites.join("")).toContain("Log file:");
     expect(stdoutWrites.join("")).toContain("raw line");
-    expect(stderrWrites.join("")).toContain("Log tail truncated");
+    expect(stderrWrites.join("")).toContain(
+      "Log tail truncated (increase --limit or --max-bytes).",
+    );
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
+
+  it.each(["plain", "json"])(
+    "reports a byte-budget re-anchor without claiming rotation in %s output",
+    async (mode) => {
+      callGatewayFromCli.mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        cursor: 8192,
+        size: 8192,
+        lines: ["line after skipped burst"],
+        truncated: true,
+        reset: true,
+        skippedBytes: 4096,
+      });
+
+      const stdoutWrites = captureStdoutWrites();
+      const stderrWrites = captureStderrWrites();
+
+      await runLogsCli(["logs", mode === "json" ? "--json" : "--plain"]);
+
+      const output = `${stdoutWrites.join("")}\n${stderrWrites.join("")}`;
+      expect(output).toContain("re-anchored (skipped 4096 bytes)");
+      expect(output).not.toContain("file rotated");
+    },
+  );
 
   it("uses the passive local Gateway client for implicit loopback log reads", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
@@ -787,7 +813,11 @@ describe("logs cli", () => {
           expect.objectContaining({ type: "raw", raw: "recovered rpc line" }),
         ]),
       );
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(JSON.parse(stderrWrites.join(""))).toMatchObject({
+        type: "error",
+        message: "stop after recovered cursor probe",
+        error: "stop after recovered cursor probe",
+      });
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
@@ -888,7 +918,9 @@ describe("logs cli", () => {
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect((stderrWrites.join("").match(/gateway disconnected/g) ?? []).length).toBe(8);
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain(
+        "gateway closed (1006 abnormal closure): abnormal closure",
+      );
       expect(stdoutWrites.join("")).not.toContain("local fallback line");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
@@ -912,7 +944,9 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
 
       expect((stderrWrites.join("").match(/gateway disconnected/g) ?? []).length).toBe(8);
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain(
+        "gateway closed (1006 abnormal closure): abnormal closure",
+      );
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
@@ -1016,7 +1050,9 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
 
       expect(stderrWrites.join("")).not.toContain("gateway disconnected");
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain(
+        "gateway closed (1008 policy violation): pairing required",
+      );
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
@@ -1036,11 +1072,11 @@ describe("logs cli", () => {
       await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
 
       expect(stderrWrites.join("")).not.toContain("gateway disconnected");
-      expect(stderrWrites.join("")).toContain("Gateway not reachable");
+      expect(stderrWrites.join("")).toContain("gateway closed (4001 unauthorized): unauthorized");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
-    it("redacts credential-bearing Gateway URLs from JSON errors", async () => {
+    it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {
       const rawUrl =
         "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";
       buildGatewayConnectionDetails.mockReturnValueOnce({
@@ -1052,9 +1088,10 @@ describe("logs cli", () => {
       const stderrWrites = captureStderrWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--json", "--url", rawUrl]);
+      await runLogsCli(["logs", mode === "json" ? "--json" : "--plain", "--url", rawUrl]);
 
       const stderr = stderrWrites.join("");
+      expect(stderr).toContain("failed to connect to");
       expect(stderr).toContain("gateway.example/ws");
       expect(stderr).not.toContain("password");
       expect(stderr).not.toContain("secret");
@@ -1124,7 +1161,9 @@ describe("logs cli", () => {
 
     expect(readConfiguredLogTail).not.toHaveBeenCalled();
     expect(stdoutWrites.join("")).not.toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("Gateway not reachable");
+    expect(stderrWrites.join("")).toContain(
+      "gateway closed (1000 normal closure): no close reason",
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 

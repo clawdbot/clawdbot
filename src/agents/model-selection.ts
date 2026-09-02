@@ -12,14 +12,6 @@ import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "./model-selection-config.js";
-export {
-  resolveThinkingDefault,
-  resolveThinkingDefaultWithRuntimeCatalog,
-} from "./model-thinking-default.js";
-import {
   type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
@@ -29,43 +21,46 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./model-ref-shared.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
 import {
-  resolveAllowedModelRef as resolveAllowedModelRefInternal,
-  resolveConfiguredModelFallbacks,
-} from "./model-selection-resolve.js";
-import {
-  buildAllowedModelSetWithFallbacks,
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  inferUniqueProviderFromCatalog,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
-  resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
-  type ModelRefStatus,
 } from "./model-selection-shared.js";
+export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";
+export { buildAllowedModelSet } from "./model-selection-shared.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
+} from "./model-thinking-default.js";
 
-export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
-
-export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
 export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
 export {
-  buildConfiguredAllowlistKeys,
+  normalizeStoredOverrideModel,
+  resolvePersistedOverrideModelRef,
+} from "./model-selection-persisted.js";
+
+export {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
-  inferUniqueProviderFromCatalog,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
@@ -89,31 +84,6 @@ export { getModelRefStatus } from "./model-selection-resolve.js";
 
 function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
-}
-
-export function resolvePersistedOverrideModelRef(params: {
-  defaultProvider?: unknown;
-  overrideProvider?: unknown;
-  overrideModel?: unknown;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
-  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
-  const overrideProvider = normalizeOptionalString(params.overrideProvider);
-  const overrideModel = normalizeOptionalString(params.overrideModel);
-  if (!overrideModel) {
-    return null;
-  }
-  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
-  return (
-    parseModelRef(encodedOverride, defaultProvider, {
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-    }) ?? {
-      provider: overrideProvider || defaultProvider,
-      model: overrideModel,
-    }
-  );
 }
 
 /**
@@ -188,37 +158,6 @@ export function resolvePersistedSelectedModelRef(params: {
   });
 }
 
-export function normalizeStoredOverrideModel(params: {
-  providerOverride?: unknown;
-  modelOverride?: unknown;
-}): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = normalizeOptionalString(params.providerOverride);
-  const modelOverride = normalizeOptionalString(params.modelOverride);
-  if (!providerOverride || !modelOverride) {
-    return {
-      providerOverride,
-      modelOverride,
-    };
-  }
-
-  const providerPrefix = `${providerOverride.toLowerCase()}/`;
-  return {
-    providerOverride,
-    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-      : modelOverride,
-  };
-}
-
-export function resolveAllowlistModelKey(
-  raw: string,
-  defaultProvider: string,
-  cfg?: OpenClawConfig,
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
-): string | null {
-  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
-}
-
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   raw: string | undefined;
   cfg?: OpenClawConfig;
@@ -289,18 +228,19 @@ function appendAuthProfileSuffix(modelRef: string, profile: string | undefined):
  * or not a known alias, returns it unchanged.
  */
 function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  const { model, profile } = splitTrailingAuthProfile(value);
   // Already a provider/model ref — no alias resolution needed.
-  if (value.includes("/")) {
-    return value;
+  if (model.includes("/")) {
+    return appendAuthProfileSuffix(model, profile);
   }
   // Check if the value is a known alias; if so, resolve to provider/model.
   // Unknown bare strings are returned as-is (don't guess the provider).
-  const aliasKey = normalizeLowercaseStringOrEmpty(value);
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
-    return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
+    return appendAuthProfileSuffix(`${aliasMatch.ref.provider}/${aliasMatch.ref.model}`, profile);
   }
-  return value;
+  return appendAuthProfileSuffix(model, profile);
 }
 
 export function resolveSubagentSpawnModelSelection(params: {
@@ -322,10 +262,11 @@ export function resolveSubagentSpawnModelSelection(params: {
     return configured;
   }
   const raw =
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: runtimeDefault.provider,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
@@ -356,54 +297,10 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
     }).provider;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
-}
-
-export function buildAllowedModelSet(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-  } & ModelManifestNormalizationContext,
-): {
-  allowAny: boolean;
-  allowedCatalog: ModelCatalogEntry[];
-  allowedKeys: Set<string>;
-  automaticFallbackKeys: Set<string>;
-} {
-  return buildAllowedModelSetWithFallbacks({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    agentId: params.agentId,
-    fallbackModels: resolveConfiguredModelFallbacks({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
-export function resolveAllowedModelRef(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    raw: string;
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-  } & ModelManifestNormalizationContext,
-):
-  | { ref: ModelRef; key: string }
-  | {
-      error: string;
-    } {
-  return resolveAllowedModelRefInternal(params);
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

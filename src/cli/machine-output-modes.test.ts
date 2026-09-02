@@ -30,6 +30,23 @@ describe("built-in machine-output resolvers", () => {
     expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
   });
 
+  it("reserves doctor JSON output with or without explicit lint mode", () => {
+    for (const argv of [
+      ["node", "openclaw", "doctor", "--json"],
+      ["node", "openclaw", "doctor", "--lint", "--json"],
+    ]) {
+      expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(true);
+    }
+  });
+
+  it.each(["--post-upgrade", "--state-sqlite=compact", "--session-sqlite=dry-run"])(
+    "preserves registered-command JSON handling for doctor %s",
+    (mode) => {
+      const argv = ["node", "openclaw", "doctor", mode, "--json"];
+      expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
+    },
+  );
+
   it.each(["blob", "coverage", "purge", "query", "sessions"])(
     "detects proxy %s output",
     (command) => {
@@ -69,6 +86,12 @@ describe("built-in machine-output resolvers", () => {
 
   it("reserves raw cron scratch output", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
+    expect(
+      isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--set", "note"]),
+    ).toBe(true);
+    expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--unset"])).toBe(
+      true,
+    );
   });
 
   it.each(["get", "file", "schema"])("reserves config %s machine output", (subcommand) => {

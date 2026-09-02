@@ -12,7 +12,7 @@ import {
   restoreRedactedValues,
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 function expectNestedPairValue(
@@ -50,13 +50,20 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
-  it("does not expose internal plugin metadata snapshot fields", () => {
+  it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
+    const token = "synthetic-canonical-token-canary";
+    const preMigrationToken = "synthetic-pre-migration-token-canary";
     const snapshot = {
       ...makeSnapshot({
+        gateway: { auth: { token } },
         plugins: {
           allow: ["demo"],
         },
       }),
+      valid,
+      sourceConfigBeforeMigrations: makeSnapshot({
+        gateway: { auth: { token: preMigrationToken } },
+      }).sourceConfig,
       pluginMetadataSnapshot: {
         manifestRegistry: {
           plugins: [
@@ -70,11 +77,60 @@ describe("redactConfigSnapshot", () => {
         },
       },
     };
+    const original = structuredClone(snapshot);
 
     const result = redactConfigSnapshot(snapshot);
+    const serialized = JSON.stringify(result);
 
+    expect(serialized).not.toContain(preMigrationToken);
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("/private/plugin/root");
+    expect("sourceConfigBeforeMigrations" in result).toBe(false);
     expect("pluginMetadataSnapshot" in result).toBe(false);
+    expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
+    const expectedConfig = valid
+      ? { gateway: { auth: { token: REDACTED_SENTINEL } }, plugins: { allow: ["demo"] } }
+      : {};
+    expect(result.config).toEqual(expectedConfig);
+    expect(result.sourceConfig).toEqual(expectedConfig);
+    expect(snapshot).toEqual(original);
   });
+
+  it.each([true, false])(
+    "omits pre-migration credentials without mutating source (valid=%s)",
+    (valid) => {
+      const source = makeSnapshot({
+        channels: { discord: { token: "synthetic-discord-token" } },
+        models: {
+          providers: {
+            inline: { apiKey: "synthetic-provider-key", models: [] },
+            referenced: {
+              apiKey: { source: "env", provider: "default", id: "SYNTHETIC_PROVIDER_KEY" },
+              models: [],
+            },
+          },
+        },
+      });
+      const snapshot = {
+        ...makeSnapshot({}),
+        valid,
+        sourceConfigBeforeMigrations: source.sourceConfig,
+      };
+      const before = structuredClone(snapshot);
+
+      const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+
+      expect(snapshot).toEqual(before);
+      expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+      for (const secret of [
+        "synthetic-discord-token",
+        "synthetic-provider-key",
+        "SYNTHETIC_PROVIDER_KEY",
+      ]) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+      }
+    },
+  );
 
   it("redacts common secret field patterns across config sections", () => {
     const snapshot = makeSnapshot({
@@ -208,7 +264,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts and restores MCP SSE header values from schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const snapshot = makeSnapshot({
       mcp: {
         servers: {
@@ -252,7 +308,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts sensitive auth material from MCP SSE URLs", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   mcp: {
     servers: {
@@ -289,7 +345,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts media request auth and proxy transport secrets from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   tools: {
     media: {
@@ -346,7 +402,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider request auth secrets from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -394,7 +450,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider local service env values from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -448,7 +504,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts install policy env values from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   security: {
     installPolicy: {
@@ -498,7 +554,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider request proxy URLs from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -566,7 +622,6 @@ describe("redactConfigSnapshot", () => {
             maxTokens: 8192,
             maxOutputTokens: 4096,
             maxCompletionTokens: 2048,
-            contextTokens: 128000,
             tokenCount: 500,
             tokenLimit: 100000,
             tokenBudget: 50000,
@@ -600,9 +655,6 @@ describe("redactConfigSnapshot", () => {
     expect(
       expectDefined(providers.openai, "providers.openai test invariant").maxCompletionTokens,
     ).toBe(2048);
-    expect(expectDefined(providers.openai, "providers.openai test invariant").contextTokens).toBe(
-      128000,
-    );
     expect(expectDefined(providers.openai, "providers.openai test invariant").tokenCount).toBe(500);
     expect(expectDefined(providers.openai, "providers.openai test invariant").tokenLimit).toBe(
       100000,
@@ -662,7 +714,7 @@ describe("redactConfigSnapshot", () => {
       },
     } satisfies OpenClawConfig;
     const raw = JSON.stringify(sourceConfig);
-    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig), "snapshot");
+    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig));
     const snapshot = {
       ...makeSnapshot(sourceConfig, raw),
       config: runtimeConfig,
@@ -1413,7 +1465,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   browser: {
     cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",

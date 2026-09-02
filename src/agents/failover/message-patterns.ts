@@ -1,5 +1,42 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
+
+// Both figures must be denominated in tokens and come from one clause. A message can state an RPM
+// limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
+// against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
+const STATED_TOKEN_SIZES_RE =
+  /(?:\btpm\b|tokens per minute)[^.\n]*?\blimit\s+([\d,]+)[^.\n]*?\brequested\s+([\d,]+)/i;
+
+function readStatedTokenCount(digits: string | undefined): number | undefined {
+  const parsed = Number(digits?.replaceAll(",", ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Groq denominates a per-request size ceiling per minute: an oversized single request is refused
+ * with a 413 naming TPM that states both `Limit <n>` and `Requested <m>`. A request larger than
+ * the whole limit does not fit even an empty bucket, so waiting can never admit it. Ordinary
+ * throttling states a requested size within the limit and remains a rate limit.
+ *
+ * The ceiling belongs to the request and to the refusing provider's quota, not to the model's
+ * context window, so compaction budgeted against that window cannot satisfy it either.
+ * Embedded recovery surfaces reset guidance without retrying. If a transport-owning harness
+ * bypasses that recovery, model failover may advance to a differently provisioned candidate.
+ */
+export function isProviderRequestSizeCeilingError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  const stated = STATED_TOKEN_SIZES_RE.exec(errorMessage);
+  const limit = readStatedTokenCount(stated?.[1]);
+  const requested = readStatedTokenCount(stated?.[2]);
+  return limit !== undefined && requested !== undefined && requested > limit;
+}
+
+// First-party model transports use these terminal-contract forms when EOF arrives
+// before a response is complete; keep non-model stream lifecycle errors out.
+export const INCOMPLETE_ASSISTANT_STREAM_RE =
+  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without a terminal finish reason)[.!]?$/i;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -85,9 +122,8 @@ const ERROR_PATTERNS = {
     /\bconcurrency limit\b.*\b(?:breached|reached)\b/i,
     "model_cooldown",
     "exceeded your current quota",
-    "resource has been exhausted",
-    "quota exceeded",
-    "resource_exhausted",
+    /\bresource[_ -]?exhausted\b/i,
+    /\bquota[_ -]?exceeded\b/i,
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
@@ -147,6 +183,7 @@ const ERROR_PATTERNS = {
     // Keep them anchored so unrelated local stream failures do not trigger model failover.
     /^stream disconnected before completion(?::[\s\S]*)?$/i,
     /^premature close of server response while trying to fetch\b/i,
+    INCOMPLETE_ASSISTANT_STREAM_RE,
     // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
     "网络错误",
     "网络异常",
@@ -213,6 +250,9 @@ const ERROR_PATTERNS = {
     /used\s+all\s+available\s+credits/i,
     /(?:monthly\s+)?spend(?:ing)?\s+limit/i,
     /insufficient[_ ]quota/i,
+    /\b(?:go|free)usagelimiterror\b/i,
+    "available balance",
+    "out of budget",
     "credit balance",
     "plans & billing",
     /insufficient[_ ]balance/i,

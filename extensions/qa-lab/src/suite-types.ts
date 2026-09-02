@@ -104,8 +104,8 @@ export type QaSuiteResolvedRunContext = {
   fastMode: boolean;
   channelDriver?: QaScorecardChannelDriver;
   enabledPluginIds: string[];
-  gatewayConfigPatch: ReturnType<
-    typeof import("./suite-planning.js").collectQaSuiteGatewayConfigPatch
+  gatewayConfigPatches: ReturnType<
+    typeof import("./suite-planning.js").collectQaSuiteGatewayConfigPatches
   >;
   gatewayRuntimeOptions: ReturnType<
     typeof import("./suite-planning.js").collectQaSuiteGatewayRuntimeOptions

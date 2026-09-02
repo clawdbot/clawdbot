@@ -14,7 +14,7 @@ import {
 
 const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
-  loadCombinedSessionStoreForGateway: loadGatewaySessionStore,
+  loadCombinedSessionStoreForGatewayCore: loadGatewaySessionStore,
 }));
 
 it("filters incognito rows from the plugin cross-session store view", () => {

@@ -5,6 +5,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessPageFreshness,
@@ -476,6 +477,9 @@ function buildLintReportBody(issues: MemoryWikiLintIssue[]): string {
 
 async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): Promise<string> {
   const reportPath = path.join(rootDir, "reports", "lint.md");
+  const directoryPath = path.dirname(reportPath);
+  await fs.mkdir(directoryPath, { recursive: true });
+  const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
   const original = await fs.readFile(reportPath, "utf8").catch(() =>
     renderWikiMarkdown({
       frontmatter: {
@@ -497,14 +501,29 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
     endMarker: "<!-- openclaw:wiki:lint:end -->",
     body: buildLintReportBody(issues),
   });
-  await fs.writeFile(reportPath, withTrailingNewline(updated), "utf8");
+  await replaceFileAtomic({
+    filePath: reportPath,
+    content: withTrailingNewline(updated),
+    dirMode,
+    mode: 0o600,
+    preserveExistingMode: true,
+    tempPrefix: `${path.basename(reportPath)}.lint-report`,
+    syncTempFile: true,
+    syncParentDir: true,
+    throwOnCleanupError: true,
+  });
   return reportPath;
 }
 
 export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options: { signal?: AbortSignal } = {},
 ): Promise<LintMemoryWikiResult> {
-  const compileResult = await compileMemoryWikiVault(config);
+  const compileResult = await compileMemoryWikiVault(
+    config,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  options.signal?.throwIfAborted();
   const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -523,6 +542,7 @@ export async function lintMemoryWikiVault(
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
+  options.signal?.throwIfAborted();
 
   await appendMemoryWikiLog(config.vault.path, {
     type: "lint",

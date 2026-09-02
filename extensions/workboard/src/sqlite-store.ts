@@ -20,15 +20,22 @@ import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openNodeSqliteDatabase,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardOwnerClaimResult,
 } from "./persistence-types.js";
+import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
@@ -36,7 +43,7 @@ const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
 type Row = Record<string, unknown>;
 type WorkboardSqliteStores = {
-  cards: WorkboardKeyedStore;
+  cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
@@ -109,18 +116,6 @@ function blobToBase64(value: unknown): string {
   return "";
 }
 
-function runTransaction<T>(db: DatabaseSync, run: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = run();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
   return new Set(
     (db.prepare(`PRAGMA table_info(${tableName})`).all() as Row[]).flatMap((row) =>
@@ -148,6 +143,7 @@ const WORKBOARD_SCHEMA_SQL = `
       description TEXT,
       icon TEXT,
       color TEXT,
+      automation_job_id TEXT,
       default_workspace_json TEXT,
       orchestration_json TEXT,
       created_at INTEGER NOT NULL,
@@ -213,6 +209,8 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_events_card_idx
+      ON workboard_card_events(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_attempts (
       id TEXT PRIMARY KEY,
@@ -228,6 +226,8 @@ const WORKBOARD_SCHEMA_SQL = `
       run_id TEXT,
       error TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_attempts_card_idx
+      ON workboard_card_attempts(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_comments (
       id TEXT PRIMARY KEY,
@@ -237,6 +237,8 @@ const WORKBOARD_SCHEMA_SQL = `
       created_at INTEGER NOT NULL,
       updated_at INTEGER
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_comments_card_idx
+      ON workboard_card_comments(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_links (
       id TEXT PRIMARY KEY,
@@ -248,6 +250,8 @@ const WORKBOARD_SCHEMA_SQL = `
       url TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_links_card_idx
+      ON workboard_card_links(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_proof (
       id TEXT PRIMARY KEY,
@@ -260,6 +264,8 @@ const WORKBOARD_SCHEMA_SQL = `
       note TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_proof_card_idx
+      ON workboard_card_proof(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_artifacts (
       id TEXT PRIMARY KEY,
@@ -271,6 +277,8 @@ const WORKBOARD_SCHEMA_SQL = `
       mime_type TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_artifacts_card_idx
+      ON workboard_card_artifacts(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_card_diagnostics (
       card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
@@ -297,6 +305,8 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_card_notifications_card_idx
+      ON workboard_card_notifications(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_worker_logs (
       id TEXT PRIMARY KEY,
@@ -308,6 +318,8 @@ const WORKBOARD_SCHEMA_SQL = `
       session_key TEXT,
       run_id TEXT
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS workboard_worker_logs_card_idx
+      ON workboard_worker_logs(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_worker_protocol (
       card_id TEXT PRIMARY KEY REFERENCES workboard_cards(id) ON DELETE CASCADE,
@@ -353,6 +365,7 @@ const WORKBOARD_SCHEMA_SQL = `
 
 function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(WORKBOARD_SCHEMA_SQL);
+  ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
   ensureColumn(
     db,
     "workboard_cards",
@@ -1195,14 +1208,88 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   }
 }
 
-class WorkboardSqliteCardStore implements WorkboardKeyedStore {
+class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  async register(key: string, value: PersistedWorkboardCard): Promise<void> {
+  private validatePayload(key: string, value: PersistedWorkboardCard): void {
     if (value.version !== 1 || value.card.id !== key) {
       throw new Error("invalid workboard card payload");
     }
-    runTransaction(this.db, () => insertCard(this.db, value.card));
+  }
+
+  async register(key: string, value: PersistedWorkboardCard): Promise<void> {
+    this.validatePayload(key, value);
+    runSqliteImmediateTransactionSync(this.db, () => insertCard(this.db, value.card));
+  }
+
+  async registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean> {
+    this.validatePayload(key, value);
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      if (this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(key)) {
+        return false;
+      }
+      insertCard(this.db, value.card);
+      return true;
+    });
+  }
+
+  async registerIfUpdatedAt(
+    key: string,
+    value: PersistedWorkboardCard,
+    expectedUpdatedAt: number,
+  ): Promise<boolean> {
+    this.validatePayload(key, value);
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const current = this.db
+        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
+        .get(key);
+      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+        return false;
+      }
+      insertCard(this.db, value.card);
+      return true;
+    });
+  }
+
+  async claimIfOwnerAvailable(
+    key: string,
+    value: PersistedWorkboardCard,
+    expectedUpdatedAt: number,
+    ownerId: string,
+    now: number,
+  ): Promise<WorkboardOwnerClaimResult> {
+    this.validatePayload(key, value);
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const current = this.db
+        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
+        .get(key);
+      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+        return "conflict";
+      }
+      const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
+      const preloaded = loadCardChildRows(this.db);
+      for (const row of rows) {
+        const card = readCard(this.db, row, preloaded);
+        if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
+          return "owner_busy";
+        }
+      }
+      insertCard(this.db, value.card);
+      return "updated";
+    });
+  }
+
+  async deleteIfUpdatedAt(key: string, expectedUpdatedAt: number): Promise<boolean> {
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const current = this.db
+        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
+        .get(key);
+      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+        return false;
+      }
+      this.deleteCard(key);
+      return true;
+    });
   }
 
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {
@@ -1213,20 +1300,22 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
   }
 
   async delete(key: string): Promise<boolean> {
-    const result = runTransaction(this.db, () => {
-      this.db
-        .prepare(
-          `
-            DELETE FROM workboard_attachment_blobs
-            WHERE attachment_id IN (
-              SELECT id FROM workboard_card_attachments WHERE card_id = ?
-            )
-          `,
-        )
-        .run(key);
-      return this.db.prepare("DELETE FROM workboard_cards WHERE id = ?").run(key);
-    });
+    const result = runSqliteImmediateTransactionSync(this.db, () => this.deleteCard(key));
     return result.changes > 0;
+  }
+
+  private deleteCard(key: string) {
+    this.db
+      .prepare(
+        `
+          DELETE FROM workboard_attachment_blobs
+          WHERE attachment_id IN (
+            SELECT id FROM workboard_card_attachments WHERE card_id = ?
+          )
+        `,
+      )
+      .run(key);
+    return this.db.prepare("DELETE FROM workboard_cards WHERE id = ?").run(key);
   }
 
   async entries(): Promise<Array<{ key: string; value: PersistedWorkboardCard }>> {
@@ -1239,6 +1328,31 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
     return rows.map((row) => ({
       key: requiredString(row, "id"),
       value: { version: 1, card: readCard(this.db, row, preloaded) },
+    }));
+  }
+
+  async listBoardAggregates() {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            board_id,
+            status,
+            COUNT(*) AS total,
+            SUM(CASE WHEN archived_at IS NOT NULL AND archived_at <> 0 THEN 1 ELSE 0 END) AS archived,
+            MAX(updated_at) AS updated_at
+          FROM workboard_cards
+          GROUP BY board_id, status
+          ORDER BY board_id ASC, status ASC
+        `,
+      )
+      .all() as Row[];
+    return rows.map((row) => ({
+      boardId: requiredString(row, "board_id"),
+      status: requiredString(row, "status") as WorkboardCard["status"],
+      total: requiredNumber(row, "total"),
+      archived: requiredNumber(row, "archived"),
+      updatedAt: requiredNumber(row, "updated_at"),
     }));
   }
 }
@@ -1255,14 +1369,15 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
       .prepare(
         `
           INSERT INTO workboard_boards (
-            id, name, description, icon, color, default_workspace_json, orchestration_json,
-            created_at, updated_at, archived_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, description, icon, color, automation_job_id, default_workspace_json,
+            orchestration_json, created_at, updated_at, archived_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
             icon = excluded.icon,
             color = excluded.color,
+            automation_job_id = excluded.automation_job_id,
             default_workspace_json = excluded.default_workspace_json,
             orchestration_json = excluded.orchestration_json,
             created_at = excluded.created_at,
@@ -1276,6 +1391,7 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
         bindNull(board.description),
         bindNull(board.icon),
         bindNull(board.color),
+        bindNull(board.automationJobId),
         jsonValue(board.defaultWorkspace),
         jsonValue(board.orchestration),
         board.createdAt,
@@ -1307,6 +1423,9 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
           : {}),
         ...(stringValue(row, "icon") ? { icon: stringValue(row, "icon") } : {}),
         ...(stringValue(row, "color") ? { color: stringValue(row, "color") } : {}),
+        ...(stringValue(row, "automation_job_id")
+          ? { automationJobId: stringValue(row, "automation_job_id") }
+          : {}),
         ...(defaultWorkspace ? { defaultWorkspace } : {}),
         ...(orchestration ? { orchestration } : {}),
         createdAt: requiredNumber(row, "created_at"),
@@ -1500,7 +1619,7 @@ class WorkboardSqliteAttachmentStore implements WorkboardKeyedStore<PersistedWor
   }
 
   async delete(key: string): Promise<boolean> {
-    const deleted = runTransaction(this.db, () => {
+    const deleted = runSqliteImmediateTransactionSync(this.db, () => {
       this.db.prepare("DELETE FROM workboard_attachment_blobs WHERE attachment_id = ?").run(key);
       return this.db.prepare("DELETE FROM workboard_card_attachments WHERE id = ?").run(key);
     });

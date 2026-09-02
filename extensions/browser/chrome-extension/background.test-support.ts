@@ -20,13 +20,6 @@ export type RuntimeMessageListener = (
   sendResponse: (response: unknown) => void,
 ) => boolean;
 
-export type PageCaptureResult = {
-  content: string;
-  selection: string;
-  title: string;
-  url: string;
-};
-
 let configuredSockets: FakeWebSocket[] = [];
 let configuredDeferredClose = false;
 let configuredProtocol: string | undefined;
@@ -83,6 +76,11 @@ export class FakeWebSocket {
 
   receive(message: unknown): void {
     this.emit("message", { data: JSON.stringify(message) });
+  }
+
+  finishClose(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.emit("close");
   }
 
   private emit(type: string, event: SocketEvent = {}): void {

@@ -2,9 +2,17 @@ import * as agentsModelsSkills from "./agents-models-skills.js";
 import * as agentsWorkspace from "./agents-workspace.js";
 import * as artifacts from "./artifacts.js";
 import * as commands from "./commands.js";
+import * as skillLibrary from "./skill-library.js";
 import * as skillWorkshop from "./skill-protocol-schemas.js";
 
 export const AgentSkillProtocolSchemas = {
+  SkillsLibraryListParams: skillLibrary.SkillsLibraryListParamsSchema,
+  SkillsLibraryReadParams: skillLibrary.SkillsLibraryReadParamsSchema,
+  SkillsLibrarySaveParams: skillLibrary.SkillsLibrarySaveParamsSchema,
+  SkillsLibraryMutateParams: skillLibrary.SkillsLibraryMutateParamsSchema,
+  SkillsLibraryActivateParams: skillLibrary.SkillsLibraryActivateParamsSchema,
+  SkillsLibraryImportParams: skillLibrary.SkillsLibraryImportParamsSchema,
+  SkillsLibraryUploadParams: skillLibrary.SkillsLibraryUploadParamsSchema,
   AgentKind: agentsModelsSkills.AgentKindSchema,
   AgentSummary: agentsModelsSkills.AgentSummarySchema,
   AgentsCreateParams: agentsModelsSkills.AgentsCreateParamsSchema,
@@ -48,6 +56,33 @@ export const AgentSkillProtocolSchemas = {
   CommandsListResult: commands.CommandsListResultSchema,
   SkillsStatusParams: agentsModelsSkills.SkillsStatusParamsSchema,
   ToolsCatalogParams: agentsModelsSkills.ToolsCatalogParamsSchema,
+  GitHubIdentitySource: agentsModelsSkills.GitHubIdentitySourceSchema,
+  GitHubAuthor: agentsModelsSkills.GitHubAuthorSchema,
+  GitHubIdentityFacts: agentsModelsSkills.GitHubIdentityFactsSchema,
+  GitHubIdentityScope: agentsModelsSkills.GitHubIdentityScopeSchema,
+  GitHubSelectedIdentity: agentsModelsSkills.GitHubSelectedIdentitySchema,
+  ToolsGitHubStatusParams: agentsModelsSkills.ToolsGitHubStatusParamsSchema,
+  ToolsGitHubStatusResult: agentsModelsSkills.ToolsGitHubStatusResultSchema,
+  ToolsGitHubManagedConfigureParams: agentsModelsSkills.ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParams: agentsModelsSkills.ToolsGitHubInheritConfigureParamsSchema,
+  ToolsGitHubConfigureParams: agentsModelsSkills.ToolsGitHubConfigureParamsSchema,
+  ToolsGitHubAuthorizeStartParams: agentsModelsSkills.ToolsGitHubAuthorizeStartParamsSchema,
+  ToolsGitHubAuthorizeStartResult: agentsModelsSkills.ToolsGitHubAuthorizeStartResultSchema,
+  ToolsGitHubAuthorizePollParams: agentsModelsSkills.ToolsGitHubAuthorizePollParamsSchema,
+  ToolsGitHubAuthorizePendingResult: agentsModelsSkills.ToolsGitHubAuthorizePendingResultSchema,
+  ToolsGitHubAuthorizeSlowDownResult: agentsModelsSkills.ToolsGitHubAuthorizeSlowDownResultSchema,
+  ToolsGitHubAuthorizeAccessDeniedResult:
+    agentsModelsSkills.ToolsGitHubAuthorizeAccessDeniedResultSchema,
+  ToolsGitHubAuthorizeExpiredResult: agentsModelsSkills.ToolsGitHubAuthorizeExpiredResultSchema,
+  ToolsGitHubAuthorizeIncorrectDeviceCodeResult:
+    agentsModelsSkills.ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema,
+  ToolsGitHubAuthorizeNetworkErrorResult:
+    agentsModelsSkills.ToolsGitHubAuthorizeNetworkErrorResultSchema,
+  ToolsGitHubAuthorizeFailedResult: agentsModelsSkills.ToolsGitHubAuthorizeFailedResultSchema,
+  ToolsGitHubAuthorizeSuccessResult: agentsModelsSkills.ToolsGitHubAuthorizeSuccessResultSchema,
+  ToolsGitHubAuthorizePollResult: agentsModelsSkills.ToolsGitHubAuthorizePollResultSchema,
+  ToolsGitHubAuthorizeCancelParams: agentsModelsSkills.ToolsGitHubAuthorizeCancelParamsSchema,
+  ToolsGitHubAuthorizeCancelResult: agentsModelsSkills.ToolsGitHubAuthorizeCancelResultSchema,
   ToolCatalogProfile: agentsModelsSkills.ToolCatalogProfileSchema,
   ToolCatalogEntry: agentsModelsSkills.ToolCatalogEntrySchema,
   ToolCatalogGroup: agentsModelsSkills.ToolCatalogGroupSchema,
@@ -78,6 +113,7 @@ export const AgentSkillProtocolSchemas = {
   SkillsProposalReviseParams: agentsModelsSkills.SkillsProposalReviseParamsSchema,
   SkillsProposalRequestRevisionParams: agentsModelsSkills.SkillsProposalRequestRevisionParamsSchema,
   SkillsProposalRequestRevisionResult: agentsModelsSkills.SkillsProposalRequestRevisionResultSchema,
+  SkillsProposalDecisionParams: agentsModelsSkills.SkillsProposalDecisionParamsSchema,
   SkillsProposalActionParams: agentsModelsSkills.SkillsProposalActionParamsSchema,
   SkillsProposalApplyResult: agentsModelsSkills.SkillsProposalApplyResultSchema,
   SkillsProposalRecordResult: agentsModelsSkills.SkillsProposalRecordResultSchema,

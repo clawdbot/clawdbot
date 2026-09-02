@@ -22,13 +22,13 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
-import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -44,11 +44,13 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
+  createSandboxPromptEntryLoader,
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
@@ -63,19 +65,19 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  buildAfterTurnRuntimeContext,
+  resolveAttemptFsWorkspaceOnly,
+} from "./attempt-prompt-helpers.js";
+import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
-import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
-import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  buildAfterTurnRuntimeContext,
-  resolveAttemptFsWorkspaceOnly,
-} from "./attempt.prompt-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -95,42 +97,61 @@ type AttemptWorkspaceParams = Pick<
   | "config"
   | "cwd"
   | "execOverrides"
+  | "permissionMode"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "sessionId"
   | "sessionKey"
+  | "sessionRoot"
+  | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
 >;
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir: resolvedWorkspace,
-  });
+  const sessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  // Collection review is a host-owned maintenance run with one restricted tool.
+  // Sandboxing would hide that tool or redirect it to a disposable workspace.
+  const sandbox = params.skillWorkshopCollectionReconcile
+    ? null
+    : await resolveSandboxContext({
+        config: params.config,
+        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+        execOverrides: params.execOverrides,
+        sessionKey: sandboxSessionKey,
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: resolvedWorkspace,
+      });
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+  // the agent's canonical workspace as their permission boundary.
+  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
+  const sessionPermissionPolicy = params.permissionMode
+    ? {
+        root: sessionPermissionRoot,
+        mode: params.permissionMode,
+      }
+    : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
       "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
     );
   }
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
   return {
-    defaultAgentId,
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
       config: params.config,
@@ -138,6 +159,8 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     }),
     effectiveWorkspace,
     resolvedWorkspace,
+    sessionPermissionRoot,
+    sessionPermissionPolicy,
     sandbox,
     sandboxSessionKey,
     sessionAgentId,
@@ -207,17 +230,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
       return providerRuntimeHandle;
     }
     const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
-    const compatibleMetadataSnapshot =
-      pluginMetadataSnapshot &&
-      pluginMetadataSnapshot.pluginIds === undefined &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: pluginMetadataSnapshot,
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      })
-        ? pluginMetadataSnapshot
-        : undefined;
     providerRuntimeHandle = {
       ...resolveProviderRuntimePluginHandle({
         provider: params.provider,
@@ -225,9 +237,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
         config: params.config,
         workspaceDir: effectiveWorkspace,
         env: process.env,
-        ...(compatibleMetadataSnapshot
-          ? { pluginMetadataSnapshot: compatibleMetadataSnapshot }
-          : {}),
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       }),
       provider: params.provider,
       modelId: params.modelId,
@@ -268,7 +278,9 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPrePromptMessageCount: () => number;
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
+  getCompactionReplayEnabled: () => boolean;
   getSystemPrompt: () => string;
+  onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
   repairToolUseResultPairing: boolean;
   sessionAgentId: string;
@@ -300,6 +312,12 @@ export function installEmbeddedAttemptContextGuards(input: {
       ? {
           midTurnPrecheck: {
             enabled: true,
+            getReplay: () => ({
+              model: attempt.model,
+              sessionId: attempt.sessionId,
+              authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+              enabled: input.getCompactionReplayEnabled(),
+            }),
             contextTokenBudget,
             reserveTokens: () => settingsManager.getCompactionReserveTokens(),
             toolResultMaxChars,
@@ -373,7 +391,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       ...(input.repairToolUseResultPairing
         ? {
             repairAssembledMessages: (messages) =>
-              repairAttemptToolUseResultPairing(messages, input.isOpenAIResponsesApi),
+              sanitizeToolUseResultPairingForModel(messages, input.isOpenAIResponsesApi),
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
@@ -427,10 +445,14 @@ export function installEmbeddedAttemptContextGuards(input: {
       maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
       workspaceOnly: input.effectiveFsWorkspaceOnly,
+      localRoots: input.effectiveFsWorkspaceOnly
+        ? undefined
+        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
+      onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
     },
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;
@@ -488,17 +510,23 @@ export function prepareEmbeddedAttemptSkills(params: {
     workspaceOnly,
   } = resolveSandboxSkillRuntimeInputs({
     sandbox: params.sandbox,
-    effectiveWorkspace: params.effectiveWorkspace,
+    skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.attempt.config,
-    agentId: params.sessionAgentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot,
-    workspaceOnly,
-  });
+  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: skillsWorkspaceDir,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot,
+      // Sandbox fallbacks stay inside their sandbox skill workspace;
+      // host execution skills are not mounted there.
+      ...(params.sandbox?.enabled === true
+        ? {}
+        : { executionSkillsDir: path.join(params.effectiveWorkspace, "skills") }),
+      workspaceOnly,
+    });
   const restoreSkillEnv = skillsSnapshot
     ? applySkillEnvOverridesFromSnapshot({
         snapshot: skillsSnapshot,
@@ -519,13 +547,19 @@ export function prepareEmbeddedAttemptSkills(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot,
       entries: promptSkillEntries,
+      loadEntries: createSandboxPromptEntryLoader({
+        loadEntries: loadSkillEntries,
+        skillsWorkspaceDir,
+        skillsPromptWorkspaceDir,
+      }),
       config: params.attempt.config,
       workspaceDir: skillsPromptWorkspaceDir,
       agentId: params.sessionAgentId,
       eligibility: skillsEligibility,
+      preserveEntryOrder,
     });
     const sandbox = params.sandbox;
     const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled

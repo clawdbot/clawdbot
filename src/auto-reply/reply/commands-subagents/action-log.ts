@@ -3,6 +3,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripToolMessages } from "../../../agents/tools/chat-history-text.js";
 import { callGateway } from "../../../gateway/call.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
@@ -10,7 +11,6 @@ import {
   type SubagentsCommandContext,
   formatLogLines,
   resolveSubagentEntryForToken,
-  stopWithText,
 } from "./shared.js";
 
 export async function handleSubagentsLogAction(
@@ -19,7 +19,7 @@ export async function handleSubagentsLogAction(
   const { runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
-    return stopWithText("📜 Usage: /subagents log <id|#> [limit]");
+    return commandReply("📜 Usage: /subagents log <id|#> [limit]");
   }
 
   const includeTools = restTokens.some(
@@ -45,7 +45,7 @@ export async function handleSubagentsLogAction(
   const lines = formatLogLines(filtered as ChatMessage[]);
   const header = `📜 Subagent log: ${formatRunLabel(targetResolution.entry)}`;
   if (lines.length === 0) {
-    return stopWithText(`${header}\n(no messages)`);
+    return commandReply(`${header}\n(no messages)`);
   }
-  return stopWithText([header, ...lines].join("\n"));
+  return commandReply([header, ...lines].join("\n"));
 }

@@ -66,11 +66,15 @@ export async function handleReefCommand({
     };
   }
   if (words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "") && words[2]) {
-    const found = await active.reviews.decide(words[2], words[1] === "approve");
+    const decided = await active.reviews.decide(words[2], words[1] === "approve");
+    if (!decided) {
+      return { text: "Unknown Reef approval digest." };
+    }
     return {
-      text: found
-        ? `Reef review ${words[1]}d. Retry the identical message to re-run the guard.`
-        : "Unknown Reef approval digest.",
+      text:
+        decided.direction === "inbound"
+          ? `Reef review ${words[1]}d. The parked message from ${decided.from} is re-processed from the relay within about 30 seconds.`
+          : `Reef review ${words[1]}d. Retry the identical message to re-run the guard.`,
     };
   }
   return {

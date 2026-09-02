@@ -9,6 +9,7 @@ import {
   isGenericBinaryMediaContentType,
   isImageMediaFact,
   normalizeMediaFacts,
+  resolveMediaFactKind,
 } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
@@ -18,7 +19,7 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
   if (!value) {
     return undefined;
   }
-  if (/^file:\/\//iu.test(value)) {
+  if (/^file:/iu.test(value)) {
     try {
       return safeFileURLToPath(value);
     } catch {
@@ -44,8 +45,13 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
         index,
         alreadyTranscribed: fact.transcribed === true,
       };
-      if (fact.kind) {
-        attachment.kind = fact.kind;
+      const kind = fact.fileName ? (resolveMediaFactKind(fact) ?? fact.kind) : fact.kind;
+      if (kind) {
+        attachment.kind = kind;
+      }
+      const fileName = normalizeOptionalString(fact.fileName);
+      if (fileName) {
+        attachment.fileName = fileName;
       }
       if (fact.workspaceDir) {
         attachment.workspaceDir = fact.workspaceDir;

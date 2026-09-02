@@ -30,7 +30,7 @@ struct RemoteGatewayProbeTests {
 
         let result = await RemoteGatewayProbe._testProbeGateway(
             connection: gateway,
-            timeoutMs: 1000)
+            timeoutMs: 0)
 
         #expect(result == .ready(RemoteGatewayProbeSuccess(authSource: GatewayAuthSource.none)))
         #expect(session.snapshotMakeCount() == 1)

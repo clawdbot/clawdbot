@@ -1,28 +1,33 @@
-// Chat-owned model, reasoning, and fast-mode picker orchestration.
-import { html } from "lit";
-import type {
-  GatewaySessionRow,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../../../api/types.ts";
+import { html, nothing } from "lit";
+import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
+import {
+  normalizeChatModelProviderId,
+  resolvePreferredServerChatModelValue,
+} from "../../../lib/chat/model-ref.ts";
 import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
+  type ChatFastModeTarget,
 } from "../../../lib/chat/model-select-state.ts";
-import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import {
-  renderChatModelPicker,
-  type ChatModelCatalogState,
-  type ChatModelPickerOption,
-  type ChatModelPickerTargetGroup,
-} from "./chat-model-picker.ts";
+  resolveChatThinkingSelectState,
+  type ChatThinkingTarget,
+} from "../../../lib/chat/thinking.ts";
+import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import type {
+  ChatModelPickerOption,
+  ChatModelPickerTargetGroup,
+} from "./chat-model-picker-options.ts";
+import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-picker.ts";
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
+
+type ChatContextWindowTarget = Pick<
+  SessionsListResult["defaults"],
+  "contextWindow" | "contextWindows" | "contextWindowDefault"
+>;
 
 type ChatModelControlsProps = {
   activeRunId: string | null;
@@ -34,21 +39,30 @@ type ChatModelControlsProps = {
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
+  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelSelectionRuntimeId?: string;
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
+  modelPickerOpen?: boolean;
   modelSwitching: boolean;
   modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
-  showFastMode?: boolean;
+  fastModeTarget?: ChatFastModeTarget;
   sending: boolean;
   sessionKey: string;
+  selectedSession: SessionsListResult["sessions"][number] | undefined;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
+  contextWindowTarget?: ChatContextWindowTarget;
   thinkingDefaults?: SessionsListResult["defaults"];
-  thinkingSession?: GatewaySessionRow;
+  thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
+  onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
+  onModelSetup?: () => void;
+  onModelPickerOpen?: () => unknown;
+  onModelPickerOpenChange?: (open: boolean) => void;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
+  onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
@@ -120,9 +134,16 @@ function resolveChatModelCatalogEntry(
     const provider = normalizeChatModelProviderId(candidate.provider);
     return `${provider}/${candidate.id.trim().toLowerCase()}` === normalizedValue;
   });
-  return (
-    matches.find((candidate) => candidate.provider.trim().toLowerCase() === "openai") ?? matches[0]
+  if (matches.length > 0) {
+    return (
+      matches.find((candidate) => candidate.provider.trim().toLowerCase() === "openai") ??
+      matches[0]
+    );
+  }
+  const idMatches = catalog.filter(
+    (candidate) => candidate.id.trim().toLowerCase() === normalizedValue,
   );
+  return idMatches.length === 1 ? idMatches[0] : undefined;
 }
 
 function resolveChatModelPickerLabel(
@@ -142,22 +163,37 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function formatPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
+function resolveCatalogTriggerStatus(
+  state: ChatModelCatalogState,
+  optionCount: number,
+): string | undefined {
+  if (state.status === "offline") {
+    return undefined;
+  }
+  if (state.status === "error") {
+    return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
+  }
+  if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
+    return t("chat.modelControls.loadingModels");
+  }
+  if (state.hasSnapshot && optionCount === 0) {
+    return t("chat.modelControls.noModelsAvailable");
+  }
+  return undefined;
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const {
     currentOverride,
-    defaultSelectable,
     defaultModel,
     defaultLabel,
+    modelOverrideSource,
     options: selectOptions,
   } = resolveChatModelSelectState({
+    activeSession: props.selectedSession,
     agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
-    restrictOptionsToCatalog: props.modelCatalogState !== undefined,
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
@@ -173,10 +209,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     catalog: props.modelCatalog,
     connected: props.connected,
     currentModelOverride: currentOverride,
+    fastModeTarget: props.fastModeTarget ?? props.selectedSession,
     gatewayAvailable: props.gatewayAvailable,
     loading: props.loading,
     sending: props.sending,
-    sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
     stream: props.stream,
   });
@@ -185,11 +221,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const fastMode = props.modelSwitching
     ? { ...resolvedFastMode, disabled: true }
     : resolvedFastMode;
-  const activeSession = props.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
+  const activeSession = props.selectedSession;
   const currentProviderHint = activeSession?.modelProvider ?? "";
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
+  const defaultCatalogEntry = resolveChatModelCatalogEntry(defaultModel, props.modelCatalog);
   const canonicalDefaultLabel = resolveChatModelPickerLabel(
     defaultModel,
     defaultLabel,
@@ -201,9 +236,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       : defaultLabel;
   const normalizedDefaultModel = defaultModel.trim().toLowerCase();
   const modelOptions: ChatModelPickerOption[] = selectOptions.map((option) => {
-    const isDefault =
-      defaultSelectable && option.value.trim().toLowerCase() === normalizedDefaultModel;
     const catalogEntry = resolveChatModelCatalogEntry(option.value, props.modelCatalog);
+    const isDefault =
+      option.value.trim().toLowerCase() === normalizedDefaultModel ||
+      (catalogEntry !== undefined && catalogEntry === defaultCatalogEntry);
     // Runtime meta labels only operator-pinned runtimes (models/provider config);
     // implicit/default resolution stays unlabeled so ordinary rows stay clean.
     const agentRuntime = catalogEntry?.agentRuntime;
@@ -211,13 +247,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       agentRuntime && (agentRuntime.source === "model" || agentRuntime.source === "provider")
         ? agentRuntime.id.trim()
         : undefined;
-    return {
+    const pickerOption: ChatModelPickerOption = {
       commitValue: isDefault ? "" : option.value,
-      ...(agentRuntimeId ? { agentRuntimeId } : {}),
-      ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
-      ...(typeof catalogEntry?.supportsTools === "boolean"
-        ? { supportsTools: catalogEntry.supportsTools }
-        : {}),
       isDefault,
       value: option.value,
       label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
@@ -232,7 +263,89 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             : "",
       ),
     };
+    if (agentRuntimeId) {
+      pickerOption.agentRuntimeId = agentRuntimeId;
+    }
+    if (catalogEntry?.contextWindow) {
+      pickerOption.contextWindow = catalogEntry.contextWindow;
+    }
+    if (typeof catalogEntry?.supportsTools === "boolean") {
+      pickerOption.supportsTools = catalogEntry.supportsTools;
+    }
+    if (option.disabled) {
+      pickerOption.disabled = true;
+      pickerOption.unavailableReason = option.unavailableReason;
+    }
+    return pickerOption;
   });
+  const currentCatalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
+  if (
+    currentOverride &&
+    modelOptions.length > 0 &&
+    !modelOptions.some((option) => option.value === currentOverride)
+  ) {
+    modelOptions.push({
+      commitValue: currentOverride,
+      ...(currentCatalogEntry?.contextWindow
+        ? { contextWindow: currentCatalogEntry.contextWindow }
+        : {}),
+      ...(typeof currentCatalogEntry?.supportsTools === "boolean"
+        ? { supportsTools: currentCatalogEntry.supportsTools }
+        : {}),
+      ...(currentCatalogEntry?.available === false
+        ? { disabled: true, unavailableReason: currentCatalogEntry.unavailableReason }
+        : {}),
+      isDefault: false,
+      value: currentOverride,
+      label: currentCatalogEntry?.name.trim() || currentOverride,
+      provider: resolveChatModelProvider(
+        currentOverride,
+        props.modelCatalog,
+        "",
+        currentProviderHint,
+      ),
+    });
+  }
+  // A persisted pin can match a changed default; equality cannot establish inheritance.
+  const pickerValue = modelOverrideSource === null ? "" : currentOverride;
+  const activeModelOption =
+    pickerValue === ""
+      ? modelOptions.find((option) => option.isDefault)
+      : modelOptions.find((option) => option.value === pickerValue);
+  const activeSessionModel = activeSession?.model
+    ? resolveChatModelCatalogEntry(
+        resolvePreferredServerChatModelValue(
+          activeSession.model,
+          activeSession.modelProvider,
+          props.modelCatalog,
+        ),
+        props.modelCatalog,
+      )
+    : undefined;
+  const activeOptionModel = activeModelOption
+    ? resolveChatModelCatalogEntry(activeModelOption.value, props.modelCatalog)
+    : undefined;
+  const activeSessionRuntime = activeSession?.agentRuntime?.id.trim().toLowerCase();
+  const activeOptionRuntime = (
+    activeOptionModel?.agentRuntime?.id ??
+    (activeModelOption?.isDefault ? props.sessionsResult?.defaults?.agentRuntime?.id : undefined)
+  )
+    ?.trim()
+    .toLowerCase();
+  const activeRuntimeMatches =
+    Boolean(activeSessionRuntime) && activeSessionRuntime === activeOptionRuntime;
+  // Missing or mismatched current-selection provenance cannot bind the cached
+  // session window. Even matching provenance is useful only after the switch settles.
+  if (
+    !props.modelSwitching &&
+    activeModelOption &&
+    activeSession?.contextTokens &&
+    activeRuntimeMatches &&
+    activeSessionModel !== undefined &&
+    activeSessionModel === activeOptionModel
+  ) {
+    activeModelOption.contextTokens = activeSession.contextTokens;
+  }
   const lockedModelLabel =
     props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
       ? t("chat.selectors.nativeCodexModel")
@@ -246,85 +359,109 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           currentOverride || pickerDefaultLabel,
           props.modelCatalog,
         ));
-  const committedThinkingLabel =
-    thinking.currentOverride === ""
-      ? thinking.defaultLabel
-      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
-        thinking.currentOverride);
-  const managedCatalog = props.modelCatalogState;
+  const managedCatalog = props.modelCatalogState ?? {
+    hasSnapshot: !props.modelsLoading,
+    status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
+  };
   const catalogLoadingWithoutSnapshot =
-    managedCatalog !== undefined &&
-    !managedCatalog.hasSnapshot &&
-    ["idle", "loading", "refreshing"].includes(managedCatalog.status);
-  const catalogErrorWithoutSnapshot =
-    managedCatalog?.status === "error" && !managedCatalog.hasSnapshot;
-  const catalogSnapshotEmpty = managedCatalog?.hasSnapshot === true && modelOptions.length === 0;
-  const catalogTriggerStatus = catalogLoadingWithoutSnapshot
-    ? t("chat.modelControls.loadingModels")
-    : catalogErrorWithoutSnapshot
-      ? t("chat.modelControls.modelsUnavailable")
-      : catalogSnapshotEmpty
-        ? t("chat.modelControls.noModelsAvailable")
-        : undefined;
+    !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
+  const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
+  // A verified-empty catalog means there is nothing to reason about: the effort
+  // picker would only steer a model that cannot be selected, so it hides with it.
+  const hasResolvableModel =
+    managedCatalog.status === "ready" &&
+    (modelOptions.some((option) => !option.disabled) ||
+      (props.modelSelectionLocked === true && activeModelOption !== undefined));
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
     !props.connected || busy || props.modelSwitching || !props.gatewayAvailable;
   const effortMutationDisabled = Boolean(props.effortMutationDisabledReason);
-  const modelDisabled =
-    commonDisabled ||
-    Boolean(props.modelMutationDisabledReason) ||
-    catalogLoadingWithoutSnapshot ||
-    (managedCatalog === undefined && Boolean(props.modelsLoading) && selectOptions.length === 0);
+  // Loading owns the menu contents, not the trigger. Keeping the trigger
+  // interactive lets the first gesture open the picker and observe that state.
+  const modelDisabled = commonDisabled || Boolean(props.modelMutationDisabledReason);
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    (managedCatalog !== undefined && !managedCatalog.hasSnapshot) ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
-  const showFastMode = props.showFastMode !== false;
+    !managedCatalog.hasSnapshot ||
+    (thinking.options.length === 0 && thinking.selection.source === "default");
+  // One owner supplies the whole tuple: mixing an override session's fields with
+  // the defaults row can render the default model's options for a session whose
+  // model declares none, then patch an invalid option id.
+  const contextWindowOwner =
+    props.contextWindowTarget ?? activeSession ?? props.sessionsResult?.defaults;
+  const contextWindows = contextWindowOwner?.contextWindows ?? [];
+  const selectedContextWindow =
+    contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
+  const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
   const effortDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
+    (thinking.options.length === 0 && fastMode.disabled);
+  // Floating UI deliberately tracks a live anchor. Keep the eventual effort
+  // control in layout while catalog state is transient (and until an open model
+  // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
+  const reserveEffortPicker =
+    !hasResolvableModel && (catalogLoadingWithoutSnapshot || props.modelPickerOpen === true);
+  const showEffortPicker = hasResolvableModel || reserveEffortPicker;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        contextWindow:
+          contextWindows.length > 1
+            ? {
+                options: contextWindows,
+                selected: selectedContextWindow,
+                ...(defaultContextWindow ? { defaultId: defaultContextWindow } : {}),
+                disabled: commonDisabled || effortMutationDisabled,
+                onSelect: async (next, targetSessionKey) => {
+                  await props.onContextWindowSelect?.(next, targetSessionKey);
+                },
+              }
+            : undefined,
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,
+        open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
+        modelSelectionTarget: props.modelSelectionTarget,
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
-        selectedModelValue: currentOverride,
+        selectedModelValue: pickerValue,
+        sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,
+        triggerLoading: catalogLoadingWithoutSnapshot,
+        onModelSetup: props.onModelSetup,
+        onOpen: props.onModelPickerOpen,
+        onOpenChange: props.onModelPickerOpenChange,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
+        onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${renderChatEffortPicker({
-        disabled: effortDisabled,
-        disabledReason: props.effortMutationDisabledReason,
-        fastMode: {
-          ...fastMode,
-          disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-        },
-        selectedThinkingValue: thinking.currentOverride,
-        sessionKey: props.sessionKey,
-        showFastMode,
-        thinkingDefaultValue: thinking.defaultValue,
-        thinkingDisabled,
-        thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
-        triggerThinkingLabel: formatPickerThinkingLabel(committedThinkingLabel),
-        onFastModeSelect: async (next, targetSessionKey) =>
-          props.onFastModeSelect?.(next, targetSessionKey),
-        onRequestUpdate: props.onRequestUpdate,
-        onThinkingSelect: async (next, targetSessionKey) =>
-          props.onThinkingSelect?.(next, targetSessionKey),
-      })}
+      ${!showEffortPicker
+        ? nothing
+        : renderChatEffortPicker({
+            disabled: effortDisabled,
+            disabledReason: props.effortMutationDisabledReason,
+            fastMode: {
+              ...fastMode,
+              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+            },
+            sessionKey: props.sessionKey,
+            thinkingDisabled,
+            thinking,
+            onFastModeSelect: async (next, targetSessionKey) =>
+              props.onFastModeSelect?.(next, targetSessionKey),
+            onRequestUpdate: props.onRequestUpdate,
+            onThinkingSelect: async (next, targetSessionKey) =>
+              props.onThinkingSelect?.(next, targetSessionKey),
+            reserved: reserveEffortPicker,
+          })}
     </div>
   `;
 }

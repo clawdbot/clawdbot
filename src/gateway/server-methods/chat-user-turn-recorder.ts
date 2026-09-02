@@ -1,7 +1,5 @@
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -10,75 +8,118 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { hasGatewayAdminScope } from "./chat-origin-routing.js";
+import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
+import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
-  buildRestartSafeChatTranscriptState,
-  type RestartSafeChatAdmission,
-} from "./chat-restart-recovery.js";
-
-type DiagnosticsAttributes = Record<string, string | number | boolean | null>;
+  resolveChatSendReplyContext,
+  type ChatSendReplyContextFields,
+} from "./chat-send-reply-context.js";
+import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { gatewayClientSenderFields } from "./gateway-client-identity.js";
+import type { GatewayClient } from "./shared-types.js";
 
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
   persist: ReturnType<typeof createUserTurnTranscriptRecorder>["persistFallback"];
   persistBestEffort: () => Promise<void>;
   recorder: UserTurnTranscriptRecorder;
-  setAcceptedSessionId: (sessionId: string) => void;
+  replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
 export function createGatewayChatUserTurnController(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  clientRunId: string;
-  initialSessionId: string;
-  now: number;
-  provenance?: InputProvenance;
-  rawMessage: string;
-  restartAdmission?: RestartSafeChatAdmission;
-  sender?: UserTurnInput["sender"];
-  senderIsOwner: boolean;
-  sessionKey: string;
-  sessionLoadOptions?: { agentId?: string; clone?: boolean };
+  admission: AdmittedChatSend;
+  client: GatewayClient | null;
+  request: NormalizedChatSendRequest;
+  session: PreparedChatSendSession;
+  transcript?: Pick<UserTurnInput, "display" | "excludeFromContext">;
   startedAt: number;
-  traceAttributes: DiagnosticsAttributes;
   warn: (message: string) => void;
+  assertGoalCurrent?: () => void;
 }): GatewayChatUserTurnController {
+  const { admission, request, session } = params;
+  const sender =
+    request.goalOperation?.action === "resume"
+      ? undefined
+      : gatewayClientSenderFields(params.client).sender;
   const baseInput: UserTurnInput = {
-    text: params.rawMessage,
-    timestamp: params.now,
-    idempotencyKey: buildRunUserTurnIdempotencyKey(params.clientRunId),
-    ...(params.sender ? { sender: params.sender } : {}),
-    ...(params.senderIsOwner ? { senderIsOwner: true } : {}),
-    ...(params.provenance ? { provenance: params.provenance } : {}),
+    ...params.transcript,
+    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
+    text: request.rawMessage,
+    timestamp: session.now,
+    idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),
+    ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
+    ...(sender ? { sender } : {}),
+    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
   };
-  let inputPromise = Promise.resolve(baseInput);
-  let acceptedSessionId = params.initialSessionId;
+  const replyContextFieldsPromise = request.p.replyToId
+    ? resolveChatSendReplyContext({
+        replyToId: request.p.replyToId,
+        cfg: session.cfg,
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        sessionEntry: session.entry,
+        storePath: session.storePath,
+        userSenderLabel: request.clientInfo?.displayName,
+        warn: params.warn,
+      })
+    : undefined;
+  let inputPromise = replyContextFieldsPromise
+    ? replyContextFieldsPromise.then(
+        (fields): UserTurnInput => ({
+          ...baseInput,
+          ...(fields.ReplyToBody
+            ? {
+                replyToPreview: {
+                  text: fields.ReplyToBody,
+                  ...(fields.ReplyToSender ? { senderLabel: fields.ReplyToSender } : {}),
+                },
+              }
+            : {}),
+        }),
+      )
+    : Promise.resolve(baseInput);
   const recorder = createUserTurnTranscriptRecorder({
+    ...(request.goalOperation
+      ? {
+          sessionTurnMutation: {
+            kind: "goal",
+            operation: request.goalOperation,
+            runId: session.clientRunId,
+            assertCurrent: params.assertGoalCurrent,
+          },
+        }
+      : {}),
     input: baseInput,
     resolveInput: () => inputPromise,
     target: () => {
-      const { storePath, store, entry } = loadSessionEntry(
-        params.sessionKey,
-        params.sessionLoadOptions,
-      );
-      if (!entry?.sessionId || entry.sessionId !== acceptedSessionId) {
+      // Retain only the current binding; transcript writers recheck it at commit.
+      const { storePath, entry } = loadSessionEntry(session.sessionKey, {
+        ...session.sessionLoadOptions,
+        clone: false,
+      });
+      const sessionId = (entry ?? admission.initialSessionEntry)?.sessionId;
+      if (!sessionId || sessionId !== admission.sessionBinding.sessionId) {
         return undefined;
       }
       return {
-        sessionId: entry.sessionId,
-        expectedSessionId: entry.sessionId,
-        sessionKey: params.sessionKey,
-        sessionEntry: entry,
-        sessionStore: store,
+        sessionId,
+        expectedSessionId: sessionId,
+        initialSessionEntry: admission.initialSessionEntry,
+        sessionKey: session.sessionKey,
+        sessionEntry: undefined,
         storePath,
-        agentId: params.agentId,
-        config: params.cfg,
+        agentId: session.agentId,
+        config: session.cfg,
       };
     },
-    ...(params.restartAdmission
+    ...(admission.restartSafeAdmission
       ? buildRestartSafeChatTranscriptState({
-          admission: params.restartAdmission,
-          clientRunId: params.clientRunId,
+          admission: admission.restartSafeAdmission,
+          clientRunId: session.clientRunId,
           startedAt: params.startedAt,
         })
       : {}),
@@ -93,8 +134,8 @@ export function createGatewayChatUserTurnController(params: {
       () => recorder.persistFallback(),
       {
         phase: "agent-turn",
-        config: params.cfg,
-        attributes: params.traceAttributes,
+        config: session.cfg,
+        attributes: admission.chatSendTraceAttributes,
       },
     );
   return {
@@ -104,11 +145,13 @@ export function createGatewayChatUserTurnController(params: {
       await persist().catch(() => undefined);
     },
     recorder,
-    setAcceptedSessionId: (sessionId) => {
-      acceptedSessionId = sessionId;
-    },
+    replyContextFieldsPromise,
     setInputPromise: (input) => {
-      inputPromise = input;
+      const previousInputPromise = inputPromise;
+      inputPromise = Promise.all([previousInputPromise, input]).then(([previous, next]) => ({
+        ...previous,
+        ...next,
+      }));
     },
   };
 }

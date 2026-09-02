@@ -8,13 +8,16 @@ import type {
   SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
-import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { CORE_AUTH_CHOICE_OPTIONS, type AuthChoiceGroup } from "./auth-choice-options.static.js";
 
 type ActivateSetupInference =
   typeof import("../system-agent/setup-inference.js").activateSetupInference;
 
-type LadderFailure = { label: string; status: SetupInferenceFailureStatus };
+export type SetupCandidateFailure = {
+  label: string;
+  result: Extract<ActivateSetupInferenceResult, { ok: false }>;
+};
 
 type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
@@ -30,8 +33,16 @@ const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceFailureStatus, string> = {
   unknown: "wizard.guided.failureUnknown",
 };
 
-export function setupFailureReason(status: SetupInferenceFailureStatus): string {
+function setupFailureReason(status: SetupInferenceFailureStatus): string {
   return t(SETUP_FAILURE_REASON_KEYS[status]);
+}
+
+export function formatSetupCandidateFailure(failure: SetupCandidateFailure): string {
+  return t("wizard.guided.testFailure", {
+    label: failure.label,
+    reason: setupFailureReason(failure.result.status),
+    detail: failure.result.error,
+  });
 }
 
 async function noteActivationFailure(params: {
@@ -40,11 +51,7 @@ async function noteActivationFailure(params: {
   result: Extract<ActivateSetupInferenceResult, { ok: false }>;
 }): Promise<void> {
   await params.prompter.note(
-    t("wizard.guided.testFailure", {
-      label: params.label,
-      reason: setupFailureReason(params.result.status),
-      detail: params.result.error,
-    }),
+    formatSetupCandidateFailure({ label: params.label, result: params.result }),
     t("wizard.guided.aiAccessTitle"),
   );
 }
@@ -56,7 +63,7 @@ export async function tryCandidate(params: {
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
   /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
-  collectFailure?: (failure: LadderFailure) => void;
+  collectFailure?: (failure: SetupCandidateFailure) => void;
 }): Promise<CandidateAttempt> {
   const progress = params.prompter.progress(
     t("wizard.guided.testingCandidate", {
@@ -71,6 +78,7 @@ export async function tryCandidate(params: {
       workspace: params.workspace,
       surface: "cli",
       runtime: params.runtime,
+      ...(params.collectFailure ? {} : { prompter: params.prompter }),
     }),
   );
   progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
@@ -78,7 +86,7 @@ export async function tryCandidate(params: {
     return { kind: "success", result };
   }
   if (params.collectFailure) {
-    params.collectFailure({ label: params.candidate.label, status: result.status });
+    params.collectFailure({ label: params.candidate.label, result });
   } else {
     await noteActivationFailure({
       prompter: params.prompter,
@@ -100,10 +108,14 @@ export async function runManualStage(params: {
   /** A working route is already persisted; skipping keeps it instead of exiting AI-less. */
   hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
+  const interactiveOptions = [
+    ...params.detection.authOptions,
+    ...(params.detection.prepareOptions ?? []),
+    ...CORE_AUTH_CHOICE_OPTIONS.map((option) => ({ id: option.value, label: option.label })),
+  ];
   const allowedChoices = new Set([
     ...params.detection.manualProviders.map((provider) => provider.id),
-    ...params.detection.authOptions.map((option) => option.id),
-    ...(params.detection.prepareOptions ?? []).map((option) => option.id),
+    ...interactiveOptions.map((option) => option.id),
   ]);
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
@@ -117,13 +129,6 @@ export async function runManualStage(params: {
       },
     ),
   }));
-  if (detectedOptions.length === 0 && allowedChoices.size === 0) {
-    await params.prompter.note(
-      t("wizard.guided.noInferenceOptions"),
-      t("wizard.guided.aiAccessTitle"),
-    );
-    throw new WizardCancelledError("no inference setup options");
-  }
   const additionalGroups: AuthChoiceGroup[] = detectedOptions.length
     ? [
         {
@@ -195,10 +200,7 @@ export async function runManualStage(params: {
       continue;
     }
 
-    const providerAuthOption = [
-      ...params.detection.authOptions,
-      ...(params.detection.prepareOptions ?? []),
-    ].find((item) => item.id === choice);
+    const providerAuthOption = interactiveOptions.find((item) => item.id === choice);
     if (providerAuthOption) {
       const result = await withConsoleSubsystemsSuppressed(() =>
         params.activate({
@@ -241,6 +243,7 @@ export async function runManualStage(params: {
         workspace: params.workspace,
         surface: "cli",
         runtime: params.runtime,
+        prompter: params.prompter,
       }),
     );
     progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));

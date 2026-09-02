@@ -4,15 +4,16 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
 import { escapeHtml } from "../shared/html-escape.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
+export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
@@ -35,6 +36,37 @@ export type OAuthCallbackResult = {
   /** State value returned by the callback and validated against the expected state. */
   state: string;
 };
+
+type ProviderOAuthLoopbackCallbackResult =
+  | { type: "authorization_code"; code: string; state: string }
+  | { type: "oauth_error"; error: string; errorDescription?: string };
+
+type ProviderOAuthLoopbackCallbackServer = {
+  waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
+  close: () => Promise<void>;
+};
+
+type ProviderOAuthLoopbackRenderedResponse = { body: string; contentType: string };
+type ProviderOAuthLoopbackCorsOriginResolver = (
+  originHeader: string | string[] | undefined,
+) => string | undefined;
+
+/**
+ * Binds a hardened loopback listener before returning so provider plugins can open the browser
+ * only after the callback route is ready. Invalid request candidates remain nonterminal.
+ */
+export async function startProviderOAuthLoopbackCallbackServer(params: {
+  redirectUrl: string | URL;
+  expectedState: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  bindHostname?: string;
+  resolveCorsOrigin?: ProviderOAuthLoopbackCorsOriginResolver;
+  renderSuccess?: () => ProviderOAuthLoopbackRenderedResponse;
+  renderError?: (message: string) => ProviderOAuthLoopbackRenderedResponse;
+}): Promise<ProviderOAuthLoopbackCallbackServer> {
+  return await startOAuthLoopbackCallbackServer(params);
+}
 
 /**
  * Non-secret auth profile metadata used by provider discovery helpers.
@@ -109,9 +141,11 @@ export function buildOAuthCallbackOriginResolver(
 /**
  * Generates a high-entropy OAuth state token for local callback validation.
  */
-export function generateOAuthState(): string {
+function generateHexOAuthState(): string {
   return crypto.randomBytes(32).toString("hex");
 }
+
+export { generateHexOAuthState as generateOAuthState };
 
 /**
  * Parses a pasted OAuth redirect URL into callback code/state fields.
@@ -228,9 +262,10 @@ function isHttpOrigin(value: string): boolean {
   }
 }
 
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type ResolveApiKeyForProvider =
+  typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 type GetRuntimeAuthForModel =
-  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModel;
+  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
 type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
 const RUNTIME_MODEL_AUTH_CANDIDATES = [
   "./runtime-model-auth.runtime",
@@ -264,9 +299,9 @@ export async function resolveApiKeyForProvider(
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   const runtimeAuth = await loadRuntimeModelAuthModule();
   const resolveApiKeyForProviderLocal =
-    typeof runtimeAuth.resolveApiKeyForProvider === "function"
-      ? runtimeAuth.resolveApiKeyForProvider
-      : resolveModelApiKeyForProvider;
+    typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
+      ? runtimeAuth.resolveProviderRuntimeApiKey
+      : (await import("../agents/model-auth.js")).resolveApiKeyForProviderCore;
   return resolveApiKeyForProviderLocal(params);
 }
 
@@ -277,7 +312,7 @@ export async function getRuntimeAuthForModel(
   /** Concrete model auth request forwarded to the runtime auth module. */
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
-  const { getRuntimeAuthForModel: getRuntimeAuthForModelLocal } =
+  const { getRuntimeAuthForModelCore: getRuntimeAuthForModelLocal } =
     await loadRuntimeModelAuthModule();
   return getRuntimeAuthForModelLocal(params);
 }

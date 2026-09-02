@@ -1,3 +1,5 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { resolveLegacyFirstAgentWorkspacePin } from "../../../config/legacy.default-agent-roles.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -15,6 +17,7 @@ function migrateAgentEntries(raw: Record<string, unknown>, changes: string[]): v
     return;
   }
   const entries: Record<string, unknown> = {};
+  const orderedEntries: Record<string, unknown>[] = [];
   for (const [index, value] of agents.list.entries()) {
     const entry = getRecord(value);
     if (!entry) {
@@ -33,6 +36,7 @@ function migrateAgentEntries(raw: Record<string, unknown>, changes: string[]): v
       suffix += 1;
     }
     const { id: _id, ...config } = entry;
+    orderedEntries.push(config);
     Object.defineProperty(entries, key, {
       configurable: true,
       enumerable: true,
@@ -42,6 +46,10 @@ function migrateAgentEntries(raw: Record<string, unknown>, changes: string[]): v
     if (key !== requestedId) {
       changes.push(`Moved duplicate agents.list id "${requestedId}" to agents.entries.${key}.`);
     }
+  }
+  const workspace = resolveLegacyFirstAgentWorkspacePin(agents, orderedEntries);
+  if (workspace !== undefined) {
+    orderedEntries[0]!.workspace = workspace;
   }
   agents.entries = entries;
   delete agents.list;
@@ -61,4 +69,3 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec
     apply: migrateAgentEntries,
   }),
 ];
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";

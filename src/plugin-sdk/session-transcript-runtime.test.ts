@@ -4,11 +4,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
@@ -51,7 +55,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-1", type: "metadata" };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendTranscriptEvent(scope, event);
 
     const identity = await resolveSessionTranscriptIdentity(scope);
@@ -74,7 +78,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(resolveSessionTranscriptIdentity(scope)).resolves.toMatchObject({
       memoryKey: "transcript:main:read-only-session",
@@ -90,7 +94,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:batch",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const messages = [
       {
         eventId: "batch-assistant",
@@ -126,7 +130,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:strict",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(
       appendSessionTranscriptMessageByIdentityStrict({
@@ -142,7 +146,7 @@ describe("session transcript runtime SDK", () => {
       }),
     ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
 
-    await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 20 });
+    await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 20 });
     await expect(
       appendSessionTranscriptMessageByIdentityStrict({
         ...scope,
@@ -158,7 +162,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:raw-delta",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     for (const id of ["event-1", "event-2", "event-3"]) {
       await appendTranscriptEvent(scope, { id, type: "custom" });
     }
@@ -214,7 +218,10 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:missing-raw-delta",
       storePath,
     };
-    await upsertSessionEntry(missingScope, { sessionId: missingScope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(missingScope, {
+      sessionId: missingScope.sessionId,
+      updatedAt: 10,
+    });
     await expect(
       readSessionTranscriptRawDelta({ ...missingScope, maxBytes: 10, maxEvents: 1 }),
     ).resolves.toEqual({ kind: "missing" });
@@ -331,7 +338,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const root = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -415,7 +422,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(
       appendAssistantMirrorMessageByIdentity({
@@ -445,7 +452,7 @@ describe("session transcript runtime SDK", () => {
       sessionId: "unkeyed-mirror-session",
       sessionKey: "agent:main:unkeyed",
     };
-    await upsertSessionEntry(unkeyedScope, {
+    await upsertSessionEntryCore(unkeyedScope, {
       sessionId: unkeyedScope.sessionId,
       updatedAt: 20,
     });
@@ -467,7 +474,7 @@ describe("session transcript runtime SDK", () => {
     );
     expect(unkeyedAssistantMessages).toHaveLength(1);
 
-    await upsertSessionEntry(scope, { sessionId: "new-session", updatedAt: 20 });
+    await upsertSessionEntryCore(scope, { sessionId: "new-session", updatedAt: 20 });
 
     await expect(
       appendAssistantMirrorMessageByIdentity({
@@ -475,6 +482,63 @@ describe("session transcript runtime SDK", () => {
         text: "stale assistant reply",
       }),
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
+  });
+
+  it("does not append an assistant mirror after cancellation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cancelled-mirror-session",
+      sessionKey: "agent:main:cancelled",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const cancellation = new Error("cancelled by user");
+    const signal = AbortSignal.abort(cancellation);
+
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        signal,
+        text: "must not be persisted",
+      }),
+    ).rejects.toBe(cancellation);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
+  });
+
+  it("rejects an assistant mirror after its admitted writer is superseded", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "superseded-mirror-session",
+      sessionKey: "agent:main:superseded-mirror",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, {
+      activeWriterRunId: "replacement-run",
+      lifecycleRevision: "revision-a",
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+
+    await expect(
+      withOwnedSessionTranscriptWrites(
+        {
+          sessionKey: scope.sessionKey,
+          sessionTarget: {
+            ...scope,
+            expectedLifecycleRevision: "revision-a",
+            expectedWriterRunId: "superseded-run",
+          },
+          withTranscriptWrite: async (run) => await run(),
+        },
+        async () =>
+          await appendAssistantMirrorMessageByIdentity({
+            ...scope,
+            idempotencyKey: "superseded:fallback",
+            text: "must not be persisted",
+          }),
+      ),
+    ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
@@ -485,7 +549,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const active = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -532,7 +596,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const firstAssistant = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -572,7 +636,7 @@ describe("session transcript runtime SDK", () => {
       internalUpdates.push(update);
     });
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     try {
       await expect(
@@ -618,7 +682,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-locator", type: "metadata" };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendTranscriptEvent(scope, event);
 
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
@@ -635,7 +699,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-active", type: "metadata" };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: path.join(tempDir, "store-default.jsonl"),
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -928,7 +992,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:telegram:direct:123",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: path.join(tempDir, "legacy-file-name.jsonl"),
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -937,7 +1001,7 @@ describe("session transcript runtime SDK", () => {
     const keys = resolveSessionTranscriptMemoryHitKeyToSessionKeys({
       key: formatSessionTranscriptMemoryHitKey(scope),
       store: Object.fromEntries(
-        listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
       ),
     });
 

@@ -1,19 +1,73 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
-import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
+import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import {
+  assertAgentHarnessRunAdmission,
+  buildContextEngineCompactionSessionTarget,
+  resetNoRealConversationTokenSnapshot,
+} from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntries: vi.fn(() => []),
+  listSessionEntriesReadOnly: vi.fn(() => []),
   loadSessionEntry: vi.fn(),
+  patchSessionEntryCore:
+    vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
+  updateSessionEntry: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
+vi.mock("../../../config/sessions/session-accessor.js", () => ({
+  ...sessionAccessorMocks,
+  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntry,
+}));
 
 beforeEach(() => {
-  sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);
+  sessionAccessorMocks.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
+  sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
+  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
 });
+
+it.each([0, 2])(
+  "retains compaction facts across cancellation with %s ingress records",
+  async (recordedCompactionCount) => {
+    const persistence = createDeferred();
+    const controller = new AbortController();
+    const cancelled = new Error("cancelled while user persistence was pending");
+    const contextRecoveryState = createEmbeddedRunContextRecoveryState();
+    contextRecoveryState.autoCompactionCount = recordedCompactionCount;
+    contextRecoveryState.lastCompactionTokensAfter = recordedCompactionCount > 0 ? 60 : undefined;
+    // Cancellation exits before model normalization; only the completed-attempt boundary is live.
+    const normalization = normalizeEmbeddedRunAttempt({
+      runInput: {
+        runParams: { abortSignal: controller.signal },
+        laneController: { throwIfAborted: () => controller.signal.throwIfAborted() },
+      },
+      preparedRuntime: { snapshot: () => ({}) },
+      recordedCompactionCount,
+      dispatchedAttempt: {
+        rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 },
+        cancellationRequested: true,
+      },
+      sessionPromptState: {
+        activePrompt: { persisted: true },
+        waitForCurrentUserMessagePersistence: () => persistence.promise,
+      },
+      contextRecoveryState,
+    } as never);
+
+    controller.abort(cancelled);
+    persistence.resolve();
+    await expect(normalization).rejects.toBe(cancelled);
+    expect(contextRecoveryState).toMatchObject({
+      autoCompactionCount: 2,
+      lastCompactionTokensAfter: recordedCompactionCount > 0 ? 60 : 40,
+    });
+  },
+);
 
 describe("buildContextEngineCompactionSessionTarget", () => {
   it("leaves the key absent when a marker has no stored mapping", () => {
@@ -46,6 +100,51 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
+  it("uses the persisted fixed-store owner for a bare compaction key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+          session: { store: "/tmp/shared-sessions.json" },
+        },
+        sessionFile: "global",
+        sessionId: "ops-session",
+        sessionKey: "global",
+      }),
+    ).toMatchObject({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
+    });
+  });
+
+  it("rejects a partial target that conflicts with the fixed-store owner", () => {
+    expect(() =>
+      buildContextEngineCompactionSessionTarget({
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+          session: { store: "/tmp/shared-sessions.json" },
+        },
+        sessionFile: "global",
+        sessionId: "ops-session",
+        sessionKey: "global",
+        sessionTarget: {
+          agentId: "research",
+          sessionId: "ops-session",
+          sessionKey: "global",
+        },
+      }),
+    ).toThrow(/belongs to "ops"/u);
+  });
+
   it("preserves an adopted session id without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
@@ -61,6 +160,90 @@ describe("buildContextEngineCompactionSessionTarget", () => {
       agentId: "main",
       sessionId: "adopted-session",
       storePath: "/tmp/sessions.json",
+    });
+  });
+});
+
+describe("fixed-store session bootstrap", () => {
+  const config = {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    session: { store: "/tmp/shared-sessions.json" },
+  };
+
+  it.each([false, true])(
+    "keeps the prepared reset target and its commit owner (closed=%s)",
+    async (closeBeforeCommit) => {
+      const sessionTarget = {
+        agentId: "ops",
+        sessionId: "ops-session",
+        sessionKey: "global",
+        storePath: "/tmp/explicit-openclaw-agent.sqlite",
+      };
+      const callerError = new Error("reset owner closed while waiting for commit");
+      let closed = false;
+      const assertActive = () => {
+        if (closed) {
+          throw callerError;
+        }
+      };
+      sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
+        async (_scope, _update, options) => {
+          closed = closeBeforeCommit;
+          options?.assertCommitAllowed?.();
+          return null;
+        },
+      );
+
+      const reset = resetNoRealConversationTokenSnapshot({ sessionTarget, assertActive });
+      if (closeBeforeCommit) {
+        await expect(reset).rejects.toBe(callerError);
+      } else {
+        await reset;
+      }
+      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledWith(
+        sessionTarget,
+        expect.any(Function),
+        expect.objectContaining({ skipMaintenance: true, assertCommitAllowed: assertActive }),
+      );
+    },
+  );
+
+  it("carries the persisted owner into harness admission", () => {
+    assertAgentHarnessRunAdmission({
+      config,
+      sessionId: "ops-session",
+      sessionKey: "global",
+    } as never);
+
+    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        sessionKey: "global",
+        storePath: "/tmp/shared-sessions.json",
+      }),
+    );
+  });
+
+  it("carries the resolved owner into quota-maintenance reads", async () => {
+    sessionAccessorMocks.loadSessionEntry.mockReturnValueOnce({
+      sessionId: "ops-session",
+      updatedAt: 1,
+    });
+
+    await loadAttemptSessionEntryAfterQuotaMaintenance({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
+    });
+
+    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
     });
   });
 });
@@ -178,7 +361,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
       sessionId: "session-before",
       updatedAt: 1,
     });
-    sessionAccessorMocks.listSessionEntries.mockReturnValue([
+    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
       {
         sessionKey: "agent:main:other",
         entry: { sessionId: "session-after", updatedAt: 2 },

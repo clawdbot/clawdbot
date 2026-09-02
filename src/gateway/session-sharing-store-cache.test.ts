@@ -42,7 +42,7 @@ describe("session mutation authorization store caches", () => {
   it("fails a patchMany request when a nested target is incognito", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-patch-many";
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-incognito", updatedAt: 1, incognito: true },
       );
@@ -63,17 +63,17 @@ describe("session mutation authorization store caches", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sharedKey = "agent:main:batch-shared";
       const draftKey = "agent:main:batch-private";
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: sharedKey },
         { sessionId: "session-shared", updatedAt: 1, visibility: "shared" },
       );
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: draftKey },
         {
           sessionId: "session-private",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -95,12 +95,18 @@ describe("session mutation authorization store caches", () => {
     });
   });
 
-  it("fences a replaced patchMany target with padded identity fields", async () => {
+  it("reuses metadata for padded patchMany targets and fences replacements", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:padded-batch-target";
-      await sessionAccessor.upsertSessionEntry(
+      const prompt = "authorization does not need this prompt snapshot".repeat(512);
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
-        { sessionId: "session-original", updatedAt: 1, visibility: "shared" },
+        {
+          sessionId: "session-original",
+          updatedAt: 1,
+          visibility: "shared",
+          skillsSnapshot: { prompt, skills: [] },
+        },
       );
       const target = { sessionKey: ` ${sessionKey} `, agentId: " main " };
       const result = resolveSessionMutationAuthorization({
@@ -116,9 +122,12 @@ describe("session mutation authorization store caches", () => {
       expect(result.error).toBeNull();
       expect(result.authorization).toBeDefined();
       const authorization = result.authorization!;
+      const parseSpy = vi.spyOn(JSON, "parse");
       expect(() => authorization.assertTargetCurrent(target)).not.toThrow();
+      expect(parseSpy.mock.calls.some(([serialized]) => serialized.includes(prompt))).toBe(false);
+      parseSpy.mockRestore();
 
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-replacement", updatedAt: 2, visibility: "shared" },
       );
@@ -132,7 +141,7 @@ describe("session mutation authorization store caches", () => {
   it("bounds malformed patchMany target discovery before schema validation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const hiddenKey = "agent:main:dashboard:incognito-over-limit";
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: hiddenKey },
         { sessionId: "session-hidden", updatedAt: 1, incognito: true },
       );
@@ -159,15 +168,15 @@ describe("session mutation authorization store caches", () => {
         ["agent:main:cache-one", "session-cache-one"],
         ["agent:main:cache-two", "session-cache-two"],
       ] as const) {
-        await sessionAccessor.upsertSessionEntry(
+        await sessionAccessor.upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           { sessionId, updatedAt: 1, visibility: "shared", category: "Cache Test" },
         );
       }
 
       const materializations = new Map<string, number>();
-      const originalListSessionEntries = sessionAccessor.listSessionEntries;
-      vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation((scope) => {
+      const originalListSessionEntries = sessionAccessor.listSessionEntriesCore;
+      vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
         const entries = originalListSessionEntries(scope);
         if (scope?.clone === false) {
           const storePath = scope.storePath ?? "default";
@@ -208,7 +217,11 @@ describe("session mutation authorization store caches", () => {
         sessionId: "session-private",
         updatedAt: 1,
         visibility: "draft" as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "owner@example.com",
+        },
       },
     },
     {
@@ -219,12 +232,16 @@ describe("session mutation authorization store caches", () => {
         updatedAt: 1,
         visibility: "shared" as const,
         incognito: true as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "owner@example.com",
+        },
       },
     },
   ])("matches uncached $name authorization", async ({ sessionKey, entry }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await sessionAccessor.upsertSessionEntry({ agentId: "main", sessionKey }, entry);
+      await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       const cfg = {};
       const requestClient = identifiedClient("viewer@example.com");
       const uncachedError = authorizeResolvedSessionMutation({

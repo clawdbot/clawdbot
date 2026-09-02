@@ -2,7 +2,7 @@
 import {
   buildChannelConfigSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelDeliveryStreamingConfigSchema,
   ChannelSendReadReceiptsSchema,
@@ -33,14 +33,15 @@ const IMessageActionSchema = z
   .strict()
   .optional();
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["mentionPatterns", "replyToMode"],
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+  mediaMaxMb: z.number().int().positive().optional(),
+});
+
 const IMessageAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      useDefaults: true,
-      omit: ["mentionPatterns", "replyToMode"],
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-      mediaMaxMb: z.number().int().positive().optional(),
-    }),
+    ...accountShape,
     cliPath: ExecutableTokenSchema.optional(),
     dbPath: z.string().optional(),
     remoteHost: z
@@ -83,6 +84,7 @@ const IMessageAccountSchemaBase = z
   .strict();
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
+  ...rootPolicyShape,
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime.
   accounts: z.record(z.string(), IMessageAccountSchemaBase.optional()).optional(),

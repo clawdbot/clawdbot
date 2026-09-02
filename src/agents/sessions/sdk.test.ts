@@ -1,4 +1,5 @@
 import path from "node:path";
+import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-settlement behavior.
@@ -36,7 +37,7 @@ import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
@@ -57,6 +58,30 @@ const testModel: Model = {
 describe("createAgentSession runtime ownership", () => {
   it("keeps embedded recovery construction out of the public sessions barrel", () => {
     expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+  });
+
+  it("keeps durable provider resources when an embedded attempt session is disposed", async () => {
+    const cleanup = vi.fn();
+    const unregisterCleanup = registerSessionResourceCleanup(cleanup);
+    try {
+      const sessionManager = SessionManager.inMemory();
+      const { session } = await createAgentSessionForEmbeddedRunner(
+        {
+          model: testModel,
+          resourceLoader: createEmptyResourceLoader(),
+          sessionManager,
+          settingsManager: SettingsManager.inMemory(),
+          modelRegistry: createTestModelRegistry(),
+        },
+        {},
+      );
+
+      session.dispose();
+
+      expect(cleanup).not.toHaveBeenCalled();
+    } finally {
+      unregisterCleanup();
+    }
   });
 
   it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
@@ -144,6 +169,15 @@ function createAssistantResultStream(message: AssistantMessage) {
     stream.end();
   });
   return stream;
+}
+
+function createRecoveredAssistantStream() {
+  return createAssistantResultStream({
+    ...createAssistantError(""),
+    content: [{ type: "text", text: "recovered" }],
+    stopReason: "stop",
+    errorMessage: undefined,
+  });
 }
 
 function createEmptyResourceLoader(): ResourceLoader {
@@ -455,9 +489,10 @@ describe("AgentSession queued user turns", () => {
     });
   });
 
-  it("carries prompt facts non-enumerably on the exact steered message", async () => {
+  it("preserves prompt image ownership across steered and follow-up messages", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const followUp = vi.spyOn(session.agent, "followUp").mockImplementation(() => undefined);
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;
     const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
@@ -484,6 +519,10 @@ describe("AgentSession queued user turns", () => {
       mediaImageBlockFactIndexes: [0],
     });
     expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
+    await session.followUp("inspect queued attachment", images);
+    expect(followUp.mock.calls[0]?.[0]).toMatchObject({
+      __openclaw: { mediaImageBlockFactIndexes: [0] },
+    });
   });
 });
 
@@ -711,6 +750,41 @@ describe("createAgentSession tool defaults", () => {
 
     expect(events).toEqual(["settlement:start", "settlement:end"]);
     expect(sessionManager.getEntries().some((entry) => entry.type === "message")).toBe(true);
+  });
+
+  it("runs provider response hooks under the configured write settlement", async () => {
+    const events: string[] = [];
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      [
+        "after_provider_response",
+        [
+          async () => {
+            events.push("hook");
+            return undefined;
+          },
+        ],
+      ],
+    ]);
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createResourceLoaderWithHandlers(handlers),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
+        try {
+          return await run();
+        } finally {
+          events.push("settlement:end");
+        }
+      },
+    });
+
+    await session.agent.onResponse?.({ status: 200, headers: {} }, testModel);
+
+    expect(events).toEqual(["settlement:start", "hook", "settlement:end"]);
   });
 
   it("runs write-capable tool hooks under the configured write settlement", async () => {
@@ -969,42 +1043,37 @@ describe("AgentSession retry behavior", () => {
     });
   }
 
-  it("stops permanent errors and retries transient HTTP errors in a session", async () => {
-    streamMocks.streamSimple.mockReset();
-    const permanentEvents: string[] = [];
-    streamMocks.streamSimple.mockImplementation(() =>
-      createAssistantResultStream(createAssistantError("model model-x-500-preview not found")),
+  it.each(["permanent", "transient", "refusal"])("handles %s provider errors", async (kind) => {
+    const error = createAssistantError(
+      kind === "permanent"
+        ? "model model-x-500-preview not found"
+        : "HTTP 503 temporary provider response",
     );
-    const { session: permanentSession } = await createRetrySession();
-    permanentSession.subscribe((event) => permanentEvents.push(event.type));
-
-    await permanentSession.prompt("test permanent error");
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(permanentEvents).not.toContain("auto_retry_start");
-
-    const transientEvents: string[] = [];
-    streamMocks.streamSimple.mockReset();
+    if (kind === "refusal") {
+      error.diagnostics = [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "anthropic", category: "cyber" },
+        },
+      ];
+    }
     streamMocks.streamSimple
-      .mockImplementationOnce(() =>
-        createAssistantResultStream(createAssistantError("HTTP 503 temporary provider response")),
-      )
-      .mockImplementationOnce(() =>
-        createAssistantResultStream({
-          ...createAssistantError(""),
-          content: [{ type: "text", text: "recovered" }],
-          stopReason: "stop",
-          errorMessage: undefined,
-        }),
+      .mockReset()
+      .mockImplementationOnce(() => createAssistantResultStream(error))
+      .mockImplementation(createRecoveredAssistantStream);
+    const { session } = await createRetrySession();
+    const events: string[] = [];
+    session.subscribe((event) => events.push(event.type));
+    try {
+      await session.prompt(`test ${kind} error`);
+      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(kind === "transient" ? 2 : 1);
+      expect(events.filter((event) => event.startsWith("auto_retry_"))).toEqual(
+        kind === "transient" ? ["auto_retry_start", "auto_retry_end"] : [],
       );
-    const { session: transientSession } = await createRetrySession();
-    transientSession.subscribe((event) => transientEvents.push(event.type));
-
-    await transientSession.prompt("test transient error");
-
-    expect(streamMocks.streamSimple.mock.calls.length).toBeGreaterThan(1);
-    expect(transientEvents).toContain("auto_retry_start");
-    expect(transientEvents).toContain("auto_retry_end");
+    } finally {
+      session.dispose();
+    }
   });
 
   it("uses a short server Retry-After as the auto-retry delay floor", async () => {
@@ -1017,14 +1086,7 @@ describe("AgentSession retry behavior", () => {
             createAssistantError("HTTP 429: rate limited; Retry-After: 30 seconds"),
           ),
         )
-        .mockImplementationOnce(() =>
-          createAssistantResultStream({
-            ...createAssistantError(""),
-            content: [{ type: "text", text: "recovered" }],
-            stopReason: "stop",
-            errorMessage: undefined,
-          }),
-        );
+        .mockImplementationOnce(createRecoveredAssistantStream);
       const { session } = await createRetrySession({ baseDelayMs: 2_000, maxRetries: 1 });
       const retryDelays: number[] = [];
       session.subscribe((event) => {

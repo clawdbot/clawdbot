@@ -1,10 +1,17 @@
 // Status command report data tests cover report data assembly from shared status fixtures.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { createStatusCommandReportDataParams } from "./status.test-support.ts";
 
 describe("buildStatusCommandReportData", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
   it("builds report inputs from shared status surfaces", async () => {
     const baseParams = createStatusCommandReportDataParams();
     const result = await buildStatusCommandReportData(
@@ -28,6 +35,8 @@ describe("buildStatusCommandReportData", () => {
                 updatedAt: 1,
                 age: 5_000,
                 model: "gpt-5.4",
+                inputTokens: 3_000,
+                cacheRead: 1_000,
               },
             ],
           },
@@ -39,20 +48,20 @@ describe("buildStatusCommandReportData", () => {
       Item: "OS",
       Value: "macOS · node " + process.versions.node,
     });
-    expect(result.taskMaintenanceHint).toBe(
-      "Task maintenance: cmd:openclaw tasks maintenance --apply",
-    );
-    expect(result.pluginCompatibilityLines).toEqual(["  warn(WARN) legacy"]);
-    expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
+    expect(result.taskMaintenanceHint).toBe("Task maintenance: openclaw tasks maintenance --apply");
+    expect(result.pluginCompatibilityLines.map(stripAnsi)).toEqual(["  WARN a legacy"]);
+    const pairingTitle = expectDefined(result.pairingRecoveryLines[0], "pairing recovery title");
+    expect(stripAnsi(pairingTitle)).toBe("Gateway pairing approval required.");
     expect(result.modelSelectionLines).toEqual([]);
     expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
-    expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
-    expect(result.healthRows?.[0]).toEqual({
+    expect(result.sessionsRows[0]?.Cache).toBe("25% hit · read 1.0k");
+    const gatewayHealth = expectDefined(result.healthRows?.[0], "Gateway health row");
+    expect({ ...gatewayHealth, Status: stripAnsi(gatewayHealth.Status) }).toEqual({
       Item: "Gateway",
-      Status: "ok(reachable)",
+      Status: "reachable",
       Detail: "42ms",
     });
-    expect(result.footerLines.at(-1)).toBe("  Need to test channels? cmd:openclaw status --deep");
+    expect(result.footerLines.at(-1)).toBe("  Need to test channels? openclaw status --deep");
   });
 
   it("shows skipped audit text when fast status omits the security audit", async () => {
@@ -62,9 +71,9 @@ describe("buildStatusCommandReportData", () => {
       }),
     );
 
-    expect(result.securityAuditLines).toEqual([
-      "muted(Skipped in fast status. Full report: cmd:openclaw security audit)",
-      "muted(Deep probe: cmd:openclaw status --deep)",
+    expect(result.securityAuditLines.map(stripAnsi)).toEqual([
+      "Skipped in fast status. Full report: openclaw security audit",
+      "Deep probe: openclaw status --deep",
     ]);
   });
 
@@ -85,8 +94,8 @@ describe("buildStatusCommandReportData", () => {
       createStatusCommandReportDataParams({ summary, opts: {} }),
     );
 
-    expect(deepResult.retainedLostTaskLine).toBe(
-      "muted(1 lost task retained until 2026-03-30T01:00:00.000Z)",
+    expect(stripAnsi(expectDefined(deepResult.retainedLostTaskLine, "retained lost task"))).toBe(
+      "1 lost task retained until 2026-03-30T01:00:00.000Z",
     );
     expect(fastResult.retainedLostTaskLine).toBeNull();
   });
@@ -106,7 +115,9 @@ describe("buildStatusCommandReportData", () => {
       }),
     );
 
-    expect(result.retainedLostTaskLine).toBe("muted(2 lost tasks retained until cleanupAfter)");
+    expect(stripAnsi(expectDefined(result.retainedLostTaskLine, "retained lost task"))).toBe(
+      "2 lost tasks retained until cleanupAfter",
+    );
   });
 
   it("adds pinned-session model selection lines", async () => {

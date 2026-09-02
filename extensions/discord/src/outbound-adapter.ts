@@ -11,14 +11,19 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { createDiscordActionGate } from "./accounts.js";
 import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
-import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
+import {
+  discordInboundEventDelivery,
+  notifyDiscordInboundEventOutboundPayloadSuccess,
+} from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -37,9 +42,13 @@ import {
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
-import { createDiscordSendReceiptFromResults } from "./send.receipt.js";
+import {
+  createDiscordSendReceiptFromResults,
+  toDiscordOutboundDeliveryResult,
+} from "./send.receipt.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+const log = createSubsystemLogger("discord/outbound");
 const loadDiscordThreadBindings = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.js"),
 );
@@ -66,6 +75,7 @@ async function maybeSendDiscordWebhookText(params: {
   identity?: OutboundIdentity;
   replyToId?: string | null;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }): Promise<{ messageId: string; channelId: string } | null> {
   if (params.threadId == null) {
     return null;
@@ -98,6 +108,7 @@ async function maybeSendDiscordWebhookText(params: {
     username: persona.username,
     avatarUrl: persona.avatarUrl,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
   });
   return result;
 }
@@ -129,10 +140,13 @@ async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageC
               NonNullable<NonNullable<Parameters<DiscordSendFn>[2]>["onDeliveryResult"]>
             >[0],
           ) => {
-            await params.onDeliveryResult?.(attachChannelToResult("discord", result));
+            await params.onDeliveryResult?.(
+              attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
+            );
           }
         : undefined,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
     },
   };
 }
@@ -191,18 +205,23 @@ export const discordOutbound: ChannelOutboundAdapter = {
                   await ctx.onPlatformSendDispatch?.();
                 }
               : undefined,
+            assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
           });
           if (webhookResult) {
-            return webhookResult;
+            return toDiscordOutboundDeliveryResult(webhookResult);
           }
         } catch (error) {
           if (webhookSelected) {
             throw error;
           }
+          // Falling back to the plain bot send is intended (persona delivery is
+          // best-effort), but the failure must stay operator-visible: a broken
+          // webhook binding otherwise degrades every reply silently.
+          log.warn("discord webhook persona send failed; falling back to bot send", { error });
         }
       }
       const { send, target, options } = await resolveDiscordOutboundMessageSend(ctx);
-      return await send(target, ctx.text, options);
+      return toDiscordOutboundDeliveryResult(await send(target, ctx.text, options));
     },
     sendMedia: async (ctx) => {
       const { send, target, options } = await resolveDiscordOutboundMessageSend(ctx);
@@ -210,16 +229,19 @@ export const discordOutbound: ChannelOutboundAdapter = {
         const sendVoice =
           resolveOutboundSendDep<DiscordVoiceSendFn>(ctx.deps, "discordVoice") ??
           (await loadDiscordSendRuntime()).sendVoiceMessageDiscord;
-        return await sendVoice(target, ctx.mediaUrl, {
-          cfg: ctx.cfg,
-          reply: options.reply,
-          accountId: ctx.accountId ?? undefined,
-          silent: ctx.silent ?? undefined,
-          mediaAccess: ctx.mediaAccess,
-          mediaLocalRoots: ctx.mediaLocalRoots,
-          mediaReadFile: ctx.mediaReadFile,
-          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-        });
+        return toDiscordOutboundDeliveryResult(
+          await sendVoice(target, ctx.mediaUrl, {
+            cfg: ctx.cfg,
+            reply: options.reply,
+            accountId: ctx.accountId ?? undefined,
+            silent: ctx.silent ?? undefined,
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
+          }),
+        );
       }
       const mediaOptions = {
         ...options,
@@ -239,29 +261,57 @@ export const discordOutbound: ChannelOutboundAdapter = {
           reply: options.reply?.scope === "all" ? options.reply : undefined,
         });
         const threadId = captionResult.receipt?.threadId;
-        if (!threadId) {
-          return mediaResult;
-        }
-        return {
-          ...captionResult,
+        return toDiscordOutboundDeliveryResult({
+          ...(threadId ? captionResult : mediaResult),
           receipt: createDiscordSendReceiptFromResults({
             results: [captionResult, mediaResult],
             threadId,
           }),
-        };
+        });
       }
-      return await send(target, ctx.text, mediaOptions);
+      return toDiscordOutboundDeliveryResult(await send(target, ctx.text, mediaOptions));
     },
-    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, onPlatformSendDispatch }) =>
-      await (
+    sendPoll: async ({
+      cfg,
+      to,
+      poll,
+      content,
+      accountId,
+      threadId,
+      silent,
+      sessionKey,
+      inboundEventKind,
+      onPlatformSendDispatch,
+      assertDirectAdapterHandoff,
+    }) => {
+      if (!createDiscordActionGate({ cfg, accountId })("polls")) {
+        throw new Error("Discord polls are disabled.");
+      }
+      const outboundTo = resolveDiscordOutboundTarget({ to, threadId });
+      const result = await (
         await loadDiscordSendRuntime()
-      ).sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
+      ).sendPollDiscord(outboundTo, poll, {
         accountId: accountId ?? undefined,
+        content,
+        threadId: threadId ?? undefined,
         silent: silent ?? undefined,
         cfg,
         onPlatformSendDispatch,
-      }),
+        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
+      });
+      discordInboundEventDelivery.notify({
+        sessionKey,
+        inboundEventKind,
+        to: outboundTo,
+        accountId,
+      });
+      return result;
+    },
   }),
+  adoptTargetFromDelivery: ({ result }) => {
+    const threadId = normalizeOptionalStringifiedId(result.receipt?.threadId);
+    return threadId ? { threadId } : null;
+  },
   afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
@@ -275,9 +325,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
     const componentSpec = questionId ? await resolveDiscordComponentSpec(payload) : undefined;
     if (questionId && result && componentSpec) {
       const to = resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId });
+      const channelId = result.target?.kind === "channel" ? result.target.id : to;
       questionGatewayRuntime.registerChannelDelivery({
         questionId,
-        deliveryId: `discord:${target.accountId ?? "default"}:${result.channelId ?? to}:${result.messageId}`,
+        deliveryId: `discord:${target.accountId ?? "default"}:${channelId}:${result.messageId}`,
         finalize: async (statusLine) => {
           const { editDiscordComponentMessage } = await loadDiscordComponentSendRuntime();
           await editDiscordComponentMessage(

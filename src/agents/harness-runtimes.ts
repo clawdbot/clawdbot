@@ -5,8 +5,11 @@ import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/confi
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { OPENCLAW_AGENT_RUNTIME_ID, isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import {
+  OPENCLAW_AGENT_RUNTIME_ID,
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "./agent-runtime-id.js";
 import { listAgentEntries } from "./agent-scope-config.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 
@@ -35,7 +38,7 @@ function parseConfiguredModelRef(
   return parseModelCatalogRef(value) ?? undefined;
 }
 
-function resolveConfiguredModelHarnessRuntime(params: {
+export function resolveConfiguredModelHarnessRuntime(params: {
   config: OpenClawConfig;
   includeImplicitRuntimePreferences: boolean;
   modelRef: string;

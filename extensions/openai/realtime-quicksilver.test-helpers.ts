@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi } from "vitest";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 
@@ -49,7 +49,7 @@ export function createRequest(params: {
   contentType?: string;
   body?: string;
 }): IncomingMessage {
-  return Object.assign(Readable.from([params.body ?? "v=offer\r\n"]), {
+  return Object.assign(createMockIncomingRequest([params.body ?? "v=offer\r\n"]), {
     method: params.method ?? "POST",
     headers: {
       ...(params.token ? { authorization: `Bearer ${params.token}` } : {}),
@@ -61,11 +61,11 @@ export function createRequest(params: {
       ...(params.origin ? { origin: params.origin } : {}),
       ...(params.host ? { host: params.host } : {}),
     },
-  }) as unknown as IncomingMessage;
+  });
 }
 
 export function createPreflightRequest(origin: string, host?: string): IncomingMessage {
-  return Object.assign(Readable.from([]), {
+  return Object.assign(createMockIncomingRequest([]), {
     method: "OPTIONS",
     headers: {
       origin,
@@ -74,7 +74,7 @@ export function createPreflightRequest(origin: string, host?: string): IncomingM
       "access-control-request-headers": "authorization,content-type",
       "access-control-request-private-network": "true",
     },
-  }) as unknown as IncomingMessage;
+  });
 }
 
 export function createResponseHarness(): {

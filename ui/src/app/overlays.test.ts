@@ -1,7 +1,8 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   approval,
@@ -13,22 +14,26 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
-  controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
-    Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+  controlUiBuildDiffersFrom: (identity: {
+    version?: string | null;
+    buildId?: string | null;
+    controlUiBuildSource?: "bundled" | "configured";
+  }) =>
+    identity.controlUiBuildSource === "configured"
+      ? false
+      : Boolean(
+          identity.buildId?.trim()
+            ? identity.buildId.trim() !== "test"
+            : identity.version?.trim() && identity.version.trim() !== "1.0.0",
+        ),
   reloadControlUiIfStale: vi.fn(),
 }));
-const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
-  peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
-}));
-vi.mock("../lib/nodes/index.ts", () => ({
-  peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
-}));
-
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 const HANDOFF_POLL_MS = 1_000;
 const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {
@@ -37,8 +42,6 @@ function installUpdateTranslations() {
     "updates.status": "Update {status}: {reason}. {guidance}",
     "updates.failureReasons.managedServiceHandoffAlreadyRunning":
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
-    "updates.verificationFailedWithVersions":
-      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     "updates.verificationFailedWithIdentity":
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     "common.unknown": "Unknown",
@@ -55,185 +58,70 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("device-auth upgrade migration", () => {
-  beforeEach(() => {
-    peekStoredDeviceIdentityIdMock.mockReturnValue("browser-1");
-  });
-
-  it("guides a device-less legacy browser to a secure context", async () => {
-    peekStoredDeviceIdentityIdMock.mockReturnValue(null);
-    const request = vi.fn<RequestFn>(() => Promise.resolve({}));
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-    harness.update({
-      client: client(request),
-      phase: "connected",
-      hello: {
-        server: { version: "1.0.0" },
-        deviceAuthMigration: { pending: true },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigration.error).toContain("HTTPS or localhost");
-    });
-    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
-    expect(request).not.toHaveBeenCalledWith("device.pair.list", expect.anything());
-    overlays.dispose();
-  });
-
-  it("approves only this browser and reconnects for its device token", async () => {
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method === "device.pair.list") {
-        return Promise.resolve({
-          pending: [
-            { requestId: "other-request", deviceId: "browser-2" },
-            { requestId: "self-request", deviceId: "browser-1" },
-          ],
-        });
-      }
-      if (method === "device.pair.approve") {
-        expect(params).toEqual({ requestId: "self-request" });
-        return Promise.resolve({ requestId: "self-request" });
-      }
-      if (method.endsWith(".list")) {
-        return Promise.resolve([]);
-      }
-      return Promise.resolve({});
-    });
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-    harness.update({
-      client: client(request),
-      phase: "connected",
-      hello: {
-        server: { version: "1.0.0" },
-        deviceAuthMigration: { pending: true },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
-    });
-    await overlays.secureThisBrowser();
-
-    expect(request).toHaveBeenCalledWith("device.pair.approve", {
-      requestId: "self-request",
-    });
-    expect(harness.connect).toHaveBeenCalledOnce();
-    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
-    overlays.dispose();
-  });
-
-  it("does not reconnect when approval finishes after disposal", async () => {
-    let resolveApproval: (() => void) | undefined;
-    const approvalRequest = new Promise<void>((resolve) => {
-      resolveApproval = resolve;
-    });
-    const request = vi.fn<RequestFn>((method) => {
-      if (method === "device.pair.list") {
-        return Promise.resolve({
-          pending: [{ requestId: "self-request", deviceId: "browser-1" }],
-        });
-      }
-      if (method === "device.pair.approve") {
-        return approvalRequest;
-      }
-      return Promise.resolve([]);
-    });
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-    harness.update({
-      client: client(request),
-      phase: "connected",
-      hello: {
-        server: { version: "1.0.0" },
-        deviceAuthMigration: { pending: true },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
-    });
-    const securing = overlays.secureThisBrowser();
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("device.pair.approve", {
-        requestId: "self-request",
-      });
-    });
-    overlays.dispose();
-    resolveApproval?.();
-    await securing;
-
-    expect(harness.connect).not.toHaveBeenCalled();
-  });
-
-  it("does not approve through a replacement gateway session", async () => {
-    const firstRequest = vi.fn<RequestFn>((method) =>
-      Promise.resolve(
-        method === "device.pair.list"
-          ? { pending: [{ requestId: "self-request", deviceId: "browser-1" }] }
-          : {},
-      ),
-    );
-    const replacementRequest = vi.fn<RequestFn>(() => Promise.resolve({ pending: [] }));
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-    harness.update({
-      client: client(firstRequest),
-      phase: "connected",
-      hello: {
-        server: { version: "1.0.0" },
-        deviceAuthMigration: { pending: true },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
-    });
-    const securing = overlays.secureThisBrowser();
-    harness.update({ client: client(replacementRequest) });
-    await securing;
-
-    expect(firstRequest).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
-    expect(replacementRequest).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
-    expect(harness.connect).not.toHaveBeenCalled();
-    overlays.dispose();
-  });
-
-  it("does not expose an action for another browser's request", async () => {
-    const request = vi.fn<RequestFn>((method) =>
-      Promise.resolve(
-        method === "device.pair.list"
-          ? { pending: [{ requestId: "other-request", deviceId: "browser-2" }] }
-          : [],
-      ),
-    );
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-    harness.update({
-      client: client(request),
-      phase: "connected",
-      hello: {
-        server: { version: "1.0.0" },
-        deviceAuthMigration: { pending: true },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigration.error).toContain(
-        "pairing request is not available",
-      );
-    });
-    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
-    await overlays.secureThisBrowser();
-    expect(request).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
-    expect(harness.connect).not.toHaveBeenCalled();
-    overlays.dispose();
-  });
-});
-
 describe("Control UI refresh nudge", () => {
+  it("runs automatic connection refreshes through the bootstrap coordinator", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method === "exec.approval.list" ? [] : {}),
+    );
+    const coordinator = {
+      reset: vi.fn(),
+      run: vi.fn(async (_key: string, task: () => Promise<unknown>) => {
+        await task();
+      }),
+      synchronize: vi.fn(),
+    } satisfies ConnectionBootstrapCoordinator;
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      connectionBootstrap: coordinator,
+    });
+
+    harness.update({ client: client(request), phase: "connected" });
+    await flushMicrotasks();
+
+    expect(coordinator.run).toHaveBeenCalledWith("approvals", expect.any(Function));
+    expect(coordinator.run).toHaveBeenCalledWith("update-status", expect.any(Function));
+    overlays.dispose();
+  });
+
+  it("flags a terminal build rejection without requiring a hello", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "reload-required",
+      hello: null,
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+    overlays.dispose();
+  });
+
+  it("does not flag an independently built configured UI root", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "2.0.0", controlUiBuildSource: "configured" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.update({ phase: "stopped", hello: null });
+    harness.update({
+      phase: "connected",
+      hello: {
+        server: { version: "2.0.0", controlUiBuildSource: "configured" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    overlays.dispose();
+  });
+
   it("waits for a reconnect before flagging a version mismatch", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
@@ -303,12 +191,42 @@ describe("application approval overlays", () => {
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-review-only",
     ]);
+    expect(overlays.snapshot.approvalCanGrant).toBe(false);
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalErrors.get("approval-review-only")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     expect(
       request.mock.calls.some(
         ([method]) => method === "exec.approval.resolve" || method === "approval.resolve",
       ),
     ).toBe(false);
+    overlays.dispose();
+  });
+
+  it("surfaces a stale decision dispatched after grant revocation", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale-action", 1_000);
+
+    // A rendered action can dispatch before the overlay subscriber consumes
+    // the snapshot that revokes its grant.
+    harness.replaceSnapshotWithoutPublishing({ hello: null });
+    await overlays.decideApproval("allow-once", "approval-stale-action");
+
+    expect(overlays.snapshot.approvalErrors.get("approval-stale-action")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
+    expect(request.mock.calls.some(([method]) => method === "exec.approval.resolve")).toBe(false);
     overlays.dispose();
   });
 
@@ -542,9 +460,13 @@ describe("application approval overlays", () => {
 
     harness.update({ hello: null });
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalCanGrant).toBe(false);
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-stale-grant",
     ]);
+    expect(overlays.snapshot.approvalErrors.get("approval-stale-grant")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     harness.update({
       hello: {
         auth: { role: "operator", scopes: ["operator.approvals"] },
@@ -552,6 +474,7 @@ describe("application approval overlays", () => {
     });
     harness.emitApproval("approval-current-grant", 2_000);
     const currentDecision = overlays.decideApproval("deny", "approval-current-grant");
+    expect(overlays.snapshot.approvalCanGrant).toBe(true);
 
     staleResolution.resolve({ ok: true });
     await staleDecision;
@@ -567,6 +490,9 @@ describe("application approval overlays", () => {
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
       "approval-stale-grant",
     ]);
+    expect(overlays.snapshot.approvalErrors.get("approval-stale-grant")).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
     overlays.dispose();
   });
 
@@ -660,12 +586,63 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
+  it("keeps a projected approval's resolve failure visible", async () => {
+    let resolveAttempts = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "exec.approval.resolve") {
+        return Promise.resolve([]);
+      }
+      resolveAttempts += 1;
+      return resolveAttempts === 1
+        ? Promise.reject(new Error("gateway unavailable"))
+        : Promise.resolve({ ok: true });
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    const projectedApproval = {
+      ...approval("approval-projected", 1_000),
+      kind: "exec" as const,
+    };
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.get(projectedApproval.id)).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.has(projectedApproval.id)).toBe(false);
+    overlays.dispose();
+  });
+
+  it("surfaces a connection error when a rendered approval races a disconnect", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.emitApproval("approval-disconnected", 1_000);
+
+    // The rendered modal can dispatch its click before Lit consumes the
+    // Gateway snapshot notification that removes the stale card.
+    harness.replaceSnapshotWithoutPublishing({ phase: "reconnecting" });
+    await overlays.decideApproval("allow-once", "approval-disconnected");
+
+    expect(overlays.snapshot.approvalErrors.get("approval-disconnected")).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
+    overlays.dispose();
+  });
+
   it("keeps A's failure visible after deciding B successfully", async () => {
     const firstResolve = deferred();
     const secondResolve = deferred();
     let resolveCalls = 0;
     const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
+      if (method !== "exec.approval.resolve") {
         return Promise.resolve([]);
       }
       resolveCalls += 1;
@@ -698,7 +675,7 @@ describe("application approval overlays", () => {
     const firstResolve = deferred();
     let resolveCalls = 0;
     const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
+      if (method !== "exec.approval.resolve") {
         return Promise.resolve([]);
       }
       resolveCalls += 1;
@@ -934,32 +911,56 @@ describe("application update overlays", () => {
   it("promotes restart health polling to the managed handoff budget", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;
+    let updateStarted = false;
+    let updateFinished = false;
     const request = vi.fn<RequestFn>((method) => {
       if (method.endsWith(".list")) {
         return Promise.resolve([]);
       }
       if (method === "update.run") {
+        updateStarted = true;
         return Promise.resolve({
           ok: true,
           result: { status: "ok", after: { version: "2.0.0" } },
+          sentinel: {
+            payload: {
+              kind: "update",
+              status: "ok",
+              ts: 1_000,
+              stats: { after: { version: "2.0.0" } },
+            },
+          },
         });
       }
       if (method === "update.status") {
         statusRequests += 1;
+        if (!updateStarted) {
+          return Promise.resolve({ sentinel: null });
+        }
+        // A newer managed attempt can replace the restart being verified.
         return Promise.resolve(
-          statusRequests <= 11
+          !updateFinished
             ? {
                 sentinel: {
                   kind: "update",
                   status: "skipped",
-                  stats: { reason: "restart-health-pending" },
+                  ts: 2_000,
+                  stats: {
+                    handoffId: "newer-managed-handoff",
+                    reason: "restart-health-pending",
+                    after: { version: "2.0.0" },
+                  },
                 },
               }
             : {
                 sentinel: {
                   kind: "update",
                   status: "ok",
-                  stats: { after: { version: "2.0.0" } },
+                  ts: 3_000,
+                  stats: {
+                    handoffId: "newer-managed-handoff",
+                    after: { version: "2.0.0" },
+                  },
                 },
               },
         );
@@ -972,22 +973,24 @@ describe("application update overlays", () => {
 
     try {
       await overlays.runUpdate();
+      const statusRequestsBeforeReconnect = statusRequests;
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
-      expect(statusRequests).toBe(1);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 1);
 
       harness.update({ sessionKey: "agent:main:next" });
       await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(11);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 11);
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
 
+      updateFinished = true;
       await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(12);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 12);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
     } finally {
@@ -999,11 +1002,13 @@ describe("application update overlays", () => {
   it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
     installUpdateTranslations();
     let statusRequests = 0;
+    let updateStarted = false;
     const request = vi.fn<RequestFn>((method) => {
       if (method.endsWith(".list")) {
         return Promise.resolve([]);
       }
       if (method === "update.run") {
+        updateStarted = true;
         return Promise.resolve({
           ok: true,
           handoff: { status: "started" },
@@ -1011,15 +1016,33 @@ describe("application update overlays", () => {
             status: "skipped",
             reason: UPDATE_HANDOFF_STARTED_REASON,
           },
+          sentinel: {
+            payload: {
+              kind: "update",
+              status: "skipped",
+              ts: 1_000,
+              stats: {
+                handoffId: "version-verification-handoff",
+                reason: UPDATE_HANDOFF_STARTED_REASON,
+              },
+            },
+          },
         });
       }
       if (method === "update.status") {
         statusRequests += 1;
+        if (!updateStarted) {
+          return Promise.resolve({ sentinel: null });
+        }
         return Promise.resolve({
           sentinel: {
             kind: "update",
             status: "ok",
-            stats: { after: { version: "1.0.0" } },
+            ts: 2_000,
+            stats: {
+              handoffId: "version-verification-handoff",
+              after: { version: "1.0.0" },
+            },
           },
         });
       }
@@ -1047,10 +1070,11 @@ describe("application update overlays", () => {
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
 
+      const statusRequestsBeforeReconnect = statusRequests;
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
-      expect(statusRequests).toBe(1);
+      expect(statusRequests).toBe(statusRequestsBeforeReconnect + 1);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",

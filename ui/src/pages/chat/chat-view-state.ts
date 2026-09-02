@@ -1,7 +1,7 @@
 import { resetChatComposerState } from "./components/chat-composer.ts";
-import { resetChatThreadPresentationState } from "./components/chat-thread.ts";
+import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 
 export function resetChatViewState(paneId?: string, owner?: ParentNode) {
   resetChatComposerState(paneId);
-  resetChatThreadPresentationState(paneId, owner);
+  resetThreadPresentation(paneId, owner);
 }

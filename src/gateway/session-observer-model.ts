@@ -18,13 +18,14 @@ import type {
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -39,6 +40,12 @@ const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
+
+export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
+  return parseAgentSessionKey(sessionKey)
+    ? sessionKey
+    : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
+}
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
@@ -263,14 +270,13 @@ export async function defaultPersistDigest(params: {
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
-  let missingEntry = false;
-  const result = await patchSessionEntry(
+  // No fallbackEntry is supplied, so the accessor returns null only when the
+  // row is gone (→ null) and a truthy clone on rejection — track acceptance
+  // separately since the result alone can't distinguish the three states.
+  let applied = false;
+  const result = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, agentId: params.agentId },
-    (entry, context) => {
-      if (!context.existingEntry) {
-        missingEntry = true;
-        return null;
-      }
+    (entry) => {
       if (params.stillCurrent?.() === false) {
         return null;
       }
@@ -280,20 +286,12 @@ export async function defaultPersistDigest(params: {
       if ((entry.observerDigest?.revision ?? 0) >= params.digest.revision) {
         return null;
       }
+      applied = true;
       return { observerDigest: params.digest };
     },
     { preserveActivity: true },
   );
-  if (result) {
-    return true;
-  }
-  return missingEntry ? null : false;
-}
-
-export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
-  return (
-    event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
-  );
+  return result === null ? null : applied;
 }
 
 export async function synthesizeSessionObserverTerminalDigest(params: {

@@ -1,10 +1,14 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
@@ -154,8 +158,14 @@ class ChatControllerModelSelectionTest {
               releasePatch.await()
               "{}"
             }
-            "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
-            else -> "{}"
+
+            "chat.send" -> {
+              """{"runId":"run-ok","status":"ok"}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)
@@ -273,12 +283,21 @@ class ChatControllerModelSelectionTest {
           cacheScope = { gatewayScope },
         ) { method, _ ->
           when {
-            method == "sessions.list" ->
+            method == "sessions.list" -> {
               """{"sessions":[{"key":"main","thinkingLevel":"off"}]}"""
-            method == "sessions.patch" && gatewayScope.gatewayId == "gateway-a" ->
+            }
+
+            method == "sessions.patch" && gatewayScope.gatewayId == "gateway-a" -> {
               """{"resolved":{"thinkingLevel":"medium"}}"""
-            method == "sessions.patch" -> error("thinking rejected")
-            else -> "{}"
+            }
+
+            method == "sessions.patch" -> {
+              error("thinking rejected")
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -308,9 +327,10 @@ class ChatControllerModelSelectionTest {
       val controller =
         createChatController(
           cacheScope = { gatewayScope },
-          captureSettingsRequestLease = { scope ->
+          captureRequestLease = { scope ->
             scope ?: error("missing scope")
-            GatewaySession.RequestLease(scope.gatewayId) { _, _, _ ->
+            GatewaySession.RequestLease(scope.gatewayId) { _, _, _, withEnqueue ->
+              withEnqueue {}
               capturedScopes += scope
               "{}"
             }
@@ -525,7 +545,10 @@ class ChatControllerModelSelectionTest {
               newListFinished.complete(Unit)
               """{"sessions":[{"key":"main","thinkingLevel":"high"}]}"""
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -743,6 +766,7 @@ class ChatControllerModelSelectionTest {
                 firstPatchStarted.complete(Unit)
                 releaseFirstPatch.await()
               }
+
               "ultra" -> {
                 secondPatchStarted.complete(Unit)
                 releaseSecondPatch.await()
@@ -794,8 +818,14 @@ class ChatControllerModelSelectionTest {
                 releaseFirstPatch.await()
                 """{"resolved":{"thinkingLevel":"medium"}}"""
               }
-              2 -> """{"resolved":{"thinkingLevel":"ultra"}}"""
-              else -> """{"resolved":{"thinkingLevel":"max"}}"""
+
+              2 -> {
+                """{"resolved":{"thinkingLevel":"ultra"}}"""
+              }
+
+              else -> {
+                """{"resolved":{"thinkingLevel":"max"}}"""
+              }
             }
           }
         }
@@ -826,8 +856,14 @@ class ChatControllerModelSelectionTest {
               releasePatch.await()
               error("patch failed")
             }
-            "chat.send" -> """{"runId":"run-unexpected","status":"ok"}"""
-            else -> "{}"
+
+            "chat.send" -> {
+              """{"runId":"run-unexpected","status":"ok"}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)
@@ -925,6 +961,320 @@ class ChatControllerModelSelectionTest {
       )
       val metadataRequest = requests.single { it.first == "chat.metadata" }
       assertTrue(metadataRequest.second.orEmpty().contains("\"agentId\":\"ops\""))
+    }
+
+  @Test
+  fun metadataScopeFollowsNegotiatedGatewayContract() =
+    runTest {
+      for (advertised in listOf(null, false, true)) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            gatewayAdvertisesCapability = { if (it == "session-scoped-chat-metadata") advertised else false }
+            respond("chat.history", historyResponse("session-ops", emptyList()))
+            respond("chat.metadata") { paramsJson ->
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              // Stable v2026.7.1-2 rejects any additional property before computing metadata.
+              require(params.keys == if (advertised == true) setOf("agentId", "sessionKey") else setOf("agentId"))
+              """{"swarmEnabled":false,"commands":[{"name":"new","textAliases":["/new"]}],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":true,"input":["text"]}]}"""
+            }
+          }
+        controller.load("agent:ops:first")
+        advanceUntilIdle()
+        assertEquals("legacy and current peers both load commands", listOf("new"), controller.commands.value.map { it.name })
+        assertEquals(
+          "gpt-5.6-luna",
+          controller.modelCatalog.value
+            .single()
+            .id,
+        )
+        controller.switchSession("agent:ops:second")
+        advanceUntilIdle()
+        val metadata = requests.filter { it.first == "chat.metadata" }.map { json.parseToJsonElement(it.second.orEmpty()) as JsonObject }
+        assertEquals(if (advertised == true) 2 else 1, metadata.size)
+        assertEquals("ops", (metadata.last()["agentId"] as JsonPrimitive).content)
+        assertEquals(if (advertised == true) JsonPrimitive("agent:ops:second") else null, metadata.last()["sessionKey"])
+      }
+    }
+
+  @Test
+  fun sessionMetadataMutationsRevalidateWithoutResettingChat() =
+    runTest {
+      for (reason in listOf("patch", "command-metadata", "reset")) verifyMetadataPublication(reason)
+    }
+
+  @Test
+  fun sequenceGapRevalidatesLoadedMetadataWithoutResettingChat() =
+    runTest {
+      verifyMetadataPublication("seqGap")
+    }
+
+  private suspend fun TestScope.verifyMetadataPublication(reason: String) {
+    var available = false
+    val (controller, requests) =
+      chatControllerTestSetup {
+        gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+        respond("chat.history", historyResponse("session-current", listOf(ReplayHistoryMessage("assistant", "Earlier reply", 1))))
+        respond("chat.metadata") { availabilityMetadata(available) }
+      }
+    controller.load("global", ownerAgentId = "main")
+    advanceUntilIdle()
+    val messages = controller.messages.value
+
+    fun owner() = resolveChatComposerOwner(null, controller.sessionOwnerAgentId.value, sessionKey = controller.sessionKey.value, mainSessionKey = "main")
+    val drafts = ChatComposerTextDraftStore()
+    drafts[owner()] = "Unsent draft"
+    val historyRequests = requests.count { it.first == "chat.history" }
+    val metadataRequests = requests.count { it.first == "chat.metadata" }
+    for (unrelated in listOf(
+      """{"sessionKey":"other","agentId":"main","reason":"patch"}""",
+      """{"sessionKey":"global","agentId":"ops","reason":"patch"}""",
+      """{"sessionKey":"global","agentId":"main","phase":"message"}""",
+    )) {
+      controller.handleGatewayEvent("sessions.changed", unrelated)
+    }
+    advanceUntilIdle()
+    assertEquals(metadataRequests, requests.count { it.first == "chat.metadata" })
+    for (next in listOf(true, false)) {
+      available = next
+      if (reason == "seqGap") {
+        controller.handleGatewayEvent("seqGap", null)
+      } else {
+        controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"global","agentId":"main","reason":"$reason"}""")
+      }
+      advanceUntilIdle()
+      assertEquals(
+        "$reason must revalidate accepted availability",
+        next,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+      assertEquals(messages, controller.messages.value)
+      assertEquals("Unsent draft", drafts[owner()])
+    }
+    assertEquals(metadataRequests + 2, requests.count { it.first == "chat.metadata" })
+    if (reason != "seqGap") assertEquals(historyRequests, requests.count { it.first == "chat.history" })
+  }
+
+  @Test
+  fun metadataChangeRetainsSessionProfileAvailabilityUntilAcceptedRefreshWithoutReloadingChat() =
+    runTest {
+      val pendingRefresh = CompletableDeferred<String>()
+      val sessionKey = "agent:main:profile-locked"
+      var metadataRequests = 0
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.history", historyResponse("session-main", listOf(ReplayHistoryMessage("assistant", "Earlier reply", 1))))
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+          respond("chat.metadata") { paramsJson ->
+            metadataRequests += 1
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            // Neutral agent credentials work; this session's selected profile starts unavailable.
+            when {
+              (params["sessionKey"] as? JsonPrimitive)?.content != sessionKey -> availabilityMetadata(true)
+              metadataRequests == 2 -> pendingRefresh.await()
+              metadataRequests == 4 -> availabilityMetadata(true)
+              else -> availabilityMetadata(false)
+            }
+          }
+        }
+      controller.load(sessionKey)
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait(sessionKey, "openai/gpt-5.6-luna"))
+      val messages = controller.messages.value
+      val historyRequests = requests.count { it.first == "chat.history" }
+      val sessionRequests = requests.count { it.first == "sessions.list" }
+      assertEquals(
+        false,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      assertEquals(2, metadataRequests)
+      assertEquals(
+        false,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+
+      pendingRefresh.completeExceptionally(IllegalStateException("transport failed"))
+      advanceUntilIdle()
+      assertEquals(
+        false,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals(
+        false,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals(
+        true,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+      assertEquals("openai/gpt-5.6-luna", controller.selectedModelRef.value)
+      assertEquals(messages, controller.messages.value)
+      assertEquals(historyRequests, requests.count { it.first == "chat.history" })
+      assertEquals(sessionRequests, requests.count { it.first == "sessions.list" })
+    }
+
+  @Test
+  fun acceptedMetadataRecoveryUnblocksPermanentAuthSendGate() =
+    runTest {
+      var available = false
+      var unavailableReason: String? = "missing-auth"
+      var sends = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") { availabilityMetadata(available, unavailableReason) }
+          respond("sessions.patch", "{}")
+          respond("chat.send") {
+            sends += 1
+            """{"runId":"recovered-send","status":"ok"}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-luna"))
+      assertEquals(
+        GatewayModelUnavailableReason.MissingAuth,
+        controller.modelCatalog.value
+          .single()
+          .unavailableReason,
+      )
+
+      assertFalse(controller.sendMessageAwaitAcceptance("blocked", "off", emptyList()))
+      assertEquals(0, sends)
+
+      available = true
+      unavailableReason = null
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertTrue(controller.sendMessageAwaitAcceptance("allowed", "off", emptyList()))
+      assertEquals(1, sends)
+    }
+
+  @Test
+  fun newerMetadataPublicationFencesOlderResponseAndFailure() =
+    runTest {
+      for (event in listOf("chat.metadata.changed", "patch", "command-metadata", "reset", "seqGap")) {
+        for (oldRequestFails in listOf(false, true)) {
+          val oldRefresh = CompletableDeferred<String>()
+          val newRefresh = CompletableDeferred<String>()
+          var metadataRequests = 0
+          val controller =
+            createScriptedChatController {
+              gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+              respond("chat.metadata") {
+                metadataRequests += 1
+                when (metadataRequests) {
+                  2 -> oldRefresh.await()
+                  3 -> newRefresh.await()
+                  else -> availabilityMetadata(false)
+                }
+              }
+            }
+          controller.handleGatewayEvent("health", null)
+          advanceUntilIdle()
+          controller.handleGatewayEvent("chat.metadata.changed", "{}")
+          runCurrent()
+          // Queue the old completion before delivering the invalidation. It must be
+          // retired synchronously, before the new refresh coroutine gets to run.
+          if (oldRequestFails) {
+            oldRefresh.completeExceptionally(IllegalStateException("stale transport failure"))
+          } else {
+            oldRefresh.complete(availabilityMetadata(true))
+          }
+          if (event == "chat.metadata.changed" || event == "seqGap") {
+            controller.handleGatewayEvent(event, null)
+          } else {
+            controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","reason":"$event"}""")
+          }
+          runCurrent()
+          assertEquals("$event refreshes at the event boundary", 3, metadataRequests)
+          assertEquals(
+            "$event fences a queued stale completion",
+            false,
+            controller.modelCatalog.value
+              .single()
+              .available,
+          )
+          newRefresh.complete(availabilityMetadata(true))
+          advanceUntilIdle()
+          assertEquals(
+            true,
+            controller.modelCatalog.value
+              .single()
+              .available,
+          )
+        }
+      }
+    }
+
+  @Test
+  fun metadataPublicationCannotCrossDisconnectOrSessionRoundTrip() =
+    runTest {
+      for (transition in listOf("disconnect", "agent", "session")) {
+        val oldRefresh = CompletableDeferred<String>()
+        var metadataRequests = 0
+        val controller =
+          createScriptedChatController {
+            gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+            respond("chat.metadata") {
+              metadataRequests += 1
+              if (metadataRequests == 2) oldRefresh.await() else availabilityMetadata(false)
+            }
+            respond("chat.history", historyResponse("session-current", emptyList()))
+          }
+        controller.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+        controller.handleGatewayEvent("chat.metadata.changed", "{}")
+        runCurrent()
+        assertEquals(2, metadataRequests)
+
+        if (transition == "disconnect") {
+          controller.onDisconnected("Offline")
+          assertTrue(controller.modelCatalog.value.isEmpty())
+          controller.handleGatewayEvent("health", null)
+          runCurrent()
+        } else {
+          controller.switchSession(if (transition == "agent") "agent:ops:main" else "agent:main:other")
+          runCurrent()
+          controller.switchSession("main")
+          runCurrent()
+        }
+        assertEquals(
+          false,
+          controller.modelCatalog.value
+            .single()
+            .available,
+        )
+
+        oldRefresh.complete(availabilityMetadata(true))
+        advanceUntilIdle()
+        assertEquals(
+          false,
+          controller.modelCatalog.value
+            .single()
+            .available,
+        )
+      }
     }
 
   @Test
@@ -1083,6 +1433,14 @@ class ChatControllerModelSelectionTest {
 
       assertEquals(listOf("max"), sentThinkingLevels)
     }
+
+  private fun availabilityMetadata(
+    available: Boolean,
+    unavailableReason: String? = null,
+  ): String {
+    val reasonField = unavailableReason?.let { ",\"unavailableReason\":\"$it\"" }.orEmpty()
+    return """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":$available$reasonField,"input":["text"]}]}"""
+  }
 
   private fun thinkingFields(
     level: String?,

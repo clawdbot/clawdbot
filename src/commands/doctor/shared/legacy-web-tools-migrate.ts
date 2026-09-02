@@ -1,8 +1,7 @@
 // Legacy web tool config migrations into plugin-owned provider config.
-import { mergeMissing } from "../../../config/legacy.shared.js";
+import { ensureRecord, mergeMissing } from "../../../config/legacy.shared.js";
 import {
   cloneRecord,
-  ensureRecord,
   hasOwnKey,
   isRecord,
   type JsonRecord,

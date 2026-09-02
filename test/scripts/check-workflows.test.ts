@@ -25,6 +25,7 @@ describe("check-workflows", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("missing workflow linter");
     expect(result.stderr).toContain("install actionlint, Go");
+    expect(result.stderr).toContain("011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7");
   });
 
   it("uses the pinned go fallback and audits all workflows with zizmor", () => {
@@ -71,7 +72,7 @@ describe("check-workflows", () => {
 
     expect(result.status).toBe(0);
     expect(readFileSync(markerPath, "utf8")).toContain(
-      "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+      "github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
     );
     const preCommitArgs = readFileSync(preCommitMarkerPath, "utf8");
     expect(preCommitArgs).toContain("run --config .pre-commit-config.yaml zizmor --files");
@@ -122,7 +123,7 @@ describe("check-workflows", () => {
 
     expect(result.status).toBe(0);
     const pythonArgs = readFileSync(markerPath, "utf8");
-    expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.2.0");
+    expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.6.2");
     expect(pythonArgs).toContain(
       "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
     );
@@ -163,7 +164,7 @@ describe("check-workflows", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("python venv unavailable");
     expect(result.stderr).toContain("missing pre-commit runtime for actionlint");
-    expect(result.stderr).toContain("Python venv support for pre-commit 4.2.0");
+    expect(result.stderr).toContain("Python venv support for pre-commit 4.6.2");
   });
 
   it("cleans the temporary Python venv before exiting on hook failure", () => {

@@ -1,7 +1,10 @@
+import {
+  clampTimerTimeoutMs,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 // Gateway discovery runtime.
 // Starts local mDNS plugin discovery and optional wide-area DNS-SD publishing.
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clampTimerTimeoutMs, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
@@ -32,7 +35,6 @@ export async function startGatewayDiscovery(params: {
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   gatewayDirectReachable?: boolean;
-  canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   wideAreaDiscoveryDomain?: string | null;
   tailscaleMode: "off" | "serve" | "funnel";
@@ -76,7 +78,6 @@ export async function startGatewayDiscovery(params: {
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
           gatewayDirectReachable: params.gatewayDirectReachable === true,
-          canvasPort: params.canvasPort,
           sshPort,
           tailnetDns,
           cliPath,

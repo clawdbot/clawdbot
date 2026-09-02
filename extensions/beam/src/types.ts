@@ -1,18 +1,32 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const BEAM_HOST_ID = "gateway";
+export const BEAM_SESSION_SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "beam",
+  hostId: BEAM_HOST_ID,
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
 export const BEAM_MAX_ITEMS = 200;
 export const BEAM_MAX_ITEM_CHARS = 6_000;
 
-type BeamTranscriptItem = {
+export type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
   text: string;
 };
 
-type BeamUpload = {
+export type BeamUpload = {
   version: 1;
   beamId: string;
   source: string;
@@ -25,6 +39,8 @@ type BeamUpload = {
 };
 
 export type BeamStoredSession = BeamUpload & {
+  /** Verified publisher of this snapshot; never accepted from the upload body. */
+  uploaderProfileId?: string;
   createdAt: number;
   receivedAt: number;
 };
@@ -47,14 +63,6 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): bool
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
-function optionalString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
 function isIsoTimestamp(value: string): boolean {
   const match =
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
@@ -63,27 +71,16 @@ function isIsoTimestamp(value: string): boolean {
   if (!match || !Number.isFinite(Date.parse(value))) {
     return false;
   }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const offsetHour = Number(match[8] ?? 0);
-  const offsetMinute = Number(match[9] ?? 0);
-  if (hour > 23 || minute > 59 || second > 59 || offsetHour > 23 || offsetMinute > 59) {
-    return false;
-  }
-  const calendar = new Date(0);
-  calendar.setUTCFullYear(year, month - 1, day);
-  calendar.setUTCHours(hour, minute, second, 0);
+  // Date.parse normalizes impossible calendar days and 24:00. Check the date
+  // before its timezone offset and reject normalized next-day timestamps.
+  const calendar = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
   return (
-    calendar.getUTCFullYear() === year &&
-    calendar.getUTCMonth() === month - 1 &&
-    calendar.getUTCDate() === day &&
-    calendar.getUTCHours() === hour &&
-    calendar.getUTCMinutes() === minute &&
-    calendar.getUTCSeconds() === second
+    calendar.getUTCDate() === Number(match[3]) &&
+    Number(match[4]) < 24 &&
+    Number(match[5]) < 60 &&
+    Number(match[6]) < 60 &&
+    Number(match[8] ?? 0) < 24 &&
+    Number(match[9] ?? 0) < 60
   );
 }
 
@@ -96,19 +93,19 @@ export function parseBeamUpload(
   if (value.version !== 1) {
     return { ok: false, error: "version must be 1" };
   }
-  const beamId = optionalString(value.beamId, 64);
+  const beamId = readBoundedString(value.beamId, 64);
   if (!beamId || !/^[a-f0-9]{32}$/i.test(beamId)) {
     return { ok: false, error: "beamId must be a 32-character hex id" };
   }
-  const source = optionalString(value.source, 32);
+  const source = readBoundedString(value.source, 32);
   if (!source || !/^[a-z0-9._-]+$/i.test(source)) {
     return { ok: false, error: "source must be a short identifier" };
   }
-  const title = optionalString(value.title, 160);
+  const title = readBoundedString(value.title, 160);
   if (!title) {
     return { ok: false, error: "title must be a non-empty string" };
   }
-  const updatedAt = optionalString(value.updatedAt, 64);
+  const updatedAt = readBoundedString(value.updatedAt, 64);
   if (!updatedAt || !isIsoTimestamp(updatedAt)) {
     return { ok: false, error: "updatedAt must be an ISO timestamp" };
   }
@@ -118,7 +115,8 @@ export function parseBeamUpload(
   if (value.truncated !== undefined && typeof value.truncated !== "boolean") {
     return { ok: false, error: "truncated must be a boolean" };
   }
-  const hookEvent = value.hookEvent === undefined ? undefined : optionalString(value.hookEvent, 64);
+  const hookEvent =
+    value.hookEvent === undefined ? undefined : readBoundedString(value.hookEvent, 64);
   if (value.hookEvent !== undefined && !hookEvent) {
     return { ok: false, error: "hookEvent must be a short string" };
   }
@@ -140,7 +138,7 @@ export function parseBeamUpload(
     ) {
       return { ok: false, error: "transcript item type is invalid" };
     }
-    const text = optionalString(rawItem.text, BEAM_MAX_ITEM_CHARS);
+    const text = readBoundedString(rawItem.text, BEAM_MAX_ITEM_CHARS);
     if (!text) {
       return {
         ok: false,

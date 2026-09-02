@@ -32,7 +32,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
 function createIdentityParams(
   overrides: {
     meta?: MemoryIndexMeta | null;
-    provider?: { id: string; model: string } | null;
+    provider?: { id: string; model?: string } | null;
     providerKey?: string;
     providerAliases?: Array<{ model: string; providerKey: string }>;
     providerKeyKnown?: boolean;
@@ -67,25 +67,23 @@ function isMemoryIndexIdentityDirty(
 }
 
 describe("memory reindex state", () => {
-  it("invalidates indexes written before path provenance classification was versioned", () => {
-    expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({ meta: createMeta({ provenanceVersion: undefined }) }),
-      ),
-    ).toEqual({
-      status: "mismatched",
+  it.each([
+    {
+      name: "missing provenance version",
+      meta: { provenanceVersion: undefined },
       reason: "index provenance classifier changed",
-    });
-  });
-
-  it("invalidates indexes written before curated entry chunking was versioned", () => {
+    },
+    {
+      name: "missing chunking version",
+      meta: { chunkingVersion: undefined },
+      reason: "index chunking implementation changed",
+    },
+  ])("invalidates indexes with $name", ({ meta, reason }) => {
     expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({ meta: createMeta({ chunkingVersion: undefined }) }),
-      ),
+      resolveMemoryIndexIdentityState(createIdentityParams({ meta: createMeta(meta) })),
     ).toEqual({
       status: "mismatched",
-      reason: "index chunking implementation changed",
+      reason,
     });
   });
 
@@ -146,6 +144,23 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("defers only model and key checks when the configured model is unknown", () => {
+    const params = createIdentityParams({ provider: { id: "openai" }, providerKey: undefined });
+    expect(resolveMemoryIndexIdentityState(params)).toEqual({ status: "valid" });
+    expect(resolveMemoryIndexIdentityState({ ...params, provider: { id: "other" } })).toEqual({
+      status: "mismatched",
+      reason: "index was built for provider openai, expected other",
+    });
+    expect(resolveMemoryIndexIdentityState({ ...params, configuredScopeHash: "other" })).toEqual({
+      status: "mismatched",
+      reason: "index scope changed",
+    });
+    expect(resolveMemoryIndexIdentityState({ ...params, vectorReady: true })).toEqual({
+      status: "mismatched",
+      reason: "index vector dimensions are missing",
+    });
   });
 
   it("keeps model identity strict when paths share a basename", () => {
@@ -355,11 +370,14 @@ describe("memory reindex state", () => {
     ).toBe(false);
   });
 
-  it("falls back to fts-only when provider.model is an empty string", () => {
+  it.each([
+    { name: "empty model", model: "" },
+    { name: "whitespace-only model", model: "  " },
+  ])("falls back to fts-only for $name", ({ model }) => {
     expect(
       resolveMemoryIndexIdentityState(
         createIdentityParams({
-          provider: { id: "openai", model: "" },
+          provider: { id: "openai", model },
           meta: createMeta({ model: "fts-only" }),
         }),
       ),
@@ -377,16 +395,5 @@ describe("memory reindex state", () => {
     if (state.status === "mismatched") {
       expect(state.reason).toContain("expected fts-only");
     }
-  });
-
-  it("falls back to fts-only when provider.model is whitespace-only", () => {
-    expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          provider: { id: "openai", model: "  " },
-          meta: createMeta({ model: "fts-only" }),
-        }),
-      ),
-    ).toEqual({ status: "valid" });
   });
 });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("legacy media persistence Doctor migration from historical v15", () => {
-  it("converges the exact 509a5f0373764 schema before current-index repair", () => {
+  it("converges the exact 509a5f0373764 schema before current-index repair", async () => {
     const historicalSchema = historicalV15AgentSchemaSql();
     expect(createHash("sha256").update(historicalSchema).digest("hex")).toBe(
       "75953ef97a738251822fc5aaf283bbe55fbcabe8702ad771892cdafc85d8e6b9",
@@ -89,10 +89,10 @@ describe("legacy media persistence Doctor migration from historical v15", () => 
     }
     registerOpenClawAgentDatabase({ agentId: "main", env, path: databasePath, schemaVersion: 15 });
 
-    const result = migrateLegacyMediaPersistence({ env });
+    const result = await migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toEqual([]);
     expect(
-      listSessionEntries({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
+      listSessionEntriesCore({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
         sessionId: entry.sessionId,
         sessionKey,
       })),

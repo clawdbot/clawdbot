@@ -1,11 +1,14 @@
 // Control UI tests cover browser credential submission and visible recovery.
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -18,23 +21,17 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(
-  process.cwd(),
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
-    ".artifacts/control-ui-e2e/control-ui-credentials",
-);
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("control-ui-credentials");
+});
 const viewport = { height: 900, width: 1280 };
 
 let browser: Browser;
 let server: ControlUiE2eServer;
 const openContexts = new Set<BrowserContext>();
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function readConnectAuth(request: MockGatewayRequest): Record<string, unknown> | undefined {
   const auth = requireRecord(request.params).auth;
@@ -46,7 +43,6 @@ async function createCredentialPage(): Promise<{
   gateway: MockGatewayControls;
   page: Page;
 }> {
-  await mkdir(artifactDir, { recursive: true });
   const context = await browser.newContext({
     locale: "en-US",
     recordVideo: { dir: artifactDir, size: viewport },
@@ -55,7 +51,7 @@ async function createCredentialPage(): Promise<{
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(server.baseUrl);
   expect(response?.status()).toBe(200);

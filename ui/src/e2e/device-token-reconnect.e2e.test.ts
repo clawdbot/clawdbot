@@ -1,9 +1,10 @@
 // Control UI tests cover browser-native device-token isolation and reuse.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +17,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("device-token-reconnect", artifactRoot)
+    : undefined;
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -34,12 +41,7 @@ const ROSITA_DEVICE_TOKEN = "rosita-device-token";
 const WILFRED_DEVICE_TOKEN = "wilfred-device-token";
 const WILFRED_ROTATED_TOKEN = "wilfred-rotated-device-token";
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function readConnectAuth(request: { params?: unknown }): Record<string, unknown> | undefined {
   const auth = requireRecord(request.params).auth;
@@ -116,7 +118,6 @@ async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
 }
 
@@ -237,6 +238,8 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
           role: "operator",
           scopes: OPERATOR_SCOPES,
           token: WILFRED_ROTATED_TOKEN,
+          rotatedAtMs: Date.now(),
+          tokenDelivery: "in-band",
         },
         "node.list": { nodes: [] },
       },

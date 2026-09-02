@@ -1,8 +1,10 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { toErrorObject } from "../infra/errors.js";
+import { fileURLToPath } from "node:url";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   confirmOpenClawAgentDatabaseIntegrity,
@@ -25,56 +27,6 @@ export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
-const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
-const PROTOTYPE_MUTATING_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
-
-function toError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-  const message = String(error);
-  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
-    return toErrorObject(error, message);
-  }
-  const normalized = toErrorObject({}, message);
-  normalized.cause = error;
-  try {
-    const detailKeys = Reflect.ownKeys(error).filter(
-      (key) =>
-        (typeof key !== "string" ||
-          (!ERROR_OWNED_FIELDS.has(key) && !PROTOTYPE_MUTATING_FIELDS.has(key))) &&
-        Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
-    );
-    for (const key of detailKeys) {
-      try {
-        Object.defineProperty(normalized, key, {
-          value: Reflect.get(error, key),
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-      } catch {
-        // Skip fields whose getters or property definitions reject access.
-      }
-    }
-  } catch {
-    // Opaque proxies may reject enumeration; preserve the original failure as the cause.
-  }
-  return normalized;
-}
-
-function resolveDatabaseVerifyWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(path.join(distRoot, "state", "openclaw-database-verify.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./openclaw-database-verify.worker${extension}`, currentModuleUrl);
-}
 
 function isVerifyResult(value: unknown): value is OpenClawDatabaseVerifyResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -93,7 +45,8 @@ export function runDatabaseVerifyWorker(
   targets: readonly OpenClawDatabaseVerifyTarget[],
   options: { onWorker?: (worker: ChildProcess | undefined) => void; workerUrl?: URL } = {},
 ): Promise<OpenClawDatabaseVerifyResult[]> {
-  const workerUrl = options.workerUrl ?? resolveDatabaseVerifyWorkerUrl();
+  const workerUrl =
+    options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: ChildProcess;
   try {
@@ -104,7 +57,7 @@ export function runDatabaseVerifyWorker(
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
   } catch (error) {
-    return Promise.reject(toError(error));
+    return Promise.reject(toStructuredErrorObject(error));
   }
   options.onWorker?.(worker);
 
@@ -130,7 +83,7 @@ export function runDatabaseVerifyWorker(
       }
       settle(() => {
         if (protocolError) {
-          reject(protocolError);
+          reject(toStructuredErrorObject(protocolError));
         } else if (completedExit.code !== 0) {
           reject(
             new Error(
@@ -156,7 +109,7 @@ export function runDatabaseVerifyWorker(
       }
       result = message;
     });
-    worker.once("error", (error) => settle(() => reject(toError(error))));
+    worker.once("error", (error) => settle(() => reject(toStructuredErrorObject(error))));
     worker.once("disconnect", () => {
       disconnected = true;
       settleAfterExitAndDisconnect();
@@ -171,7 +124,7 @@ export function runDatabaseVerifyWorker(
         return;
       }
       worker.kill();
-      settle(() => reject(toError(error)));
+      settle(() => reject(toStructuredErrorObject(error)));
     });
   });
 }

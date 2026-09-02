@@ -5,7 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -31,6 +31,7 @@ import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
   providerHasGenericConfig,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
@@ -204,7 +205,7 @@ async function injectTtsAuthProfileApiKey(params: {
   if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
     return params.cfg;
   }
-  const auth = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProviderCore({
     provider: providerId,
     cfg: params.cfg,
     credentialPrecedence: "profile-first",
@@ -413,9 +414,12 @@ function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string)
   return ttsProviderConfigHasApiKey(config.providerConfigs[providerId]);
 }
 
-export async function runTtsProviders(transport: CapabilityTransport) {
+export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
   const cfg = getRuntimeConfig();
   if (transport === "gateway") {
+    if (rawAgentId !== undefined) {
+      throw new Error("--agent is only supported with local TTS provider inspection.");
+    }
     const payload: {
       providers?: Array<Record<string, unknown>>;
       active?: string;
@@ -441,6 +445,7 @@ export async function runTtsProviders(transport: CapabilityTransport) {
       }),
     };
   }
+  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const active = getTtsProvider(config, prefsPath);
@@ -448,7 +453,8 @@ export async function runTtsProviders(transport: CapabilityTransport) {
     providers: listSpeechProviders(cfg).map((provider) => ({
       available: true,
       configured:
-        active === provider.id || providerHasGenericConfig({ cfg, providerId: provider.id }),
+        active === provider.id ||
+        providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
       selected: active === provider.id,
       id: provider.id,
       name: provider.label,

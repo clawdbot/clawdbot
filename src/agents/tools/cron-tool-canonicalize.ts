@@ -313,6 +313,31 @@ export function canonicalizeCronToolObject(
   return next;
 }
 
+// cron.add accepts these nulls, and a null sessionKey intentionally suppresses
+// default creator-session binding on create.
+const CRON_CREATE_NULLABLE_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["agentId", "sessionKey"]);
+
+function deleteNullFields(record: Record<string, unknown>, keep?: ReadonlySet<string>): void {
+  for (const [key, entry] of Object.entries(record)) {
+    if (entry === null && !keep?.has(key)) {
+      delete record[key];
+    } else if (isRecord(entry)) {
+      deleteNullFields(entry);
+    }
+  }
+}
+
+/**
+ * Drops null-valued fields from a create job in place. The model-facing job
+ * schema is shared with update, where null means "clear this field"; on create
+ * there is nothing to clear, and the strict gateway cron.add contract rejects
+ * the nulls its update patch accepts.
+ */
+export function stripCronCreateNullClears(value: Record<string, unknown>): Record<string, unknown> {
+  deleteNullFields(value, CRON_CREATE_NULLABLE_TOP_LEVEL_KEYS);
+  return value;
+}
+
 /** Detects recovered update patches that contain no meaningful cron fields after normalization. */
 export function isEmptyRecoveredCronPatch(value: unknown): boolean {
   if (!isRecord(value)) {

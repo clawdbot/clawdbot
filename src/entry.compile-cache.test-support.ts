@@ -5,8 +5,6 @@ import "./entry.compile-cache.js";
 type CompileCacheParams = {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
-  nodeVersion?: string;
-  platform?: NodeJS.Platform;
 };
 
 type CompileCacheRespawnPlan = {
@@ -25,10 +23,8 @@ type CompileCacheTestApi = {
     installRoot: string;
     argv?: string[];
     compileCacheDir?: string;
-    nodeVersion?: string;
     platform?: NodeJS.Platform;
   }): CompileCacheRespawnPlan | undefined;
-  isNodeVersionAffectedByCompileCacheDeadlock(nodeVersion: string | undefined): boolean;
   isSourceCheckoutInstallRoot(installRoot: string): boolean;
   resolveOpenClawCompileCacheDirectory(params: {
     env?: NodeJS.ProcessEnv;
@@ -51,12 +47,6 @@ export function buildOpenClawCompileCacheRespawnPlan(
   params: Parameters<CompileCacheTestApi["buildOpenClawCompileCacheRespawnPlan"]>[0],
 ): CompileCacheRespawnPlan | undefined {
   return getTestApi().buildOpenClawCompileCacheRespawnPlan(params);
-}
-
-export function isNodeVersionAffectedByCompileCacheDeadlock(
-  nodeVersion: string | undefined,
-): boolean {
-  return getTestApi().isNodeVersionAffectedByCompileCacheDeadlock(nodeVersion);
 }
 
 export function isSourceCheckoutInstallRoot(installRoot: string): boolean {

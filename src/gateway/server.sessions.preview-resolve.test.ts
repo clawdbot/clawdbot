@@ -1,7 +1,9 @@
 /**
  * Gateway session preview resolve tests.
  */
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionHistoryEvents from "../config/sessions/session-accessor.sqlite-history-events.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
@@ -13,6 +15,23 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+async function seedPreviewTail(
+  sessionId: string,
+  messages: Array<{ role: string; content: string }>,
+): Promise<void> {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { "agent:main:main": sessionStoreEntry(sessionId) },
+  });
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath },
+    {
+      messages: messages.map((message) => ({ message })),
+      touchSessionEntry: false,
+    },
+  );
+}
 
 function identifiedClient(profileId: string, scopes: string[] = ["operator.read"]): GatewayClient {
   return {
@@ -70,8 +89,118 @@ test("sessions.preview returns transcript previews", async () => {
   const entry = preview.payload?.previews[0];
   expect(entry?.key).toBe("main");
   expect(entry?.status).toBe("ok");
-  expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-  expect(entry?.items[1]?.text).toContain("call weather");
+  expect(entry?.items).toEqual([
+    { role: "user", text: "Hello" },
+    { role: "assistant", text: "Hi" },
+    { role: "assistant", text: "Forecast ready" },
+  ]);
+});
+
+test("sessions.preview honors maxChars up to the shared cap", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-preview-explicit-budget";
+  const maxChars = 800;
+
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": sessionStoreEntry(sessionId),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: [{ role: "assistant", content: "a".repeat(maxChars + 20) }],
+  });
+
+  const preview = await directSessionReq<{
+    previews: Array<{ items: Array<{ role: string; text: string }> }>;
+  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars });
+
+  expect(preview.ok).toBe(true);
+  expect(preview.payload?.previews[0]?.items).toEqual([
+    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
+  ]);
+
+  const capped = await directSessionReq<{
+    previews: Array<{ items: Array<{ role: string; text: string }> }>;
+  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars: Number.MAX_SAFE_INTEGER });
+
+  expect(capped.ok).toBe(true);
+  expect(capped.payload?.previews[0]?.items).toEqual([
+    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
+  ]);
+});
+
+test("sessions.preview reads only a bounded tail from a large transcript", async () => {
+  await seedPreviewTail(
+    "sess-preview-bounded-tail",
+    Array.from({ length: 1024 }, (_, index) => ({
+      role: "assistant",
+      content: `message ${String(index)}`,
+    })),
+  );
+  const fullRead = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEvents");
+  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
+  const storeRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+
+  try {
+    const preview = await directSessionReq<{
+      previews: Array<{ items: Array<{ role: string; text: string }> }>;
+    }>("sessions.preview", { keys: ["main"], limit: 12, maxChars: 120 });
+
+    expect(preview.ok).toBe(true);
+    expect(preview.payload?.previews[0]?.items).toEqual(
+      Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        text: `message ${String(1012 + index)}`,
+      })),
+    );
+    expect(fullRead).not.toHaveBeenCalled();
+    expect(storeRead).not.toHaveBeenCalled();
+    expect(tailRead).toHaveBeenCalledOnce();
+    expect(tailRead.mock.results[0]).toMatchObject({
+      type: "return",
+      value: { events: { length: 64 }, totalMessages: 1024 },
+    });
+  } finally {
+    fullRead.mockRestore();
+    tailRead.mockRestore();
+    storeRead.mockRestore();
+  }
+});
+
+test("sessions.preview widens its bounded tail past filtered tool-result rows", async () => {
+  await seedPreviewTail("sess-preview-sparse-tail", [
+    ...Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    ...Array.from({ length: 320 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
+
+  try {
+    const preview = await directSessionReq<{
+      previews: Array<{ items: Array<{ role: string; text: string }> }>;
+    }>("sessions.preview", { keys: ["main"], limit: 12, maxChars: 120 });
+
+    expect(preview.payload?.previews[0]?.items).toEqual(
+      Array.from({ length: 12 }, (_, index) => ({
+        role: "assistant",
+        text: `visible ${String(index)}`,
+      })),
+    );
+    expect(tailRead.mock.calls.map(([, options]) => options)).toEqual([
+      { maxBytes: 1024 * 1024, maxLines: 64, maxMessages: 64 },
+      { maxBytes: 8 * 1024 * 1024, maxLines: 1024, maxMessages: 1024 },
+    ]);
+  } finally {
+    tailRead.mockRestore();
+  }
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
@@ -114,6 +243,18 @@ test("sessions.resolve can probe a missing selector without returning an RPC err
   expect(resolved.payload).toEqual({ ok: false });
 });
 
+test("sessions.resolve rejects a missing key by default", async () => {
+  await createSessionStoreDir();
+  const { ws } = await openClient();
+
+  const resolved = await rpcReq(ws, "sessions.resolve", {
+    key: "agent:main:missing",
+  });
+
+  expect(resolved.ok).toBe(false);
+  expect(resolved.error?.message).toBe("No session found: agent:main:missing");
+});
+
 test("sessions.resolve returns short-id ambiguity as a protocol-success result", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -141,10 +282,12 @@ test("sessions.resolve returns short-id ambiguity as a protocol-success result",
     ok: false,
     candidates: [
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
         displayName: "Newer",
       },
       {
+        agentId: "main",
         key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
         displayName: "Older",
       },
@@ -167,7 +310,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Visible session",
         updatedAt: 40,
         visibility: "shared",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [hiddenCollisionKey]: {
         sessionId: "sess-collision",
@@ -175,7 +318,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Hidden collision",
         updatedAt: 30,
         visibility: "draft",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [secondVisibleKey]: {
         sessionId: "sess-second-visible",
@@ -183,7 +326,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Second visible session",
         updatedAt: 35,
         visibility: "shared",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [hiddenOnlyKey]: {
         sessionId: "sess-hidden-only",
@@ -191,7 +334,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Hidden only",
         updatedAt: 20,
         visibility: "draft",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [incognitoKey]: {
         sessionId: "sess-incognito",
@@ -200,7 +343,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         updatedAt: 10,
         visibility: "shared",
         incognito: true,
-        createdActor: { type: "human", id: "viewer" },
+        createdActor: { type: "human", source: "profile", id: "viewer" },
       },
     },
   });

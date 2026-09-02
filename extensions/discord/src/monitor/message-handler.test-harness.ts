@@ -46,6 +46,7 @@ export async function createBaseDiscordMessageContext(
     isDirectMessage: false,
     isGroupDm: false,
     commandAuthorized: true,
+    resolveChannelIngress: async () => undefined as never,
     baseText: "hi",
     messageText: "hi",
     preparedMedia: [],

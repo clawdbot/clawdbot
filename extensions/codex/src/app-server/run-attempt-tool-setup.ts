@@ -3,12 +3,13 @@ import {
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureFinalCodexCronCreatorToolAllowlist,
   materializeStaticMcpToolsForScheduledHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
+import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
   formatCodexDynamicToolBuildStageSummary,
@@ -23,9 +24,17 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import { CodexCompactionPlanState } from "./plan-compaction-state.js";
+import type { CodexDynamicToolSpec } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import {
+  captureScheduledCodexAppAuthority,
+  resolveScheduledCodexAppCreatorCaptureDecision,
+} from "./scheduled-app-authority.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
   return signal?.aborted === true && error === signal.reason;
@@ -55,9 +64,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
+    contextSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     agentDir,
@@ -78,8 +90,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       },
     );
   }
-  const toolState = {
+  const toolState: {
+    yieldDetected: boolean;
+    yieldAcknowledgment?: string;
+    persistentWebSearchAllowed?: boolean;
+    webSearchAllowed: boolean;
+  } = {
     yieldDetected: false,
+    yieldAcknowledgment: undefined,
     persistentWebSearchAllowed: undefined as boolean | undefined,
     webSearchAllowed: false,
   };
@@ -110,38 +128,75 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         return ordinal;
       }
     : undefined;
-  const dynamicToolParams =
-    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
-      ? {
-          ...runtimeParams,
-          ...(allocateCodexToolOutcomeOrdinal
-            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
-            : {}),
-          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
-        }
-      : runtimeParams;
+  const compactionPlanState = new CodexCompactionPlanState();
+  const dynamicToolParams = {
+    ...runtimeParams,
+    onAgentEvent: (event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]) => {
+      compactionPlanState.record(event);
+      return runtimeParams.onAgentEvent?.(event);
+    },
+    ...(allocateCodexToolOutcomeOrdinal
+      ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+      : {}),
+    ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+  };
   const computerContextEpoch: {
     value: number;
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
   } = {};
+  const scheduledAppAuthoritySourceRef: {
+    current?: Omit<
+      Parameters<typeof captureScheduledCodexAppAuthority>[0],
+      "profileId" | "accountId"
+    >;
+  } = {};
+  const preparedChatgptAuth =
+    connection.startupPreparedAuth?.kind === "profile" &&
+    connection.startupPreparedAuth.snapshot?.loginParams.type === "chatgptAuthTokens" &&
+    connection.startupPreparedAuth.snapshot.chatgptAccountId
+      ? {
+          profileId: connection.startupPreparedAuth.profileId,
+          accountId: connection.startupPreparedAuth.snapshot.chatgptAccountId,
+        }
+      : undefined;
+  const appPolicy = resolveCodexPluginsPolicy(pluginConfig);
+  const codexAppsMayBeVisible =
+    appPolicy.enabled &&
+    (appPolicy.allowAllPlugins || appPolicy.pluginPolicies.some((entry) => entry.enabled));
+  const appCreatorCapture = resolveScheduledCodexAppCreatorCaptureDecision({
+    appsMayBeVisible: codexAppsMayBeVisible,
+    authenticatedScheduledMode,
+    usesSupervisionConnection: connection.usesSupervisionConnection,
+    homeScope: connection.appServer.start.homeScope,
+    hasPreparedAccountIdentity: Boolean(preparedChatgptAuth),
+  });
+  const codexAppAuthorityUnavailableReason = appCreatorCapture.unavailableReason;
+  const canResolveScheduledCodexAppAuthority = appCreatorCapture.supported;
+  const requiresScheduledCodexAppAuthority = appCreatorCapture.required;
+  const canResolveAnyScheduledCreatorAuthority =
+    canResolveScheduledConfiguredMcpCreatorAuthority || requiresScheduledCodexAppAuthority;
   let toolBridge: ReturnType<typeof createCodexDynamicToolBridge> | undefined;
   let creatorAuthorityPromise:
     | Promise<{
         tools: readonly (string | { name: string; pluginId?: string })[];
         provenance: { version: 1; source: "final-executable-surface" };
+        runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>
     | undefined;
   let resolveCreatorAuthorityImpl:
     | ((options?: { signal?: AbortSignal }) => Promise<{
         tools: readonly (string | { name: string; pluginId?: string })[];
         provenance: { version: 1; source: "final-executable-surface" };
+        runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>)
     | undefined;
+  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -149,10 +204,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
@@ -161,14 +218,16 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
         }
       : {}),
-    onYieldDetected: () => {
+    onYieldDetected: (acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
+      toolState.yieldAcknowledgment = acknowledgment;
     },
+    claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
     onCodexAppServerEvent: (event: Parameters<typeof emitCodexAppServerEvent>[1]) => {
       void emitCodexAppServerEvent(params, event);
     },
     computerContextEpoch,
-    ...(canResolveScheduledConfiguredMcpCreatorAuthority
+    ...(canResolveAnyScheduledCreatorAuthority
       ? {
           resolveCronCreatorToolAuthority: (options?: { signal?: AbortSignal }) => {
             if (!resolveCreatorAuthorityImpl) {
@@ -195,8 +254,35 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
       : {}),
   };
+  let nativeSpecs: CodexDynamicToolSpec[] | undefined;
+  if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
+    runAbortController.signal.throwIfAborted();
+    params.hostCapabilities.assertActive();
+    const client = await connection.attemptClientFactory({
+      startOptions: connection.appServer.start,
+      authProfileId: connection.startupClientAuthProfileId,
+      agentDir,
+      config: params.config,
+      timeoutMs: connection.appServer.requestTimeoutMs,
+    });
+    try {
+      nativeSpecs = await loadCodexNativeToolCatalog({
+        client,
+        binding: mutable.startupBinding,
+        appServer: connection.appServer,
+        agentDir,
+        assertCurrent: () => {
+          runAbortController.signal.throwIfAborted();
+          params.hostCapabilities.assertActive();
+        },
+      });
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  }
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -206,12 +292,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState.webSearchAllowed = allowed;
     },
   });
-  const registeredTools = await buildDynamicTools({
-    ...commonToolParams,
-    forceHeartbeatTool: true,
-    ignoreDisableMessageTool: true,
-    ignoreRuntimePlan: true,
-  });
+  const registeredTools = nativeSpecs
+    ? []
+    : await buildDynamicTools({
+        ...commonToolParams,
+        forceHeartbeatTool: true,
+        ignoreDisableMessageTool: true,
+        ignoreRuntimePlan: true,
+      });
   const policyContext = {
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -219,7 +307,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     agentAccountId: params.agentAccountId,
     messageProvider: params.messageProvider ?? params.messageChannel,
@@ -300,6 +388,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           agentDir: policyContext.agentDir,
           cfg: params.config,
           manifestRegistry: bundleManifestRegistry,
+          toolOverrides: codexMcpToolOverrides,
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,
@@ -331,7 +420,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
@@ -357,6 +446,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
       loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
@@ -382,11 +472,54 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       // Keep the names for finite intersections, but never certify a partial default cap.
       delete cronCreatorToolAllowlistCaptureRef.value;
     }
-    if (canResolveScheduledConfiguredMcpCreatorAuthority) {
+    if (requiresScheduledCodexAppAuthority) {
+      // Native apps are not represented in the OpenClaw dynamic-tool list.
+      // Require the exact-thread resolver before certifying a default cap.
+      delete cronCreatorToolAllowlistCaptureRef.value;
+    }
+    if (canResolveAnyScheduledCreatorAuthority) {
       resolveCreatorAuthorityImpl = async (options) => {
         options?.signal?.throwIfAborted();
+        if (codexAppAuthorityUnavailableReason) {
+          throw new Error(codexAppAuthorityUnavailableReason);
+        }
         if (!toolBridge) {
-          throw new Error("configured MCP authority resolver lost the active tool bridge");
+          throw new Error("cron creator authority resolver lost the active tool bridge");
+        }
+        const authorityTools: Array<string | { name: string; pluginId?: string }> = [];
+        const captureRef: {
+          value?: { version: 1; source: "final-executable-surface" };
+        } = {};
+        await captureFinalCodexCronCreatorToolAllowlist(
+          authorityTools,
+          captureRef,
+          toolBridge.availableTools,
+        );
+        if (!captureRef.value) {
+          throw new Error("cron creator authority snapshot did not produce provenance");
+        }
+        const appSource = scheduledAppAuthoritySourceRef.current;
+        const runtimeAuthority =
+          canResolveScheduledCodexAppAuthority && preparedChatgptAuth
+            ? appSource
+              ? await captureScheduledCodexAppAuthority({
+                  ...appSource,
+                  ...preparedChatgptAuth,
+                  signal: options?.signal,
+                })
+              : (() => {
+                  throw new Error(
+                    "Codex app authority is unavailable before the exact creator thread is active. Retry this automation mutation from the current owner turn.",
+                  );
+                })()
+            : undefined;
+        if (!canResolveScheduledConfiguredMcpCreatorAuthority) {
+          options?.signal?.throwIfAborted();
+          return Object.freeze({
+            tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
+            provenance: Object.freeze(captureRef.value),
+            ...(runtimeAuthority ? { runtimeAuthority } : {}),
+          });
         }
         const authorityRuntimeId = `cron-authority:${params.runId}`;
         let materialized: Awaited<
@@ -423,10 +556,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
               `${materialized.diagnosticNotice} Sign in to the affected MCP server and retry, or provide an explicit finite toolsAllow list containing only currently visible tools. No automation changes were saved.`,
             );
           }
-          const authorityTools: Array<string | { name: string; pluginId?: string }> = [];
-          const captureRef: {
-            value?: { version: 1; source: "final-executable-surface" };
-          } = {};
           // Default authority contains model-callable tools only. App-only projections
           // gate view callbacks and must never become headless scheduled capability.
           const projectedConfiguredMcp = projectCodexExecutableDynamicTools({
@@ -444,6 +573,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           return Object.freeze({
             tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
             provenance: Object.freeze(captureRef.value),
+            ...(runtimeAuthority ? { runtimeAuthority } : {}),
           });
         } finally {
           await materialized.dispose();
@@ -458,14 +588,18 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       configuredMcpOwnershipVersion: ownsScheduledConfiguredMcpSurface ? (1 as const) : undefined,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
+      scheduledAppAuthoritySourceRef,
       dynamicToolParams,
+      compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
       onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
+      runtimeYieldCompletionClaim,
     };
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.

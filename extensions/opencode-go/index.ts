@@ -95,6 +95,9 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
         const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
         if (!auth) {
           return null;

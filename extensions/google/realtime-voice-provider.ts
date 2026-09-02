@@ -42,6 +42,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  realtimeVoiceAudioDurationMs,
   resamplePcm,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
@@ -49,12 +50,14 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   asBoolean,
   asFiniteNumber,
+  asOptionalRecord,
+  asSafeIntegerInRange,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
+import { resolveGoogleGemini3ThinkingLevel } from "./thinking-api.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
@@ -209,8 +212,7 @@ function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined 
 }
 
 function asNonNegativeInteger(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
@@ -225,18 +227,8 @@ function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
 function resolveGoogleRealtimeProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers =
-    typeof config.providers === "object" &&
-    config.providers !== null &&
-    !Array.isArray(config.providers)
-      ? (config.providers as Record<string, unknown>)
-      : undefined;
-  const nested = providers?.google;
-  return typeof nested === "object" && nested !== null && !Array.isArray(nested)
-    ? (nested as Record<string, unknown>)
-    : typeof config.google === "object" && config.google !== null && !Array.isArray(config.google)
-      ? (config.google as Record<string, unknown>)
-      : config;
+  const providers = asOptionalRecord(config.providers);
+  return asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
 }
 
 function normalizeProviderConfig(
@@ -503,7 +495,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private connectionOwner: GoogleLiveConnectionAttempt | undefined;
   private connectAttempt: GoogleLiveConnectionAttempt | undefined;
   // Google can interleave independent input/output transcripts, so each role
-  // owns its own in-progress byte budget until `finished` or terminal cleanup.
+  // owns its own in-progress byte budget until its protocol boundary or cleanup.
   private readonly pendingTranscripts: Record<RealtimeVoiceRole, GoogleLiveTranscriptAccumulator> =
     {
       user: { text: "", byteCount: 0 },
@@ -693,9 +685,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       typeof this.config.silenceDurationMs === "number"
         ? Math.max(0, Math.floor(this.config.silenceDurationMs))
         : DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
-    const bytesPerSample = this.audioFormat.encoding === "pcm16" ? 2 : 1;
     this.consecutiveSilenceMs += Math.round(
-      (audio.length / bytesPerSample / this.audioFormat.sampleRateHz) * 1000,
+      realtimeVoiceAudioDurationMs(this.audioFormat, audio.length),
     );
     if (!this.audioStreamEnded && this.consecutiveSilenceMs >= silenceThresholdMs) {
       this.session.sendRealtimeInput({ audioStreamEnd: true });
@@ -950,8 +941,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleServerContent(content: LiveServerContent): void {
+    const owner = this.connectionOwner;
     if (content.interrupted) {
       this.config.onClearAudio("barge-in");
+      if (this.connectionOwner !== owner) {
+        return;
+      }
     }
 
     if (content.inputTranscription) {
@@ -980,14 +975,28 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const audio = this.toOutputAudio(pcm, sampleRate);
         if (audio.length > 0) {
           this.config.onAudio(audio);
+          if (this.connectionOwner !== owner) {
+            return;
+          }
           this.config.onMark?.(`audio-${randomUUID()}`);
+          if (this.connectionOwner !== owner) {
+            return;
+          }
         }
         continue;
       }
     }
+    // Output transcription precedes these model boundaries; input transcription
+    // is independently ordered and must not be finalized by an assistant turn.
+    if (content.generationComplete || content.interrupted || content.turnComplete) {
+      this.flushPendingTranscript("assistant");
+    }
   }
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
+    const owner = this.connectionOwner;
+    // Live 3.1 emits complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && isGemini31LiveModel(this.model);
     const text = transcript.text;
     if (text) {
       const pending = this.pendingTranscripts[role];
@@ -999,14 +1008,17 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       pending.text += text;
       pending.byteCount += textBytes;
-      this.emitTranscript(role, text, false);
+      if (!completeInput) {
+        this.emitTranscript(role, text, false);
+        if (this.connectionOwner !== owner) {
+          return false;
+        }
+      }
     }
-    // turnComplete belongs to model generation and is unordered with transcription.
-    // Finalize only on the protocol terminal or when the bridge permanently closes.
-    if (transcript.finished) {
+    if (transcript.finished || completeInput) {
       this.flushPendingTranscript(role);
     }
-    return true;
+    return this.connectionOwner === owner;
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {

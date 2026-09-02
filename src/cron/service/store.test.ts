@@ -2,12 +2,22 @@
 import fs from "node:fs/promises";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  claimCronRunReceiptInDatabase,
+  CronRunReceiptConflictError,
+  finishCronRunReceipt,
+  prepareCronRunReceiptClaim,
+} from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
+import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
@@ -136,7 +146,9 @@ describe("cron service store seam coverage", () => {
     });
     await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
     openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET schedule_kind = ? WHERE job_id = ?")
+      .db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.kind', ?) WHERE job_id = ?",
+      )
       .run("unsupported", malformed.id);
     const state = createStoreTestState(storePath);
 
@@ -152,6 +164,42 @@ describe("cron service store seam coverage", () => {
       }),
     ]);
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
+  });
+
+  it("quarantines malformed job and state JSON with exact recovery bytes", async () => {
+    const { storePath } = await makeStorePath();
+    const malformedJob = createReloadCronJob({ id: "malformed-job-json" });
+    const malformedState = createReloadCronJob({ id: "malformed-state-json" });
+    const surviving = createReloadCronJob({ id: "surviving-json-row" });
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [malformedJob, malformedState, surviving],
+    });
+    const db = openOpenClawStateDatabase().db;
+    const stateRow = db
+      .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(malformedState.id) as { job_json: string };
+    db.prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?").run("{", malformedJob.id);
+    db.prepare("UPDATE cron_jobs SET state_json = ? WHERE job_id = ?").run("[]", malformedState.id);
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({
+        sourceIndex: 0,
+        reason: "invalid-payload",
+        raw: { jobId: malformedJob.id, jobJson: "{", stateJson: "{}" },
+      }),
+      expect.objectContaining({
+        sourceIndex: 1,
+        reason: "invalid-state",
+        job: expect.objectContaining({ id: malformedState.id }),
+        raw: { jobId: malformedState.id, jobJson: stateRow.job_json, stateJson: "[]" },
+      }),
+    ]);
   });
 
   it("quarantines persisted every schedules that cannot produce valid Date timestamps", async () => {
@@ -192,18 +240,18 @@ describe("cron service store seam coverage", () => {
       ],
     });
     const db = openOpenClawStateDatabase().db;
-    db.prepare("UPDATE cron_jobs SET every_ms = ? WHERE job_id = ?").run(
-      MAX_DATE_TIMESTAMP_MS + 1,
-      invalidInterval.id,
-    );
-    db.prepare("UPDATE cron_jobs SET anchor_ms = ? WHERE job_id = ?").run(
-      MAX_DATE_TIMESTAMP_MS + 1,
-      invalidAnchor.id,
-    );
-    db.prepare("UPDATE cron_jobs SET stagger_ms = ? WHERE job_id = ?").run(
-      MAX_DATE_TIMESTAMP_MS + 1,
-      invalidStagger.id,
-    );
+    // Number bindings become SQLite FLOATs; JSON formatting can round max + 1
+    // back into the valid Date domain. Inject exact numeric JSON instead.
+    const invalidTimestampJson = JSON.stringify(MAX_DATE_TIMESTAMP_MS + 1);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.everyMs', json(?)) WHERE job_id = ?",
+    ).run(invalidTimestampJson, invalidInterval.id);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.anchorMs', json(?)) WHERE job_id = ?",
+    ).run(invalidTimestampJson, invalidAnchor.id);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.staggerMs', json(?)) WHERE job_id = ?",
+    ).run(invalidTimestampJson, invalidStagger.id);
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state, { skipRecompute: true });
@@ -214,13 +262,35 @@ describe("cron service store seam coverage", () => {
       surviving.id,
     ]);
     expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
-      expect.objectContaining({ job: expect.objectContaining({ id: invalidInterval.id }) }),
-      expect.objectContaining({ job: expect.objectContaining({ id: invalidAnchor.id }) }),
       expect.objectContaining({
+        sourceIndex: 0,
+        reason: "invalid-schedule",
+        job: expect.objectContaining({
+          id: invalidInterval.id,
+          schedule: expect.objectContaining({ everyMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+        }),
+      }),
+      expect.objectContaining({
+        sourceIndex: 1,
+        reason: "invalid-schedule",
+        job: expect.objectContaining({
+          id: invalidAnchor.id,
+          schedule: expect.objectContaining({ anchorMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+        }),
+      }),
+      expect.objectContaining({
+        sourceIndex: 2,
         reason: "unsatisfiable-schedule",
         job: expect.objectContaining({ id: unsatisfiableInterval.id }),
       }),
-      expect.objectContaining({ job: expect.objectContaining({ id: invalidStagger.id }) }),
+      expect.objectContaining({
+        sourceIndex: 4,
+        reason: "invalid-schedule",
+        job: expect.objectContaining({
+          id: invalidStagger.id,
+          schedule: expect.objectContaining({ staggerMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+        }),
+      }),
     ]);
   });
 
@@ -230,8 +300,10 @@ describe("cron service store seam coverage", () => {
     const surviving = createReloadCronJob({ id: "valid-runtime-state" });
     await saveCronStore(storePath, { version: 1, jobs: [invalidState, surviving] });
     openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET last_run_at_ms = ? WHERE job_id = ?")
-      .run(MAX_DATE_TIMESTAMP_MS + 1, invalidState.id);
+      .db.prepare(
+        "UPDATE cron_jobs SET state_json = json_set(state_json, '$.lastRunAtMs', json(?)) WHERE job_id = ?",
+      )
+      .run(JSON.stringify(MAX_DATE_TIMESTAMP_MS + 1), invalidState.id);
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state, { skipRecompute: true });
@@ -553,21 +625,71 @@ describe("cron service store seam coverage", () => {
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
   });
 
-  it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
+  it("does not let quarantine recovery bypass an active receipt fence", async () => {
     const { storePath } = await makeStorePath();
+    const job = createReloadCronJob({ id: "quarantined-receipt-conflict", agentId: "alpha" });
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const prepared = prepareCronRunReceiptClaim({
+      storePath,
+      job,
+      agentId: "alpha",
+      startedAtMs: STORE_TEST_NOW,
+    });
+    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+      claimCronRunReceiptInDatabase({
+        database: db,
+        prepared,
+        resolveAgentId: (current) => current.agentId!,
+      }),
+    );
+    const snapshot = snapshotStoreForRollback(state);
+    findJobOrThrow(state, job.id).agentId = "beta";
+    state.pendingQuarantineConfigJobs = [
+      { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
+    ];
 
-    await writeSingleJobStore(storePath, {
+    try {
+      await expect(
+        persistOrRestore(state, snapshot, {
+          transactionHooks: cronRunReceiptOwnerMutationHooks({ state, jobId: job.id }),
+        }),
+      ).rejects.toBeInstanceOf(CronRunReceiptConflictError);
+      expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");
+      expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
+    } finally {
+      finishCronRunReceipt({
+        handle: receipt,
+        status: "superseded",
+        finishedAtMs: STORE_TEST_NOW + 1,
+      });
+    }
+  });
+
+  it("uses the normalized stable id for job rows and companion authority", async () => {
+    const { storePath } = await makeStorePath();
+    const rawJob = {
       jobId: "repro-stable-id",
       name: "handed",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,
       updatedAtMs: STORE_TEST_NOW - 60_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick", toolsAllow: [" read "] },
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      },
       state: {},
-    });
+    };
+
+    await writeSingleJobStore(storePath, rawJob);
+    await writeSingleJobStore(storePath, rawJob);
 
     const state = createStoreTestState(storePath);
 
@@ -576,6 +698,13 @@ describe("cron service store seam coverage", () => {
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
     expect((job as { jobId?: unknown }).jobId).toBeUndefined();
+    expect(job.payload).toMatchObject({ kind: "agentTurn", toolsAllow: ["read"] });
+    expect(job.runtimeAuthority).toEqual({
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    });
     await expectPathMissing(`${storePath}.migrated`);
   });
 

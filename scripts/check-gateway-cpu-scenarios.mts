@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
 // Runs gateway startup and QA scenarios while checking hot CPU observations.
-import { spawnSync as defaultSpawnSync } from "node:child_process";
-import type { SpawnSyncOptions } from "node:child_process";
+import {
+  spawnSync as defaultSpawnSync,
+  type SpawnSyncOptions,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -45,11 +49,7 @@ const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
   "dist/plugin-sdk/qa-runtime.js",
 ];
 
-type SpawnSyncResultLike = {
-  error?: Error;
-  signal?: NodeJS.Signals | null;
-  status?: number | null;
-};
+type SpawnSyncResultLike = Partial<Pick<SpawnSyncReturns<Buffer>, "error" | "signal" | "status">>;
 type SpawnSyncFn = (
   command: string,
   args: string[],
@@ -70,10 +70,6 @@ type ConcurrencyReport = {
     controlUiLatencyMs?: { p99?: number };
   };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
@@ -458,6 +454,13 @@ async function runGatewayCpuScenarios(
               "scripts/bench-gateway-concurrency.ts",
               "--concurrency",
               String(DEFAULT_GATEWAY_CONCURRENCY),
+              "--workspace-fanout",
+              // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
+              // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
+              "--max-control-ms",
+              "4000",
+              "--max-handshake-ms",
+              "2000",
               "--runs",
               String(options.runs),
               "--warmup",
@@ -483,6 +486,23 @@ async function runGatewayCpuScenarios(
     );
     steps.push(privateQaBuild);
     privateQaBuildFailed = privateQaBuild.status !== 0;
+  }
+
+  if (!options.skipQa) {
+    steps.push(
+      privateQaBuildFailed
+        ? { name: "node worker finalization gate", signal: null, status: 1 }
+        : runStep(
+            "node worker finalization gate",
+            process.execPath,
+            [
+              "scripts/run-vitest.mjs",
+              "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
+            ],
+            { env: qaBuildEnv },
+            params,
+          ),
+    );
   }
 
   let qaStep = null;
@@ -629,11 +649,8 @@ async function main(params: GatewayCpuRunParams = {}) {
  * Test-only access to the gateway CPU scenario parser and runner helpers.
  */
 export const testing = {
-  hasPrivateQaDist,
   parseArgs,
-  readStartupReport,
   runGatewayCpuScenarios,
-  validateStartupReport,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

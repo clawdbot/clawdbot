@@ -6,7 +6,12 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+} from "../agents/agent-run-terminal-outcome.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
@@ -15,19 +20,26 @@ import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscrib
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+} from "../infra/agent-events.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
   testState,
@@ -43,7 +55,7 @@ let enabledPort: number;
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
   const started = await startGatewayServerWithRetries({
-    port: await getFreePort(),
+    port: await getGatewayTestPort(),
     opts: {
       host: "127.0.0.1",
       auth: { mode: "none" },
@@ -149,6 +161,7 @@ type FirstAgentCommandOptions = {
   message?: string;
   messageChannel?: string;
   model?: string;
+  onAdmittedRunContext?: (context: object) => void | Promise<void>;
   senderIsOwner?: boolean;
   sessionKey?: string;
   streamParams?: {
@@ -164,15 +177,86 @@ type FirstAgentCommandOptions = {
 };
 
 function firstAgentCommandOptions() {
-  return agentCommand.mock.calls.at(0)?.[0] as FirstAgentCommandOptions | undefined;
+  return agentCommandMock.mock.calls.at(0)?.[0] as FirstAgentCommandOptions | undefined;
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openAiChatCompletionsEnabled: true,
+      },
+    });
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+        const admittedRunContext = {};
+        const onAdmittedRunContext = (opts as FirstAgentCommandOptions).onAdmittedRunContext;
+        expect(onAdmittedRunContext).toBeTypeOf("function");
+        await onAdmittedRunContext?.(admittedRunContext);
+        resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+        return { payloads: [{ text: "hello" }] } as never;
+      });
+
+      const res = await postChatCompletions(started.port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+
+      expect(res.status).toBe(200);
+      await res.text();
+      const context = resolveGatewayContext?.();
+      expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+    } finally {
+      await started.server.close({ reason: "chat-completion resolver lifecycle test done" });
+    }
+    expect(resolveGatewayContext?.()).toBeUndefined();
+  });
+
+  it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
+    try {
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
+      agentCommandMock.mockClear();
+
+      const missing = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(missing.status).toBe(400);
+      const missingJson = (await missing.json()) as { error?: { message?: string; type?: string } };
+      expect(missingJson.error?.type).toBe("invalid_request_error");
+      expect(missingJson.error?.message).toContain("has no explicit owner");
+      expect(agentCommandMock).not.toHaveBeenCalled();
+
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      const selected = await postChatCompletions(
+        enabledPort,
+        { model: "openclaw/default", messages: [{ role: "user", content: "hi" }] },
+        { "x-openclaw-agent-id": "main" },
+      );
+      expect(selected.status).toBe(200);
+      expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(/^agent:main:/);
+      await selected.text();
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
   it("handles request validation and routing", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
     };
     const expectAgentSessionKeyMatch = async (request: {
       body: unknown;
@@ -182,7 +266,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const res = await postChatCompletions(port, request.body, request.headers);
       expect(res.status).toBe(200);
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
       expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(request.matcher);
       await res.text();
     };
@@ -202,7 +286,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     const getFirstAgentCall = () => firstAgentCommandOptions();
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
     const expectInvalidRequestNoDispatch = async (messages: unknown[]) => {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         messages,
@@ -212,7 +296,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const error = json.error as Record<string, unknown> | undefined;
       expect(error?.type).toBe("invalid_request_error");
       expect(error?.message).toBe("Invalid image_url content in `messages`.");
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
     };
     const postSyncUserMessage = async (message: string) => {
       const res = await postChatCompletions(port, {
@@ -225,7 +309,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { list: [{ id: "main" }] };
       resetConfigRuntimeState();
 
       {
@@ -243,15 +327,21 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "x-openclaw-agent-id": "main",
           },
           body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
         });
         expect(res.status).toBe(200);
-        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
         expect(getFirstAgentCall()?.messageChannel).toBe("webchat");
         await res.text();
       }
 
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
       await expectAgentSessionKeyMatch({
         body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
         headers: { "x-openclaw-agent-id": "beta" },
@@ -266,16 +356,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         matcher: /^agent:beta:/,
       });
 
+      testState.agentsConfig = { list: [{ id: "main" }] };
+      resetConfigRuntimeState();
+
       await expectAgentSessionKeyMatch({
         body: {
           model: "openclaw/default",
           messages: [{ role: "user", content: "hi" }],
         },
+        headers: { "x-openclaw-agent-id": "main" },
         matcher: /^agent:main:/,
       });
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(
           port,
           { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
@@ -285,11 +379,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw/missing-agent",
           messages: [{ role: "user", content: "hi" }],
@@ -298,11 +392,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(
           port,
           { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
@@ -316,10 +410,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(json.error?.message).toBe(
           "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
         );
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
+        testState.agentsConfig = {
+          ownership: "explicit",
+          list: [{ id: "main" }, { id: "beta" }],
+        };
+        resetConfigRuntimeState();
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
@@ -333,10 +432,12 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
+        testState.agentsConfig = { list: [{ id: "main" }] };
+        resetConfigRuntimeState();
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(
           port,
           { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
@@ -348,7 +449,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(json.error?.message).toBe(
           "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
         );
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
@@ -427,7 +528,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openai/",
           messages: [{ role: "user", content: "hi" }],
@@ -438,11 +539,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(json.error?.message).toBe(
           "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
         );
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(
           port,
           {
@@ -455,11 +556,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { message?: string; type?: string } };
         expect(json.error?.type).toBe("forbidden");
         expect(json.error?.message).toBe("missing scope: operator.admin");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(
           port,
           {
@@ -475,7 +576,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message).toBe("Invalid `x-openclaw-model`.");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
@@ -908,8 +1009,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "tool choice function" }],
           meta: {
             stopReason: "tool_calls",
@@ -960,8 +1061,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "tool choice required" }],
           meta: {
             stopReason: "tool_calls",
@@ -1029,8 +1130,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "Calling a different tool." }],
           meta: {
             stopReason: "tool_calls",
@@ -1067,7 +1168,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw",
           tool_choice: "required",
@@ -1077,11 +1178,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message ?? "").toContain("no tools were provided");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw",
           tool_choice: { type: "function", function: { name: "missing_tool" } },
@@ -1101,11 +1202,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message ?? "").toContain("unknown tool");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw",
           tool_choice: {
@@ -1128,11 +1229,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message ?? "").toContain("allowed_tools");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw",
           tools: [
@@ -1148,7 +1249,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message ?? "").toContain("tool.function is required");
-        expect(agentCommand).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
@@ -1214,8 +1315,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+        agentCommandMock.mockClear();
+        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
         const res = await postChatCompletions(port, {
           stream: false,
           model: "openclaw",
@@ -1238,8 +1339,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "Let me check that." }],
           meta: {
             stopReason: "tool_calls",
@@ -1326,8 +1427,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [],
           meta: {
             stopReason: "tool_calls",
@@ -1381,8 +1482,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        agentCommandMock.mockClear();
+        agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
           const { session, emit } = createStubSessionHarness();
           subscribeEmbeddedAgentSession({ session, runId });
@@ -1415,8 +1516,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage basic" }],
           meta: {
             agentMeta: {
@@ -1436,8 +1537,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage cache" }],
           meta: {
             agentMeta: {
@@ -1460,8 +1561,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
+          payloads: [{ text: "usage last call" }],
+          meta: {
+            agentMeta: {
+              lastCallUsage: { input: 80, output: 20, total: 100 },
+            },
+          },
+        } as never);
+        const json = await postSyncUserMessage("usage");
+        expect(json.usage).toEqual({
+          prompt_tokens: 80,
+          completion_tokens: 20,
+          total_tokens: 100,
+        });
+      }
+
+      {
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage total" }],
           meta: {
             agentMeta: {
@@ -1482,8 +1601,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage total only" }],
           meta: {
             agentMeta: {
@@ -1502,8 +1621,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage non-finite" }],
           meta: {
             agentMeta: {
@@ -1527,8 +1646,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage non-finite aggregate fallback" }],
           meta: {
             agentMeta: {
@@ -1549,8 +1668,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage cache-write only" }],
           meta: {
             agentMeta: {
@@ -1570,8 +1689,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
         const json = await postSyncUserMessage("hi");
         const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
         const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
@@ -1598,8 +1717,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("validates and forwards max_completion_tokens and max_tokens into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = () => {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
     };
     const getRecordedAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
 
@@ -1641,7 +1760,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         messages: [{ role: "user", content: "hi" }],
       });
       expect(res.status).toBe(200);
-      expect(agentCommand, testCase.name).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock, testCase.name).toHaveBeenCalledTimes(1);
       expect(getRecordedAgentMaxTokens(), testCase.name).toBe(testCase.expected);
       await res.text();
     }
@@ -1654,7 +1773,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       max_tokens: null,
       messages: [{ role: "user", content: "hi" }],
     });
-    expect(agentCommand, "SDK null fields").toHaveBeenCalledTimes(1);
+    expect(agentCommandMock, "SDK null fields").toHaveBeenCalledTimes(1);
     expect(getRecordedAgentMaxTokens(), "SDK null fields").toBeUndefined();
   });
 
@@ -1672,7 +1791,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
     for (const field of ["max_completion_tokens", "max_tokens"] as const) {
       for (const testCase of invalidValues) {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw",
           [field]: testCase.value,
@@ -1682,10 +1801,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
         expect(json.error?.message).toContain(field);
-        expect(agentCommand, `${field}: ${testCase.name}`).toHaveBeenCalledTimes(0);
+        expect(agentCommandMock, `${field}: ${testCase.name}`).toHaveBeenCalledTimes(0);
       }
 
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postRawChatCompletions(
         port,
         `{"model":"openclaw","messages":[{"role":"user","content":"hi"}],"${field}":1e309}`,
@@ -1694,7 +1813,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toContain(field);
-      expect(agentCommand, `${field}: non-finite raw number`).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock, `${field}: non-finite raw number`).toHaveBeenCalledTimes(0);
     }
 
     const shadowedCases = [
@@ -1710,7 +1829,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       },
     ];
     for (const testCase of shadowedCases) {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         ...testCase.body,
@@ -1720,15 +1839,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toContain(testCase.field);
-      expect(agentCommand, testCase.name).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock, testCase.name).toHaveBeenCalledTimes(0);
     }
   });
 
   it("forwards inbound temperature and top_p into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
     };
     const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
 
@@ -1771,7 +1890,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
 
     {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         temperature: 999,
@@ -1781,11 +1900,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toMatch(/temperature/);
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
     }
 
     {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         top_p: 5,
@@ -1795,15 +1914,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toMatch(/top_p/);
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
     }
   });
 
   it("forwards inbound penalty and seed params into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
     };
     const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
 
@@ -1826,7 +1945,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
 
     for (const body of [{ frequency_penalty: 3 }, { presence_penalty: -3 }, { seed: 1.5 }]) {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         ...body,
@@ -1835,15 +1954,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(res.status).toBe(400);
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
     }
   });
 
   it("forwards inbound stop into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
     };
     const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
 
@@ -1883,7 +2002,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
 
     for (const stop of [["a", "b", "c", "d", "e"], [""], [123], {}]) {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         stop,
@@ -1893,15 +2012,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toMatch(/stop/);
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
     }
   });
 
   it("maps provider format failures to OpenAI-compatible 400 errors", async () => {
     const port = enabledPort;
 
-    agentCommand.mockClear();
-    agentCommand.mockRejectedValueOnce(
+    agentCommandMock.mockClear();
+    agentCommandMock.mockRejectedValueOnce(
       new FailoverError(
         "LLM request failed: provider rejected the request schema or tool payload.",
         {
@@ -1925,14 +2044,176 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(json.error?.type).toBe("invalid_request_error");
     expect(json.error?.code).toBe("decimal_above_max_value");
     expect(json.error?.message).toContain("Invalid 'temperature'");
-    expect(agentCommand).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects resolved terminal agent failures without exposing provider details", async () => {
+    const privateDetail = "raw provider detail should stay private";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+        },
+        "failed",
+      ) as never,
+    );
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const body = await res.text();
+    expect(res.status).toBe(500);
+    expect(JSON.parse(body)).toEqual({
+      error: { message: "internal error", type: "api_error" },
+    });
+    expect(body).not.toContain(privateDetail);
+  });
+
+  it.each([
+    { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
+    {
+      name: "run-budget timeout without error metadata",
+      meta: { aborted: false, timeoutPhase: "provider", providerStarted: true },
+      outcome: "failed",
+      status: 500,
+    },
+    { name: "completed run with an error payload", meta: {}, outcome: "completed", status: 200 },
+  ] as const)("uses the recorded outcome for $name", async ({ meta, outcome, status }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        { payloads: [{ text: "Command may have changed state", isError: true }], meta },
+        outcome,
+      ) as never,
+    );
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(status);
+    await res.text();
+  });
+
+  it.each(
+    [
+      {
+        label: "terminal metadata",
+        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
+        expectedPhase: "error" as const,
+      },
+      {
+        label: "an error stop reason",
+        meta: { stopReason: "error" },
+        expectedPhase: "end" as const,
+      },
+      {
+        label: "a run-budget timeout without error metadata",
+        meta: { aborted: false, timeoutPhase: "provider" as const, providerStarted: true },
+        expectedPhase: "end" as const,
+      },
+    ].flatMap((failure) =>
+      [false, true].map((producerTerminal) => ({
+        meta: failure.meta,
+        expectedPhase: failure.expectedPhase,
+        producerTerminal,
+        label: `${failure.label} ${producerTerminal ? "after" : "without"} a producer terminal`,
+      })),
+    ),
+  )(
+    "rejects resolved streaming agent failures from $label",
+    async ({ meta, expectedPhase, producerTerminal }) => {
+      let runId: string | undefined;
+      const terminals: Array<{ phase: "end" | "error"; status: string }> = [];
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle") {
+          const phase = event.data?.phase;
+          if (phase === "end" || phase === "error") {
+            terminals.push({
+              phase,
+              status: buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data })
+                .status,
+            });
+          }
+        }
+      });
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (options: unknown) => {
+        runId = (options as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
+        const result = {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: { durationMs: 0, ...meta },
+        };
+        if (producerTerminal) {
+          const lifecycle = createAgentCommandLifecycle({
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration,
+            startedAt: Date.now(),
+            state: {
+              currentTurnUserMessagePersisted: true,
+              lifecycleFinishing: false,
+              lifecycleEnded: false,
+            },
+          });
+          const terminal = {
+            metadata: {},
+            outcome: buildAgentRunTerminalOutcome({
+              status: meta.timeoutPhase ? "timeout" : "error",
+              stopReason: meta.timeoutPhase ? undefined : "error",
+              timeoutPhase: meta.timeoutPhase,
+            }),
+          };
+          if (lifecycle.resolveResultError(result, false)) {
+            lifecycle.emitResultError(result, false, terminal);
+          } else {
+            lifecycle.emitEnd(terminal);
+          }
+        }
+        return recordAgentRunTerminalOutcome(result, "failed");
+      }) as never);
+
+      try {
+        const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        });
+        const finishReasons: Array<string | null> = [];
+        const content: string[] = [];
+        await expect(async () => {
+          for await (const chunk of stream) {
+            finishReasons.push(...chunk.choices.map((choice) => choice.finish_reason));
+            content.push(...chunk.choices.map((choice) => choice.delta.content ?? ""));
+          }
+        }).rejects.toMatchObject({
+          error: { message: "internal error", type: "api_error" },
+        });
+        expect(finishReasons).not.toContain("stop");
+        expect(content.join("")).toBe("partial answer");
+        expect(terminals).toEqual([
+          {
+            phase: producerTerminal ? expectedPhase : "error",
+            status: producerTerminal && meta.timeoutPhase ? "timeout" : "error",
+          },
+        ]);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("forwards response_format into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads } as never);
     };
     const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
 
@@ -1989,7 +2270,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
 
     {
-      agentCommand.mockClear();
+      agentCommandMock.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
         response_format: { type: "xml" },
@@ -1999,7 +2280,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toMatch(/response_format/);
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
     }
   });
 
@@ -2057,8 +2338,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expected: "<script>alert('literal')</script>",
     },
   ])("preserves $name through the official OpenAI SDK SSE stream", async ({ deltas, expected }) => {
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       const { session, emit } = createStubSessionHarness();
       subscribeEmbeddedAgentSession({ session, runId });
@@ -2087,13 +2368,13 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
     expect(content.join("")).toBe(expected);
     expect(finishReasons.at(-1)).toBe("stop");
-    expect(agentCommand).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves buffered leading content in cumulative assistant snapshots", async () => {
     const expected = "<xiaohai-banli>milk tea</xiaohai-banli>";
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       emitAgentEvent({
         runId,
@@ -2127,8 +2408,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it("flushes same-turn assistant microtasks before the SSE done frame", async () => {
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce(((opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(((opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
       const result = Promise.resolve({ payloads: [{ text: "start finish" }] });
@@ -2174,8 +2455,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     async ({ reject }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const wireResponse = createDeferred<string>();
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
         if (!runId) {
           throw new Error("expected a streaming chat-completion run ID");
@@ -2243,7 +2524,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         { error: { message: "All model fallback candidates failed", type: "api_error" } },
       ]);
       expect(data.at(-1)).toBe("[DONE]");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
     },
   );
@@ -2253,8 +2534,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     { name: "shortened", replacementText: "dra" },
     { name: "cleared", replacementText: "" },
   ])("fails an official SDK stream when streamed text is $name", async ({ replacementText }) => {
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string }).runId;
       if (!runId) {
         throw new Error("expected a streaming chat-completion run ID");
@@ -2292,7 +2573,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       type: "api_error",
     });
     expect(deliveredContent).toEqual(["draft answer"]);
-    expect(agentCommand).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -2314,8 +2595,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   ])(
     "keeps official SDK text consistent for $name",
     async ({ previousDelta, replacementDelta }) => {
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
         if (!runId) {
           throw new Error("expected a streaming chat-completion run ID");
@@ -2358,9 +2639,78 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
       expect(deliveredContent.join("")).toBe("final answer");
       expect(finishReasons.at(-1)).toBe("stop");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each(
+    [
+      {
+        name: "the corrected final payload",
+        provisional: "Working...",
+        replacement: "Done.",
+        payloads: [{ text: "Done." }],
+        expected: "Done.",
+      },
+      {
+        name: "all finalized payloads",
+        provisional: "First.Second.",
+        payloads: [{ text: "First." }, { text: "Second." }],
+        expected: "First.\n\nSecond.",
+      },
+      {
+        name: "streamed commentary when the final payload is empty",
+        provisional: "Working...",
+        payloads: [],
+        expected: "Working...",
+      },
+    ].flatMap((scenario) => (["required", "pinned"] as const).map((mode) => ({ scenario, mode }))),
+  )("uses $scenario.name for $mode tool-stream terminal commentary", async ({ scenario, mode }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId: string }).runId;
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: scenario.provisional, delta: scenario.provisional },
+      });
+      if (scenario.replacement) {
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: scenario.replacement, delta: "", replace: true, phase: "final_answer" },
+        });
+      }
+      return {
+        payloads: scenario.payloads,
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
+        },
+      };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Check the weather." }],
+      stream: true,
+      tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
+      tool_choice:
+        mode === "required" ? "required" : { type: "function", function: { name: "get_weather" } },
+    });
+    let content = "";
+    const finishReasons: string[] = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        content += choice.delta.content ?? "";
+        if (choice.finish_reason) {
+          finishReasons.push(choice.finish_reason);
+        }
+      }
+    }
+    expect(content).toBe(scenario.expected);
+    expect(finishReasons).toEqual(["tool_calls"]);
+  });
 
   it.each([
     {
@@ -2381,8 +2731,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       name: "internal agent error without a provider terminal",
       fail: true,
       providerTerminal: false,
-      expected: "Error: internal error",
-      protocolError: false,
+      expected: "internal error",
+      protocolError: true,
     },
     {
       name: "internal agent error with a provider terminal",
@@ -2395,10 +2745,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     "separates streamed content from the terminal finish for an official SDK $name",
     async ({ fail, providerTerminal, expected, protocolError }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const terminalAdmission = createDeferred<{
-        active: number;
-        drained: { drained: boolean; active: number };
-      }>();
+      const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
@@ -2415,12 +2762,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         // Agent settlement schedules the terminal in a later microtask. The
         // request must remain admitted until Node finishes the actual stream.
         const active = getActiveGatewayRootWorkCount();
-        void waitForActiveGatewayRootWork(0).then((drained) => {
-          terminalAdmission.resolve({ active, drained });
-        });
+        terminalAdmission.resolve({ active });
       });
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         activeRunId = (opts as { runId?: string }).runId;
         if (!activeRunId) {
           throw new Error("expected a streaming chat-completion run ID");
@@ -2461,7 +2806,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           messages: [{ role: "user", content: "Return a complete streamed response." }],
           stream: true,
         });
-        await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
@@ -2490,7 +2835,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           wireResponse.promise,
         ]);
         expect(admission.active).toBe(idleRootCount + 1);
-        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
         expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
 
@@ -2514,12 +2858,72 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
+  it.each([
+    { name: "a string", stream: "false" },
+    { name: "a number", stream: 1 },
+    { name: "an array", stream: [] },
+    { name: "an object", stream: {} },
+  ])("rejects $name stream mode before dispatching an agent", async ({ stream }) => {
+    agentCommandMock.mockClear();
+    const response = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      stream,
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "invalid_request_error", message: expect.stringContaining("stream") },
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps one created timestamp across every streamed completion chunk", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "commentary" } });
+        return {
+          payloads: [{ text: "commentary" }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_1", name: "lookup", arguments: JSON.stringify({ q: "x".repeat(300) }) },
+            ],
+            agentMeta: { usage: { input: 4, output: 1, total: 5 } },
+          },
+        };
+      }) as never);
+
+      const response = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(response.status).toBe(200);
+      const chunks = parseSseDataLines(await response.text())
+        .filter((data) => data !== "[DONE]")
+        .map((data) => JSON.parse(data) as { created?: number });
+
+      expect(chunks.length).toBeGreaterThanOrEqual(6);
+      expect(chunks.every((chunk) => typeof chunk.created === "number")).toBe(true);
+      expect(new Set(chunks.map((chunk) => chunk.created))).toEqual(new Set([chunks[0]?.created]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
       {
-        agentCommand.mockClear();
-        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        agentCommandMock.mockClear();
+        agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
           buildAssistantDeltaResult({
             opts,
             emit: emitAgentEvent,
@@ -2566,8 +2970,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        agentCommandMock.mockClear();
+        agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
           buildAssistantDeltaResult({
             opts,
             emit: emitAgentEvent,
@@ -2595,8 +2999,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "hello" }],
         } as never);
 
@@ -2612,8 +3016,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        agentCommandMock.mockClear();
+        agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
           buildAssistantDeltaResult({
             opts,
             emit: emitAgentEvent,
@@ -2645,8 +3049,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "Let me check that." }],
           meta: {
             stopReason: "tool_calls",
@@ -2712,8 +3116,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "Let me check that." }],
           meta: {
             stopReason: "tool_calls",
@@ -2760,7 +3164,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         let resolveLateToolCall:
           | ((result: {
               payloads: Array<{ text: string }>;
@@ -2770,7 +3174,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               };
             }) => void)
           | undefined;
-        agentCommand.mockImplementationOnce(
+        agentCommandMock.mockImplementationOnce(
           ((opts: unknown) =>
             new Promise((resolve) => {
               resolveLateToolCall = resolve;
@@ -2841,8 +3245,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+        agentCommandMock.mockClear();
+        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
 
         const toolConflictRes = await postChatCompletions(port, {
           stream: true,
@@ -2883,8 +3287,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        agentCommand.mockClear();
-        agentCommand.mockRejectedValueOnce(new Error("boom"));
+        agentCommandMock.mockClear();
+        agentCommandMock.mockRejectedValueOnce(new Error("boom"));
 
         const errorRes = await postChatCompletions(port, {
           stream: true,
@@ -2902,16 +3306,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const choices = errorChunks.flatMap(
           (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
-        const errorContentChoice = choices.find(
-          (choice) =>
-            (choice.delta as Record<string, unknown> | undefined)?.content ===
-            "Error: internal error",
-        );
-        expect(errorContentChoice?.finish_reason).toBeNull();
-        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
-        expect(stopChoices).toHaveLength(1);
-        expect(stopChoices[0]?.delta).toEqual({});
-        expect(choices.at(-1)).toEqual(stopChoices[0]);
+        expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
+        expect(
+          choices.some((choice) =>
+            Boolean((choice.delta as Record<string, unknown> | undefined)?.content),
+          ),
+        ).toBe(false);
+        expect(choices.some((choice) => choice.finish_reason === "stop")).toBe(false);
+        expect(errorText).not.toContain("boom");
       }
     } finally {
       // shared server
@@ -2929,8 +3333,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const expectedArguments = JSON.stringify({ value });
       expect(expectedArguments.indexOf(astral)).toBe(boundary);
 
-      agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
         payloads: [{ text: "Calling the tool." }],
         meta: {
           stopReason: "tool_calls",
@@ -2991,8 +3395,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const port = enabledPort;
       let serverAbortSignal: AbortSignal | undefined;
 
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce(
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(
         (opts: unknown) =>
           new Promise<undefined>((resolve) => {
             const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
@@ -3051,7 +3455,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       await expect(firstChunk).resolves.toContain('"role":"assistant"');
       await vi.waitFor(() => {
-        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
       });
 
       await vi.waitFor(
@@ -3066,8 +3470,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
     const idleRootCount = getActiveGatewayRootWorkCount();
     const continueAgent = createDeferred();
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async () => {
       await continueAgent.promise;
       const queued = await enqueueCommandInLane("openai-http-admission-probe", async () => true);
       return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
@@ -3091,8 +3495,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("buffers replaceable assistant events for streaming chat completions", async () => {
     const port = enabledPort;
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       emitAgentEvent({
         runId,
@@ -3132,8 +3536,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("prefers final result text over buffered replaceable chat drafts", async () => {
     const port = enabledPort;
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       emitAgentEvent({
         runId,
@@ -3164,10 +3568,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(allContent).toBe("final answer");
   });
 
-  it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
+  it.each([
+    {
+      name: "includes aggregate usage in the final stream chunk",
+      usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
+      lastCallUsage: undefined,
+      expected: {
+        prompt_tokens: 15,
+        completion_tokens: 5,
+        total_tokens: 20,
+        prompt_tokens_details: { cached_tokens: 3 },
+      },
+    },
+    {
+      name: "uses last-call usage when the aggregate is zero",
+      usage: { input: 0, output: 0, total: 0 },
+      lastCallUsage: { input: 55, output: 7, total: 62 },
+      expected: {
+        prompt_tokens: 55,
+        completion_tokens: 7,
+        total_tokens: 62,
+      },
+    },
+  ])("$name", async ({ usage, lastCallUsage, expected }) => {
     const port = enabledPort;
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
       emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
@@ -3175,13 +3601,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         payloads: [{ text: "hello" }],
         meta: {
           agentMeta: {
-            usage: {
-              input: 12,
-              output: 5,
-              cacheRead: 3,
-              cacheWrite: 0,
-              total: 20,
-            },
+            usage,
+            ...(lastCallUsage ? { lastCallUsage } : {}),
           },
         },
       };
@@ -3203,19 +3624,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       .map((d) => JSON.parse(d) as Record<string, unknown>);
 
     const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual({
-      prompt_tokens: 15,
-      completion_tokens: 5,
-      total_tokens: 20,
-      prompt_tokens_details: { cached_tokens: 3 },
-    });
+    expect(usageChunk?.usage).toEqual(expected);
     expect(usageChunk?.choices).toStrictEqual([]);
   });
 
   it("keeps aggregate-only usage total in final stream usage chunk", async () => {
     const port = enabledPort;
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
       return {
@@ -3254,8 +3670,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("finalizes stream when lifecycle end arrives before usage is available", async () => {
     const port = enabledPort;
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce(
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(
       ((opts: unknown) =>
         new Promise((resolve) => {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
@@ -3303,8 +3719,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const port = enabledPort;
       let serverAbortSignal: AbortSignal | undefined;
 
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce(
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(
         (opts: unknown) =>
           new Promise<undefined>((resolve) => {
             const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
@@ -3341,7 +3757,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
 
       await vi.waitFor(() => {
-        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
       });
 
       clientReq.destroy();
@@ -3357,8 +3773,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("does not require usage to finalize when include_usage is not requested", async () => {
     const port = enabledPort;
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce(
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(
       ((opts: unknown) =>
         new Promise((resolve) => {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
@@ -3393,8 +3809,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         { scopes: "operator.write", senderIsOwner: false },
         { scopes: "operator.admin, operator.write", senderIsOwner: true },
       ]) {
-        agentCommand.mockClear();
-        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
 
         const res = await postChatCompletions(
           enabledPort,
@@ -3411,17 +3827,99 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(res.status).toBe(200);
         await res.text();
-        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
         expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
       }
     }
+  });
+
+  it("blocks a view-capped operator from mutating another operator's session", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getGatewayTestPort();
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sessions: { others: "view" },
+                  },
+                },
+              },
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openAiChatCompletionsEnabled: true,
+          });
+
+          const owner = ensureProfileForEmail("session-owner@example.test");
+          const sessionKey = "agent:main:foreign-openai-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "foreign-openai-http",
+              updatedAt: 1,
+              visibility: "shared",
+              createdVia: "operator",
+              createdActor: { type: "human", source: "profile", id: owner.id },
+            },
+          );
+
+          agentCommandMock.mockClear();
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const response = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
+            {
+              "x-forwarded-for": "198.51.100.42",
+              "x-forwarded-proto": "https",
+              "x-forwarded-user": "guest@example.test",
+              "x-openclaw-session-key": sessionKey,
+            },
+          );
+
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({
+            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+          });
+          expect(agentCommandMock).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openai operator role session sharing test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
   });
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const port = await getFreePort();
+        const port = await getGatewayTestPort();
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
         const trustedProxyAuth = {
@@ -3448,13 +3946,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             openAiChatCompletionsEnabled: true,
           });
 
+          const incognitoSessionKey = "agent:main:dashboard:incognito-openai-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: incognitoSessionKey },
+            {
+              sessionId: "session-incognito-openai-http",
+              updatedAt: 1,
+              incognito: true,
+              visibility: "shared",
+            },
+          );
+
           for (const stream of [false, true]) {
             for (const { scopes, senderIsOwner } of [
               { scopes: "operator.write", senderIsOwner: false },
               { scopes: "operator.admin, operator.write", senderIsOwner: true },
             ]) {
-              agentCommand.mockClear();
-              agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+              agentCommandMock.mockClear();
+              agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
 
               const res = await postChatCompletions(
                 port,
@@ -3464,6 +3973,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
                   messages: [{ role: "user", content: "hi" }],
                 },
                 {
+                  "x-forwarded-for": "198.51.100.42",
                   "x-forwarded-proto": "https",
                   "x-forwarded-user": "operator@example.com",
                   "x-openclaw-scopes": scopes,
@@ -3473,16 +3983,55 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
               expect(res.status).toBe(200);
               await res.text();
-              expect(agentCommand).toHaveBeenCalledTimes(1);
+              expect(agentCommandMock).toHaveBeenCalledTimes(1);
               expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
             }
           }
 
-          agentCommand.mockClear();
+          const trustedProxyHeaders = {
+            "x-forwarded-for": "198.51.100.42",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": "operator@example.com",
+          };
+          for (const requestedSessionKey of [
+            incognitoSessionKey,
+            "dashboard:incognito-openai-http",
+          ]) {
+            agentCommandMock.mockClear();
+            const denied = await postChatCompletions(
+              port,
+              { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+              {
+                ...trustedProxyHeaders,
+                "x-openclaw-scopes": "operator.write",
+                "x-openclaw-session-key": requestedSessionKey,
+              },
+            );
+            expect(denied.status).toBe(403);
+            await denied.text();
+            expect(agentCommandMock).not.toHaveBeenCalled();
+          }
+
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const allowed = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openai-http",
+            },
+          );
+          expect(allowed.status).toBe(200);
+          await allowed.text();
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
+
+          agentCommandMock.mockClear();
           const unauthorized = await postChatCompletions(
             port,
             { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
             {
+              "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
               "x-openclaw-scopes": "operator.admin, operator.write",
               "x-openclaw-sender-is-owner": "true",
@@ -3490,7 +4039,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           );
           expect(unauthorized.status).toBe(401);
           await unauthorized.text();
-          expect(agentCommand).not.toHaveBeenCalled();
+          expect(agentCommandMock).not.toHaveBeenCalled();
         } finally {
           await server?.close({ reason: "openai trusted-proxy auth owner test done" });
           testState.gatewayAuth = previousGatewayAuth;
@@ -3504,12 +4053,12 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it.each(["token", "password"] as const)(
     "preserves owner identity for streaming and non-streaming %s-authenticated callers",
     async (mode) => {
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       const server = await startSharedSecretServer(port, mode);
       try {
         for (const stream of [false, true]) {
-          agentCommand.mockClear();
-          agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          agentCommandMock.mockClear();
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
 
           const res = await postChatCompletions(
             port,
@@ -3527,11 +4076,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
           expect(res.status).toBe(200);
           await res.text();
-          expect(agentCommand).toHaveBeenCalledTimes(1);
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
           expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
         }
 
-        agentCommand.mockClear();
+        agentCommandMock.mockClear();
         const unauthorized = await postChatCompletions(
           port,
           { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
@@ -3539,7 +4088,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         );
         expect(unauthorized.status).toBe(401);
         await unauthorized.text();
-        expect(agentCommand).not.toHaveBeenCalled();
+        expect(agentCommandMock).not.toHaveBeenCalled();
       } finally {
         await server.close({ reason: `openai ${mode} auth owner test done` });
       }
@@ -3554,8 +4103,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     const cleanupAdmissionClosed = createDeferred<boolean>();
     let serverAbortSignal: AbortSignal | undefined;
 
-    agentCommand.mockClear();
-    agentCommand.mockImplementationOnce(async (opts: unknown) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
       const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
       serverAbortSignal = signal;
       if (signal?.aborted) {
@@ -3589,7 +4138,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
 
     await vi.waitFor(() => {
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
     });
 
     try {
@@ -3601,10 +4150,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(await cleanupAdmissionClosed.promise).toBe(false);
       expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-      expect(await waitForActiveGatewayRootWork(0)).toEqual({
-        drained: false,
-        active: idleRootCount + 1,
-      });
     } finally {
       finishAgentCleanup.resolve();
     }
@@ -3622,8 +4167,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const port = enabledPort;
       let serverAbortSignal: AbortSignal | undefined;
 
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce(
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(
         (opts: unknown) =>
           new Promise<undefined>((resolve) => {
             const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
@@ -3655,7 +4200,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
 
       await vi.waitFor(() => {
-        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
       });
 
       clientReq.destroy();

@@ -1,14 +1,11 @@
 import { html, type TemplateResult } from "lit";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "../../workboard/types.ts";
+import { workboardCardBoardId } from "../../workboard/board-filter.ts";
+import { WORKBOARD_STATUSES } from "../../workboard/types.ts";
 import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 import { WorkboardWidgetElement } from "./workboard-widget.ts";
-
-function cardBoardId(card: WorkboardCard): string {
-  return card.metadata?.automation?.boardId ?? "default";
-}
 
 class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
   override render(): TemplateResult {
@@ -27,7 +24,9 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
     // cards created with an explicit board id and renders an all-zero widget.
     const boardId = this.readStringProp("boardId");
     const limit = Math.min(10, this.readPositiveIntegerProp("limit", 5));
-    const cards = boardId ? this.cards.filter((card) => cardBoardId(card) === boardId) : this.cards;
+    const cards = boardId
+      ? this.cards.filter((card) => workboardCardBoardId(card) === boardId)
+      : this.cards;
     const topCards = cards
       .filter((card) => card.status === "ready" || card.status === "running")
       .toSorted(

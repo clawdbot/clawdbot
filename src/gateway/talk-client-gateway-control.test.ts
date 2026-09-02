@@ -6,6 +6,13 @@ import {
 } from "./talk-client-gateway-control.js";
 import { cleanupTalkConnection } from "./talk-session-registry.js";
 
+const sessionTarget = {
+  agentId: "main",
+  sessionKey: "agent:main:main",
+  canonicalKey: "agent:main:main",
+  storePath: "/tmp/sessions",
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -14,7 +21,80 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function controlContext(
+  warn = vi.fn(),
+  onTalkEvent?: (event: { type: string; payload: unknown }) => void,
+) {
+  return {
+    logGateway: { warn },
+    chatAbortControllers: new Map(),
+    broadcastToConnIds: vi.fn((_name: string, payload: { talkEvent?: unknown }) => {
+      if (payload.talkEvent) {
+        onTalkEvent?.(payload.talkEvent as { type: string; payload: unknown });
+      }
+    }),
+  } as never;
+}
+
 describe("Talk client Gateway control owner", () => {
+  it.each(["failed", "incomplete"] as const)(
+    "keeps Gateway-controlled browser Talk reusable after a %s response",
+    async (status) => {
+      const warn = vi.fn();
+      const closeProvider = vi.fn(async () => undefined);
+      const closeLogicalSession = vi.fn(async () => undefined);
+      const talkEvents: Array<{ type: string; payload: unknown }> = [];
+      const owner = createTalkClientGatewayControlOwner({
+        voiceSessionId: `voice-${status}`,
+        providerId: "openai",
+        sessionTarget,
+        connId: "conn-gateway",
+        context: controlContext(warn, (event) => talkEvents.push(event)),
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        appendTranscript: vi.fn(async () => undefined),
+        flushTranscript: vi.fn(async () => undefined),
+        closeLogicalSession,
+      });
+      await owner.adoptProvider(closeProvider);
+      owner.activate();
+      owner.control.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "response-1",
+      });
+      const firstOutcome = {
+        status,
+        responseId: "response-1",
+        message: `provider ${status}`,
+      } as const;
+      owner.control.onResponseDone?.(firstOutcome);
+      owner.control.onEvent?.({
+        direction: "server",
+        type: "response.done",
+        responseId: "response-1",
+      });
+      owner.control.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "response-2",
+      });
+      owner.control.onResponseDone?.({ status: "completed", responseId: "response-2" });
+      owner.control.onEvent?.({
+        direction: "server",
+        type: "response.done",
+        responseId: "response-2",
+      });
+
+      expect(talkEvents.filter((event) => event.type === "session.error")).toHaveLength(1);
+      expect(talkEvents.filter((event) => event.type === "turn.ended")).toHaveLength(2);
+      expect(warn).toHaveBeenCalledWith(`talk Gateway control provider ${status}`);
+      expect(closeProvider).not.toHaveBeenCalled();
+      expect(closeLogicalSession).not.toHaveBeenCalled();
+
+      await owner.close();
+    },
+  );
+
   it("persists sideband transcripts, completes consults, and closes idempotently", async () => {
     const consultResult = deferred<{ text: string }>();
     const runAgentConsult = vi.fn(async () => await consultResult.promise);
@@ -35,16 +115,17 @@ describe("Talk client Gateway control owner", () => {
     } satisfies RealtimeVoiceBridge;
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-gateway",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-gateway",
+      context: controlContext(),
       runAgentConsult,
       appendTranscript,
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
-      warn: vi.fn(),
     });
     owner.control.bindBridge(bridge);
-    owner.activate(closeProvider);
+    await owner.adoptProvider(closeProvider);
+    owner.activate();
 
     owner.control.onTranscript?.("user", "check the repository", true);
     owner.control.onToolCall?.({
@@ -68,7 +149,7 @@ describe("Talk client Gateway control owner", () => {
 
     const closeParams = {
       voiceSessionId: "voice-gateway",
-      sessionKey: "agent:main:main",
+      sessionKey: sessionTarget.sessionKey,
       connId: "conn-gateway",
     };
     await expect(
@@ -93,16 +174,17 @@ describe("Talk client Gateway control owner", () => {
     const runAgentConsult = vi.fn(async () => ({ text: "unexpected" }));
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-control",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-control",
+      context: controlContext(),
       runAgentConsult,
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession: vi.fn(async () => undefined),
-      warn: vi.fn(),
     });
     owner.control.bindBridge(bridge);
-    owner.activate(vi.fn(async () => undefined));
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
     owner.control.onToolCall?.({
       itemId: "item-status",
       callId: "call-status",
@@ -129,7 +211,7 @@ describe("Talk client Gateway control owner", () => {
           : text === "status"
             ? ("status" as const)
             : ("steer" as const),
-      sessionKey: "agent:main:main",
+      sessionKey: sessionTarget.canonicalKey,
       active: true,
       ...(text === "cancel" ? { aborted: true } : { queued: text !== "status" }),
       message: `${text} accepted`,
@@ -166,17 +248,18 @@ describe("Talk client Gateway control owner", () => {
     } satisfies RealtimeVoiceBridge;
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-spoken-control",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-spoken-control",
+      context: controlContext(),
       runAgentConsult,
       controlAgentRun,
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession: vi.fn(async () => undefined),
-      warn: vi.fn(),
     });
     owner.control.bindBridge(bridge);
-    owner.activate(vi.fn(async () => undefined));
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
     owner.control.onToolCall?.({
       itemId: "item-long",
       callId: "call-long",
@@ -214,15 +297,16 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-disconnect",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-disconnect",
+      context: controlContext(),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
-      warn: vi.fn(),
     });
-    owner.activate(closeProvider);
+    await owner.adoptProvider(closeProvider);
+    owner.activate();
 
     cleanupTalkConnection("conn-disconnect", { warn: vi.fn() });
 
@@ -234,15 +318,16 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-close-error",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-close-error",
+      context: controlContext(),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
-      warn: vi.fn(),
     });
-    owner.activate(vi.fn(() => Promise.reject(new Error("provider close failed"))));
+    await owner.adoptProvider(vi.fn(() => Promise.reject(new Error("provider close failed"))));
+    owner.activate();
 
     await expect(owner.close()).rejects.toThrow("provider close failed");
     expect(closeLogicalSession).toHaveBeenCalledOnce();
@@ -263,13 +348,13 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const common = {
       voiceSessionId: "voice-replacement",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-replacement",
+      context: controlContext(),
       runAgentConsult,
       appendTranscript,
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
-      warn: vi.fn(),
     };
     const firstBridge = {
       connect: vi.fn(async () => undefined),
@@ -288,7 +373,8 @@ describe("Talk client Gateway control owner", () => {
     const closeSecond = vi.fn(async () => undefined);
     const first = createTalkClientGatewayControlOwner(common);
     first.control.bindBridge(firstBridge);
-    first.activate(closeFirst);
+    await first.adoptProvider(closeFirst);
+    first.activate();
     first.control.onTranscript?.("user", "first transport", true);
     first.control.onToolCall?.({
       itemId: "item-replacement",
@@ -300,7 +386,8 @@ describe("Talk client Gateway control owner", () => {
 
     const second = createTalkClientGatewayControlOwner(common);
     second.control.bindBridge(secondBridge);
-    second.activate(closeSecond);
+    await second.adoptProvider(closeSecond);
+    second.activate();
     await vi.waitFor(() => expect(closeFirst).toHaveBeenCalledOnce());
     first.control.onClose?.("completed");
     first.control.onTranscript?.("user", "stale transport", true);

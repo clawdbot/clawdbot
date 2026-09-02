@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
   parseApiErrorInfo,
@@ -9,18 +10,9 @@ import {
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-const TIMEOUT_ERROR_CODES = new Set([
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
+const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
   "EHOSTDOWN",
   "ENETRESET",
-  "EPIPE",
-  "EAI_AGAIN",
   "ERR_STREAM_PREMATURE_CLOSE",
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -240,8 +232,8 @@ export function classifyFailoverClassificationFromHttpStatus(
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
     }
-    // billing message on 401/403 takes precedence over generic auth (e.g. OpenRouter
-    // "Key limit exceeded" 401/403 should trigger model fallback, not auth)
+    // Provider-owned billing classifications on ambiguous 401/403 responses
+    // take precedence over generic auth.
     if (messageReason === "billing") {
       return toReasonClassification("billing");
     }
@@ -342,7 +334,10 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     case "OVERLOADED_ERROR":
       return "overloaded";
     default:
-      return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
+      return FAILOVER_TIMEOUT_ERROR_CODES.has(normalized) ||
+        isTransientNetworkError({ code: normalized })
+        ? "timeout"
+        : null;
   }
 }
 export function classifyCoreFailoverReasonFromErrorType(
@@ -393,7 +388,7 @@ function hasBillingApiErrorType(raw: string): boolean {
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
 }
-export function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
   if (!isBillingErrorMessage(raw)) {
     return false;
   }
@@ -407,35 +402,20 @@ export function isBilling429MessageForProvider(raw: string, provider: string | u
 export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
-export function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "openrouter") &&
-    (normalizeOptionalLowercaseString(raw)?.includes("provider returned error") ?? false)
-  );
-}
-export function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "openrouter") && /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
-  );
-}
-export function isOpenRouterKeyBudgetLimitExceededError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "openrouter") &&
-    /\bapi\s+key\s+budget\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
-  );
-}
 export function isExactUnknownNoDetailsError(raw: string): boolean {
   return (
     normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
   );
 }
-export function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
-  // This upstream phrase is generic prose. Provider identity must come from
-  // the runner metadata so other providers cannot inherit Claude CLI policy.
+export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
+  // These upstream phrases overlap generic session/auth wording. Provider identity
+  // must come from runner metadata so other CLIs cannot inherit Claude policy.
   if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
     return false;
   }
-  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+  return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(
+    raw,
+  );
 }
 export function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);

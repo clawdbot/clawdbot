@@ -4,7 +4,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { requestSafeGatewayRestart } from "./restart-coordinator.js";
+import {
+  createSafeGatewayRestartPreflight,
+  scheduleSafeGatewayRestart,
+} from "./restart-coordinator.js";
 
 const scheduleGatewaySigusr1Restart = vi.hoisted(() => vi.fn());
 
@@ -31,8 +34,8 @@ afterEach(() => {
 
 describe("safe gateway restart coordinator", () => {
   const requestPreflight = (
-    inspect: NonNullable<Parameters<typeof requestSafeGatewayRestart>[0]>["inspect"],
-  ) => requestSafeGatewayRestart({ inspect }).preflight;
+    inspect: NonNullable<Parameters<typeof scheduleSafeGatewayRestart>[0]>["inspect"],
+  ) => createSafeGatewayRestartPreflight(inspect);
 
   it("reports safe when no restart blockers are active", () => {
     const preflight = requestPreflight({
@@ -126,8 +129,8 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("counts an admitted spawn handoff while excluding the preflight request", async () => {
-    const handoff = tryBeginGatewayRootWorkAdmission();
-    const request = tryBeginGatewayRootWorkAdmission();
+    const handoff = tryBeginGatewayRootWorkAdmission("subagents:spawn-handoff");
+    const request = tryBeginGatewayRootWorkAdmission("ws:gateway.restart");
     expect(handoff).not.toBeNull();
     expect(request).not.toBeNull();
 
@@ -148,7 +151,7 @@ describe("safe gateway restart coordinator", () => {
           {
             kind: "root-request",
             count: 1,
-            message: "1 active gateway request(s)",
+            message: "1 active gateway request(s): subagents:spawn-handoff",
           },
         ]);
       });
@@ -191,7 +194,7 @@ describe("safe gateway restart coordinator", () => {
       cooldownMsApplied: 0,
     });
 
-    const result = requestSafeGatewayRestart({
+    const result = scheduleSafeGatewayRestart({
       reason: "test.safe",
       inspect: {
         getQueueSize: () => 1,
@@ -221,7 +224,7 @@ describe("safe gateway restart coordinator", () => {
       cooldownMsApplied: 0,
     });
 
-    const result = requestSafeGatewayRestart({
+    const result = scheduleSafeGatewayRestart({
       inspect: {
         getQueueSize: () => 0,
         getPendingReplies: () => 0,
@@ -246,7 +249,7 @@ describe("safe gateway restart coordinator", () => {
       cooldownMsApplied: 0,
     });
 
-    const result = requestSafeGatewayRestart({
+    const result = scheduleSafeGatewayRestart({
       reason: "test.skip-deferral",
       skipDeferral: true,
       inspect: {
@@ -280,7 +283,7 @@ describe("safe gateway restart coordinator", () => {
       cooldownMsApplied: 0,
     });
 
-    requestSafeGatewayRestart({
+    scheduleSafeGatewayRestart({
       reason: "test.no-skip",
       inspect: {
         getQueueSize: () => 0,

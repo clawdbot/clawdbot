@@ -21,6 +21,7 @@ const ANTHROPIC_DEFAULT_BETAS = [
   "interleaved-thinking-2025-05-14",
 ];
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
 const ANTHROPIC_OAUTH_BETAS = ["oauth-2025-04-20", "claude-code-20250219"];
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
@@ -220,6 +221,54 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
+function createAnthropicCompactionWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+) {
+  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
+  return ((model, context, options) => {
+    if (
+      extraParams?.anthropicServerCompaction !== true ||
+      isAnthropicOauthApiKey(options?.apiKey) ||
+      !isDirectAnthropicModel(model)
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    const configuredThreshold =
+      typeof extraParams.anthropicCompactThreshold === "number"
+        ? Math.floor(extraParams.anthropicCompactThreshold)
+        : undefined;
+    const threshold = Math.max(
+      50_000,
+      configuredThreshold ?? Math.floor((model.contextWindow ?? 0) * 0.7),
+    );
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "anthropic-beta": [options?.headers?.["anthropic-beta"], ANTHROPIC_COMPACTION_BETA]
+          .filter(Boolean)
+          .join(","),
+      },
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          payloadObj.context_management ??= {
+            edits: [
+              {
+                type: "compact_20260112",
+                trigger: { type: "input_tokens", value: threshold },
+              },
+            ],
+          };
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  }) as StreamFn;
+}
+
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
@@ -336,6 +385,9 @@ function installFullProviderRuntimeDepsForTest() {
         const fastMode = resolveAnthropicFastMode(params.context.extraParams);
         if (fastMode !== undefined) {
           streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
+        }
+        if (params.context.extraParams?.anthropicServerCompaction === true) {
+          streamFn = createAnthropicCompactionWrapper(streamFn, params.context.extraParams);
         }
         return streamFn;
       }
@@ -603,7 +655,8 @@ describe("applyExtraParamsToAgent", () => {
       | Model<"openai-responses">
       | Model<"openai-chatgpt-responses">
       | Model<"azure-openai-responses">
-      | Model<"anthropic-messages">;
+      | Model<"anthropic-messages">
+      | Model<"google-generative-ai">;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
@@ -698,6 +751,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "anthropic",
         id: "claude-sonnet-4-5",
         baseUrl: params.baseUrl ?? "https://api.anthropic.com",
+        contextWindow: 200_000,
       } as Model<"anthropic-messages">,
       payload: params.payload ?? {},
     });
@@ -1450,6 +1504,20 @@ describe("applyExtraParamsToAgent", () => {
       } as Model<"anthropic-messages">,
     },
     {
+      name: "does not inject parallel_tool_calls for google-generative-ai APIs",
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      cfg: buildModelConfig("google/gemini-2.5-pro", {
+        parallel_tool_calls: false,
+      }),
+      extraParamsOverride: undefined,
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as Model<"google-generative-ai">,
+    },
+    {
       name: "lets null runtime override suppress inherited parallel_tool_calls injection",
       applyProvider: "nvidia-nim",
       applyModelId: "moonshotai/kimi-k2.5",
@@ -1893,18 +1961,6 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "passes configured websocket transport through stream options",
-      cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
-      modelId: "gpt-5.4",
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
-      options: {},
-      expected: "websocket",
-    },
-    {
-      name: "passes configured websocket transport through stream options for openai gpt-5.4",
       cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
       modelId: "gpt-5.4",
       model: {
@@ -3096,19 +3152,6 @@ describe("applyExtraParamsToAgent", () => {
       expectedModelId: "MiniMax-M2.7-highspeed",
     },
     {
-      name: "maps MiniMax M2.7 /fast to the matching highspeed model",
-      applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.7",
-      fastMode: true,
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-        baseUrl: "https://api.minimax.io/anthropic",
-      } as Model<"anthropic-messages">,
-      expectedModelId: "MiniMax-M2.7-highspeed",
-    },
-    {
       name: "keeps explicit MiniMax highspeed models unchanged when /fast is off",
       applyProvider: "minimax-portal",
       applyModelId: "MiniMax-M2.7-highspeed",
@@ -3214,6 +3257,50 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.service_tier).toBe(expected);
+  });
+
+  it("injects configured Anthropic server compaction through the provider runtime", () => {
+    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: 120_000,
+    });
+    const payload = runAnthropicServiceTierCase({ cfg });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-sonnet-4-5",
+      options: { apiKey: "sk-ant-api03-test-key" },
+    });
+
+    expect(payload.context_management).toEqual({
+      edits: [
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: 120_000 },
+        },
+      ],
+    });
+    expect(headers?.["anthropic-beta"]).toContain(ANTHROPIC_COMPACTION_BETA);
+  });
+
+  it.each([
+    {
+      name: "is omitted",
+      extraParamsOverride: {},
+    },
+    {
+      name: "uses OAuth auth",
+      extraParamsOverride: { anthropicServerCompaction: true },
+      options: { apiKey: "sk-ant-oat-test-token" },
+    },
+    {
+      name: "uses a proxy endpoint",
+      extraParamsOverride: { anthropicServerCompaction: true },
+      baseUrl: "https://proxy.example.test/v1",
+    },
+  ])("does not inject Anthropic server compaction when the opt-in $name", (params) => {
+    const payload = runAnthropicServiceTierCase(params);
+
+    expect(payload).not.toHaveProperty("context_management");
   });
 
   it.each([

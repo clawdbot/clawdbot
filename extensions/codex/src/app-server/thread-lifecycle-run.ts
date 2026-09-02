@@ -1,8 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
+import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -14,12 +16,9 @@ import {
   createCodexSessionGenerationSupersededError,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
-  sessionBindingIdentity,
-  type CodexAppServerBindingIdentity,
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import {
   isTransientWebSearchRestriction,
   shouldRecheckRecoverablePluginBinding,
@@ -32,16 +31,23 @@ import {
   areUserMcpServersFingerprintsCompatible,
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
+import {
+  resumePendingCodexThread,
+  prepareCodexThreadResume,
+  withCodexThreadLifecycleBinding,
+} from "./thread-lifecycle-adoption.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
-import { prepareCodexThreadLifecyclePreflight } from "./thread-lifecycle-preflight.js";
+import {
+  prepareCodexThreadLifecyclePreflight,
+  resolveCodexThreadAgentDir,
+} from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
 import {
-  releaseCodexConsumedLiveThread,
-  releaseCodexRetainedLiveThread,
+  releaseCodexBoundLiveThread,
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
@@ -53,13 +59,28 @@ export async function startOrResumeThread(
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const incognito = isIncognitoSessionKey(params.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(params.client);
-  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
-    sessionId: params.params.sessionId,
-    sessionKey: params.params.sessionKey,
-    agentId: params.agentId ?? params.params.agentId,
-    config: params.params.config,
-  });
-  return await params.bindingStore.withLease(bindingIdentity, async () => {
+  return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, currentBinding) => {
+    let binding = currentBinding;
+    if (hasCodexNativeToolCatalog(binding)) {
+      // A resumed native catalog is immutable data. Run eligibility only changes
+      // the bridge's available executors, never this thread's inherited history.
+      const nativeCatalog = await loadCodexNativeToolCatalog({
+        client: params.client,
+        binding,
+        appServer: params.appServer,
+        agentDir: resolveCodexThreadAgentDir(params),
+        assertCurrent: () => {
+          params.signal?.throwIfAborted();
+          params.params.hostCapabilities.assertActive();
+        },
+      });
+      if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
+        throw new Error(
+          "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
+        );
+      }
+    }
+    const preflight = await prepareCodexThreadLifecyclePreflight(params);
     const {
       contextEngineBinding,
       dynamicToolsContainDeferred,
@@ -80,10 +101,7 @@ export async function startOrResumeThread(
       userMcpServersConfigPatch,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
-    } = await prepareCodexThreadLifecyclePreflight(params);
-    let binding = await lifecycleTiming.measure("read-binding", () =>
-      params.bindingStore.read(bindingIdentity),
-    );
+    } = preflight;
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
@@ -99,35 +117,20 @@ export async function startOrResumeThread(
         config: params.params.config,
       });
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
-    const releaseRetainedThread = async (
+    const releaseRetainedThread = (
       threadId: string,
       ownerClientId = initialBoundClientId,
-    ) => {
-      if (ownerClientId && ownerClientId !== clientId) {
-        // Auth/runtime rotation selects a new physical client, but its map
-        // cannot release a subscription owned by the previous app-server.
-        const previousClient = retainSharedCodexAppServerClientByInstanceId(ownerClientId);
-        if (!previousClient) {
-          return;
-        }
-        try {
-          await releaseCodexRetainedLiveThread({
-            client: previousClient.client,
-            lifecycleTiming,
-            threadId,
-          });
-        } finally {
-          previousClient.release();
-        }
-        return;
-      }
-      await releaseCodexRetainedLiveThread({
+      assertCurrent?: () => void,
+    ) =>
+      releaseCodexBoundLiveThread({
         client: params.client,
+        clientId,
+        ownerClientId,
         abandonClient: params.abandonClient,
         lifecycleTiming,
         threadId,
+        assertCurrent,
       });
-    };
     if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
       // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
       // the authoritative session store may let its successor displace that stale owner.
@@ -187,6 +190,8 @@ export async function startOrResumeThread(
         hostSystemAgentActive,
         restrictedToolSurface,
         restrictedToolSurfaceInheritedMcpServerNames,
+        shellEnvironment: params.shellEnvironment,
+        disableLoginShell: params.disableLoginShell,
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
@@ -199,6 +204,7 @@ export async function startOrResumeThread(
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
+          agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
           preserveNativeModel: true,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
@@ -241,6 +247,52 @@ export async function startOrResumeThread(
       }
       binding = undefined;
     };
+    const resolveRequestContext = () => {
+      const startModelSelection = resolveCodexAppServerThreadModelSelection({
+        provider: params.params.provider,
+        model: params.runtimeModelId ?? params.params.modelId,
+        binding,
+        authProfileId: params.params.authProfileId,
+        authProfileStore: params.params.authProfileStore,
+        agentDir: params.params.agentDir,
+        config: params.params.config,
+      });
+      return {
+        ...preflight,
+        bindingIdentity,
+        startModelSelection,
+        startModelProvider: startModelSelection.modelProvider,
+        normalizeBindingModelProvider,
+        throwIfAborted,
+      };
+    };
+    const transientDelegationRestriction = params.params.delegationCapability === "report_only";
+    const persistentWebSearchRestriction =
+      params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
+    const transientNativeToolRestriction =
+      params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction;
+    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+    if (binding?.pendingResumeConfiguration) {
+      return await resumePendingCodexThread(params, {
+        ...resolveRequestContext(),
+        binding,
+        clearCurrentBinding,
+        releaseRetainedThread: (threadId, assertCurrent) =>
+          releaseRetainedThread(threadId, initialBoundClientId, assertCurrent),
+        transientRestriction:
+          transientDelegationRestriction ||
+          transientNativeToolRestriction ||
+          transientWebSearchRestriction,
+      });
+    }
+
+    if (
+      binding?.threadId &&
+      !restrictedToolSurface &&
+      binding.nativeToolPolicyRestricted === true
+    ) {
+      await clearCurrentBinding("rotating a host-policy-restricted thread binding");
+    }
     if (
       binding?.threadId &&
       binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint
@@ -302,19 +354,9 @@ export async function startOrResumeThread(
       await clearCurrentBinding("rotating a GPT-5.6 multi-agent thread binding");
       binding = undefined;
     }
-    const startModelSelection = resolveCodexAppServerThreadModelSelection({
-      provider: params.params.provider,
-      model: params.params.modelId,
-      binding,
-      authProfileId: params.params.authProfileId,
-      authProfileStore: params.params.authProfileStore,
-      agentDir: params.params.agentDir,
-      config: params.params.config,
-    });
-    const startModelProvider = startModelSelection.modelProvider;
+    const requestContext = resolveRequestContext();
     // Capability read failures use managed search for this turn but must not
     // create a binding that later looks like a confirmed provider-policy change.
-    const transientDelegationRestriction = params.params.delegationCapability === "report_only";
     let preserveExistingBinding =
       transientDelegationRestriction ||
       (!ringZeroActive &&
@@ -322,14 +364,41 @@ export async function startOrResumeThread(
         !binding?.threadId);
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+    // Scoped inventory requires a loaded native thread. The warm/resume owner
+    // calls this only after acquiring that exact subscription, before admission.
+    const buildLoadedPluginThreadConfig = async (
+      current: CodexAppServerThreadBinding,
+    ): Promise<CodexPluginThreadConfig | undefined> => {
+      if (
+        !params.pluginThreadConfig?.requiresCurrentPolicyCheck &&
+        !shouldRecheckRecoverablePluginBinding({
+          binding: current,
+          pluginThreadConfig: params.pluginThreadConfig,
+        })
+      ) {
+        return undefined;
+      }
+      try {
+        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
+          params.pluginThreadConfig?.build({ threadId: current.threadId }),
+        );
+      } catch (error) {
+        throwIfAborted();
+        if (params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
+          throw error;
+        }
+        embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
+          error,
+          threadId: current.threadId,
+        });
+        return undefined;
+      }
+      throwIfAborted();
+      return prebuiltPluginThreadConfig;
+    };
     const webSearchBindingChanged =
       binding?.threadId &&
       binding.webSearchThreadConfigFingerprint !== webSearchThreadConfigFingerprint;
-    const persistentWebSearchRestriction =
-      params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
-    const transientNativeToolRestriction =
-      params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction;
-    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
     const explicitTransientWebSearchRestriction =
       params.webSearchAllowed === false &&
       params.persistentWebSearchAllowed !== false &&
@@ -493,33 +562,13 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId) {
-      let pluginBindingStale = isCodexPluginThreadBindingStale({
+      const pluginBindingStale = isCodexPluginThreadBindingStale({
         codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
         bindingFingerprint: binding.pluginAppsFingerprint,
         bindingInputFingerprint: binding.pluginAppsInputFingerprint,
         currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
         hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
       });
-      if (
-        !pluginBindingStale &&
-        shouldRecheckRecoverablePluginBinding({
-          binding,
-          pluginThreadConfig: params.pluginThreadConfig,
-        })
-      ) {
-        try {
-          prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
-            params.pluginThreadConfig?.build(),
-          );
-          pluginBindingStale =
-            prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
-        } catch (error) {
-          embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
-            error,
-            threadId: binding.threadId,
-          });
-        }
-      }
       if (pluginBindingStale) {
         embeddedAgentLog.debug(
           "codex app-server plugin app config changed; starting a new thread",
@@ -580,83 +629,51 @@ export async function startOrResumeThread(
           );
           await clearCurrentBinding("rotating a stale thread binding");
         }
-      } else if (incognito) {
-        if (binding.clientId && binding.clientId === clientId) {
-          // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
-          params.buildFinalConfigPatch?.({ action: "resume", binding });
-          throwIfAborted();
-          lifecycleTiming.mark("thread-ready");
-          lifecycleTiming.logSummary({
-            runId: params.params.runId,
-            sessionId: params.params.sessionId,
-            sessionKey: params.params.sessionKey,
-            threadId: binding.threadId,
-            action: "resumed",
-          });
-          return { ...binding, lifecycle: { action: "resumed" } };
-        }
-        await clearCurrentBinding("rotating an unavailable ephemeral thread binding");
-        binding = undefined;
       } else {
         const warmReuse = await tryReuseCodexLiveThread({
+          ...requestContext,
           params,
           binding,
-          bindingIdentity,
           clientId,
-          dynamicToolsFingerprint,
-          environmentSelectionFingerprint,
-          hostSystemAgentActive,
-          lifecycleTiming,
-          nativeSkillIsolation,
-          releaseConsumedThread: (threadId, cause) =>
-            releaseCodexConsumedLiveThread({
-              client: params.client,
-              abandonClient: params.abandonClient,
-              lifecycleTiming,
-              threadId,
-              cause,
-            }),
-          ringZeroActive,
-          restrictedToolSurfaceInheritedMcpServerNames,
-          startModelProvider,
-          startModelSelection,
-          throwIfAborted,
-          userMcpServersConfigPatch,
+          buildLoadedPluginThreadConfig,
         });
-        if (warmReuse.binding) {
+        if (warmReuse.kind === "ready") {
           return warmReuse.binding;
         }
-        // Codex cold-resumes a changed idle thread after its last subscriber
-        // leaves; resume_running_thread shuts down the old cached session.
-        await releaseRetainedThread(binding.threadId);
-        const resumed = await resumeExistingCodexThread(params, {
-          binding,
-          bindingIdentity,
-          startModelSelection,
-          startModelProvider,
-          userMcpServersConfigPatch,
-          dynamicToolsFingerprint,
-          dynamicToolsContainDeferred,
-          webSearchThreadConfigFingerprint,
-          nativeSkillIsolationFingerprint,
-          userMcpServersFingerprint,
-          ringZeroConfigFingerprint,
-          ringZeroClientInstanceId,
-          networkProxyConfigFingerprint,
-          contextEngineBinding,
-          environmentSelectionFingerprint,
-          hostSystemAgentActive,
-          ringZeroActive,
-          restrictedToolSurfaceInheritedMcpServerNames,
-          nativeSkillIsolation,
-          lifecycleTiming,
-          normalizeBindingModelProvider,
-          throwIfAborted,
-          clearCurrentBinding,
-          prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
-        });
-        if (resumed) {
-          return resumed;
+        if (incognito || warmReuse.kind === "rotate") {
+          throwIfAborted();
+          await clearCurrentBinding(
+            incognito
+              ? "rotating an unavailable ephemeral thread binding"
+              : "rotating a stale plugin app binding",
+          );
+        } else {
+          // Native adoption must be checked before releasing any retained owner;
+          // a passive refusal neither acquires nor authorizes dropping a subscription.
+          const configuration = await prepareCodexThreadResume(params, binding, requestContext);
+          try {
+            await releaseRetainedThread(
+              binding.threadId,
+              binding.clientId,
+              configuration.assertCurrent,
+            );
+            configuration.assertCurrent();
+            const resumed = await resumeExistingCodexThread(params, {
+              ...requestContext,
+              binding,
+              clearCurrentBinding,
+              prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
+              prebuiltPluginThreadConfig,
+              buildLoadedPluginThreadConfig,
+              assertResumeOwnership: configuration.assertCurrent,
+              assertResumeConfiguration: configuration.assertConfigured,
+            });
+            if (resumed) {
+              return resumed;
+            }
+          } finally {
+            configuration.dispose();
+          }
         }
       }
     }
@@ -665,27 +682,7 @@ export async function startOrResumeThread(
       await releaseRetainedThread(initialBoundThreadId);
     }
     const started = await startFreshCodexThread(params, {
-      bindingIdentity,
-      startModelSelection,
-      startModelProvider,
-      userMcpServersConfigPatch,
-      dynamicToolsFingerprint,
-      dynamicToolsContainDeferred,
-      webSearchThreadConfigFingerprint,
-      nativeSkillIsolationFingerprint,
-      userMcpServersFingerprint,
-      ringZeroConfigFingerprint,
-      ringZeroClientInstanceId,
-      networkProxyConfigFingerprint,
-      contextEngineBinding,
-      environmentSelectionFingerprint,
-      hostSystemAgentActive,
-      ringZeroActive,
-      restrictedToolSurfaceInheritedMcpServerNames,
-      nativeSkillIsolation,
-      lifecycleTiming,
-      normalizeBindingModelProvider,
-      throwIfAborted,
+      ...requestContext,
       prebuiltPluginThreadConfig,
       preserveExistingBinding,
       rotatedContextEngineBinding,

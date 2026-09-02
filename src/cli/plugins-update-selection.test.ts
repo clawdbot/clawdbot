@@ -147,6 +147,65 @@ describe("resolvePluginUpdateSelection", () => {
     });
   });
 
+  it("resolves a packed child update to its tracked package owner", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          pack: createNpmInstall({ spec: "@acme/pack", resolvedName: "@acme/pack" }),
+        },
+        installOwnerByPluginId: new Map([
+          ["pack/one", "pack"],
+          ["pack/two", "pack"],
+        ]),
+        rawId: "pack/two",
+      }),
+    ).toEqual({ pluginIds: ["pack"] });
+  });
+
+  it("does not infer a packed child owner when owner metadata is missing", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          pack: createNpmInstall({ spec: "@acme/pack", resolvedName: "@acme/pack" }),
+        },
+        rawId: "pack/two",
+      }),
+    ).toEqual({ pluginIds: [] });
+  });
+
+  it("rejects an ambiguous child before exact install-record selection", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "pack/one": createNpmInstall({ spec: "@acme/pack" }),
+          "pack/two": createNpmInstall({ spec: "@acme/pack" }),
+        },
+        rejectedPluginIds: new Map([
+          ["pack/one", "ambiguous pack/one"],
+          ["pack/two", "ambiguous pack/two"],
+        ]),
+        rawId: "pack/one",
+      }),
+    ).toEqual({ pluginIds: [], error: "ambiguous pack/one" });
+  });
+
+  it("rejects an ambiguous package owner for targeted and update-all selection", () => {
+    const installs = {
+      pack: createNpmInstall({ spec: "@acme/pack" }),
+      stable: createNpmInstall({ spec: "@acme/stable" }),
+    };
+    const rejectedPluginIds = new Map([["pack", "ambiguous pack"]]);
+
+    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, rawId: "pack" })).toEqual({
+      pluginIds: [],
+      error: "ambiguous pack",
+    });
+    expect(resolvePluginUpdateSelection({ installs, rejectedPluginIds, all: true })).toEqual({
+      pluginIds: [],
+      error: "ambiguous pack",
+    });
+  });
+
   it("maps prototype-named npm packages by own install records", () => {
     expect(
       resolvePluginUpdateSelection({
@@ -168,6 +227,54 @@ describe("resolvePluginUpdateSelection", () => {
 });
 
 describe("resolveHookPackUpdateSelection", () => {
+  it.each([
+    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks" },
+    { packageName: "openclaw-demo-hooks", requestedSpec: "openclaw-demo-hooks" },
+    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks@beta" },
+    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks@1.2.3" },
+  ])(
+    "maps npm package spec $requestedSpec to its tracked hook pack",
+    ({ packageName, requestedSpec }) => {
+      expect(
+        resolveHookPackUpdateSelection({
+          installs: {
+            "demo-hooks": createNpmHookInstall({
+              spec: `${packageName}@1.0.0`,
+              resolvedName: packageName,
+            }),
+          },
+          rawId: requestedSpec,
+        }),
+      ).toEqual({
+        hookIds: ["demo-hooks"],
+        specOverrides: { "demo-hooks": requestedSpec },
+      });
+    },
+  );
+
+  it("preserves the tracked npm spec when updating by exact hook-pack id", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {
+          "demo-hooks": createNpmHookInstall({ spec: "@acme/demo-hooks@beta" }),
+        },
+        rawId: "demo-hooks",
+      }),
+    ).toEqual({ hookIds: ["demo-hooks"] });
+  });
+
+  it("does not guess an owner when an npm package maps to multiple tracked hook packs", () => {
+    expect(
+      resolveHookPackUpdateSelection({
+        installs: {
+          alpha: createNpmHookInstall({ spec: "@acme/shared" }),
+          beta: createNpmHookInstall({ spec: "@acme/shared" }),
+        },
+        rawId: "@acme/shared",
+      }),
+    ).toEqual({ hookIds: [] });
+  });
+
   it("does not treat inherited prototype keys as installed hook ids", () => {
     expect(
       resolveHookPackUpdateSelection({

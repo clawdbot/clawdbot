@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { listConfiguredMcpServers, unsetConfiguredMcpServer } from "../config/mcp-config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -564,7 +565,7 @@ export async function applyClawRemovePlan(
         action: "removed",
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       cronJobs.push({
         manifestId: cron.manifestId,
         schedulerJobId: cron.schedulerJobId,
@@ -596,15 +597,13 @@ export async function applyClawRemovePlan(
     fallbackWorkspace: record.install.workspace,
     config: options.config,
     commitConfig: options.commitConfig,
+    stateDatabase: options,
     trashPath: options.trashPath,
     onModified: () => new ClawRemoveError("agent_modified", "Agent config changed during remove."),
   });
-  const {
-    agentRemoved,
-    cleanupTargets,
-    configBeforeDelete,
-    nextConfig: committedNextConfig,
-  } = configRemoval;
+  const { agentRemoved, cleanupTargets, configBeforeDelete } = configRemoval;
+  const committedNextConfig = configRemoval.nextConfig;
+  const completeDeletion = configRemoval.completeDeletion;
   if (!options.commitConfig || options.purgeSessions) {
     const purgeSessions =
       options.purgeSessions ??
@@ -678,7 +677,7 @@ export async function applyClawRemovePlan(
   if (!complete) {
     updateClawInstallRecordStatus(agentId, "partial", options);
   }
-  releaseClawRemoveRows(plan.agentId, workspaceFiles, complete, options);
+  releaseClawRemoveRows(plan.agentId, workspaceFiles, complete, completeDeletion, options);
   return {
     schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,

@@ -1,4 +1,5 @@
 // Defines Zod schema fragments for per-agent runtime configuration.
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,6 +12,7 @@ import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -517,6 +519,7 @@ const ToolExecBaseShape = {
   safeBins: z.array(z.string()).optional(),
   strictInlineEval: z.boolean().optional(),
   commandHighlighting: z.boolean().optional(),
+  grantExpiryDays: z.number().int().min(1).max(3650).optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   reviewer: z
@@ -714,6 +717,21 @@ const MessageToolConfigSchema = z
   .strict()
   .optional();
 
+const GitHubToolIdentitySchema = z
+  .object({
+    profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
+    kind: z.literal("oauth").optional(),
+    gitAuthor: z
+      .object({
+        name: z.string().trim().min(1).optional(),
+        email: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
@@ -727,6 +745,7 @@ const AgentToolsSchema = z
       .strict()
       .optional(),
     exec: ToolExecSchema,
+    github: GitHubToolIdentitySchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
@@ -867,14 +886,32 @@ const AgentRuntimePolicySchema = z
   .strict()
   .optional();
 
-export const AgentModelRuntimeEntrySchema = z
+const AgentModelRuntimeEntrySchema = z
   .object({
     alias: z.string().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: AgentRuntimePolicySchema,
+    codeMode: z.boolean().optional(),
     streaming: z.boolean().optional(),
   })
   .strict();
+
+export const AgentModelMapSchema = z
+  .record(z.string(), AgentModelRuntimeEntrySchema)
+  .superRefine((models, ctx) => {
+    for (const [ref, entry] of Object.entries(models)) {
+      // Runtime policy supports wildcard rows; Code Mode resolves exact models.
+      // Reject an authored override that would otherwise be silently ignored.
+      if (entry.codeMode !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [ref, "codeMode"],
+          message:
+            "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
+        });
+      }
+    }
+  });
 
 export const AgentModelPolicySchema = z
   .object({
@@ -885,14 +922,13 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
-    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
@@ -924,7 +960,6 @@ export const AgentEntrySchema = z
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
@@ -950,6 +985,7 @@ export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     web: ToolsWebSchema,
+    github: GitHubToolIdentitySchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
     sessions: z

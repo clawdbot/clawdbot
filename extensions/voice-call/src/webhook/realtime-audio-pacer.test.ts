@@ -46,8 +46,8 @@ describe("RealtimeAudioPacer", () => {
     vi.useRealTimers();
   });
 
-  it("paces realtime audio as 20ms telephony frames before marks (Twilio shape)", async () => {
-    vi.useFakeTimers();
+  it("primes an eight-frame lead and then advances without timer drift", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
     const sent: unknown[] = [];
     const pacer = new RealtimeAudioPacer({
       serializer: createTwilioSerializer("MZ-test"),
@@ -57,26 +57,70 @@ describe("RealtimeAudioPacer", () => {
       },
     });
 
-    pacer.sendAudio(Buffer.alloc(320, 0x7f));
-    pacer.sendMark("audio-1");
+    pacer.sendAudio(Buffer.alloc(50 * 160, 0x7f));
 
-    expect(sent).toHaveLength(1);
-    expect(
-      Buffer.from((sent[0] as { media: { payload: string } }).media.payload, "base64"),
-    ).toHaveLength(160);
+    expect(sent).toHaveLength(8);
 
-    await vi.advanceTimersByTimeAsync(20);
-    expect(sent).toHaveLength(2);
-    expect(
-      Buffer.from((sent[1] as { media: { payload: string } }).media.payload, "base64"),
-    ).toHaveLength(160);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sent).toHaveLength(13);
+  });
 
-    await vi.advanceTimersByTimeAsync(20);
-    expect(sent[2]).toEqual({
-      event: "mark",
-      streamSid: "MZ-test",
-      mark: { name: "audio-1" },
+  it("catches up all overdue frames when a pump runs late", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
     });
+
+    pacer.sendAudio(createSequencedAudio(50));
+    expect(sent).toHaveLength(8);
+
+    now = 100;
+    await vi.runOnlyPendingTimersAsync();
+    expect(sent).toHaveLength(13);
+  });
+
+  it("starts a fresh lead window after a genuine silence gap", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    pacer.sendAudio(createSequencedAudio(5));
+    expect(sent).toHaveLength(5);
+    await vi.advanceTimersByTimeAsync(500);
+    pacer.sendAudio(createSequencedAudio(20));
+    expect(sent).toHaveLength(13);
+  });
+
+  it("preserves marks after the audio they follow", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    pacer.sendAudio(createSequencedAudio(10));
+    pacer.sendMark("audio-1");
+    pacer.sendMark("audio-2");
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(sent.slice(-2)).toEqual(["mark:audio-1", "mark:audio-2"]);
   });
 
   it("clears queued audio immediately (Twilio shape)", async () => {
@@ -94,8 +138,27 @@ describe("RealtimeAudioPacer", () => {
     pacer.clearAudio();
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(sent).toHaveLength(2);
-    expect(sent[1]).toEqual({ event: "clear", streamSid: "MZ-test" });
+    expect(sent).toHaveLength(4);
+    expect(sent[3]).toEqual({ event: "clear", streamSid: "MZ-test" });
+  });
+
+  it("closes without sending the remaining lead-window backlog", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    pacer.sendAudio(createSequencedAudio(20));
+    pacer.close();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(sent).toHaveLength(8);
+    expect(pacer.hasPendingAudio()).toBe(false);
   });
 
   it("stops instead of buffering unbounded realtime audio", async () => {
@@ -183,12 +246,12 @@ describe("RealtimeAudioPacer", () => {
     pacer.sendAudio(createSequencedAudio(frameCount));
     await vi.advanceTimersByTimeAsync(500 * 20);
 
-    expect(sent).toHaveLength(501);
-    expect(inspectQueue(pacer)).toEqual({ length: 399, head: 100 });
-    expect(pacer.clearAudio()).toBe(299 * 160);
+    expect(sent).toHaveLength(508);
+    expect(inspectQueue(pacer)).toEqual({ length: 399, head: 107 });
+    expect(pacer.clearAudio()).toBe(292 * 160);
     await vi.advanceTimersByTimeAsync(frameCount * 20);
 
-    expect(sent).toHaveLength(502);
+    expect(sent).toHaveLength(509);
     expect(sent.at(-1)).toBe("clear");
     expect(inspectQueue(pacer)).toEqual({ length: 0, head: 0 });
     expect(pacer.hasPendingAudio()).toBe(false);

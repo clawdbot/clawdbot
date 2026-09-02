@@ -1,6 +1,7 @@
 // Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
-import { buildPendingApprovalView, resolveApprovalRequestKind } from "./approval-view-model.js";
+import { normalizeApprovalRequest, resolveApprovalRequestKind } from "./approval-types.js";
+import { buildPendingApprovalView } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -20,6 +21,13 @@ describe("buildPendingApprovalView", () => {
           riskKinds: ["inline-eval"],
           warningLines: ["Contains inline-eval: python -c"],
         },
+        scope: {
+          kind: "message-send",
+          target: "email",
+          recipientCount: 3,
+          recipients: ["alice@example.com", "bob@example.com"],
+          audience: "external",
+        },
       },
     };
 
@@ -30,6 +38,12 @@ describe("buildPendingApprovalView", () => {
       throw new Error("expected exec approval view");
     }
     expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
+    expect(view.scope).toEqual(request.request.scope);
+    expect(view.metadata).toContainEqual({
+      label: "Scope",
+      value:
+        "Send to 3 recipients via email (external): alice@example.com, bob@example.com, +1 more",
+    });
     expect(view.actions[0]?.action).toEqual({
       type: "approval",
       approvalId: "approval-id",
@@ -46,18 +60,54 @@ describe("buildPendingApprovalView", () => {
       request: {
         title: "Use protected tool",
         description: "The plugin needs operator consent.",
+        scope: { kind: "external-post", target: "github", visibility: "public" },
       },
     };
 
     expect(resolveApprovalRequestKind(request)).toBe("plugin");
     const view = buildPendingApprovalView(request);
     expect(view.approvalKind).toBe("plugin");
+    expect(view.scope).toEqual(request.request.scope);
+    expect(view.metadata).toContainEqual({ label: "Scope", value: "Post publicly to github" });
     expect(view.actions[0]?.action).toEqual({
       type: "approval",
       approvalId: "custom-id-without-prefix",
       approvalKind: "plugin",
       decision: "allow-once",
     });
+  });
+
+  const approvalRequestBase = { id: "approval-id", createdAtMs: 1, expiresAtMs: 2 };
+
+  it.each([
+    { request: { ...approvalRequestBase, request: { command: "echo safe" } }, metadata: [] },
+    {
+      request: {
+        ...approvalRequestBase,
+        request: { title: "Use protected tool", description: "The plugin needs consent." },
+      },
+      metadata: [{ label: "Severity", value: "Warning" }],
+    },
+  ])("preserves existing metadata when no approval scope is declared", ({ request, metadata }) => {
+    const view = buildPendingApprovalView(request);
+
+    expect(view.metadata).toEqual(metadata);
+    expect(view).not.toHaveProperty("scope");
+  });
+
+  it("does not trust conflicting approval kind metadata", () => {
+    const request: PluginApprovalRequest = {
+      id: "plugin-approval",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Use protected tool",
+        description: "The plugin needs operator consent.",
+      },
+    };
+    Object.defineProperty(request, "approvalKind", { value: "exec", enumerable: true });
+
+    expect(normalizeApprovalRequest(request).approvalKind).toBe("plugin");
   });
 
   it("keeps the fail-closed plugin decision in channel-facing actions", () => {

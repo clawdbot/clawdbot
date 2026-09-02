@@ -10,6 +10,7 @@ import {
   type LegacyMediaContextKey,
 } from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
+import { normalizeInternalTurnContext } from "../internal-turn-source.js";
 import type {
   CanonicalInboundText,
   FinalizedMsgContext,
@@ -22,7 +23,6 @@ export type FinalizeInboundContextOptions = {
   forceBodyForAgent?: boolean;
   forceBodyForCommands?: boolean;
   forceChatType?: boolean;
-  forceConversationLabel?: boolean;
 };
 
 const FINALIZED_INBOUND_CONTEXT = Symbol("openclaw.finalizedInboundContext");
@@ -125,6 +125,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   preserveLegacyMedia: boolean,
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
+  normalizeInternalTurnContext(normalized);
   foldDeprecatedPromptContextFields(normalized);
   applySupplementalContext(normalized);
 
@@ -153,7 +154,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.BodyForCommands = normalized.commandText;
 
   const explicitLabel = normalizeOptionalString(normalized.ConversationLabel);
-  if (opts.forceConversationLabel || !explicitLabel) {
+  if (!explicitLabel) {
     const resolved = normalizeOptionalString(resolveConversationLabel(normalized));
     if (resolved) {
       normalized.ConversationLabel = resolved;

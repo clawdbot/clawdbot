@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -667,9 +668,11 @@ describe("skill upload store", () => {
   });
 
   it("renews the install lease and preserves an expired leased upload", async () => {
+    let now = 1000;
     const { databasePath, store } = await makeStore({
       installLeaseHeartbeatMs: 10,
       installLeaseMs: 100,
+      now: () => now,
     });
     const archive = Buffer.from("abc");
     const committed = await store.begin({
@@ -686,47 +689,53 @@ describe("skill upload store", () => {
 
     const entered = deferred();
     const release = deferred();
+    vi.useFakeTimers();
     const pinned = store.withCommittedUpload(committed.uploadId, async () => {
       entered.resolve();
       await release.promise;
     });
-    await entered.promise;
-    const db = stateDatabase(databasePath);
-    const initialHeartbeat = (
-      db
-        .prepare(
-          "SELECT heartbeat_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .get(committed.uploadId) as { heartbeat_at: number }
-    ).heartbeat_at;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 40);
-    });
-    const renewedHeartbeat = (
-      db
-        .prepare(
-          "SELECT heartbeat_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .get(committed.uploadId) as { heartbeat_at: number }
-    ).heartbeat_at;
-    expect(renewedHeartbeat).toBeGreaterThan(initialHeartbeat);
+    try {
+      await entered.promise;
+      const db = stateDatabase(databasePath);
+      const initialHeartbeat = (
+        db
+          .prepare(
+            "SELECT heartbeat_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+          )
+          .get(committed.uploadId) as { heartbeat_at: number }
+      ).heartbeat_at;
+      now += 10;
+      await vi.advanceTimersByTimeAsync(10);
+      const renewedHeartbeat = (
+        db
+          .prepare(
+            "SELECT heartbeat_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
+          )
+          .get(committed.uploadId) as { heartbeat_at: number }
+      ).heartbeat_at;
+      expect(renewedHeartbeat).toBeGreaterThan(initialHeartbeat);
 
-    db.prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?").run(
-      Date.now() - 1,
-      committed.uploadId,
-    );
-    expect(
-      deleteExpiredSkillUploadUnlessLeased({
-        uploadId: committed.uploadId,
-        nowMs: Date.now(),
-        options: { path: databasePath },
-      }),
-    ).toBe("leased");
-    expect(uploadCount(databasePath)).toBe(1);
-    expect(installLeaseCount(databasePath, committed.uploadId)).toBe(1);
-
-    release.resolve();
-    await pinned;
+      db.prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?").run(
+        now - 1,
+        committed.uploadId,
+      );
+      expect(
+        deleteExpiredSkillUploadUnlessLeased({
+          uploadId: committed.uploadId,
+          nowMs: now,
+          options: { path: databasePath },
+        }),
+      ).toBe("leased");
+      expect(uploadCount(databasePath)).toBe(1);
+      expect(installLeaseCount(databasePath, committed.uploadId)).toBe(1);
+    } finally {
+      release.resolve();
+      try {
+        await pinned;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
     expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
   });
 
@@ -921,17 +930,3 @@ describe("skill upload store", () => {
     expect(uploadCount(databasePath)).toBe(1);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
