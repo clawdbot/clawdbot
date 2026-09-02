@@ -1151,7 +1151,7 @@
         "inputSchema": {
           "properties": {
             "limit": {
-              "maximum": 25,
+              "description": "Positive integer; maximum 25.",
               "minimum": 1,
               "type": "integer"
             },

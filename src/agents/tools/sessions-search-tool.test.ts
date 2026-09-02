@@ -1,5 +1,6 @@
 /** sessions_search visibility, bounds, redaction, and input tests. */
 import path from "node:path";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -172,10 +173,29 @@ describe("sessions_search tool", () => {
       "query must not be empty",
     );
     await expect(tool.execute("call-2", { query: "ok", limit: 26 })).rejects.toThrow(
-      "limit must be a positive integer",
+      "limit must be a positive integer <= 25",
     );
     await expect(tool.execute("call-3", { query: "x".repeat(4097) })).rejects.toThrow(
       "query must not exceed 4096 characters",
+    );
+  });
+
+  it("surfaces the bounded limit message through the assembled tool-call flow", async () => {
+    // Regression guard: the schema must not declare `maximum` for `limit`
+    // (packages/agent-core/src/agent-loop.ts validates args against the
+    // schema before execute() runs), or an over-limit call would fail with a
+    // generic schema-validation error instead of this actionable message.
+    const tool = createTool({});
+    const args = { query: "ok", limit: 26 };
+    const call = {
+      type: "toolCall" as const,
+      id: "call-assembled-limit",
+      name: "sessions_search",
+      arguments: args,
+    };
+    expect(validateToolArguments(tool, call)).toEqual(args);
+    await expect(tool.execute(call.id, args)).rejects.toThrow(
+      "limit must be a positive integer <= 25",
     );
   });
 
