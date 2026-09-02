@@ -56,15 +56,18 @@ import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { withSkillCollectionLock } from "./target-lock.js";
-import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
+import {
+  listWritableWorkshopSkillSummaries,
+  type WorkshopSkillReadOptions,
+} from "./workspace-skill-read.js";
 
 /**
  * The Workshop's whole editable collection is the contents of its global directory.
  */
 export function listWritableSkillCollection(
-  env?: NodeJS.ProcessEnv,
+  options: WorkshopSkillReadOptions = {},
 ): WritableSkillCollectionEntry[] {
-  return listWritableWorkshopSkillSummaries(env).map((skill) => ({
+  return listWritableWorkshopSkillSummaries(options).map((skill) => ({
     name: skill.name,
     description: skill.description,
     baseDir: path.resolve(skill.baseDir),
@@ -86,7 +89,7 @@ export async function reconcileSkillCollection(params: {
   const commit = await withSkillCollectionLock(
     async () => {
       params.assertCurrent?.();
-      const current = listWritableSkillCollection(params.env);
+      const current = listWritableSkillCollection({ config: params.config, env: params.env });
       const currentByName = new Map(current.map((skill) => [skill.name, skill]));
       if (currentByName.size !== current.length) {
         throw new Error("Writable skill names must be unique before collection reconciliation.");

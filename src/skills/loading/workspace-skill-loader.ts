@@ -252,22 +252,35 @@ function setSyncSourceForPluginSkill(
   };
 }
 
-function loadDiscoveredSkillRecords(params: {
+/** Loads one skill root under the configured discovery limits and symlink/hardlink policy. */
+export function loadSkillRootRecords(params: {
   dir: string;
   source: string;
-  limits: ResolvedSkillDiscoveryLimits;
-  allowedSymlinkTargetRealPaths: readonly string[];
-  rejectHardlinks: boolean;
+  config?: OpenClawConfig;
+  rejectHardlinks?: boolean;
 }): LoadedSkillRecord[] {
-  const discovered = discoverSkillCandidates(params);
-  const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
+  const limits = resolveSkillDiscoveryLimits(params.config);
+  const rejectHardlinks =
+    params.rejectHardlinks ??
+    shouldRejectHardlinkedPluginFiles({
+      origin:
+        resolveSkillTelemetrySourceValue(params.source) === "bundled" ? "bundled" : "workspace",
+      rootDir: params.dir,
+    });
+  const discovered = discoverSkillCandidates({
+    dir: params.dir,
+    source: params.source,
+    limits,
+    allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
+  });
+  const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
   const loadCandidate = (candidate: CandidateSkillDir) =>
     loadContainedSkillRecords({
       skillDir: candidate.skillDir,
       source: params.source,
-      maxSkillFileBytes: params.limits.maxSkillFileBytes,
+      maxSkillFileBytes: limits.maxSkillFileBytes,
       canonicalSkillDir: canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
-      rejectHardlinks: params.rejectHardlinks,
+      rejectHardlinks,
     });
   if (discovered.configuredRootCandidate) {
     const rootRecords = loadCandidate(discovered.configuredRootCandidate);
@@ -372,24 +385,11 @@ function loadSkillEntries(
   }
 
   const limits = resolveSkillDiscoveryLimits(opts?.config);
-  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(opts?.config);
   const loadSkills = (params: {
     dir: string;
     source: string;
     rejectHardlinks?: boolean;
-  }): LoadedSkillRecord[] =>
-    loadDiscoveredSkillRecords({
-      ...params,
-      limits,
-      allowedSymlinkTargetRealPaths,
-      rejectHardlinks:
-        params.rejectHardlinks ??
-        shouldRejectHardlinkedPluginFiles({
-          origin:
-            resolveSkillTelemetrySourceValue(params.source) === "bundled" ? "bundled" : "workspace",
-          rootDir: params.dir,
-        }),
-    });
+  }): LoadedSkillRecord[] => loadSkillRootRecords({ ...params, config: opts?.config });
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workshopSkillsDir = opts?.workshopSkillsDir ?? resolveWorkshopSkillsDir();
   const bundledSkillsDir = workspaceOnly

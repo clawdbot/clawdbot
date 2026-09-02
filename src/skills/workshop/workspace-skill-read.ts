@@ -1,12 +1,14 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideSkillsRoot,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
-import { loadSkillsFromDirSafe } from "../loading/local-loader.js";
 import type { Skill } from "../loading/skill-contract.js";
+import { resolveSkillKey } from "../loading/frontmatter.js";
+import { loadSkillRootRecords } from "../loading/workspace-skill-loader.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 export function assertWritableSkillTarget(
@@ -29,17 +31,25 @@ export type WritableWorkshopSkillSummary = {
   filePath: string;
 };
 
+export type WorkshopSkillReadOptions = {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+};
+
 export function listWritableWorkshopSkillSummaries(
-  env?: NodeJS.ProcessEnv,
+  options: WorkshopSkillReadOptions = {},
 ): WritableWorkshopSkillSummary[] {
-  const loaded = loadSkillsFromDirSafe({
-    dir: resolveWorkshopSkillsDir(env),
+  // The inventory is model-visible and reviewer-iterated, so it shares the loader's
+  // per-source count, file-size, symlink, and hardlink limits instead of an unbounded read.
+  const records = loadSkillRootRecords({
+    dir: resolveWorkshopSkillsDir(options.env),
     source: "openclaw-workshop",
+    config: options.config,
   });
-  return loaded.skills
-    .map((skill) => ({
+  return records
+    .map(({ skill, frontmatter }) => ({
       name: skill.name,
-      skillKey: normalizeSkillIndexName(skill.name),
+      skillKey: resolveSkillKey(skill, frontmatter),
       description: skill.description,
       baseDir: skill.baseDir,
       filePath: skill.filePath,
@@ -49,10 +59,10 @@ export function listWritableWorkshopSkillSummaries(
 
 function resolveWritableWorkshopSkillSummary(
   skillName: string,
-  env?: NodeJS.ProcessEnv,
+  options: WorkshopSkillReadOptions,
 ): WritableWorkshopSkillSummary | undefined {
   const normalized = normalizeSkillIndexName(skillName);
-  const matches = listWritableWorkshopSkillSummaries(env).filter(
+  const matches = listWritableWorkshopSkillSummaries(options).filter(
     (skill) =>
       skill.name === skillName ||
       skill.name.toLowerCase() === skillName.toLowerCase() ||
@@ -63,7 +73,7 @@ function resolveWritableWorkshopSkillSummary(
 
 export async function readWritableWorkshopSkill(
   skillName: string,
-  env?: NodeJS.ProcessEnv,
+  options: WorkshopSkillReadOptions = {},
 ): Promise<{
   skillName: string;
   skillKey: string;
@@ -76,13 +86,13 @@ export async function readWritableWorkshopSkill(
   if (!name) {
     throw new Error("Skill name is required.");
   }
-  const targetSkill = resolveWritableWorkshopSkillSummary(name, env);
+  const targetSkill = resolveWritableWorkshopSkillSummary(name, options);
   if (!targetSkill) {
     throw new Error(
       `Skill Workshop can only update skills it generated. No Workshop-generated skill matched: ${name}. Create it as a new skill, or edit the file directly.`,
     );
   }
-  assertWritableSkillTarget(targetSkill, env);
+  assertWritableSkillTarget(targetSkill, options.env);
   const content = await readWorkspaceSkillFile(targetSkill.filePath);
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);

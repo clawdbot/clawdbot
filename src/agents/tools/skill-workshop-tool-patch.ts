@@ -103,7 +103,7 @@ export async function executePrepareSkillPatch(params: {
       required: true,
       label: "skill_name",
     }),
-    params.env,
+    { config: params.config, env: params.env },
   );
   if (params.preparedSkillPatches.has(skill.skillKey)) {
     throw new ToolInputError(

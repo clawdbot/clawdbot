@@ -448,7 +448,7 @@ async function runSkillExperienceReviewInner(
     abortSignal.throwIfAborted();
     const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
     abortSignal.throwIfAborted();
-    const existingSkills = listWritableWorkshopSkillSummaries();
+    const existingSkills = listWritableWorkshopSkillSummaries({ config });
     const run = () =>
       runSkillWorkshopReview({
         reviewKind: "experience",

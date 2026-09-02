@@ -249,7 +249,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         const skill = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          options.env,
+          { config: options.config, env: options.env },
         );
         if (
           options.collectionReconcile &&
@@ -484,7 +484,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         // redeem one exact span prepared from the authoritative full skill.
         const target = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          options.env,
+          { config: options.config, env: options.env },
         );
         const readHash = readSkillHashes.get(target.skillKey);
         const contentHash = sha256Hex(target.content);

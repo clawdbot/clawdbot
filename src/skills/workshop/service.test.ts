@@ -286,7 +286,9 @@ describe("skill workshop proposals", () => {
     ).resolves.toContain("parseWeather");
 
     expect(
-      listWritableWorkshopSkillSummaries(testEnv).find((skill) => skill.name === "weather-helper"),
+      listWritableWorkshopSkillSummaries({ env: testEnv }).find(
+        (skill) => skill.name === "weather-helper",
+      ),
     ).toMatchObject({
       name: "weather-helper",
       filePath: applied.targetSkillFile,

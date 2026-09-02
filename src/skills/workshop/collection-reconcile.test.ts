@@ -101,7 +101,7 @@ describe("skill collection reconciliation", () => {
 
     const proposals = await listSkillProposals({ env: testState.env });
     expect(proposals.proposals).toEqual([]);
-    expect(listWritableSkillCollection(testState.env)).toEqual([
+    expect(listWritableSkillCollection({ env: testState.env })).toEqual([
       expect.objectContaining({ name: "learned" }),
     ]);
   });
@@ -591,7 +591,7 @@ describe("skill collection reconciliation", () => {
 });
 
 async function readCollectionReceipt() {
-  const skills = listWritableSkillCollection(testState.env);
+  const skills = listWritableSkillCollection({ env: testState.env });
   return {
     readSkillHashes: new Map(
       await Promise.all(

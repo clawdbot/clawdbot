@@ -257,7 +257,7 @@ describe("skill collection backup and restore", () => {
 
     await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
 
-    expect(listWritableSkillCollection(testState.env)).toEqual([
+    expect(listWritableSkillCollection({ env: testState.env })).toEqual([
       expect.objectContaining({ name: "dropped" }),
       expect.objectContaining({ name: "updated" }),
     ]);
@@ -267,7 +267,7 @@ describe("skill collection backup and restore", () => {
       "---\nname: created\ndescription: Recreated procedure\n---\n\n# Recreated\n",
       "utf8",
     );
-    expect(listWritableSkillCollection(testState.env)).toEqual([
+    expect(listWritableSkillCollection({ env: testState.env })).toEqual([
       expect.objectContaining({ name: "created" }),
       expect.objectContaining({ name: "dropped" }),
       expect.objectContaining({ name: "updated" }),
@@ -477,7 +477,7 @@ describe("skill collection backup and restore", () => {
     }
 
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
-    expect(listWritableSkillCollection(testState.env)).toEqual([
+    expect(listWritableSkillCollection({ env: testState.env })).toEqual([
       expect.objectContaining({ name: "obsolete" }),
     ]);
   });
@@ -518,7 +518,7 @@ describe("skill collection backup and restore", () => {
 });
 
 async function readCollectionReceipt() {
-  const skills = listWritableSkillCollection(testState.env);
+  const skills = listWritableSkillCollection({ env: testState.env });
   return {
     readSkillHashes: new Map(
       await Promise.all(

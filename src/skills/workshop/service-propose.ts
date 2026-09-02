@@ -220,7 +220,10 @@ export async function proposeUpdateSkill(
 ): Promise<SkillProposalReadResult> {
   const skillName = normalizeRequired(input.skillName, "Skill name");
   const config = resolveSkillWorkshopConfig(input.config);
-  const target = await readWritableWorkshopSkill(skillName, input.env);
+  const target = await readWritableWorkshopSkill(skillName, {
+    config: input.config,
+    env: input.env,
+  });
   const currentContent = target.content;
   if (
     input.expectedCurrentContentHash !== undefined &&

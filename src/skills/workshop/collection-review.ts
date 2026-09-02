@@ -37,7 +37,7 @@ async function runSkillCollectionReview(params: {
   assertCurrent: () => void;
 }): Promise<SkillCollectionReconcileResult | null> {
   params.assertCurrent();
-  const skills = listWritableSkillCollection(params.env);
+  const skills = listWritableSkillCollection({ config: params.config, env: params.env });
   if (skills.length === 0) {
     return null;
   }
