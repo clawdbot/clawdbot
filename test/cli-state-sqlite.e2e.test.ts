@@ -426,9 +426,9 @@ describe("SQLite CLI maintenance ownership", () => {
             closeOpenClawStateDatabase();
             await requireGit(tempHome, ["init", "--bare", remote]);
 
-            const entry = path.resolve(process.cwd(), "src/entry.ts");
+            const entry = path.resolve(process.cwd(), "openclaw.mjs");
             const runCli = (args: string[], childEnv: NodeJS.ProcessEnv = env) =>
-              spawnSync(process.execPath, ["--import", "tsx", entry, ...args], {
+              spawnSync(process.execPath, [entry, ...args], {
                 cwd: process.cwd(),
                 env: childEnv,
                 encoding: "utf8",
