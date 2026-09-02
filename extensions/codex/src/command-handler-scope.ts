@@ -51,11 +51,11 @@ type CommandAppServerScope = Pick<
   "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
 > & { agentId: string; agentDir: string };
 
-export async function resolveCommandAppServerScope(
+export async function resolveCommandAppServerContext(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-): Promise<CommandAppServerScope> {
+) {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const agentDir = target?.agentDir ?? fallback.agentDir;
@@ -73,7 +73,7 @@ export async function resolveCommandAppServerScope(
     authProfileId,
     pluginConfig,
   });
-  return {
+  const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,
     agentDir,
     ...(connection.clientAuthProfileId !== undefined
@@ -83,6 +83,15 @@ export async function resolveCommandAppServerScope(
     ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
     ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
   };
+  return { scope, target, binding };
+}
+
+export async function resolveCommandAppServerScope(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+): Promise<CommandAppServerScope> {
+  return (await resolveCommandAppServerContext(deps, ctx, pluginConfig)).scope;
 }
 
 export function conversationBindingIdentity(
