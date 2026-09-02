@@ -2913,6 +2913,32 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("preserves the unlimited agent timeout for heartbeat watchdogs", () => {
+    const cfg = {
+      ...createCronConfig("server-cron-unlimited-heartbeat"),
+      agents: {
+        defaults: {
+          timeoutSeconds: 0,
+          heartbeat: { every: "1h" },
+        },
+      },
+    } as OpenClawConfig;
+    const state = loadCronService(cfg);
+    try {
+      expect(
+        getCronDeps(state)?.resolveHeartbeatTimeoutMs?.({
+          source: "cron",
+          intent: "immediate",
+          reason: "cron:test",
+          agentId: "main",
+          heartbeat: { target: "last" },
+        }),
+      ).toBeUndefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("does not inherit explicit heartbeat destinations for queued target-last wakes", async () => {
     const cfg = {
       ...createCronConfig("server-cron-queued-heartbeat-route"),

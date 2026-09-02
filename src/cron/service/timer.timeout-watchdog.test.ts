@@ -119,6 +119,68 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("restarts a main system-event watchdog when its immediate heartbeat begins", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-09-02T12:15:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "system-event-heartbeat-watchdog",
+        name: "system event heartbeat watchdog",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "systemEvent", text: "check heartbeat work" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.sessionTarget = "main";
+      cronJob.wakeMode = "now";
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      vi.setSystemTime(scheduledAt);
+      const heartbeatStarted = createDeferred();
+      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => Date.now(),
+        defaultAgentId: "main",
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        resolveHeartbeatTimeoutMs,
+        runHeartbeatOnce: vi.fn(() => {
+          heartbeatStarted.resolve();
+          return new Promise<never>(() => {});
+        }),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      const timerPromise = onTimer(state);
+      let timerSettled = false;
+      void timerPromise.then(() => {
+        timerSettled = true;
+      });
+      await heartbeatStarted.promise;
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      expect(timerSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await timerPromise;
+
+      expect(timerSettled).toBe(true);
+      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          source: "cron",
+          intent: "immediate",
+          agentId: "main",
+          heartbeat: { target: "last" },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the cron deadline while a heartbeat-backed trigger is still evaluating", async () => {
     vi.useFakeTimers();
     try {
