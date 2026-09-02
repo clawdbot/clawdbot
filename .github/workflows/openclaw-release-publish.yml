@@ -546,6 +546,19 @@ jobs:
           }
           NODE
 
+      - name: Verify Android approval consumer capability
+        if: ${{ !inputs.publish_docker_only && inputs.publish_openclaw_npm && steps.full_manifest.outputs.coverage_policy == 'npm-stable-v1' }}
+        env:
+          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Frozen tags execute their own Android approval consumer. Reject an
+          # unsupported native proof contract before any core publication.
+          if ! git cat-file -e "${EXPECTED_SHA}:scripts/android-native-ci.mjs"; then
+            echo "The frozen Android publisher cannot consume native-CI-bound approval. Qualify this source with release_profile=full before publication." >&2
+            exit 1
+          fi
+
       - name: Download OpenClaw npm preflight manifest
         id: preflight_artifact
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
@@ -994,7 +1007,6 @@ jobs:
     outputs:
       qualified: ${{ steps.proof.outputs.qualified }}
       run_id: ${{ steps.dispatch.outputs.run_id }}
-      dispatch_id: ${{ steps.dispatch.outputs.dispatch_id }}
       workflow_ref: ${{ steps.dispatch.outputs.workflow_ref }}
     steps:
       - name: Checkout trusted native qualification tooling
@@ -1026,7 +1038,6 @@ jobs:
             -f release_scope=full \
             -f dispatch_id="${dispatch_id}")"
           echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
-          echo "dispatch_id=${dispatch_id}" >> "${GITHUB_OUTPUT}"
           echo "workflow_ref=${CHILD_WORKFLOW_REF}" >> "${GITHUB_OUTPUT}"
           gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status --interval 30
 
@@ -1035,27 +1046,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NATIVE_CI_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
-          NATIVE_CI_DISPATCH_ID: ${{ steps.dispatch.outputs.dispatch_id }}
           NATIVE_CI_WORKFLOW_REF: ${{ steps.dispatch.outputs.workflow_ref }}
           NATIVE_CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: &verify_native_ci_qualification |
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${NATIVE_CI_RUN_ID}" \
-            > "${RUNNER_TEMP}/android-native-ci.json"
           node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          import { validateReleaseChildRunProvenance } from './.release-harness/scripts/full-release-validation-policy.mjs';
+          import { verifyAndroidNativeCi } from './.release-harness/scripts/android-native-ci.mjs';
           const env = process.env;
-          const run = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/android-native-ci.json`, 'utf8'));
-          const proof = validateReleaseChildRunProvenance(run, {
-            key: 'nativeAndroid', plannedRunAttempt: 1, repository: env.GITHUB_REPOSITORY,
-            runId: env.NATIVE_CI_RUN_ID, workflow: 'ci.yml',
-            displayTitle: `CI ${env.NATIVE_CI_DISPATCH_ID}`,
-            workflowRef: env.NATIVE_CI_WORKFLOW_REF, workflowSha: env.NATIVE_CI_WORKFLOW_SHA,
+          verifyAndroidNativeCi({
+            version: 3, repository: env.GITHUB_REPOSITORY,
+            parentRunId: env.GITHUB_RUN_ID, parentRunAttempt: Number(env.GITHUB_RUN_ATTEMPT),
+            parentWorkflowSha: env.NATIVE_CI_WORKFLOW_SHA, targetSha: env.TARGET_SHA,
+            nativeCi: { runId: env.NATIVE_CI_RUN_ID, runAttempt: 1, workflowRef: env.NATIVE_CI_WORKFLOW_REF },
           });
-          if (proof.effectiveRunAttempt !== 1 || run.status !== 'completed' || run.conclusion !== 'success') {
-            throw new Error('Android approval requires the exact completed successful native CI attempt.');
-          }
           NODE
           echo "qualified=true" >> "${GITHUB_OUTPUT}"
 
@@ -1087,20 +1091,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # Recheck live evidence after waiting for core publication; a rerun or
-      # cancellation must not retain the earlier qualification snapshot.
-      - name: Revalidate exact native CI qualification before approval
-        if: ${{ needs.resolve_release_target.outputs.coverage_policy == 'npm-stable-v1' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NATIVE_CI_RUN_ID: ${{ needs.qualify_android_native.outputs.run_id }}
-          NATIVE_CI_DISPATCH_ID: ${{ needs.qualify_android_native.outputs.dispatch_id }}
-          NATIVE_CI_WORKFLOW_REF: ${{ needs.qualify_android_native.outputs.workflow_ref }}
-          NATIVE_CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: *verify_native_ci_qualification
-
       - name: Write Android release approval
         env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COVERAGE_POLICY: ${{ needs.resolve_release_target.outputs.coverage_policy }}
+          NATIVE_CI_RUN_ID: ${{ needs.qualify_android_native.outputs.run_id }}
+          NATIVE_CI_WORKFLOW_REF: ${{ needs.qualify_android_native.outputs.workflow_ref }}
           RELEASE_PUBLISH_BRANCH: ${{ github.ref_name }}
           RELEASE_PUBLISH_FULL_REF: ${{ github.ref }}
           RELEASE_PUBLISH_WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -1115,9 +1111,13 @@ jobs:
           node --input-type=module <<'NODE'
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
+          import { verifyAndroidNativeCi } from './.release-harness/scripts/android-native-ci.mjs';
 
+          const nativeCi = process.env.RELEASE_COVERAGE_POLICY === "npm-stable-v1"
+            ? { runId: process.env.NATIVE_CI_RUN_ID, runAttempt: 1, workflowRef: process.env.NATIVE_CI_WORKFLOW_REF }
+            : undefined;
           const approval = {
-            version: 2,
+            version: nativeCi ? 3 : 2,
             repository: process.env.GITHUB_REPOSITORY,
             workflow: "OpenClaw Release Publish",
             parentRunId: process.env.RELEASE_PUBLISH_RUN_ID,
@@ -1127,7 +1127,10 @@ jobs:
             parentWorkflowSha: process.env.RELEASE_PUBLISH_WORKFLOW_SHA,
             releaseTag: process.env.RELEASE_TAG,
             targetSha: process.env.TARGET_SHA,
+            ...(nativeCi ? { nativeCi } : {}),
           };
+          // Core publication may outlive the earlier native qualification.
+          verifyAndroidNativeCi(approval);
           writeFileSync(
             join(process.env.RUNNER_TEMP, "android-release-approval", "approval.json"),
             `${JSON.stringify(approval, null, 2)}\n`,

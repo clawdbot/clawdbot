@@ -3160,6 +3160,8 @@ printf 'native_failed=%s\\n' "$native_failed"
 
   it.each([
     "success",
+    "rerun-before-approval",
+    "rerun-at-dispatch",
     "moved-protected-tag",
     "failed",
     "rerun",
@@ -3168,80 +3170,109 @@ printf 'native_failed=%s\\n' "$native_failed"
     "other-workflow",
     "other-repository",
     "other-tooling",
-  ])(
-    "requires exact successful native CI before writing the existing Android approval: %s",
-    (mode) => {
-      const root = tempDirs.make("android-native-qualification-");
-      const bin = join(root, "bin");
-      mkdirSync(bin);
-      mkdirSync(join(root, ".release-harness"));
-      symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
-      const targetSha = "a".repeat(40);
-      const workflowSha = "d".repeat(40);
-      const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
-      const dispatchId = `release-native-android-123-2-${targetSha}`;
-      const run = {
-        id: 91,
-        run_attempt: mode === "rerun" ? 2 : 1,
-        event: "workflow_dispatch",
-        path:
-          mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
-        display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
-        head_branch: mode === "other-ref" ? "main" : workflowRef,
-        head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
-        repository: {
-          full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
-        },
-        actor: { login: "github-actions[bot]" },
-        triggering_actor: { login: "github-actions[bot]" },
-        status: "completed",
-        conclusion: mode === "failed" ? "failure" : "success",
-      };
-      const dispatchPath = join(root, "dispatch.json");
-      const gh = join(bin, "gh");
-      writeFileSync(
-        gh,
-        `#!${process.execPath}
+  ])("binds native qualification through Android approval and dispatch: %s", (mode) => {
+    const root = tempDirs.make("android-native-qualification-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    mkdirSync(join(root, ".release-harness"));
+    symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
+    const targetSha = "a".repeat(40);
+    const workflowSha = "d".repeat(40);
+    const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    const dispatchId = `release-native-android-123-2-${targetSha}`;
+    const run = {
+      id: 91,
+      run_attempt: mode === "rerun" ? 2 : 1,
+      event: "workflow_dispatch",
+      path: mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
+      display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
+      head_branch: mode === "other-ref" ? "main" : workflowRef,
+      head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
+      repository: {
+        full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
+      },
+      actor: { login: "github-actions[bot]" },
+      triggering_actor: { login: "github-actions[bot]" },
+      status: "completed",
+      conclusion: mode === "failed" ? "failure" : "success",
+    };
+    const dispatchPath = join(root, "dispatch.json");
+    const androidDispatchPath = join(root, "android-dispatch.json");
+    const nativeRunPath = join(root, "native-run.json");
+    writeFileSync(nativeRunPath, JSON.stringify(run));
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
 import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispatches'))) {
   writeFileSync(${JSON.stringify(dispatchPath)}, readFileSync(0, 'utf8'));
   console.log(JSON.stringify({ workflow_run_id: 91, html_url: 'https://github.com/openclaw/openclaw/actions/runs/91' }));
+} else if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/android-release.yml/dispatches'))) {
+  writeFileSync(${JSON.stringify(androidDispatchPath)}, readFileSync(0, 'utf8'));
+  console.log(JSON.stringify({ workflow_run_id: 92, html_url: 'https://github.com/openclaw/openclaw/actions/runs/92' }));
 } else if (args[0] === 'api' && args.some(arg => arg.includes('/git/matching-refs/'))) {
   console.log(JSON.stringify([{ ref: ${JSON.stringify(`refs/tags/${workflowRef}`)}, object: { sha: ${JSON.stringify(workflowSha)}, type: 'commit' } }]));
 } else if (args[0] === 'api' && args.some(arg => arg.includes('/commits/'))) {
   const endpoint = args.find(arg => arg.includes('/commits/'));
-  console.log(endpoint.endsWith('/main') || ${mode === "moved-protected-tag"} ? ${JSON.stringify("e".repeat(40))} : ${JSON.stringify(workflowSha)});
+  if (endpoint.endsWith('/v2026.8.1')) {
+    if (${mode === "rerun-at-dispatch"}) {
+      const run = JSON.parse(readFileSync(${JSON.stringify(nativeRunPath)}, 'utf8'));
+      writeFileSync(${JSON.stringify(nativeRunPath)}, JSON.stringify({ ...run, run_attempt: 2, status: 'queued', conclusion: null }));
+    }
+    console.log(${JSON.stringify(targetSha)});
+  } else {
+    console.log(endpoint.endsWith('/main') || ${mode === "moved-protected-tag"} ? ${JSON.stringify("e".repeat(40))} : ${JSON.stringify(workflowSha)});
+  }
 } else if (args[0] === 'api' && args[1].endsWith('/actions/runs/91')) {
-  console.log(${JSON.stringify(JSON.stringify(run))});
+  console.log(readFileSync(${JSON.stringify(nativeRunPath)}, 'utf8'));
 } else if (args[0] === 'run' && args[1] === 'view') {
-  console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: 'https://github.com/openclaw/openclaw/actions/runs/91' }));
+  console.log(JSON.stringify({ headSha: args.includes('92') ? ${JSON.stringify(targetSha)} : ${JSON.stringify(workflowSha)}, url: 'https://github.com/openclaw/openclaw/actions/runs/91' }));
 } else if (args[0] === 'run' && args[1] === 'watch') {
   process.exit(${mode === "failed" ? 1 : 0});
 } else throw new Error('Unexpected GitHub operation: ' + JSON.stringify(args));
 `,
-      );
-      chmodSync(gh, 0o755);
-      const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
-      const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
-      const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
-      const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
-      const recheck = workflowStep(
-        approvalJob,
-        "Revalidate exact native CI qualification before approval",
-      );
-      const approval = workflowStep(approvalJob, "Write Android release approval");
-      expect(recheck.run).toBe(proof.run);
-      expect(nativeJob.outputs).toMatchObject({
-        workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
-      });
-      expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe("${{ steps.dispatch.outputs.workflow_ref }}");
-      expect(recheck.env?.NATIVE_CI_WORKFLOW_REF).toBe(
-        "${{ needs.qualify_android_native.outputs.workflow_ref }}",
-      );
-      const outputPath = join(root, "output");
-      writeFileSync(outputPath, "");
-      const result = spawnSync("bash", ["-c", [dispatch.run, proof.run, approval.run].join("\n")], {
+    );
+    chmodSync(gh, 0o755);
+    const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
+    const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
+    const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
+    const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
+    const approval = workflowStep(approvalJob, "Write Android release approval");
+    expect(nativeJob.outputs).toMatchObject({
+      workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
+    });
+    expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe("${{ steps.dispatch.outputs.workflow_ref }}");
+    expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+      "${{ needs.qualify_android_native.outputs.workflow_ref }}",
+    );
+    const outputPath = join(root, "output");
+    writeFileSync(outputPath, "");
+    const rerunBeforeApproval =
+      mode === "rerun-before-approval"
+        ? `
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+const path = ${JSON.stringify(nativeRunPath)};
+const run = JSON.parse(readFileSync(path, 'utf8'));
+writeFileSync(path, JSON.stringify({ ...run, run_attempt: 2, status: 'queued', conclusion: null }));
+NODE
+`
+        : "";
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          dispatch.run,
+          proof.run,
+          rerunBeforeApproval,
+          approval.run,
+          'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
+        ].join("\n"),
+      ],
+      {
         cwd: root,
         encoding: "utf8",
         timeout: 10_000,
@@ -3259,8 +3290,8 @@ if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispat
           PARENT_WORKFLOW_SHA: workflowSha,
           TARGET_SHA: targetSha,
           RELEASE_TAG: "v2026.8.1",
+          RELEASE_COVERAGE_POLICY: "npm-stable-v1",
           NATIVE_CI_RUN_ID: "91",
-          NATIVE_CI_DISPATCH_ID: dispatchId,
           NATIVE_CI_WORKFLOW_REF: workflowRef,
           NATIVE_CI_WORKFLOW_SHA: workflowSha,
           RELEASE_PUBLISH_BRANCH: "main",
@@ -3269,45 +3300,94 @@ if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispat
           RELEASE_PUBLISH_RUN_ATTEMPT: "2",
           RELEASE_PUBLISH_RUN_ID: "123",
         },
+      },
+    );
+    if (mode === "moved-protected-tag") {
+      expect(existsSync(dispatchPath)).toBe(false);
+      expect(result.stderr).toContain("refusing dispatch");
+    } else {
+      expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
+        ref: workflowRef,
+        inputs: {
+          target_ref: targetSha,
+          historical_target_tag: "v2026.8.1",
+          include_android: "true",
+          release_scope: "full",
+          dispatch_id: dispatchId,
+        },
       });
-      if (mode === "moved-protected-tag") {
-        expect(existsSync(dispatchPath)).toBe(false);
-        expect(result.stderr).toContain("refusing dispatch");
-      } else {
-        expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
-          ref: workflowRef,
-          inputs: {
-            target_ref: targetSha,
-            historical_target_tag: "v2026.8.1",
-            include_android: "true",
-            release_scope: "full",
-            dispatch_id: dispatchId,
-          },
-        });
-        expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+      expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+    }
+    const approvalPath = join(root, "android-release-approval/approval.json");
+    const approved = mode === "success" || mode === "rerun-at-dispatch";
+    const qualified = approved || mode === "rerun-before-approval";
+    expect(existsSync(approvalPath)).toBe(approved);
+    if (approved) {
+      expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
+        version: 3,
+        repository: "openclaw/openclaw",
+        workflow: "OpenClaw Release Publish",
+        parentRunId: "123",
+        parentRunAttempt: 2,
+        workflowBranch: "main",
+        workflowFullRef: "refs/heads/main",
+        parentWorkflowSha: workflowSha,
+        releaseTag: "v2026.8.1",
+        targetSha,
+        nativeCi: { runId: "91", runAttempt: 1, workflowRef },
+      });
+    }
+    expect(existsSync(androidDispatchPath)).toBe(mode === "success");
+    expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
+    expect(result.status === 0, result.stderr).toBe(mode === "success");
+    if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
+      expect(result.stderr).toContain("exact completed successful native CI attempt");
+    }
+  });
+
+  it("requires native-bound Android approval support in the frozen source before publication", () => {
+    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const step = workflowStep(job, "Verify Android approval consumer capability");
+    const root = tempDirs.make("android-frozen-approval-consumer-");
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git(
+      "-c",
+      "user.name=OpenClaw Test",
+      "-c",
+      "user.email=openclaw-test@example.com",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "legacy consumer",
+    );
+    const legacySource = git("rev-parse", "HEAD");
+    mkdirSync(join(root, "scripts"));
+    writeFileSync(join(root, "scripts/android-native-ci.mjs"), "export {};\n");
+    git("add", "scripts/android-native-ci.mjs");
+    git(
+      "-c",
+      "user.name=OpenClaw Test",
+      "-c",
+      "user.email=openclaw-test@example.com",
+      "commit",
+      "-qm",
+      "native-bound consumer",
+    );
+    const supportedSource = git("rev-parse", "HEAD");
+    for (const source of [legacySource, supportedSource]) {
+      const result = spawnSync("bash", ["-c", step.run ?? ""], {
+        cwd: root,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, EXPECTED_SHA: source },
+      });
+      expect(result.status === 0, result.stderr).toBe(source === supportedSource);
+      if (source === legacySource) {
+        expect(result.stderr).toContain("Qualify this source with release_profile=full");
       }
-      const approvalPath = join(root, "android-release-approval/approval.json");
-      expect(existsSync(approvalPath)).toBe(mode === "success");
-      if (mode === "success") {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
-          version: 2,
-          repository: "openclaw/openclaw",
-          workflow: "OpenClaw Release Publish",
-          parentRunId: "123",
-          parentRunAttempt: 2,
-          workflowBranch: "main",
-          workflowFullRef: "refs/heads/main",
-          parentWorkflowSha: workflowSha,
-          releaseTag: "v2026.8.1",
-          targetSha,
-        });
-      } else {
-        expect(result.status, result.stderr).not.toBe(0);
-        expect(readFileSync(outputPath, "utf8")).not.toContain("qualified=true");
-      }
-    },
-  );
+    }
+  });
 
   it("compares dependency evidence zip contents independently of archive timestamps", () => {
     const orchestration = releasePublishOrchestration(

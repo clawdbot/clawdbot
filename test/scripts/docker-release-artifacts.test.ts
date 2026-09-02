@@ -595,50 +595,91 @@ describe("prepared Docker publication", () => {
     ).toThrow("alpha");
   });
 
-  it("requires the Release SHA's own prepared evidence and preserves historical preparation", async () => {
-    const { manifest } = await createPreparedRelease(false);
-    const prepared = {
-      preparedRunId: runId,
-      preparedRunAttempt: runAttempt,
-      preparedArtifactName: manifest.artifactName,
-      preparedManifestSha256: "c".repeat(64),
-    };
-    const full = {
-      runId,
-      runAttempt: Number(runAttempt),
-      targetSha: sourceSha,
-      publicationArtifacts: { docker: prepared },
-    };
-    expect(
-      preparedDockerEvidenceFromFullRelease({ manifest: full, sourceSha, runId, runAttempt }),
-    ).toBe(prepared);
-    expect(
-      preparedDockerEvidenceFromFullRelease({ manifest: {}, sourceSha, runId, runAttempt }),
-    ).toBeNull();
-    expect(() =>
-      preparedDockerEvidenceFromFullRelease({
+  it.each([
+    { workflow: "full-release-validation", fullRunId: runId, fullRunAttempt: runAttempt },
+    { workflow: "full-release-artifacts", fullRunId: "200", fullRunAttempt: "3" },
+  ])(
+    "resolves $workflow Docker evidence from its selected full release",
+    async ({ workflow, fullRunId, fullRunAttempt }) => {
+      const fixture = await createPreparedRelease(false);
+      const { manifest } = fixture;
+      fixture.run.path = `.github/workflows/${workflow}.yml`;
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "success";
+      manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
+      const prepared = {
+        preparedRunId: runId,
+        preparedRunAttempt: runAttempt,
+        preparedArtifactName: manifest.artifactName,
+        preparedManifestSha256: "c".repeat(64),
+      };
+      const full = {
+        runId: fullRunId,
+        runAttempt: Number(fullRunAttempt),
+        targetSha: sourceSha,
+        publicationArtifacts: { docker: prepared },
+      };
+      const selection = {
         manifest: full,
-        sourceSha: toolingSha,
-        runId,
-        runAttempt,
-      }),
-    ).toThrow("selected full release");
-    prepared.preparedRunAttempt = "1";
-    expect(() =>
-      preparedDockerEvidenceFromFullRelease({ manifest: full, sourceSha, runId, runAttempt }),
-    ).toThrow("incomplete or stale");
-    expect(() =>
-      validateDockerReleaseManifest(manifest, {
+        sourceSha,
+        runId: fullRunId,
+        runAttempt: fullRunAttempt,
+      };
+      const selected = preparedDockerEvidenceFromFullRelease(selection);
+      expect(selected).toBe(prepared);
+      const expected = {
         repository,
-        sourceSha: toolingSha,
+        sourceSha,
         tag: manifest.tag,
         imageTagSuffix: manifest.imageTagSuffix,
-        artifactName: manifest.artifactName,
-        runId,
-        runAttempt,
-      }),
-    ).toThrow("does not match");
-  });
+        artifactName: selected.preparedArtifactName,
+        runId: selected.preparedRunId,
+        runAttempt: selected.preparedRunAttempt,
+      };
+      expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
+      expect(
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toBe(manifest);
+      expect(preparedDockerEvidenceFromFullRelease({ ...selection, manifest: {} })).toBeNull();
+      for (const mismatch of [{ sourceSha: toolingSha }, { runId: "300" }, { runAttempt: "4" }]) {
+        expect(() => preparedDockerEvidenceFromFullRelease({ ...selection, ...mismatch })).toThrow(
+          "selected full release",
+        );
+      }
+      for (const invalid of [
+        { preparedRunId: 100 },
+        { preparedRunId: "0" },
+        { preparedRunAttempt: 2 },
+        { preparedRunAttempt: "0" },
+        { preparedRunAttempt: "1" },
+        { preparedArtifactName: dockerReleaseArtifactName(sourceSha, "3") },
+        { preparedManifestSha256: "invalid" },
+      ]) {
+        expect(() =>
+          preparedDockerEvidenceFromFullRelease({
+            ...selection,
+            manifest: {
+              ...full,
+              publicationArtifacts: { docker: { ...prepared, ...invalid } },
+            },
+          }),
+        ).toThrow("incomplete or stale");
+      }
+      expect(() => validateDockerReleaseManifest(manifest, { ...expected, runId: "300" })).toThrow(
+        "producer identity mismatch",
+      );
+      fixture.run.run_attempt += 1;
+      expect(() =>
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toThrow("run/attempt/source mismatch");
+    },
+  );
 
   it("prepares both native architectures with one release identity and smokes before sealing", () => {
     const prepare = parse(readFileSync(".github/workflows/docker-release-prepare.yml", "utf8"));

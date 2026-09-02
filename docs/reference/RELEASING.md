@@ -615,14 +615,18 @@ release needs:
 7. Verify the published npm package and selector readback, then call reusable `Docker Release` with the immutable tag and SHA. For stable releases, create or update the GitHub release as a draft, dispatch `Windows Node Release` with the explicit `windows_node_tag` and candidate-approved `windows_node_installer_digests`, and verify the canonical Windows installer/checksum assets. Also dispatch `Android Release` to build the exact-tag signed APK plus checksum and provenance. Finalize the GitHub release after Docker and the Windows asset contract succeed; Android completion is independent and does not hold the core release.
 
 Android approval binds the release tag and target SHA to the approving parent's
-run ID, exact attempt, full ref, and workflow SHA. The child verifies the attested
-v2 receipt and the live parent identity, including the protected tooling tag or
-main ancestry. Normal Android admission accepts an active or successfully completed
+run ID, exact attempt, full ref, and workflow SHA. npm-stable publication adds the
+native CI run, exact attempt, and tooling ref in a v3 receipt; full validation
+retains the historical v2 receipt. The child verifies the attested receipt and
+the live parent identity, including the protected tooling tag or main ancestry.
+Normal Android admission accepts an active or successfully completed
 parent and the exact stable target release, whether draft or public. Failed or
 cancelled parents remain rejected; explicit recovery can separately admit a
 completed failed parent. Before provenance publication and each asset upload,
 Android rechecks the live release tag target and stable classification, protected
-tooling identity, and exact parent attempt/state. These are fresh boundary checks,
+tooling identity, native CI qualification when present, and exact parent attempt/state.
+The parent also rechecks native qualification immediately before dispatch.
+These are fresh boundary checks,
 not an atomic GitHub validation-and-write transaction. A dispatched run link is
 pending publication evidence, not an APK download claim. Monitor and approve the
 linked Android run separately;
@@ -630,9 +634,10 @@ if dispatch cannot be confirmed, inspect existing runs before retrying.
 For explicit Android recovery, pass `release_publish_run_attempt`,
 `release_publish_full_ref`, and `release_publish_workflow_sha` from that same
 parent alongside its run ID and ref; a rerun requires its own matching receipt.
-Older immutable release tags retain their original Android workflow contract:
-recover them with their matching frozen release tooling, rather than mixing a
-new v2 producer with an older consumer.
+Older immutable release tags retain their original Android workflow contract.
+Tags without the v3 consumer, including `v2026.8.2` and its same-source corrections,
+require `release_profile=full` and their matching frozen release tooling;
+npm-only qualification is rejected before core publication for those targets.
 
 Beta publish example:
 

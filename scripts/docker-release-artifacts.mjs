@@ -108,10 +108,15 @@ export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, run
       String(manifest.runAttempt) === String(runAttempt),
     "Docker qualification does not match the selected full release run.",
   );
+  // FRV authorizes the release; its recorded producer owns the immutable bytes.
+  // Parent retries retain that producer's run and attempt.
   requireValue(
-    prepared?.preparedRunId === String(runId) &&
-      prepared.preparedRunAttempt === String(runAttempt) &&
-      prepared.preparedArtifactName === dockerReleaseArtifactName(sourceSha, runAttempt) &&
+    typeof prepared?.preparedRunId === "string" &&
+      POSITIVE_INTEGER.test(prepared.preparedRunId) &&
+      typeof prepared.preparedRunAttempt === "string" &&
+      POSITIVE_INTEGER.test(prepared.preparedRunAttempt) &&
+      prepared.preparedArtifactName ===
+        dockerReleaseArtifactName(sourceSha, prepared.preparedRunAttempt) &&
       /^[a-f0-9]{64}$/u.test(prepared.preparedManifestSha256),
     "Full release Docker qualification tuple is incomplete or stale.",
   );

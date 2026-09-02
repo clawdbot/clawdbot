@@ -256,9 +256,14 @@ replace stable npm qualification.
 Native publication owns the deferred qualification. For an npm-stable release,
 `OpenClaw Release Publish` starts an exact-source full CI run with Android enabled
 in parallel with core publication. Only successful native qualification and core
-publication permit the separate Android job to issue the existing approval
-receipt and dispatch the tag-owned APK publisher. It rechecks the native run
-before approval, preserving older frozen release tags. Native failures are
+publication permit the separate Android job to issue a v3 approval receipt and
+dispatch the tag-owned APK publisher. The receipt binds the exact native CI run,
+attempt, and tooling ref. The publisher rechecks that proof before writing approval,
+immediately before dispatch, before APK attestation, and before each asset upload.
+Frozen tags without the v3 consumer, including `v2026.8.2` and its same-source
+corrections, must use `release_profile=full`; publication rejects npm-only evidence
+for those targets before starting core publication. Their historical full-validation
+route retains the v2 approval contract. Native failures are
 recorded and block Android approval, while core npm publication and GitHub
 release finalization remain independent. The parent may remain active for native
 work after core publication completes. macOS retains its separate native

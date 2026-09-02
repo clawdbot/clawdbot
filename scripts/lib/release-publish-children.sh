@@ -130,6 +130,12 @@ dispatch_workflow_at_ref() {
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
     '{ref: $ref, inputs: $inputs}')"
+  # Ref and asset queries can outlive native qualification. Check the attested
+  # approval's exact native attempt after those reads and immediately before POST.
+  if [[ "$workflow" == "android-release.yml" ]]; then
+    node "${BASH_SOURCE[0]%/*}/../android-native-ci.mjs" \
+      "${RUNNER_TEMP}/android-release-approval/approval.json" || return 1
+  fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
