@@ -4,8 +4,6 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { parsePostContent } from "./post.js";
 
-type FeishuLogger = (...args: unknown[]) => void;
-
 export function formatFeishuMediaContent(
   parsed: Record<string, unknown>,
   messageType: string,
@@ -54,23 +52,19 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-export function parseMergeForwardContent(params: { content: string; log?: FeishuLogger }): string {
-  const { content, log } = params;
+export function parseMergeForwardContent(params: { content: string }): string {
+  const { content } = params;
   const maxMessages = 50;
-  log?.("feishu: parsing merge_forward sub-messages from API response");
 
   let items: Array<{
-    message_id?: string;
     msg_type?: string;
     body?: { content?: string };
-    sender?: { id?: string };
     upper_message_id?: string;
     create_time?: string;
   }>;
   try {
     items = JSON.parse(content);
   } catch {
-    log?.("feishu: merge_forward items parse failed");
     return "[Merged and Forwarded Message - parse error]";
   }
   if (!Array.isArray(items) || items.length === 0) {
@@ -85,8 +79,6 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   if (subMessages.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages found]";
   }
-
-  log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
   subMessages.sort(
     (a, b) =>
       (parseStrictNonNegativeInteger(a.create_time) ?? 0) -
