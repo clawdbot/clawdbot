@@ -836,6 +836,22 @@ function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): bool
   return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
 }
 
+function compactConfiguredCandidatesForPreferenceCheck(
+  candidates: readonly PluginAutoEnableCandidate[],
+): PluginAutoEnableCandidate[] {
+  const seenProviderModelPlugins = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (candidate.kind !== "provider-model-configured") {
+      return true;
+    }
+    if (seenProviderModelPlugins.has(candidate.pluginId)) {
+      return false;
+    }
+    seenProviderModelPlugins.add(candidate.pluginId);
+    return true;
+  });
+}
+
 function disableImplicitPreferredOverPlugin(params: {
   config: OpenClawConfig;
   originalConfig: OpenClawConfig;
@@ -1088,33 +1104,45 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   }
 
   const preferOverCache = new Map<string, string[]>();
+  const blockedPluginIds = new Set<string>();
+  const candidatePluginIds = new Set(params.candidates.map((entry) => entry.pluginId));
+  for (const pluginId of candidatePluginIds) {
+    if (isPluginDenied(next, pluginId) || isPluginExplicitlyDisabled(next, pluginId)) {
+      blockedPluginIds.add(pluginId);
+    }
+  }
+  const configuredForPreferenceCheck = compactConfiguredCandidatesForPreferenceCheck(
+    params.candidates,
+  );
 
   for (const entry of params.candidates) {
     const builtInChannelId = resolveAutoEnableChannelId({
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
+    if (blockedPluginIds.has(entry.pluginId)) {
       continue;
     }
     if (
       shouldSkipPreferredPluginAutoEnable({
-        config: next,
         entry,
-        configured: params.candidates,
+        configured: configuredForPreferenceCheck,
         env: params.env,
         registry: params.manifestRegistry,
-        isPluginDenied,
-        isPluginExplicitlyDisabled,
+        blockedPluginIds,
         preferOverCache,
       })
     ) {
-      next = disableImplicitPreferredOverPlugin({
+      const nextConfig = disableImplicitPreferredOverPlugin({
         config: next,
         originalConfig: params.config ?? {},
         pluginId: entry.pluginId,
         manifestRegistry: params.manifestRegistry,
       });
+      if (nextConfig !== next) {
+        blockedPluginIds.add(entry.pluginId);
+        next = nextConfig;
+      }
       continue;
     }
 

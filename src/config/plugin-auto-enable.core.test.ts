@@ -620,6 +620,32 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
+  it("keeps model auto-enable behavior stable when one plugin owns multiple model refs", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {},
+      candidates: [
+        {
+          pluginId: "google",
+          kind: "provider-model-configured",
+          modelRef: "google/gemini-2.5-pro",
+        },
+        {
+          pluginId: "google",
+          kind: "provider-model-configured",
+          modelRef: "google/gemini-2.5-flash",
+        },
+      ],
+      env,
+      manifestRegistry: makeRegistry([{ id: "google", channels: [], providers: ["google"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+    expect(result.changes).toEqual([
+      "google/gemini-2.5-pro model configured, enabled automatically.",
+    ]);
+    expect(result.autoEnabledReasons.google).toEqual(["google/gemini-2.5-pro model configured"]);
+  });
+
   it("does not auto-enable Codex when only the OpenAI plugin is explicitly enabled", () => {
     const result = applyPluginAutoEnable({
       config: {
