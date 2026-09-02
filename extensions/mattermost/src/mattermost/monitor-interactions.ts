@@ -127,7 +127,7 @@ export function registerMattermostInteractions(params: {
       handleInteraction: async (interaction) =>
         (await handleQuestionInteraction(interaction)) ??
         (await params.handleModelPickerInteraction(interaction)),
-      authorizeButtonClick: async ({ payload, post }) => {
+      authorizeButtonClick: async ({ payload }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
@@ -147,13 +147,13 @@ export function registerMattermostInteractions(params: {
         if (decision.ok) {
           return { ok: true };
         }
+        // An ignored click leaves the post alone. Echoing it back as an update
+        // makes Mattermost re-issue the attachment's action ids, and every
+        // button already rendered on that post then fails with an invalid id -
+        // so one refused click would retire a question prompt for everyone.
         return {
           ok: false,
           response: {
-            update: {
-              message: post.message ?? "",
-              props: post.props ?? undefined,
-            },
             ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
           },
         };

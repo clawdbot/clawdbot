@@ -10,8 +10,18 @@ type CapturedDispatch = (opts: never) => Promise<{
   update?: { message: string; props?: Record<string, unknown> };
   ephemeral_text?: string;
 } | null>;
+type CapturedAuthorize = (opts: never) => Promise<{
+  ok: boolean;
+  response?: { update?: unknown; ephemeral_text?: string };
+}>;
 const createInteractionHandlerMock = vi.hoisted(() =>
-  vi.fn((_options: { handleInteraction?: CapturedDispatch }) => async () => {}),
+  vi.fn(
+    (_options: {
+      handleInteraction?: CapturedDispatch;
+      authorizeButtonClick?: CapturedAuthorize;
+    }) =>
+      async () => {},
+  ),
 );
 const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn(() => () => {}));
 
@@ -62,6 +72,15 @@ function captureDispatcher(overrides?: {
     throw new Error("registration did not supply a handleInteraction");
   }
   return options.handleInteraction;
+}
+
+function captureButtonAuthorizer() {
+  captureDispatcher();
+  const options = createInteractionHandlerMock.mock.calls[0]?.[0];
+  if (!options?.authorizeButtonClick) {
+    throw new Error("registration did not supply an authorizeButtonClick");
+  }
+  return options.authorizeButtonClick;
 }
 
 function questionInteraction(context: Record<string, unknown>) {
@@ -136,6 +155,26 @@ describe("mattermost question interactions", () => {
     expect(resolveOptionMock).not.toHaveBeenCalled();
     expect(response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
     expect(response?.update).toBeUndefined();
+  });
+
+  // Mattermost re-issues an attachment's action ids whenever a response updates
+  // the post, and every button already rendered on it then fails as an invalid
+  // id. One outsider's refused click would otherwise retire the whole prompt.
+  it("leaves the post untouched when the transport refuses a click", async () => {
+    authorizeMock.mockResolvedValue({
+      ok: false,
+      denyReason: "channel-no-allowlist",
+      roomLabel: "#town-square",
+    });
+
+    const result = await captureButtonAuthorizer()({
+      payload: { channel_id: "chan-1", user_id: "mallory", user_name: "mallory" },
+      post: { id: "post-1", message: "Which environment?", props: { attachments: [] } },
+    } as never);
+
+    expect(result.ok).toBe(false);
+    expect(result.response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
+    expect(result.response?.update).toBeUndefined();
   });
 
   it("refuses a click whose access is lost while the Gateway read is in flight", async () => {
