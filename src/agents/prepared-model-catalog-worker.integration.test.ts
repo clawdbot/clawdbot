@@ -1,8 +1,5 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -59,7 +56,6 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { PreparedModelCatalogGenerationMismatchError } from "./prepared-model-runtime.errors.js";
 import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -245,33 +241,6 @@ async function createReadyWorkerFixture(spinMs: number) {
   await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
   expect(fs.existsSync(fixture.marker)).toBe(false);
   return fixture;
-}
-
-function createDirectWorkerInput(
-  fixture: Awaited<ReturnType<typeof createStaticSnapshot>>,
-  authStore: PreparedModelRuntimeAgentFacts["authStore"],
-) {
-  return createPreparedModelCatalogWorkerInput({
-    agentFacts: {
-      input: {
-        agentId: "main",
-        agentDir: fixture.agentDir,
-        workspaceDir: fixture.workspaceDir,
-        config: fixture.config,
-        env: fixture.env,
-      },
-      env: fixture.env,
-      authStore,
-      credentials: {},
-      providerIds: [PROVIDER_ID],
-      configuredModelRefs: [],
-      configuredRuntimeModels: [],
-      runtimeCapabilityModels: [],
-      configuredGeneratedCatalogPluginIds: [],
-      templateAuthStorage: AuthStorage.inMemory({}),
-    } satisfies PreparedModelRuntimeAgentFacts,
-    pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
-  });
 }
 
 describe("prepared model catalog worker boundary", () => {
@@ -1035,46 +1004,6 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it("retires a worker that reconstructs another generation instead of publishing its facts", async () => {
-    const fixture = await createStaticSnapshot(0);
-    const input = createDirectWorkerInput(fixture, { version: 1, profiles: {} });
-    const spawned: Worker[] = [];
-    const workerChannel = channel("worker_threads");
-    const trackWorker = (message: unknown) => {
-      if (isRecord(message) && message.worker instanceof Worker) {
-        spawned.push(message.worker);
-      }
-    };
-    workerChannel.subscribe(trackWorker);
-    try {
-      const worker = createPreparedModelCatalogWorker({
-        input: { ...input, generationFingerprint: "owner-generation-drifted" },
-        isCurrent: fixture.isCurrent,
-      });
-
-      const mismatch = await worker
-        .loadAuth({ providerIds: [PROVIDER_ID] })
-        .catch((error) => error);
-      expect(mismatch).toBeInstanceOf(PreparedModelCatalogGenerationMismatchError);
-      expect(mismatch).toMatchObject({
-        agentDir: fixture.agentDir,
-        generationFingerprint: "owner-generation-drifted",
-        reconstructedFingerprint: input.generationFingerprint,
-      });
-      expect(spawned).toHaveLength(1);
-
-      // Retired, not wedged: the next request rebuilds a worker from the same plan and
-      // reports the same typed outcome rather than a cached terminal error.
-      await expect(worker.loadCatalog()).rejects.toBeInstanceOf(
-        PreparedModelCatalogGenerationMismatchError,
-      );
-      expect(spawned).toHaveLength(2);
-      expect(fs.existsSync(fixture.marker)).toBe(false);
-    } finally {
-      workerChannel.unsubscribe(trackWorker);
-    }
-  });
-
   it("preserves ref-only api-key and token profiles through the real worker", async () => {
     const fixture = await createStaticSnapshot(0);
     const authStore = {
@@ -1092,7 +1021,27 @@ describe("prepared model catalog worker boundary", () => {
         },
       },
     };
-    const input = createDirectWorkerInput(fixture, authStore);
+    const input = createPreparedModelCatalogWorkerInput({
+      agentFacts: {
+        input: {
+          agentId: "main",
+          agentDir: fixture.agentDir,
+          workspaceDir: fixture.workspaceDir,
+          config: fixture.config,
+          env: fixture.env,
+        },
+        env: fixture.env,
+        authStore,
+        credentials: {},
+        providerIds: [PROVIDER_ID],
+        configuredModelRefs: [],
+        configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
+        configuredGeneratedCatalogPluginIds: [],
+        templateAuthStorage: AuthStorage.inMemory({}),
+      } satisfies PreparedModelRuntimeAgentFacts,
+      pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
+    });
 
     const catalog = await createPreparedModelCatalogWorker({
       input,

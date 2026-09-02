@@ -184,6 +184,14 @@ export function createPreparedModelCatalogWorker(params: {
   };
   let pool: WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult> | undefined;
   let terminalError: Error | undefined;
+  const mismatch = (
+    message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
+  ) =>
+    new PreparedModelCatalogGenerationMismatchError(
+      params.input.input.agentDir,
+      message.generationFingerprint,
+      message.reconstructedFingerprint,
+    );
   const createPool = () =>
     new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
       workerUrl: resolveRuntimeWorkerUrl({
@@ -203,6 +211,12 @@ export function createPreparedModelCatalogWorker(params: {
       },
       validateResult: (message) => {
         assertCurrent();
+        if (message.status === "generation-mismatch") {
+          // Fence before any successor dispatches: rejecting here closes the pool, so a queued
+          // auth or catalog request never runs on the retired worker and rejects with this
+          // same typed outcome instead of a generic failure.
+          throw mismatch(message);
+        }
         if (
           message.status === "ok" &&
           message.generationFingerprint !== params.input.generationFingerprint
@@ -246,23 +260,23 @@ export function createPreparedModelCatalogWorker(params: {
       );
       assertCurrent();
     } catch (error) {
-      await stop(error instanceof Error ? error : new Error(String(error)));
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (failure instanceof PreparedModelCatalogGenerationMismatchError) {
+        // Facts from another generation are never published as this one, but the generation
+        // itself stays open: drop the fenced pool so the next request rebuilds a worker from
+        // the same lifecycle plan instead of replaying a cached terminal error.
+        await retire(failure);
+        throw failure;
+      }
+      await stop(failure);
       throw error;
     }
     if (message.status === "failed") {
       throw new Error(message.error);
     }
     if (message.status === "generation-mismatch") {
-      // Facts from another generation must never be published as this one. Retire the worker
-      // only; the next request rebuilds one from the same lifecycle plan instead of wedging
-      // the generation behind a cached terminal error.
-      const mismatch = new PreparedModelCatalogGenerationMismatchError(
-        params.input.input.agentDir,
-        message.generationFingerprint,
-        message.reconstructedFingerprint,
-      );
-      await retire(mismatch);
-      throw mismatch;
+      // validateResult fences this reply before the pool can resolve it.
+      throw mismatch(message);
     }
     return message;
   };
