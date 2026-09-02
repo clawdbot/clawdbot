@@ -489,7 +489,7 @@ function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
       title=${checks ? `${state} · ${checks}` : state}
       >${pullRequestStateIcon(pullRequest.state)}</span
     >
-    <span class="session-hovercard__pr-title" title=${pullRequest.title}>${pullRequest.title}</span>
+    <span class="session-hovercard__pr-title">${pullRequest.title}</span>
     ${renderDiffStats(pullRequest)}
   </a>`;
 }

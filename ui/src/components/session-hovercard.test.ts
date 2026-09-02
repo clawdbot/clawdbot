@@ -236,9 +236,9 @@ describe("renderSessionHovercard", () => {
     expect(links[0]?.target).toBe("_blank");
     expect(links[0]?.rel).toContain("noopener");
     expect(links[0]?.querySelector(".session-hovercard__pr-title")?.textContent).toBe("First");
-    expect(links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title")).toBe(
-      "First",
-    );
+    expect(
+      links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title"),
+    ).toBeNull();
     expect(links[0]?.querySelector(".session-hovercard__pr-number")).toBeNull();
     expect(links[0]?.querySelector(".session-hovercard__pr-author")).toBeNull();
     expect(

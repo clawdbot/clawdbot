@@ -312,7 +312,7 @@ suite.define(() => {
         const fullPrTitle =
           "Restore the session hovercard with compact interactive attribution details";
         await expect.poll(() => prTitle.textContent()).toBe(fullPrTitle);
-        expect(await prTitle.getAttribute("title")).toBe(fullPrTitle);
+        expect(await prTitle.getAttribute("title")).toBeNull();
         expect(await prRow.getAttribute("aria-label")).toContain(fullPrTitle);
         expect(await card.locator(".session-hovercard__more").textContent()).toBe("+2 more");
         expect(
@@ -325,7 +325,14 @@ suite.define(() => {
         await expect
           .poll(() => prRow.evaluate((node) => getComputedStyle(node).textDecorationLine))
           .toBe("none");
-        await captureProof(page, "sidebar-row-hovercard-maximum.png");
+        const restingBackground = await prRow.evaluate(
+          (node) => getComputedStyle(node).backgroundColor,
+        );
+        await prRow.hover();
+        await expect
+          .poll(() => prRow.evaluate((node) => getComputedStyle(node).backgroundColor))
+          .not.toBe(restingBackground);
+        await captureProof(page, "sidebar-row-hovercard-pr-hover.png");
         await expect
           .poll(async () =>
             (await card.locator(".session-hovercard__attribution-copy").textContent())
