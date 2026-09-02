@@ -265,7 +265,6 @@ export async function handleNextcloudTalkInbound(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (messageValue) => runtime.log?.(messageValue),
   });
-  const commandAuthorized = access.commandAccess.authorized;
   const accessReason =
     access.ingress.reasonCode === "route_blocked"
       ? "route blocked"
@@ -333,12 +332,13 @@ export async function handleNextcloudTalkInbound(params: {
       id: isGroup ? roomToken : senderId,
     },
   });
-  access = await resolveAccess(isGroup ? wasMentioned : undefined, {
+  const contextBinding: ChannelIngressContextBinding = {
     agentId: route.agentId,
     sessionKey: route.sessionKey,
     messageId: message.messageId,
     inboundEventKind: "user_request",
-  });
+  };
+  access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
 
   if (access.ingress.admission !== "dispatch") {
     runtime.log?.(
@@ -351,6 +351,7 @@ export async function handleNextcloudTalkInbound(params: {
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
   let authorizedMediaUnavailable = false;
+  let performedAsyncMediaWork = false;
   const mediaSenderAllowed =
     hasInboundMedia &&
     isNextcloudTalkMediaSenderAllowed({
@@ -420,6 +421,7 @@ export async function handleNextcloudTalkInbound(params: {
           senderId,
         });
       } else {
+        performedAsyncMediaWork = true;
         const authenticatedSource = await resolveNextcloudTalkAuthenticatedMediaSource({
           baseUrl: account.baseUrl,
           roomToken,
@@ -480,6 +482,18 @@ export async function handleNextcloudTalkInbound(params: {
     }
   }
 
+  if (performedAsyncMediaWork) {
+    access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
+    if (access.ingress.admission !== "dispatch") {
+      runtime.log?.(
+        isGroup && access.activationAccess.shouldSkip
+          ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+          : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+      );
+      return;
+    }
+  }
+
   const agentBody = authorizedMediaUnavailable
     ? formatInboundMediaUnavailableText({
         body: rawBody,
@@ -519,7 +533,7 @@ export async function handleNextcloudTalkInbound(params: {
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
     message: { body, bodyForAgent: agentBody, rawBody, commandBody: rawBody },
     access: {
-      commands: { authorized: commandAuthorized },
+      commands: { authorized: access.commandAccess.authorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },
     },
     ...(stagedMedia ? { media: [stagedMedia] } : {}),

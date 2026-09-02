@@ -1,10 +1,21 @@
 // Nextcloud Talk tests cover inbound.authz plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+
+const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./inbound-media.js", async () => {
+  const actual = await vi.importActual<typeof import("./inbound-media.js")>("./inbound-media.js");
+  return {
+    ...actual,
+    resolveNextcloudTalkAuthenticatedMediaSource: resolveNextcloudTalkAuthenticatedMediaSourceMock,
+  };
+});
 
 function installInboundAuthzRuntime(params: {
   readAllowFromStore: () => Promise<string[]>;
@@ -51,6 +62,73 @@ const TEST_ATTACHMENT = {
 } as const;
 
 describe("nextcloud-talk inbound authz", () => {
+  it("revalidates paired DM access after attachment I/O before dispatch", async () => {
+    let paired = true;
+    const readAllowFromStore = vi.fn(async () => (paired ? ["paired-user"] : []));
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.pairing.readAllowFromStore = readAllowFromStore;
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockImplementationOnce(async () => {
+      paired = false;
+      return {
+        ok: true,
+        url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+        origin: "https://cloud.example.com",
+        hostname: "cloud.example.com",
+        fileName: "receipt.pdf",
+        authorization: "Basic redacted-test-credential",
+      };
+    });
+    const runtime = createTestRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-revoked",
+        roomToken: "room-revoked",
+        roomName: "Revoked DM",
+        senderId: "paired-user",
+        senderName: "Paired User",
+        text: "inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: false,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        baseUrl: "https://cloud.example.com",
+        secret: "",
+        secretSource: "none",
+        config: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          mediaAllowFrom: ["paired-user"],
+        },
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      },
+      runtime,
+    });
+
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).toHaveBeenCalledTimes(3);
+    expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: drop DM room-revoked (authorization changed)",
+    );
+  });
+
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const readAllowFromStore = vi.fn(async () => ["attacker"]);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
