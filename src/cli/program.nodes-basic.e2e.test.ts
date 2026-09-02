@@ -691,6 +691,7 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("keeps explicit gateway options in node reapproval guidance without leaking auth", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
     programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
@@ -717,7 +718,9 @@ describe("cli program (nodes basics)", () => {
     ]);
 
     const output = getRuntimeOutput();
-    expect(output).toContain("openclaw nodes approve request-reapproval --timeout 3000");
+    expect(output).toContain(
+      "openclaw --profile work nodes approve request-reapproval --timeout 3000",
+    );
     expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
     expect(output).not.toContain("gateway-user");
     expect(output).not.toContain("url-secret");

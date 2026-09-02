@@ -72,11 +72,8 @@ export type NewSessionComposerOptions = {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: TemplateResult | typeof nothing;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
+  nativeTerminal?: boolean;
+  onUnsupportedAttachment?: () => void;
   submitting: boolean;
   textareaController: NewSessionComposerTextareaController;
   voiceControl?: TemplateResult | typeof nothing;
@@ -101,58 +98,29 @@ function submitNewSession(options: NewSessionComposerOptions) {
 }
 
 function renderStartControl(options: NewSessionComposerOptions) {
-  const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
+  const startLabel = options.submitting
+    ? t("newSession.starting")
+    : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
-  if (!options.terminalAction) {
-    return html`
-      <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
-        <button
-          type="button"
-          class="chat-send-btn new-session-page__start-submit ${reasonedBlock
-            ? "new-session-page__start-submit--blocked"
-            : ""}"
-          ?disabled=${!options.canSubmit && !reasonedBlock}
-          aria-disabled=${String(!options.canSubmit)}
-          aria-busy=${String(options.submitting)}
-          aria-label=${startLabel}
-          @click=${() => submitNewSession(options)}
-        >
-          ${options.submitting ? icons.loader : icons.arrowUp}
-        </button>
-      </openclaw-tooltip>
-    `;
-  }
-  const terminalLabel = t("newSession.startInTerminal");
-  return html`
-    <div class="new-session-page__start-split">
-      <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
-        <button
-          type="button"
-          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary ${reasonedBlock
-            ? "new-session-page__start-submit--blocked"
-            : ""}"
-          ?disabled=${!options.canSubmit && !reasonedBlock}
-          aria-disabled=${String(!options.canSubmit)}
-          aria-busy=${String(options.submitting)}
-          aria-label=${startLabel}
-          @click=${() => submitNewSession(options)}
-        >
-          ${options.submitting ? icons.loader : icons.arrowUp}
-        </button>
-      </openclaw-tooltip>
-      <openclaw-tooltip content=${options.terminalAction.disabledReason ?? terminalLabel}>
-        <button
-          type="button"
-          class="chat-send-btn new-session-page__start-menu-trigger"
-          ?disabled=${!options.terminalAction.canStart}
-          aria-label=${terminalLabel}
-          @click=${() => options.terminalAction?.onStart()}
-        >
-          ${icons.squareTerminal}
-        </button>
-      </openclaw-tooltip>
-    </div>
-  `;
+  return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
+    <button
+      type="button"
+      class="chat-send-btn new-session-page__start-submit ${reasonedBlock
+        ? "new-session-page__start-submit--blocked"
+        : ""}"
+      ?disabled=${!options.canSubmit && !reasonedBlock}
+      aria-disabled=${String(!options.canSubmit)}
+      aria-busy=${String(options.submitting)}
+      aria-label=${startLabel}
+      @click=${() => submitNewSession(options)}
+    >
+      ${options.submitting
+        ? icons.loader
+        : options.nativeTerminal
+          ? icons.squareTerminal
+          : icons.arrowUp}
+    </button>
+  </openclaw-tooltip>`;
 }
 
 export class NewSessionComposerTextareaController {
@@ -466,6 +434,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     commandFilter: (command) => command.executeLocal !== true,
   };
   const updateMenus = (target: HTMLTextAreaElement) => {
+    if (options.nativeTerminal) {
+      return;
+    }
     updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
     updateSkillMenu(
       target.value,
@@ -478,14 +449,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
-      updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
-      updateSkillMenu(
-        target.value,
-        target.selectionStart,
-        skillMenuState,
-        skillMenuHost,
-        options.requestUpdate,
-      );
+      updateMenus(target);
     }
   };
   const composerLocked =
@@ -505,11 +469,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
     ...attachmentProps,
-    canCompose: !composerLocked,
+    canCompose: !composerLocked && !options.nativeTerminal,
   });
   const visibleMessage = options.dictationPreview ?? options.message;
   options.textareaController.syncDraft(visibleMessage);
-  const messagePlaceholder = t("newSession.messagePlaceholder");
+  const messagePlaceholder = t(
+    options.nativeTerminal ? "newSession.nativeTerminalPrompt" : "newSession.messagePlaceholder",
+  );
   const animatedPlaceholder = options.dictationActive
     ? ""
     : options.textareaController.getPlaceholder(
@@ -517,8 +483,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         options.message,
         options.requestUpdate,
       );
-  const skillMenuVisible = !composerLocked && isSkillMenuVisible(skillMenuState);
-  const slashMenuVisible = !composerLocked && isSlashMenuVisible(slashMenuState);
+  const skillMenuVisible =
+    !options.nativeTerminal && !composerLocked && isSkillMenuVisible(skillMenuState);
+  const slashMenuVisible =
+    !options.nativeTerminal && !composerLocked && isSlashMenuVisible(slashMenuState);
   const menuVisible = skillMenuVisible || slashMenuVisible;
   const menuListboxId = paneDomId(
     skillMenuHost.paneId,
@@ -541,7 +509,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   return html`
     <div
       class="agent-chat__composer-shell new-session-page__composer"
-      @drop=${attachmentDropHandlers.onDrop}
+      @drop=${(event: DragEvent) => {
+        if (options.nativeTerminal && event.dataTransfer?.files.length) {
+          event.preventDefault();
+          options.onUnsupportedAttachment?.();
+        } else {
+          attachmentDropHandlers.onDrop(event);
+        }
+      }}
       @dragenter=${attachmentDropHandlers.onDragenter}
       @dragleave=${attachmentDropHandlers.onDragleave}
       @dragover=${attachmentDropHandlers.onDragover}
@@ -551,7 +526,8 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
           ? " agent-chat__input--dictating"
           : ""}"
       >
-        ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
+        ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
+        ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
@@ -595,7 +571,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               @keydown=${(event: KeyboardEvent) =>
                 handleComposerKeydown(event, options, skillMenuHost, slashMenuHost)}
               @paste=${(event: ClipboardEvent) => {
-                if (!composerLocked) {
+                if (options.nativeTerminal && event.clipboardData?.files.length) {
+                  event.preventDefault();
+                  options.onUnsupportedAttachment?.();
+                } else if (!composerLocked && !options.nativeTerminal) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
@@ -612,10 +591,12 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-lead">
-            ${renderNewSessionPlusMenu(options, attachmentProps)}
+            ${options.nativeTerminal ? nothing : renderNewSessionPlusMenu(options, attachmentProps)}
             ${options.permissionControl ?? nothing}
-            ${options.draftAvailable ? renderNewSessionDraftVisibility(options) : nothing}
-            ${renderNewSessionSelectionStatus(options)}
+            ${!options.nativeTerminal && options.draftAvailable
+              ? renderNewSessionDraftVisibility(options)
+              : nothing}
+            ${options.nativeTerminal ? nothing : renderNewSessionSelectionStatus(options)}
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">

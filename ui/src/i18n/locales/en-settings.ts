@@ -221,6 +221,8 @@ const enSettings = {
       detailed: "Detailed",
       quietHours: "Quiet hours",
       quietHoursWindow: "Quiet hours window",
+      quietHoursStart: "Quiet hours start",
+      quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
       onlyAgents: "Only these agents",
       inherit: "Use account default",

@@ -13,7 +13,14 @@ type NativeNotificationsSnapshot = {
 type NativeNotificationsMessage =
   | { type: "status" }
   | { type: "request-permission" }
-  | { type: "send-test" };
+  | { type: "send-test" }
+  | ({ type: "background-session-completed" } & NativeBackgroundSessionCompletion);
+
+type NativeBackgroundSessionCompletion = {
+  runId: string;
+  path: string;
+  search?: string;
+};
 
 type WebKitNotificationsMessageHandler = {
   postMessage(message: NativeNotificationsMessage): void;
@@ -36,6 +43,7 @@ export type NativeNotificationsCapability = {
   subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void): () => void;
   requestPermission(): void;
   sendTest(): void;
+  backgroundSessionCompleted(completion: NativeBackgroundSessionCompletion): void;
   dispose(): void;
 };
 
@@ -129,6 +137,9 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
       }
       publish({ ...snapshot, test: { state: "pending" } });
       postMessage({ type: "send-test" });
+    },
+    backgroundSessionCompleted(completion) {
+      postMessage({ type: "background-session-completed", ...completion });
     },
     dispose() {
       window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);

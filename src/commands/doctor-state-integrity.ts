@@ -67,6 +67,7 @@ import {
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
+import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
@@ -1247,6 +1248,9 @@ export async function noteStateIntegrity(
         `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
+  }
+  if (stateDirExists) {
+    warnings.push(...collectRetainedUnconfiguredAgentDatabaseWarnings({ cfg, env }));
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);

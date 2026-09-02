@@ -753,6 +753,40 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
   }
 
+  it("renders the remove action with the menu font size and a leading trash icon", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+      await openWidgetMenu(page);
+      const presentation = await page
+        .locator(".board-widget__menu[open] .board-widget__menu-danger")
+        .evaluate((remove) => {
+          const preset = remove.parentElement?.querySelector(".board-widget__preset");
+          const icon = remove.querySelector('[slot="icon"]');
+          if (!(preset instanceof HTMLElement)) {
+            throw new Error("board fixture menu did not expose a resize preset");
+          }
+          return {
+            fontSize: getComputedStyle(remove).fontSize,
+            iconHidden: icon?.getAttribute("aria-hidden"),
+            iconSvg: Boolean(icon?.querySelector("svg")),
+            presetFontSize: getComputedStyle(preset).fontSize,
+          };
+        });
+      expect({
+        fontSizesMatch: presentation.fontSize === presentation.presetFontSize,
+        iconHidden: presentation.iconHidden,
+        iconSvg: presentation.iconSvg,
+      }).toEqual({
+        fontSizesMatch: true,
+        iconHidden: "true",
+        iconSvg: true,
+      });
+    } finally {
+      await page.close();
+    }
+  });
+
   it("follows live system color-scheme changes", async () => {
     const context = await browser.newContext({ colorScheme: "dark" });
     try {

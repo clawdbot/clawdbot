@@ -11,6 +11,7 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
+import { routeAvatarFixtures } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session owner assignment mocked Gateway E2E",
@@ -58,12 +59,20 @@ function sessionsListResponse() {
 }
 
 async function installOwnerGateway(page: Page) {
+  await routeAvatarFixtures(page, [{ id: "profile-ada", background: "#7c3aed", label: "A" }]);
   const gateway = await installMockGateway(page, {
     featureMethods: ["chat.startup", "sessions.assignOwner"],
     historyMessages: [{ role: "assistant", content: "Owner assignment outcome proof." }],
     methodResponses: { "sessions.list": sessionsListResponse() },
     operatorScopes: ["operator.read", "operator.write"],
-    presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+    presenceUsers: [
+      {
+        self: true,
+        id: "profile-ada",
+        name: "Ada",
+        avatarUrl: "/api/users/profile-ada/avatar?v=1",
+      },
+    ],
     sessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -166,6 +175,14 @@ suite.define(() => {
           ':scope > wa-dropdown-item[slot="submenu"] > .session-menu__text',
         );
         await expectBrowser(ownerItems).toHaveText(["Me", "OpenClaw", "Bob", "Carol"]);
+        await captureProof(page, "assignment-submenu");
+        const selfAvatar = assignTo
+          .getByRole("menuitemradio", { name: "Me", exact: true })
+          .locator("openclaw-viewer-avatar img");
+        await expectBrowser(selfAvatar).toHaveCount(1);
+        await expect
+          .poll(() => selfAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+          .toBeGreaterThan(0);
         const avatarSizes = await assignTo
           .locator(':scope > wa-dropdown-item[slot="submenu"] .viewer-avatar')
           .evaluateAll((avatars) =>
@@ -187,8 +204,6 @@ suite.define(() => {
               Math.abs(width - height) < 0.01 && cssWidth === "14px" && cssHeight === "14px",
           ),
         ).toBe(true);
-        await captureProof(page, "assignment-submenu");
-
         await assignTo.getByRole("menuitemradio", { name: "Carol", exact: true }).click();
         await expectAssignmentRequest(gateway, "profile-carol");
         await gateway.resolveDeferred("sessions.assignOwner", {

@@ -482,7 +482,14 @@ suite.define(() => {
         label: string,
         includeNeutral = false,
       ) => {
-        await gateway.setMethodResponse("sessions.list", {
+        const placement = {
+          state,
+          generation,
+          createdAtMs: 1,
+          updatedAtMs: generation,
+          stateChangedAtMs: generation,
+        };
+        await gateway.setSessionsListResponse({
           count: includeNeutral ? 2 : 1,
           path: "",
           defaults: SESSION_LIST_DEFAULTS,
@@ -491,14 +498,10 @@ suite.define(() => {
               key: sessionKey,
               kind: "direct",
               label: "Cloud session",
+              sessionId: "session-cloud-e2e",
+              status: "running",
               updatedAt: Date.now(),
-              placement: {
-                state,
-                generation,
-                createdAtMs: 1,
-                updatedAtMs: generation,
-                stateChangedAtMs: generation,
-              },
+              placement,
             },
             ...(includeNeutral
               ? [
@@ -585,7 +588,7 @@ suite.define(() => {
       const promptBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: message });
       await expect.poll(() => promptBubbles.count()).toBe(1);
 
-      await gateway.setMethodResponse("sessions.list", {
+      await gateway.setSessionsListResponse({
         count: 4,
         path: "",
         defaults: {},
@@ -594,9 +597,22 @@ suite.define(() => {
             key: sessionKey,
             kind: "direct",
             label: "Cloud session",
+            sessionId: "session-cloud-e2e",
+            status: "running",
             updatedAt: Date.now(),
             worktree: { id: "worktree-1", branch: "openclaw/cloud-e2e", repoRoot: WORKSPACE },
-            placement: { state: "active" },
+            placement: {
+              state: "active",
+              generation: 5,
+              createdAtMs: 1,
+              updatedAtMs: 5,
+              stateChangedAtMs: 5,
+              environmentId: "worker-1",
+              activeOwnerEpoch: 1,
+              workerBundleHash: "a".repeat(64),
+              workspaceBaseManifestRef: "manifest-1",
+              remoteWorkspaceDir: "/workspace",
+            },
           },
           {
             key: "agent:cloud:managed-e2e",

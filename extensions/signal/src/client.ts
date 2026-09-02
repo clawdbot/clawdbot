@@ -25,6 +25,16 @@ type SignalRpcResponse<T> = {
   id?: string | number | null;
 };
 
+/** Thrown when the native SSE endpoint rejects the request with a non-2xx HTTP status. */
+export class SignalSseRejectionError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string,
+  ) {
+    super(`Signal SSE failed (${status} ${statusText})`);
+  }
+}
+
 type SignalSseEvent = {
   event?: string;
   data?: string;
@@ -309,7 +319,7 @@ function openSignalEventStream(
         const status = res.statusCode ?? 0;
         if (status < 200 || status >= 300) {
           res.resume();
-          rejectOnce(new Error(`Signal SSE failed (${status} ${res.statusMessage || "error"})`));
+          rejectOnce(new SignalSseRejectionError(status, res.statusMessage || "error"));
           return;
         }
         if (settled) {

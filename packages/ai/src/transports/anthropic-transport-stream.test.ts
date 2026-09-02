@@ -823,7 +823,7 @@ describe("anthropic transport stream", () => {
 
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
     const model = makeAnthropicTransportModel({
-      headers: { "X-Provider": "anthropic" },
+      headers: { "user-agent": "configured-client/1.0", "X-Provider": "anthropic" },
       requestTransport: {
         proxy: {
           mode: "explicit-proxy",
@@ -839,7 +839,7 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamContext,
       {
         apiKey: "sk-ant-api",
-        headers: { "X-Call": "1" },
+        headers: { "User-Agent": "openclaw/2026.9.1", "X-Call": "1" },
       } as AnthropicStreamOptions,
     );
 
@@ -853,6 +853,7 @@ describe("anthropic transport stream", () => {
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("accept")).toBe("application/json");
     expect(headers.get("anthropic-dangerous-direct-browser-access")).toBe("true");
+    expect(headers.get("user-agent")).toBe("openclaw/2026.9.1");
     expect(headers.get("X-Provider")).toBe("anthropic");
     expect(headers.get("X-Call")).toBe("1");
     expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");

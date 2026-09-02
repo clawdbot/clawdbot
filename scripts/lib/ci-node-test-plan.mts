@@ -2123,7 +2123,8 @@ function resolveCiNodeTestRunner(shard: NodeTestShard, compactProfile?: string):
       (compactProfile === "blacksmith" &&
         shard.includePatterns?.includes("src/cli/update-dry-run-state.process.test.ts")) ||
       (compactProfile === "hybrid" &&
-        shard.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts")))
+        (shard.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts") ||
+          shard.includePatterns?.includes("src/cli/gateway-backed-exit-health.process.test.ts"))))
   ) {
     return DEFAULT_NODE_TEST_RUNNER;
   }

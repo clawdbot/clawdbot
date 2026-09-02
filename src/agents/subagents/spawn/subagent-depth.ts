@@ -7,16 +7,14 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 
-type SessionDepthEntry = {
-  sessionId?: unknown;
-  spawnDepth?: unknown;
-  spawnedBy?: unknown;
-};
+type PersistedSessionDepthEntry = Pick<SessionEntry, "sessionId" | "spawnDepth" | "spawnedBy">;
+type SessionDepthEntry = { [Key in keyof PersistedSessionDepthEntry]?: unknown };
 
 function normalizeSpawnDepth(value: unknown): number | undefined {
   if (typeof value === "number") {
@@ -28,14 +26,14 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   return undefined;
 }
 
-export function readSubagentSessionStore<T extends SessionDepthEntry = SessionDepthEntry>(
+export function readSubagentSessionStore(
   storePath: string,
   agentId: string,
-): Record<string, T> {
+): Record<string, SessionEntry> {
   try {
     return Object.fromEntries(
       listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
-        ({ sessionKey, entry }) => [sessionKey, entry as unknown as T],
+        ({ sessionKey, entry }) => [sessionKey, entry],
       ),
     );
   } catch {
@@ -88,7 +86,7 @@ function resolveEntryForSessionKey(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   store?: Record<string, SessionDepthEntry>;
-  cache: Map<string, Record<string, SessionDepthEntry>>;
+  cache: Map<string, Record<string, SessionEntry>>;
   agentId?: string;
 }): SessionDepthEntry | undefined {
   const candidates = buildKeyCandidates(params.sessionKey, params.cfg, params.agentId);
@@ -151,7 +149,7 @@ export function getSubagentDepthFromSessionStore(
     return fallbackDepth;
   }
 
-  const cache = new Map<string, Record<string, SessionDepthEntry>>();
+  const cache = new Map<string, Record<string, SessionEntry>>();
   const visited = new Set<string>();
 
   const depthFromStore = (key: string): number | undefined => {

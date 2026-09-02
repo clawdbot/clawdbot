@@ -11,6 +11,7 @@ type AnsiSegment =
   | { kind: "text"; value: string };
 
 export function matchAnsiOscAt(input: string, index: number): string | undefined {
+  // Reset the sticky matcher when callers interleave segment iterators.
   ansiOscAtIndexRegex.lastIndex = index;
   return ansiOscAtIndexRegex.exec(input)?.[0];
 }
@@ -291,8 +292,7 @@ export function scanAnsiCsiAt(input: string, index: number): AnsiCsiScan | undef
   return { controls, ended, value: input.slice(index, cursor) };
 }
 
-export function splitAnsiSegments(input: string): AnsiSegment[] {
-  const segments: AnsiSegment[] = [];
+export function* iterateAnsiSegments(input: string): Generator<AnsiSegment, void> {
   let position = 0;
   let index = 0;
 
@@ -311,14 +311,13 @@ export function splitAnsiSegments(input: string): AnsiSegment[] {
       continue;
     }
     if (index > position) {
-      segments.push({ kind: "text", value: input.slice(position, index) });
+      yield { kind: "text", value: input.slice(position, index) };
     }
-    segments.push({ controls: csi?.controls ?? [], kind: "ansi", value });
+    yield { controls: csi?.controls ?? [], kind: "ansi", value };
     index += value.length;
     position = index;
   }
   if (position < input.length) {
-    segments.push({ kind: "text", value: input.slice(position) });
+    yield { kind: "text", value: input.slice(position) };
   }
-  return segments;
 }

@@ -92,7 +92,7 @@ suite.define(() => {
         await input.fill("Stale rename");
         await capture("editing");
 
-        await gateway.setMethodResponse("sessions.list", sessionsListResponse([replacement]));
+        await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
         await gateway.emitGatewayEvent("sessions.changed", {
           ...replacement,
           sessionKey: original.key,

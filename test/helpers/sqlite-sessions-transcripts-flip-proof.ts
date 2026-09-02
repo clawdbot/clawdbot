@@ -160,21 +160,22 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
         }
         if (options.requireBuiltCli === true) {
-          const inventory = await inst.cli(["plugins", "list", "--json"]);
-          const plugins = parseJsonObject(inventory.stdout)?.plugins;
-          if (inventory.code !== 0 || !Array.isArray(plugins)) {
-            throw new Error("built CLI could not list bundled plugin artifacts");
+          // Only this provider is exercised, so inspect it instead of listing every plugin.
+          const inspection = await inst.cli(["plugins", "inspect", "openai", "--json"]);
+          const plugin = asRecord(parseJsonObject(inspection.stdout)?.plugin);
+          if (
+            inspection.code !== 0 ||
+            plugin?.id !== "openai" ||
+            plugin.origin !== "bundled" ||
+            typeof plugin.source !== "string"
+          ) {
+            // The Gateway has not started, so its log tail is empty; the command outcome
+            // is the only evidence a CI reader gets.
+            throw new Error(
+              `built CLI could not inspect the bundled OpenAI artifact (code=${String(inspection.code)} signal=${String(inspection.signal)})\n--- plugins inspect stdout ---\n${tail(inspection.stdout, 2_000)}\n--- plugins inspect stderr ---\n${tail(inspection.stderr, 4_000)}`,
+            );
           }
-          bundledPlugins = plugins.flatMap((value) => {
-            const plugin = asRecord(value);
-            if (plugin?.origin !== "bundled") {
-              return [];
-            }
-            if (typeof plugin.id !== "string" || typeof plugin.source !== "string") {
-              throw new Error("bundled plugin inventory omitted its identity or source artifact");
-            }
-            return [{ id: plugin.id, source: plugin.source }];
-          });
+          bundledPlugins = [{ id: plugin.id, source: plugin.source }];
         }
 
         await startMockOpenAiServer(context, {

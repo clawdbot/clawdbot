@@ -400,7 +400,7 @@ registerHooks({
   },
 });
 const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
-const { runMessageAction } = createMessageCliHelpers({}, "fixture");
+const { runMessageAction } = createMessageCliHelpers("fixture");
 await runMessageAction("broadcast", {
   channel: "fixture",
   targets: ["ok-target", "failed-target"],

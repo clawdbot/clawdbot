@@ -270,6 +270,7 @@ export async function listClaudeSessionCatalog(params: {
       label: "Paired nodes",
       kind: "node",
       connected: false,
+      canStartTerminal: false,
       sessions: [],
       error: createNodeListFailedError(error),
     };
@@ -282,7 +283,8 @@ export async function listClaudeSessionCatalog(params: {
     .filter(
       (node) =>
         node.gatewayLocal !== true &&
-        node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
+        (node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) ||
+          catalogTerminal.claudeNodeTerminalCapability(node).canStartTerminal) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
     .slice(0, MAX_HOSTS - localHosts.length)
@@ -290,7 +292,9 @@ export async function listClaudeSessionCatalog(params: {
   const nodeHosts = await Promise.all(
     eligible.map(async (node): Promise<ClaudeSessionCatalogHost> => {
       const hostId = `node:${node.nodeId}`;
-      const common = {
+      const { canOpenTerminalClaude, canStartTerminal } =
+        catalogTerminal.claudeNodeTerminalCapability(node);
+      const common: ClaudeSessionCatalogHost = {
         hostId,
         label: resolveNodeLabel(node),
         kind: "node" as const,
@@ -302,15 +306,20 @@ export async function listClaudeSessionCatalog(params: {
           node.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           node.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
           node.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
-        ...catalogTerminal.claudeNodeTerminalCapability(node),
+        canOpenTerminalClaude,
+        canStartTerminal,
+        sessions: [],
       };
       if (node.connected !== true) {
         const host: ClaudeSessionCatalogHost = Object.assign({}, common, {
-          sessions: [],
           error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
         });
         params.onHost?.(host);
         return host;
+      }
+      if (!node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND)) {
+        params.onHost?.(common);
+        return common;
       }
       const eventualHost = Promise.resolve()
         .then(async () => {
@@ -330,7 +339,6 @@ export async function listClaudeSessionCatalog(params: {
         .catch(
           (): ClaudeSessionCatalogHost =>
             Object.assign({}, common, {
-              sessions: [],
               error: {
                 code: "NODE_INVOKE_FAILED",
                 message: "Paired node Claude sessions are unavailable",
@@ -348,7 +356,6 @@ export async function listClaudeSessionCatalog(params: {
         });
       } catch {
         return Object.assign({}, common, {
-          sessions: [],
           error: {
             code: "NODE_INVOKE_FAILED",
             message: "Paired node Claude sessions are unavailable",

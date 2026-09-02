@@ -24,7 +24,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import { resolveSessionDisplayModel } from "./sessions-display-model.js";
 import {
   formatSessionAgeCell,
@@ -312,19 +312,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   }
 
   const cfg = getRuntimeConfig();
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-    json: opts.json,
-  });
-  if (!targets) {
-    return;
-  }
+  const targets = resolveCommandSessionStoreTargets({ cfg, opts });
   const cleanupParams = { cfg, opts, targets };
   let cleanupResult;
   if (opts.dryRun) {

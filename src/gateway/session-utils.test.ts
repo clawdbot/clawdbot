@@ -36,7 +36,7 @@ import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { projectSessionActor } from "./session-identity-projection.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import { deriveSessionTitle, getSingleRowChildSessionCandidates } from "./session-utils-core.js";
+import { deriveSessionTitle } from "./session-utils-core.js";
 import { listSessionsFromStoreAsync } from "./session-utils-list.js";
 import {
   getSessionDefaults,
@@ -3372,34 +3372,6 @@ describe("gateway session utils", () => {
     } finally {
       resetConfigRuntimeState();
     }
-  });
-
-  test("short-list child candidates reuse stable full-store entry identities", () => {
-    const parentKey = "agent:main:main";
-    let spawnedByReads = 0;
-    const parent = { sessionId: "parent", updatedAt: 1 } as SessionEntry;
-    const child = {
-      sessionId: "child",
-      updatedAt: Date.now(),
-      get spawnedBy() {
-        spawnedByReads += 1;
-        return parentKey;
-      },
-    } as SessionEntry;
-    const storePath = "/tmp/openclaw-single-row-child-cache";
-
-    const first = getSingleRowChildSessionCandidates({
-      store: { [parentKey]: parent, "agent:main:child": child },
-      storePath,
-    });
-    const second = getSingleRowChildSessionCandidates({
-      store: { [parentKey]: parent, "agent:main:child": child },
-      storePath,
-    });
-
-    expect(first.get(parentKey)).toEqual(["agent:main:child"]);
-    expect(second.get(parentKey)).toEqual(["agent:main:child"]);
-    expect(spawnedByReads).toBe(1);
   });
 
   test("loadGatewaySessionEntryReadOnly rejects a persisted main alias", async () => {

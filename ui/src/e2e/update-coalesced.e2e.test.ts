@@ -162,16 +162,19 @@ suite.define(() => {
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        // Failure triage navigates to Updates when Ask OpenClaw is unavailable.
+        await page.waitForURL("**/settings/updates");
+        await page.locator("openclaw-config-page").waitFor();
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
-        await page.locator(".sidebar-issues-button").click();
-        const updateIssue = page.locator(
-          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
-        );
-        await updateIssue.locator("summary").click();
-        const reason = updateIssue.locator(".sidebar-update-card__compact-reason");
-        await reason.waitFor();
-        expect(await reason.textContent()).toContain("global-install-failed");
-        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
+        expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+        await page.getByText("Latest update attempt", { exact: true }).waitFor();
+        await page
+          .locator(".settings-status--danger")
+          .getByText("global-install-failed", {
+            exact: false,
+          })
+          .waitFor();
         expect(pageErrors).toEqual([]);
         await captureUpdateProof(page, artifactDir, "package-update-failure.png");
       },
@@ -405,10 +408,9 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-      // The confirmation closes the lazy Inbox. Recovery belongs to the
-      // persistent attention owner, not the now-disconnected update card.
-      await page.keyboard.press("Escape");
-      await expect.poll(() => page.locator(".sidebar-issues-panel").count()).toBe(0);
+      await page.keyboard.press("Control+Shift+,");
+      await page.locator(".shell--settings").waitFor();
+      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
       await page.evaluate(
         (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
         NATIVE_UPDATE_DECLINED_EVENT,

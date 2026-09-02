@@ -2,9 +2,8 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  margin-left: auto;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+  background: transparent;
 }
 
 .chat-pane__face-switch .settings-segmented {
@@ -23,12 +22,13 @@
   border-radius: var(--radius-full);
 }
 
-.chat-pane__face-switch .settings-segmented__btn--active {
-  background: var(--panel);
+.chat-pane__face-switch .settings-segmented__btn svg {
+  width: 15px;
+  height: 15px;
 }
 
-.chat-pane__face-switch + .chat-pane__actions {
-  margin-left: 0;
+.chat-pane__face-switch .settings-segmented__btn--active {
+  background: var(--panel);
 }
 
 .chat-pane__dock-caret {

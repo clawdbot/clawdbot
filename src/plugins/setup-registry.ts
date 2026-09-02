@@ -233,7 +233,7 @@ function resolveLoadableSetupRuntimeSource(
   if (!source) {
     return null;
   }
-  if (record.origin !== "bundled") {
+  if (record.origin !== "bundled" || record.sourcePreferred) {
     return { source, rootDir: record.rootDir };
   }
   return resolvePreferredBundledRootArtifact({
