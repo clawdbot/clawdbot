@@ -7,9 +7,7 @@ const context: Context = {
 };
 
 async function capturePayload(
-  compat: Model<"openai-completions">["compat"] & {
-    reasoningEffortMap?: Record<string, string>;
-  },
+  compat: Model<"openai-completions">["compat"],
   off: string | null | undefined,
   reasoningEffort?: OpenAICompletionsOptions["reasoningEffort"],
 ) {
