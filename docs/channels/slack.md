@@ -2091,7 +2091,7 @@ openclaw pairing list slack
     - The manifest uses `features.agent_view` with `assistant:write` and subscribes to `app_context_changed`. Apps still on `features.assistant_view` get Assistant View threads instead, and Slack cannot move an app back once it switches to Agent View.
     - OpenClaw has seen an Agent View signal since the app was installed: open the app's **Messages** tab once, or send a DM from the Agent View composer. In verbose logs, `slack suggested prompts update failed for channel D...: internal_error` on a Messages-tab open is expected for an Agent View app and counts as evidence.
     - In HTTP mode, the Gateway has received at least one signed event since it started; `slack app id <id> learned from signed event` in the logs confirms the durable marker can be read. Socket Mode reads the app ID from the app token at startup, so no event is needed.
-    - A `Slack Agent View state failed to persist` warning means the signal was recorded for the running process but the marker was not stored, so it is forgotten on restart. `failed to open` or `failed to load` means a stored marker could not be read, so Agent View stays off until the next signal.
+    - `Slack Agent View state failed to open`, `persist`, or `load` warnings mean the durable marker could not be stored or read. A signal already detected in the running process still applies until the Gateway restarts; after a restart, Agent View stays off until the next signal.
 
     See [Agent View DMs](/channels/slack#agent-view-dms).
 
