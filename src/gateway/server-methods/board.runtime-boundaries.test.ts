@@ -584,7 +584,10 @@ describe("board gateway runtime boundaries", () => {
         env,
       });
       const { invoke } = createHarness(undefined, {}, store);
-      const callGateway: InProcessGatewayCaller = async <T>(method, params) => {
+      const callGateway: InProcessGatewayCaller = async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
         const response = await invoke(method, params);
         expect(response.mock.calls[0]?.[0]).toBe(true);
         return response.mock.calls[0]?.[1] as T;
