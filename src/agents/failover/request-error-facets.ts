@@ -2,15 +2,22 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { FailoverSignal } from "./signal.js";
 
 export type ProviderRequestFacet =
+  | "biological-risk"
   | "quota-429"
   | "conversation-state"
   | "provider-internal"
   | "provider-internal-503";
 
+const BIOLOGICAL_RISK_PROVIDER_PREFIX = "this content was flagged for possible biological risk.";
+
 /** Classify copy-sensitive provider-request facts that are finer than FailoverReason. */
 export function classifyProviderRequestFacets(signal: FailoverSignal): ProviderRequestFacet | null {
   const message = signal.message ?? "";
   const lower = normalizeLowercaseStringOrEmpty(message);
+  // Codex/OpenAI bio_policy safety block — stable prefix, non-retryable, session-preserving.
+  if (lower.startsWith(BIOLOGICAL_RISK_PROVIDER_PREFIX)) {
+    return "biological-risk";
+  }
   const genericProviderError =
     lower.includes("an error occurred while processing your request") ||
     lower.includes("something went wrong while processing your request");

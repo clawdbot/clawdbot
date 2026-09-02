@@ -3,6 +3,7 @@ import { FailoverError } from "../../agents/failover-error.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  PROVIDER_BIOLOGICAL_RISK_ERROR_USER_MESSAGE,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -148,6 +149,27 @@ describe("buildExternalRunFailureReply", () => {
         "This is usually temporary — try again shortly.",
     );
     expect(reply.text).not.toContain("secret-canary");
+    expect(reply.text).not.toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.isGenericRunnerFailure).toBe(false);
+  });
+
+  it("surfaces Codex biological-risk blocks with session-preserving copy", () => {
+    const message =
+      "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request.";
+    const reply = buildExternalRunFailureReply(
+      {
+        message,
+        error: new FailoverError(message, {
+          reason: "format",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+        }),
+      },
+      { includeDetails: false },
+    );
+
+    expect(reply.text).toBe(PROVIDER_BIOLOGICAL_RISK_ERROR_USER_MESSAGE);
+    expect(reply.text).not.toMatch(/\/new\b/);
     expect(reply.text).not.toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
     expect(reply.isGenericRunnerFailure).toBe(false);
   });

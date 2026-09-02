@@ -245,6 +245,21 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   });
 
   it.each([
+    "This content was flagged for possible biological risk.",
+    "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request. We are continuously refining our work in detecting biological risk, and you can read more about our approach in our blog post: https://openai.com/index/preparing-for-future-ai-capabilities-in-biology",
+  ])("preserves biological-risk guidance for %s", (message) => {
+    const facet = classifyProviderRequestFacets({ message });
+
+    expect(facet).toBe("biological-risk");
+    expect(classifyReplyRequest({ message })).toMatchObject({
+      code: "provider_biological_risk_error",
+      technicalMessage: message,
+      userMessage: expect.stringContaining("biological-risk policy"),
+    });
+    expect(classifyReplyRequest({ message })?.userMessage).not.toMatch(/\/new\b/);
+  });
+
+  it.each([
     "Custom tool call output is missing for call id: call_live_123.",
     "The number of toolResult blocks at messages.186.content exceeds the number of toolUse blocks of previous turn.",
     "400 Function call turn comes immediately after a user turn or after a function response turn.",
