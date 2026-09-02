@@ -626,7 +626,8 @@ export async function waitForAgentJob(params: {
     };
     const onWake = (lifecycleReset = false) => {
       if (lifecycleReset) {
-        finish(null);
+        // The lifecycle interrupted this wait; do not cache it as a terminal run outcome.
+        finish({ status: "timeout", timeoutPhase: "gateway_draining" });
         return;
       }
       const snapshot = getAgentRunSnapshot({
