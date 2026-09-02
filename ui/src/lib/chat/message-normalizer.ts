@@ -67,7 +67,7 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
   };
 }
 
-function readSenderSession(value: unknown): NormalizedMessage["senderSession"] {
+export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
   const source = asOptionalRecord(value);
   if (!source) {
     return undefined;
@@ -93,6 +93,31 @@ export function normalizeRoleForGrouping(role: string): string {
   return role;
 }
 
+function hasToolMessageEnvelope(message: Record<string, unknown> | undefined): boolean {
+  return (
+    typeof message?.toolCallId === "string" ||
+    typeof message?.tool_call_id === "string" ||
+    typeof message?.toolUseId === "string" ||
+    typeof message?.tool_use_id === "string" ||
+    typeof message?.toolName === "string" ||
+    typeof message?.tool_name === "string"
+  );
+}
+
+export function resolveMessageRole(message: unknown): string {
+  const m = asOptionalRecord(message);
+  const content = m?.content;
+  const hasToolContent =
+    Array.isArray(content) &&
+    content.some((value) => {
+      const type = asOptionalRecord(value)?.type;
+      return isToolResultContentType(type) || isToolCallContentType(type);
+    });
+  return hasToolContent || hasToolMessageEnvelope(m)
+    ? "toolResult"
+    : (readStringField(m, "role") ?? "unknown");
+}
+
 export function isToolResultMessage(message: unknown): boolean {
   const m = asOptionalRecord(message);
   const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
@@ -103,15 +128,7 @@ export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
   // Tool classification needs envelope fields, not parsed content or media.
   const m = asOptionalRecord(message);
   const role = typeof m?.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
-  return (
-    role === "tool" ||
-    typeof m?.toolCallId === "string" ||
-    typeof m?.tool_call_id === "string" ||
-    typeof m?.toolUseId === "string" ||
-    typeof m?.tool_use_id === "string" ||
-    typeof m?.toolName === "string" ||
-    typeof m?.tool_name === "string"
-  );
+  return role === "tool" || hasToolMessageEnvelope(m);
 }
 
 function coerceCanvasPreview(preview: Record<string, unknown>): CanvasPreview | null {
@@ -417,29 +434,9 @@ function expandTextContent(
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m = asOptionalRecord(message) ?? {};
-  let role = readStringField(m, "role") ?? "unknown";
-
-  // Detect tool messages by common gateway shapes.
-  // Some tool events come through as assistant role with tool_* items in the content array.
-  const hasToolId =
-    typeof m.toolCallId === "string" ||
-    typeof m.tool_call_id === "string" ||
-    typeof m.toolUseId === "string" ||
-    typeof m.tool_use_id === "string";
-
+  const role = resolveMessageRole(m);
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
-  const hasToolContent =
-    contentItems?.some((value) => {
-      const type = asOptionalRecord(value)?.type;
-      return isToolResultContentType(type) || isToolCallContentType(type);
-    }) ?? false;
-
-  const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
-
-  if (hasToolId || hasToolContent || hasToolName) {
-    role = "toolResult";
-  }
   const isAssistantMessage = role === "assistant";
   const delivery = isAssistantMessage ? readMessageDelivery(m.openclawDelivery) : undefined;
 
@@ -578,7 +575,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
 
   content = stripMessageDisplayMetadata(content);
-  const senderSession = readSenderSession(m.senderSession);
+  const senderSession = readMessageSenderSession(m.senderSession);
 
   return {
     role,

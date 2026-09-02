@@ -6,6 +6,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -50,7 +51,6 @@ import {
   renderMessageJson,
   renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
-  resolveMessageMarkdownRenderOptions,
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -73,15 +73,17 @@ function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
 }
 
-function canonicalImageMessageKey(message: unknown, sessionKey: string | undefined) {
+function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
-  return identity?.role === "user" &&
-    identity.id &&
-    !identity.isImported &&
-    !isPendingSendMessage(message) &&
-    !identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? JSON.stringify([sessionKey, identity.id, identity.sequence])
-    : undefined;
+  if (identity?.role !== "user" || identity.isImported) {
+    return { localSubmission: false };
+  }
+  if (!identity.id || isPendingSendMessage(message)) {
+    return { localSubmission: Boolean(identity.sendId) };
+  }
+  return identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
+    ? {}
+    : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
 }
 
 function renderInlineToolCards(
@@ -262,7 +264,7 @@ export function renderGroupedMessage(
   const images = extractImages(message);
   const hasImages = images.length > 0;
   const imageRenderOptions = {
-    canonicalMessageKey: hasImages ? canonicalImageMessageKey(message, opts.sessionKey) : undefined,
+    ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
     connectionEpoch: opts.connectionEpoch,
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,
@@ -287,12 +289,16 @@ export function renderGroupedMessage(
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);
-  const markdownRenderOptions = resolveMessageMarkdownRenderOptions({
-    role,
-    isStreaming: opts.isStreaming,
+  const markdownRenderOptions: MarkdownRenderOptions = {
+    assistantTranscriptRoleHeaders: role === "assistant",
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
-    linkFavicons: Boolean(opts.fetchLinkFavicon),
-  });
+    sessionLinks: true,
+    tableInteractions: "enabled",
+    linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
+  };
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;

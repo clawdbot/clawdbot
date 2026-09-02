@@ -91,7 +91,7 @@ function createInitialHandoffFixture() {
 function createAuthoritativeInitialMessage(sequence = 1) {
   return {
     role: "user",
-    content: [{ type: "image", source: { type: "url", url: "/persisted.png" } }],
+    content: "Inspect this persisted image",
     timestamp: 456,
     serverField: "authoritative",
     __openclaw: {
@@ -99,7 +99,8 @@ function createAuthoritativeInitialMessage(sequence = 1) {
       idempotencyKey: "initial-run:user",
       runId: "initial-execution",
       seq: sequence,
-      media: [{ path: "/persisted.png", contentType: "image/png" }],
+      media: [{ url: "media://inbound/image-1.png", contentType: "image/png" }],
+      mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
     },
   };
 }
@@ -324,29 +325,15 @@ describe("pane-owned canonical session projection", () => {
       );
       expect(owner.chatMessages).toEqual([handoff.message]);
     }
-    const localContent = handoff.message.content;
     const authoritative = createAuthoritativeInitialMessage();
     const event =
       eventType === "messagePersisted"
         ? ({ type: eventType, message: authoritative } as const)
         : ({ type: eventType, messages: [authoritative] } as const);
     const projection = reduceChatSessionProjection(owner, event, { runActive: admitFirst });
-    const adopted = owner.chatMessages[0] as Record<string, unknown>;
 
-    expect(owner.chatMessages).toHaveLength(1);
-    expect(projection.messages[0]).toBe(adopted);
-    expect(adopted.content).toBe(localContent);
-    expect(adopted).toMatchObject({
-      role: "user",
-      timestamp: 456,
-      serverField: "authoritative",
-      __openclaw: {
-        id: "persisted-initial-user",
-        idempotencyKey: "initial-run:user",
-        seq: 1,
-      },
-    });
-    expect((adopted["__openclaw"] as Record<string, unknown>).media).toBeUndefined();
+    expect(owner.chatMessages).toEqual([authoritative]);
+    expect(projection.messages[0]).toBe(authoritative);
 
     if (admitFirst) {
       expect(chatSubmissions.readInitial(sessionKey, client)).not.toBeNull();
@@ -367,7 +354,6 @@ describe("pane-owned canonical session projection", () => {
 
   it("adopts the exact submission at its actual committed position", () => {
     const { client, chatSubmissions, owner, sessionKey } = createInitialHandoffFixture();
-    const localContent = chatSubmissions.readInitial(sessionKey, client)!.message.content;
     admitChatSubmission(owner);
     const authoritative = createAuthoritativeInitialMessage(4);
     reduceChatSessionProjection(
@@ -375,11 +361,7 @@ describe("pane-owned canonical session projection", () => {
       { type: "snapshotLoaded", messages: [authoritative] },
       { runActive: false },
     );
-    expect(owner.chatMessages).toHaveLength(1);
-    expect(owner.chatMessages[0]).toMatchObject({
-      content: localContent,
-      __openclaw: { id: "persisted-initial-user", seq: 4, runId: "initial-execution" },
-    });
+    expect(owner.chatMessages).toEqual([authoritative]);
     expect(chatSubmissions.readInitial(sessionKey, client)).toBeNull();
   });
 

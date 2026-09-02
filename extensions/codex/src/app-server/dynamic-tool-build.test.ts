@@ -48,7 +48,10 @@ import {
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import * as nativeExecutionPolicy from "./native-execution-policy.js";
-import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  flattenCodexDynamicToolFunctions,
+} from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -1994,11 +1997,26 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(nativeToolSurfaceEnabled).toBe(false);
     expect(tools.map((tool) => tool.name)).toEqual(["exec", "process", "message", "node_exec"]);
+    expect(
+      tools
+        .filter((tool) => ["exec", "process", "node_exec"].includes(tool.name))
+        .map((tool) => tool.catalogMode),
+    ).toEqual(["direct-only", "direct-only", "direct-only"]);
 
     const bridge = createCodexDynamicToolBridge({
       tools,
       signal: new AbortController().signal,
       loading: "direct",
+    });
+    expect(bridge.specs).toContainEqual({
+      type: "namespace",
+      name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      description: "",
+      tools: expect.arrayContaining([
+        expect.objectContaining({ name: "exec" }),
+        expect.objectContaining({ name: "process" }),
+        expect.objectContaining({ name: "node_exec" }),
+      ]),
     });
     await bridge.handleToolCall({
       threadId: "restricted-thread",
@@ -2058,6 +2076,11 @@ describe("Codex app-server dynamic tool build", () => {
       expect.objectContaining({ sandboxAvailable: true }),
     );
     expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
+    expect(tools.map((tool) => tool.catalogMode)).toEqual([
+      undefined,
+      "direct-only",
+      "direct-only",
+    ]);
     expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
       "Docker container-path bind layout",
     );

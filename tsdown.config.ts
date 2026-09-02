@@ -443,7 +443,6 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "cli/run-main": "src/cli/run-main.ts",
     "config/config": "src/config/config.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
-    "plugins/official-external-install-records": "src/plugins/official-external-install-records.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
     "system-agent/rescue-message": "src/system-agent/rescue-message.ts",

@@ -46,11 +46,8 @@ export async function withProjectedSessionTranscriptWriteLock<
     context: InternalSessionTranscriptWriteLockContext,
     locked: SessionTranscriptWriteLockAccessorContext,
   ) => TContext,
-  publishQueuedUpdate?: (
-    params: InternalSessionTranscriptWriteLockParams & { update?: TranscriptUpdatePayload },
-  ) => Promise<void>,
 ): Promise<T> {
-  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params);
+  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params, params.config);
   const agentId = normalizeAgentId(storageTarget.agentId);
   const target: InternalSessionTranscriptTarget = {
     agentId,
@@ -64,11 +61,10 @@ export async function withProjectedSessionTranscriptWriteLock<
   };
   const boundScope = {
     ...params,
-    sessionId: storageTarget.sessionId,
-    sessionKey: storageTarget.sessionKey,
+    ...storageTarget,
   };
-  // Publish only after the write callback commits, so failed transactions cannot
-  // expose transcript updates to gateway subscribers.
+  // Keep the selected store and owner through awaits and publication. Individual appends
+  // commit independently, but a failed callback must not publish its queued updates.
   const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
   const result = await withTranscriptWriteLock(
     boundScope,
@@ -92,23 +88,7 @@ export async function withProjectedSessionTranscriptWriteLock<
       ),
   );
   for (const update of queuedUpdates) {
-    if (publishQueuedUpdate) {
-      await publishQueuedUpdate({
-        ...boundScope,
-        ...(update !== undefined ? { update } : {}),
-      });
-      continue;
-    }
-    await publishTranscriptUpdate(boundScope, {
-      ...update,
-      agentId: storageTarget.agentId,
-      sessionKey: storageTarget.sessionKey,
-      target: {
-        agentId: storageTarget.agentId,
-        sessionId: storageTarget.sessionId,
-        sessionKey: storageTarget.sessionKey,
-      },
-    });
+    await publishTranscriptUpdate(boundScope, update);
   }
   return result;
 }

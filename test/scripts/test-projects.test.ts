@@ -869,6 +869,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/changed-path-facts.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
         "test/scripts/docker-release-artifacts.test.ts",
+        "test/scripts/full-release-artifacts.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/ios-lifecycle-workflow.test.ts",
         "test/scripts/macos-native-test-launch.test.ts",
@@ -877,7 +878,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
+        "test/scripts/release-tooling-identity.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
+        "test/scripts/validate-release-publish-approval.test.ts",
       ],
     );
   });
@@ -902,6 +905,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/frv-proof-broker.test.ts",
         "test/scripts/frv.test.ts",
         "test/scripts/full-release-artifact-contract.test.ts",
+        "test/scripts/full-release-artifacts.test.ts",
         "test/scripts/full-release-validation-continuation-workflow.test.ts",
         "test/scripts/npm-prepared-bundle.test.ts",
         "test/scripts/openclaw-npm-extended-stable-release.test.ts",

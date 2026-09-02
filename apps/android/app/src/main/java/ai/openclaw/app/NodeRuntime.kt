@@ -110,7 +110,6 @@ import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
-import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
 import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
@@ -1161,38 +1160,6 @@ class NodeRuntime private constructor(
   private val mobileUiHandler = MobileUiHandler()
   private var lastMobileUiConnected = mobileUiHandler.isConnected.value
 
-  private val connectionManager: ConnectionManager =
-    ConnectionManager(
-      prefs = prefs,
-      cameraEnabled = { cameraEnabled.value },
-      locationMode = { locationMode.value },
-      motionActivityAvailable = { motionHandler.isActivityAvailable() },
-      motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-      sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
-      readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
-      smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
-      callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
-      photosAvailable = { SensitiveFeatureConfig.photosEnabled },
-      installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
-      voiceWakeAvailable = {
-        voiceWakeManager.isAvailable &&
-          hasRecordAudioPermission() &&
-          isVoiceWakeWordsReadyForCurrentGateway()
-      },
-      mobileUiAvailable = {
-        SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
-      },
-      inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
-      permissionSnapshot = permissionSnapshot,
-      manualTls = { endpoint ->
-        prefs.gatewayRegistry.entries.value
-          .firstOrNull { it.stableId == endpoint.stableId }
-          ?.tls ?: manualTls.value
-      },
-    )
-  private var lastNodePermissions = connectionManager.buildPermissions()
-  private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
-
   private val invokeDispatcher: InvokeDispatcher =
     InvokeDispatcher(
       cameraHandler = cameraHandler,
@@ -1223,8 +1190,7 @@ class NodeRuntime private constructor(
       locationEnabled = { locationMode.value != LocationMode.Off },
       sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
       readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
-      smsFeatureEnabled = { SensitiveFeatureConfig.smsEnabled },
-      smsTelephonyAvailable = { sms.hasTelephonyFeature() },
+      smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
@@ -1234,7 +1200,24 @@ class NodeRuntime private constructor(
       mobileUiAvailable = {
         SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
+      voiceWakeAvailable = ::isVoiceWakeCapabilityEnabled,
     )
+
+  private val connectionManager: ConnectionManager =
+    ConnectionManager(
+      prefs = prefs,
+      advertisedCapabilities = invokeDispatcher::buildCapabilities,
+      advertisedCommands = invokeDispatcher::buildInvokeCommands,
+      inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
+      permissionSnapshot = permissionSnapshot,
+      manualTls = { endpoint ->
+        prefs.gatewayRegistry.entries.value
+          .firstOrNull { it.stableId == endpoint.stableId }
+          ?.tls ?: manualTls.value
+      },
+    )
+  private var lastNodePermissions = connectionManager.buildPermissions()
+  private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
 
   /**
    * Pending TLS trust decision when a gateway certificate is new or has changed.
@@ -2280,12 +2263,6 @@ class NodeRuntime private constructor(
     )
   }
 
-  val micStatusText: StateFlow<String>
-    get() = micCapture.statusText
-
-  val micLiveTranscript: StateFlow<String?>
-    get() = micCapture.liveTranscript
-
   val micIsListening: StateFlow<Boolean>
     get() = micCapture.isListening
 
@@ -2294,18 +2271,6 @@ class NodeRuntime private constructor(
 
   val micCooldown: StateFlow<Boolean>
     get() = micCapture.micCooldown
-
-  val micQueuedMessages: StateFlow<List<String>>
-    get() = micCapture.queuedMessages
-
-  val micConversation: StateFlow<List<VoiceConversationEntry>>
-    get() = micCapture.conversation
-
-  val micInputLevel: StateFlow<Float>
-    get() = micCapture.inputLevel
-
-  val micIsSending: StateFlow<Boolean>
-    get() = micCapture.isSending
 
   private val talkMode: TalkModeManager by lazy {
     TalkModeManager(
@@ -2335,23 +2300,11 @@ class NodeRuntime private constructor(
   val talkModeSpeaking: StateFlow<Boolean>
     get() = talkMode.isSpeaking
 
-  val talkInputLevel: StateFlow<Float>
-    get() = talkMode.inputLevel
-
-  val talkOutputLevel: StateFlow<Float?>
-    get() = talkMode.outputLevel
-
-  val talkSpeechActive: StateFlow<Boolean>
-    get() = talkMode.speechActive
-
   val talkAwaitingAgent: StateFlow<Boolean>
     get() = talkMode.awaitingAgent
 
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
-
-  val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
-    get() = talkMode.conversation
 
   private val wearRealtimeLifecycleMutex = Mutex()
 
@@ -4034,9 +3987,6 @@ class NodeRuntime private constructor(
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 
-  val preferredCameraFacing: StateFlow<String>
-    get() = prefs.preferredCameraFacing
-
   val preferredAudioInputDevice: StateFlow<String?>
     get() = prefs.preferredAudioInputDevice
 
@@ -4047,10 +3997,6 @@ class NodeRuntime private constructor(
     }
     // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
-  }
-
-  fun setPreferredCameraFacing(value: String) {
-    prefs.setPreferredCameraFacing(value)
   }
 
   fun setPreferredAudioInputDevice(value: String?) {

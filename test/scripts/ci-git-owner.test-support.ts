@@ -55,8 +55,6 @@ const defaults: Record<string, string> = {
   EVENT_BASE_SHA: base,
   GH_TOKEN: "",
   PULL_REQUEST_NUMBER: "17",
-  PR_COMMIT_COUNT: "5",
-  PR_MERGE_SHA: merge,
   TARGET_SHA: candidate,
   RELEASE_GATE: "false",
   FROZEN_TARGET: "false",
@@ -215,8 +213,9 @@ export async function runCiGitStep(options: {
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
-      if (options.performance)
+      if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
+      }
       env = stepEnvironment(step, {
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",

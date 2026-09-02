@@ -12,7 +12,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
+import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -43,7 +43,13 @@ export function buildPendingInputItems(
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
       continue;
     }
-    items.push({ kind: "message", key: `pending-input:${input.id}`, message: input.message });
+    // Custody keeps submission correlation outside the message; use it for
+    // presentation without inventing transcript or execution identity.
+    items.push(
+      ...buildMessageItems([input.message], () =>
+        input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
+      ),
+    );
     if (input.state === "queued") {
       continue;
     }

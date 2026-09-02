@@ -1,4 +1,3 @@
-// Control UI chat module owns Chat thread item derivation and thread-local caches.
 import {
   accumulatedStreamText,
   trimAccumulatedStreamPrefix,
@@ -13,11 +12,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
-import {
-  getOrCreateSessionCacheValue,
-  getSessionCacheValue,
-  setSessionCacheValue,
-} from "./session-cache.ts";
+import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 export {
   isPendingSendMessage,
@@ -35,25 +30,31 @@ export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-gr
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
   items: ReturnType<typeof buildChatItems>;
-  liveStreamIdentity: string | null;
-  liveStreamIndex: number;
-  liveStreamPrefix: string | null;
+  liveStream: {
+    index: number;
+    identity: string;
+    prefix: string | null;
+  } | null;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
 
+type ToolCardExpansionState = {
+  expanded: Map<string, boolean>;
+  // Group disclosures share the map but must stay outside tool-only auto-expand and pruning.
+  initialized: Set<string>;
+  lastSync?: {
+    // The scan memo must not retain messages after their owning pane releases them.
+    items: WeakRef<readonly RenderChatItem[]>;
+    isFilteredProjection: boolean;
+    autoExpandToolCalls: boolean;
+  };
+};
+
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
-const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
+const toolCardStateBySession = new Map<string, ToolCardExpansionState>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
-const initializedToolCardsBySession = new Map<string, Set<string>>();
-const lastAutoExpandPrefBySession = new Map<string, boolean>();
-// This memo only skips repeated work. Keeping its transcript strongly would
-// retain message payloads after the owning pane and message cache release them.
-const lastToolCardItemsBySession = new Map<
-  string,
-  { items: WeakRef<readonly RenderChatItem[]>; isFilteredProjection: boolean }
->();
 
 export function resetChatThreadState(paneId?: string): void {
   if (paneId) {
@@ -62,11 +63,8 @@ export function resetChatThreadState(paneId?: string): void {
   }
   chatItemsByPane.clear();
   resetWorkingProgress();
-  expandedToolCardsBySession.clear();
+  toolCardStateBySession.clear();
   expandedUserMessagesBySession.clear();
-  initializedToolCardsBySession.clear();
-  lastAutoExpandPrefBySession.clear();
-  lastToolCardItemsBySession.clear();
 }
 
 function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
@@ -80,6 +78,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
+    previous.visibleContent === next.visibleContent &&
     previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
@@ -276,49 +275,28 @@ function sameChatItemsStructuralInput(
   );
 }
 
-function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
-  return previous.stream === next.stream && sameChatItemsStructuralInput(previous, next);
-}
-
-function sameChatItemsInputExceptStream(
-  previous: BuildChatItemsProps,
-  next: BuildChatItemsProps,
-): boolean {
-  return (
-    previous.stream !== null && next.stream !== null && sameChatItemsStructuralInput(previous, next)
-  );
-}
-
 function liveStreamIdentity(input: BuildChatItemsProps): string {
   return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
 }
 
-function updateCachedLiveStream(
-  items: ReturnType<typeof buildChatItems>,
-  index: number,
-  identity: string | null,
-  accumulatedPrefix: string | null,
-  input: BuildChatItemsProps,
-): boolean {
-  const item = items[index];
+function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsProps): boolean {
+  const live = cached.liveStream;
+  const item = live ? cached.items[live.index] : undefined;
   if (
+    input.stream === null ||
+    !live ||
     item?.kind !== "stream" ||
     !item.isStreaming ||
-    identity !== liveStreamIdentity(input) ||
-    input.stream === null
+    live.identity !== liveStreamIdentity(input)
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), accumulatedPrefix);
+  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), live.prefix);
   if (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip) {
     return false;
   }
-  items[index] = { ...item, text };
+  cached.items[live.index] = { ...item, text };
   return true;
-}
-
-function findLiveStreamIndex(items: ReturnType<typeof buildChatItems>): number {
-  return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
 }
 
 export function buildCachedChatItems(
@@ -332,36 +310,31 @@ export function buildCachedChatItems(
   const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
     items: [],
-    liveStreamIdentity: null,
-    liveStreamIndex: -1,
-    liveStreamPrefix: null,
+    liveStream: null,
   }));
-  if (cached.input && sameChatItemsInput(cached.input, input)) {
-    return cached.items;
-  }
-  // Streaming updates are the hottest transcript path. When every structural
-  // input is unchanged, update the owned live row without rescanning
-  // loaded history; shape changes still use the canonical full builder.
-  if (
-    cached.input &&
-    sameChatItemsInputExceptStream(cached.input, input) &&
-    updateCachedLiveStream(
-      cached.items,
-      cached.liveStreamIndex,
-      cached.liveStreamIdentity,
-      cached.liveStreamPrefix,
-      input,
-    )
-  ) {
-    cached.input = input;
-    return cached.items;
+  // Keep stream-only updates off the loaded-history path; structural changes
+  // still use the full builder.
+  if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
+    if (cached.input.stream === input.stream) {
+      return cached.items;
+    }
+    if (cached.input.stream !== null && updateCachedLiveStream(cached, input)) {
+      cached.input = input;
+      return cached.items;
+    }
   }
   const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
-  cached.liveStreamIndex = findLiveStreamIndex(items);
-  cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
-  cached.liveStreamPrefix = accumulatedStreamText(input.streamSegments, sanitizeStreamText);
+  const liveStreamIndex = items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+  cached.liveStream =
+    liveStreamIndex < 0
+      ? null
+      : {
+          index: liveStreamIndex,
+          identity: liveStreamIdentity(input),
+          prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+        };
   return items;
 }
 
@@ -383,8 +356,16 @@ export function deleteExpansionState<T>(values: Map<string, T>, key: string): vo
   }
 }
 
+function getToolCardExpansionState(sessionKey: string): ToolCardExpansionState {
+  // Expansion choices, initialization, and memoization share one eviction boundary.
+  return getOrCreateSessionCacheValue(toolCardStateBySession, sessionKey, () => ({
+    expanded: new Map(),
+    initialized: new Set(),
+  }));
+}
+
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
-  return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
+  return getToolCardExpansionState(sessionKey).expanded;
 }
 
 export function getExpandedUserMessages(sessionKey: string): Map<string, boolean> {
@@ -415,24 +396,18 @@ export type AssistantMessageExpansionState =
   | { status: "error"; revision: number }
   | { status: "loaded"; markdown: string; revision: number };
 
-function getInitializedToolCards(sessionKey: string): Set<string> {
-  return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
-}
-
 export function syncToolCardExpansionState(
   sessionKey: string,
   items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
   isFilteredProjection = false,
 ): void {
-  const expanded = getExpandedToolCards(sessionKey);
-  const initialized = getInitializedToolCards(sessionKey);
-  const previousProjection = getSessionCacheValue(lastToolCardItemsBySession, sessionKey);
-  const previousAutoExpand = getSessionCacheValue(lastAutoExpandPrefBySession, sessionKey) ?? false;
+  const state = getToolCardExpansionState(sessionKey);
+  const { expanded, initialized, lastSync } = state;
   if (
-    previousProjection?.items.deref() === items &&
-    previousProjection.isFilteredProjection === isFilteredProjection &&
-    previousAutoExpand === autoExpandToolCalls
+    lastSync?.items.deref() === items &&
+    lastSync.isFilteredProjection === isFilteredProjection &&
+    lastSync.autoExpandToolCalls === autoExpandToolCalls
   ) {
     return;
   }
@@ -464,7 +439,7 @@ export function syncToolCardExpansionState(
       initialized.add(disclosureId);
     }
   }
-  if (autoExpandToolCalls && !previousAutoExpand) {
+  if (autoExpandToolCalls && !lastSync?.autoExpandToolCalls) {
     for (const toolCardId of initialized) {
       setExpansionState(expanded, toolCardId, true);
     }
@@ -479,9 +454,9 @@ export function syncToolCardExpansionState(
       }
     }
   }
-  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, {
+  state.lastSync = {
     items: new WeakRef(items),
     isFilteredProjection,
-  });
-  setSessionCacheValue(lastAutoExpandPrefBySession, sessionKey, autoExpandToolCalls);
+    autoExpandToolCalls,
+  };
 }

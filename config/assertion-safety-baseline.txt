@@ -30,7 +30,7 @@ extensions/anthropic/cli-migration.ts	2
 extensions/anthropic/config-defaults.ts	10
 extensions/anthropic/register.runtime.ts	2
 extensions/anthropic/session-catalog-continue.ts	1
-extensions/anthropic/session-catalog-discovery.ts	5
+extensions/anthropic/session-catalog-discovery.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	7
@@ -1631,7 +1631,7 @@ src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-error.ts	1
 src/agents/agent-run-terminal-outcome.ts	2
 src/agents/agent-run-terminal-receipt.ts	1
-src/agents/agent-run-terminal-reply.ts	4
+src/agents/agent-run-terminal-reply.ts	3
 src/agents/agent-runtime-config.ts	1
 src/agents/agent-scope-config.ts	7
 src/agents/agent-tool-definition-adapter.ts	4
@@ -2602,9 +2602,9 @@ src/config/io.read-helpers.ts	3
 src/config/io.session-store-owner.ts	2
 src/config/io.snapshot.ts	1
 src/config/io.warnings.ts	2
-src/config/io.write-prepare.ts	16
+src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	4
-src/config/io.write.ts	7
+src/config/io.write.ts	6
 src/config/issue-location.ts	2
 src/config/legacy-private-network-migration.ts	1
 src/config/legacy.default-agent-roles.ts	1
@@ -2631,7 +2631,7 @@ src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.hints.ts	15
 src/config/schema.tags.ts	1
-src/config/schema.ts	3
+src/config/schema.ts	1
 src/config/sessions/archive-compression.ts	1
 src/config/sessions/cleanup-service.ts	3
 src/config/sessions/conversation-delivery-store.ts	2
@@ -3928,7 +3928,7 @@ ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/board/widgets/workboard-card.ts	3
 ui/src/lib/board/widgets/workboard-widget.ts	2
 ui/src/lib/channels/index.ts	3
-ui/src/lib/chat/message-extract.ts	7
+ui/src/lib/chat/message-extract.ts	5
 ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1

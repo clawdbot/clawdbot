@@ -108,17 +108,17 @@ describe("startSshPortForward", () => {
     mocks.spawn.mockReset();
   });
 
-  // Fake ssh child that, when spawned, parses the -L forward spec and starts a
-  // real IPv4-loopback listener on the chosen local port so waitForLocalListener
-  // resolves without launching a real ssh process.
-  function spawnFakeSshListening() {
+  // A synthetic child can open a real loopback listener or stall until cancellation.
+  function spawnFakeSsh({ listen = true } = {}) {
     mocks.spawn.mockImplementation((_cmd: string, args: string[]) => {
       const forwardSpec = args[args.indexOf("-L") + 1] ?? "";
       const localPort = Number(forwardSpec.split(":")[1]);
-      const server = net.createServer();
-      server.on("error", () => {});
-      openServers.push(server);
-      server.listen(localPort, "127.0.0.1");
+      if (listen) {
+        const server = net.createServer();
+        server.on("error", () => {});
+        openServers.push(server);
+        server.listen(localPort, "127.0.0.1");
+      }
 
       const child = new EventEmitter() as EventEmitter & {
         killed: boolean;
@@ -193,7 +193,7 @@ describe("startSshPortForward", () => {
     const preferredPort = addr.port;
 
     mocks.ensurePortAvailable.mockRejectedValueOnce(new PortInUseError(preferredPort));
-    spawnFakeSshListening();
+    spawnFakeSsh();
 
     const tunnel = await startSshPortForward({
       target: "me@example.com:2222",
@@ -216,7 +216,7 @@ describe("startSshPortForward", () => {
   it.each(["term", "kill"] as const)(
     "keeps every stop caller pending until the child exits after %s",
     async (exitAfter) => {
-      spawnFakeSshListening();
+      spawnFakeSsh();
       const tunnel = await startSshPortForward({
         target: "me@example.com:2222",
         localPortPreferred: await getFreePort(),
@@ -257,7 +257,7 @@ describe("startSshPortForward", () => {
   );
 
   it("stops an established tunnel when its owner aborts", async () => {
-    spawnFakeSshListening();
+    spawnFakeSsh();
     const controller = new AbortController();
     const tunnel = await startSshPortForward({
       target: "me@example.com:2222",
@@ -390,14 +390,51 @@ describe("startSshPortForward", () => {
     },
   );
 
+  it.each([10_000, -10_000])(
+    "keeps the startup budget through a %s ms wall-clock step",
+    async (stepMs) => {
+      spawnFakeSsh({ listen: false });
+      const localPort = await getFreePort();
+      const controller = new AbortController();
+      const now = Date.now;
+      let offset = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+      const connect = net.connect;
+      const probe = vi.spyOn(net, "connect").mockImplementation((...args) => {
+        // Move wall time only after the owner's initial budget timestamp is captured.
+        offset = stepMs;
+        return connect(...args);
+      });
+      const safety = setTimeout(() => controller.abort(), 1000);
+      const started = performance.now();
+      try {
+        await expect(
+          startSshPortForward({
+            target: "me@example.com:2222",
+            localPortPreferred: localPort,
+            remotePort: 18789,
+            timeoutMs: 250,
+            signal: controller.signal,
+          }),
+        ).rejects.toThrow("ssh tunnel did not start listening");
+        expect(performance.now() - started).toBeGreaterThanOrEqual(200);
+      } finally {
+        clearTimeout(safety);
+        controller.abort();
+        clock.mockRestore();
+        probe.mockRestore();
+      }
+    },
+  );
+
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
     async (phase) => {
       // Real timers only. The fake spawn opens a real socket, and
-      // waitForLocalListener retries on setTimeout against a Date.now() deadline.
+      // waitForLocalListener retries on setTimeout against a monotonic budget.
       // Under fake timers neither advances, so a listener that loses the race on the
       // first probe hangs to the suite timeout instead of failing on its own budget.
-      spawnFakeSshListening();
+      spawnFakeSsh();
       const localPort = await getFreePort();
 
       const tunnel = await startSshPortForward({
