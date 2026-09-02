@@ -51,7 +51,6 @@ import {
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
-  QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
@@ -1078,22 +1077,6 @@ async function buildResponsesPayload(
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
   const canCallSessionsYield =
     hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
-  const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
-  // Progress scenarios share full session transcripts. Scope completion to
-  // the selected prompt so an older turn's tool output cannot finish this one.
-  const toolProgressToolOutput = toolProgressTurn
-    ? extractToolOutput(input.slice(toolProgressTurn.index))
-    : "";
-  const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
-  const buildToolProgressReadEvents = () => {
-    return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(scenarioFamilyPrompt),
-    });
-  };
-  const buildToolProgressExecEvents = () => {
-    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
-  };
   const slackProgressTurn = extractLastMatchingUserTurn(
     input,
     QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
@@ -1661,28 +1644,31 @@ async function buildResponsesPayload(
       );
     }
   }
-  const toolProgressReplyDirective =
-    extractExactReplyDirective(toolProgressToolOutput) ??
-    extractExactMarkerDirective(toolProgressToolOutput) ??
-    scenarioFamilyReplyDirective;
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(
-        hasToolErrorOutput(toolProgressToolJson, toolProgressToolOutput)
-          ? toolProgressReplyDirective
-          : "BUG-TOOL-DID-NOT-FAIL",
+  const toolProgress = QA_TOOL_PROGRESS_PROMPT_RE.exec(scenarioFamilyPrompt);
+  if (toolProgress) {
+    const expectsError = Boolean(toolProgress[1]);
+    const turn = extractLastMatchingUserTurn(input, QA_TOOL_PROGRESS_PROMPT_RE);
+    // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
+    const progressInput = turn ? input.slice(turn.index) : [];
+    if (!hasToolOutput(progressInput)) {
+      const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
+      return buildToolCallEventsWithArgs(
+        command ? "exec" : "read",
+        command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
       );
     }
-  }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(toolProgressReplyDirective);
+    const output = extractToolOutput(progressInput);
+    const reply =
+      extractExactReplyDirective(output) ??
+      extractExactMarkerDirective(output) ??
+      scenarioFamilyReplyDirective;
+    if (reply) {
+      // A successful CodeMode runner can still return a failed capability result.
+      const structuredError = extractToolOutputStructuredError(progressInput);
+      const failed =
+        (hasCodeModeControlOutput ? structuredError || undefined : structuredError) ??
+        hasToolErrorOutput(parseToolOutputJson(output), output);
+      return buildAssistantEvents(expectsError && !failed ? "BUG-TOOL-DID-NOT-FAIL" : reply);
     }
   }
   if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
