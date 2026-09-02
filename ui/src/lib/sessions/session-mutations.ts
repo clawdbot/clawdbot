@@ -431,7 +431,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
       if (!options.deferListRefresh) {
-        refreshOutcome = await host.refreshReplacementResult(options.agentId);
+        if (Object.hasOwn(patchParams, "permissionMode")) {
+          refreshOutcome = await host.refreshReplacementResult(options.agentId);
+        } else {
+          await host.refreshReplacement(options.agentId);
+        }
         if (!host.connection.isCurrent(scope)) {
           settleOptimisticPatch(false);
           return (await reconcileConfirmedPreviousConnection(scope, options.agentId))
