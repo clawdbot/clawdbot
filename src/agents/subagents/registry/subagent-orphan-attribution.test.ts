@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBootLifecycleSegment } from "../../../infra/gateway-boot-lifecycle.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   countRecordedSubagentAssistantMessages,
   formatSubagentOrphanErrorMessage,
@@ -8,6 +7,7 @@ import {
   resolveSubagentOrphanAttribution,
   resolveSubagentRunLastActivityMs,
 } from "./subagent-orphan-attribution.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const KERNEL_BOOT_A = "kernel:11111111-1111-4111-8111-111111111111";
 const KERNEL_BOOT_B = "kernel:22222222-2222-4222-8222-222222222222";
@@ -43,13 +43,13 @@ describe("isAbruptGatewayBootEnd", () => {
   });
 
   it("treats any recorded stop as deliberate", () => {
-    expect(
-      isAbruptGatewayBootEnd(bootSegment({ completedAtMs: 10, outcome: "clean_stop" })),
-    ).toBe(false);
-    expect(isAbruptGatewayBootEnd(bootSegment({ completedAtMs: 10, outcome: null }))).toBe(false);
-    expect(isAbruptGatewayBootEnd(bootSegment({ completedAtMs: null, outcome: "forced_stop" }))).toBe(
+    expect(isAbruptGatewayBootEnd(bootSegment({ completedAtMs: 10, outcome: "clean_stop" }))).toBe(
       false,
     );
+    expect(isAbruptGatewayBootEnd(bootSegment({ completedAtMs: 10, outcome: null }))).toBe(false);
+    expect(
+      isAbruptGatewayBootEnd(bootSegment({ completedAtMs: null, outcome: "forced_stop" })),
+    ).toBe(false);
   });
 });
 
@@ -135,7 +135,7 @@ describe("resolveSubagentOrphanAttribution", () => {
     expect(attribution?.diedAtEvidence).toBe("successor_boot_start");
   });
 
-  it("ignores a last-activity timestamp that falls outside the run's window", () => {
+  it("rejects attribution when run activity postdates the successor boot", () => {
     const attribution = resolveSubagentOrphanAttribution({
       runStartedAtMs: RUN_STARTED_AT,
       // A reap-time reading leaking in must not be accepted as a death time.
@@ -145,8 +145,7 @@ describe("resolveSubagentOrphanAttribution", () => {
         bootSegment({ bootId: "boot-minus-4", startedAtMs: GATEWAY_RESTARTED_AT }),
       ],
     });
-    expect(attribution?.diedAtEvidence).toBe("successor_boot_start");
-    expect(attribution?.diedAtMs).toBe(GATEWAY_RESTARTED_AT);
+    expect(attribution).toBeNull();
   });
 
   it("calls a changed host boot id a host reboot", () => {
@@ -249,9 +248,7 @@ describe("resolveSubagentOrphanAttribution", () => {
         boots: [bootSegment({ bootId: "boot-later", startedAtMs: RUN_STARTED_AT + 60_000 })],
       }),
     ).toBeNull();
-    expect(
-      resolveSubagentOrphanAttribution({ runStartedAtMs: Number.NaN, boots: [] }),
-    ).toBeNull();
+    expect(resolveSubagentOrphanAttribution({ runStartedAtMs: Number.NaN, boots: [] })).toBeNull();
   });
 });
 
@@ -293,9 +290,9 @@ describe("formatSubagentOrphanErrorMessage", () => {
         bootSegment({ bootId: "boot-b", startedAtMs: GATEWAY_RESTARTED_AT }),
       ],
     });
-    expect(formatSubagentOrphanErrorMessage(processDeath!)).toContain(
-      "gateway process died while the host stayed up",
-    );
+    const message = formatSubagentOrphanErrorMessage(processDeath!);
+    expect(message).toContain("gateway process died while the host stayed up");
+    expect(message).not.toContain("gateway absent under 1s");
   });
 
   it("flags an inferred host-continuity verdict", () => {
@@ -326,7 +323,9 @@ describe("formatSubagentOrphanErrorMessage", () => {
         bootSegment({ bootId: "boot-b", startedAtMs: GATEWAY_RESTARTED_AT }),
       ],
     });
-    expect(formatSubagentOrphanErrorMessage(attribution!)).toContain("1 assistant message recorded");
+    expect(formatSubagentOrphanErrorMessage(attribution!)).toContain(
+      "1 assistant message recorded",
+    );
   });
 });
 

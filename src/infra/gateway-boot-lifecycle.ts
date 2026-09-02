@@ -251,6 +251,7 @@ export function recordGatewayBootStart(
 ): string | undefined {
   const bootId = randomUUID();
   try {
+    const hostBootId = resolveHostBootId(nowMs);
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
@@ -270,7 +271,7 @@ export function recordGatewayBootStart(
             outcome: null,
             startup_reason: reason ?? null,
             reason: null,
-            host_boot_id: resolveHostBootId(nowMs),
+            host_boot_id: hostBootId,
           }),
         );
       },
@@ -295,6 +296,7 @@ export function recordGatewayCrashLoopRecovery(
 ): string | undefined {
   const recoveredBootId = randomUUID();
   try {
+    const hostBootId = resolveHostBootId(nowMs);
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
@@ -321,7 +323,7 @@ export function recordGatewayCrashLoopRecovery(
             outcome: null,
             startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
             reason: null,
-            host_boot_id: resolveHostBootId(nowMs),
+            host_boot_id: hostBootId,
           }),
         );
       },

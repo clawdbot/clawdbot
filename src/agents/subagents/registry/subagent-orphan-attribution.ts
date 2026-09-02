@@ -1,3 +1,4 @@
+import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 /**
  * Causal attribution for subagent runs orphaned by a gateway death.
  *
@@ -18,7 +19,6 @@ import {
   isInferredHostBootId,
   readGatewayBootLifecycleSegments,
 } from "../../../infra/gateway-boot-lifecycle.js";
-import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentOrphanCause =
@@ -74,7 +74,8 @@ function resolveHostContinuity(
   if (!prior.hostBootId || !successor.hostBootId) {
     return { cause: "gateway_restart", inferred: false };
   }
-  const inferred = isInferredHostBootId(prior.hostBootId) || isInferredHostBootId(successor.hostBootId);
+  const inferred =
+    isInferredHostBootId(prior.hostBootId) || isInferredHostBootId(successor.hostBootId);
   return {
     cause: prior.hostBootId === successor.hostBootId ? "gateway_process_death" : "host_reboot",
     inferred,
@@ -160,6 +161,14 @@ export function resolveSubagentOrphanAttribution(params: {
   if (!successor) {
     return null;
   }
+  if (
+    typeof params.lastActivityAtMs === "number" &&
+    params.lastActivityAtMs > successor.startedAtMs
+  ) {
+    // Run-written activity after the successor boot disproves that this run
+    // died with the prior boot. Preserve the generic recovery wording.
+    return null;
+  }
 
   const death = resolveDeathEvidence({
     prior,
@@ -235,12 +244,15 @@ export function formatSubagentOrphanErrorMessage(attribution: SubagentOrphanAttr
     attribution.assistantMessageCount === 1
       ? "1 assistant message recorded"
       : `${attribution.assistantMessageCount} assistant messages recorded`;
+  const downtime =
+    attribution.diedAtEvidence === "successor_boot_start"
+      ? ""
+      : `; gateway absent ${describeDuration(attribution.downtimeMs)} before the run could be reaped`;
   return (
     `${describeCause(attribution)} at ${restartedAt} ` +
     `(previous boot ${attribution.priorBootId} ended without a clean stop); ` +
     `run orphaned after ${describeElapsed(attribution)} ${describeEvidence(attribution)}, ` +
-    `${messages}; gateway absent ${describeDuration(attribution.downtimeMs)} ` +
-    `before the run could be reaped${inferredNote}`
+    `${messages}${downtime}${inferredNote}`
   );
 }
 

@@ -187,6 +187,30 @@ describe("updateSubagentArchiveAtMs", () => {
 });
 
 describe("reconcileOrphanedRestoredRuns", () => {
+  it("leaves active restored orphans for attributed sweeper recovery", () => {
+    const entry = createRunEntry({
+      childSessionKey: "agent:main:subagent:missing-active",
+      execution: { status: "running", startedAt: 1_000 },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(resumedRuns.has(entry.runId)).toBe(true);
+  });
+
+  it("still prunes queued restored orphans that the sweeper does not own", () => {
+    const entry = createRunEntry({
+      childSessionKey: "agent:main:subagent:missing-queued",
+      execution: { status: "queued" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
   it("keeps waitable collector tombstones after delete-mode sessions disappear", () => {
     const entry = createRunEntry({
       collect: true,

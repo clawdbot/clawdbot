@@ -3,10 +3,7 @@ import type { GatewayBootLifecycleSegment } from "../../../infra/gateway-boot-li
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
-import type {
-  SubagentCompletionRequest,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const RUN_STARTED_AT = Date.parse("2026-08-26T22:49:16.000Z");
 const RUN_DIED_AT = Date.parse("2026-08-26T22:54:52.000Z");
@@ -54,9 +51,7 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
   };
 });
 
-function segment(
-  overrides: Partial<GatewayBootLifecycleSegment>,
-): GatewayBootLifecycleSegment {
+function segment(overrides: Partial<GatewayBootLifecycleSegment>): GatewayBootLifecycleSegment {
   return {
     bootId: "boot",
     pid: 1234,
@@ -86,10 +81,9 @@ function createHarness(entryOverrides?: Partial<SubagentRunRecord>) {
     ...entryOverrides,
   } as SubagentRunRecord;
   const runs = new Map([[entry.runId, entry]]);
-  const completeSubagentRunWithRecovery =
-    vi.fn<(completion: SubagentCompletionRequest, source: string) => Promise<void>>(
-      async () => {},
-    );
+  const completeSubagentRunWithRecovery = vi.fn<
+    (completion: SubagentCompletionRequest, source: string) => Promise<void>
+  >(async () => {});
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),

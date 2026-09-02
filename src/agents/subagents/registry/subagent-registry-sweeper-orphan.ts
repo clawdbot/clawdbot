@@ -15,10 +15,7 @@ import {
   resolveSubagentRunLastActivityMs,
 } from "./subagent-orphan-attribution.js";
 import { reconcileOrphanedRun } from "./subagent-registry-helpers.js";
-import type {
-  SubagentCompletionRequest,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
@@ -51,11 +48,18 @@ export async function reconcileStaleActiveSubagentRun(params: {
   // long the host stayed down. Correlate against boot history before writing
   // anything about this run: the reap clock is not evidence of its lifetime.
   const assistantMessageCount = countRecordedSubagentAssistantMessages(entry);
+  const boots = loadGatewayBootSegmentsForAttribution(now);
+  const currentBootId = boots
+    .toReversed()
+    .find(
+      (boot) => boot.pid === process.pid && boot.completedAtMs === null && boot.outcome === null,
+    )?.bootId;
   const attribution = resolveSubagentOrphanAttribution({
     runStartedAtMs: entry.execution.startedAt ?? entry.createdAt,
     lastActivityAtMs: resolveSubagentRunLastActivityMs(entry),
     assistantMessageCount,
-    boots: loadGatewayBootSegmentsForAttribution(now),
+    boots,
+    currentBootId,
   });
   const attributedError = attribution ? formatSubagentOrphanErrorMessage(attribution) : undefined;
 

@@ -10,10 +10,12 @@ import { replaceSessionEntry } from "../../../config/sessions/session-accessor.j
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { recordGatewayBootStart } from "../../../infra/gateway-boot-lifecycle.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
+import { resetGatewayBootSegmentCacheForTests } from "./subagent-orphan-attribution.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
@@ -826,7 +828,7 @@ describe("subagent registry persistence", () => {
     await testing.sweepOnceForTests();
   });
 
-  it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
+  it("preserves stale unended restored runs for attributed sweeper recovery", async () => {
     const now = Date.now();
     const runId = "run-stale-unended-restore";
     const childSessionKey = "agent:main:subagent:stale-unended-restore";
@@ -845,16 +847,24 @@ describe("subagent registry persistence", () => {
         },
       },
     });
+    expect(recordGatewayBootStart(process.env, now - 4 * 60 * 60 * 1_000)).toBeDefined();
+    expect(recordGatewayBootStart(process.env, now - 2 * 60 * 60 * 1_000)).toBeDefined();
+    resetGatewayBootSegmentCacheForTests();
 
     restartRegistry();
-    await waitForRegistryWork(async () => {
-      const after = readPersistedRegistry();
-      return after.runs?.[runId] === undefined;
-    });
+    await flushQueuedRegistryWork();
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(readPersistedRegistry().runs?.[runId]).toBeDefined();
+
+    await testing.sweepOnceForTests();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("gateway process died while the host stayed up"),
+    });
+    expect(announceSpy).toHaveBeenCalled();
   });
 
   it("finalizes stale unended restored runs with abortedLastRun in the sweeper", async () => {
