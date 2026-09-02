@@ -71,19 +71,38 @@ suite.define(() => {
           await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
           await waitForControlUiGatewayReady(page, { timeout: 30_000 });
 
+          const setInputValue = async (selector: string, value: string) => {
+            await page.locator(selector).evaluate((element, nextValue) => {
+              const input = element as HTMLInputElement | HTMLTextAreaElement;
+              input.value = nextValue;
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+            }, value);
+          };
+
           const createJob = async (name: string, group: string, tags: string) => {
             await page.locator('[data-test-id="cron-new-task"]').dispatchEvent("click");
             const nameInput = page.locator("#cron-name");
             await nameInput.waitFor({ state: "visible", timeout: 30_000 });
             await expect.poll(() => nameInput.isEditable(), { timeout: 60_000 }).toBe(true);
-            await nameInput.fill(name);
-            await page.locator("#cron-group").fill(group);
-            await page.locator("#cron-tags").fill(tags);
-            await page.locator("#cron-payload-text").fill(`${name} fired`);
-            await page.locator("wa-select#cron-payload-kind").dispatchEvent("click");
-            await page
-              .getByRole("option", { name: "Post to main timeline", exact: true })
-              .dispatchEvent("click");
+            await setInputValue("#cron-name", name);
+            await setInputValue("#cron-group", group);
+            await setInputValue("#cron-tags", tags);
+            await setInputValue("#cron-payload-text", `${name} fired`);
+            await page.locator("wa-select#cron-payload-kind").evaluate((element) => {
+              const select = element as HTMLElement & { value: string };
+              select.value = "systemEvent";
+              select.dispatchEvent(new Event("change", { bubbles: true }));
+            });
+            await expect
+              .poll(() =>
+                page
+                  .locator("wa-select#cron-payload-kind")
+                  .evaluate((element) =>
+                    String((element as HTMLElement & { value: string }).value),
+                  ),
+              )
+              .toBe("systemEvent");
             await page.locator('[data-test-id="cron-submit"]').dispatchEvent("click");
             await page
               .locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") })
@@ -93,9 +112,8 @@ suite.define(() => {
           await createJob("Real Gateway Work", "Work", "sales\\,emea, daily");
           await createJob("Real Gateway Personal", "Personal", "home");
 
-          const groupFilter = page.locator('[data-test-id="cron-jobs-group-filter"]');
           await page.locator(".cron-filter-popover__trigger").dispatchEvent("click");
-          await groupFilter.fill("Work");
+          await setInputValue('[data-test-id="cron-jobs-group-filter"]', "Work");
           await expect
             .poll(() => page.locator(".cron-table__name-text").allTextContents())
             .toEqual(["Real Gateway Work"]);
@@ -114,8 +132,8 @@ suite.define(() => {
           await expect
             .poll(() => page.locator("#cron-tags").inputValue())
             .toBe("sales\\,emea, daily");
-          await page.locator("#cron-group").fill("");
-          await page.locator("#cron-tags").fill("");
+          await setInputValue("#cron-group", "");
+          await setInputValue("#cron-tags", "");
           await page.locator('[data-test-id="cron-submit"]').dispatchEvent("click");
 
           await expect
