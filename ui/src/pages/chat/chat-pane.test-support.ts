@@ -1,4 +1,4 @@
-import type { TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { vi } from "vitest";
 import type {
   SessionSuggestion,
@@ -32,8 +32,11 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import { ChatPane } from "./chat-pane-render.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -437,4 +440,34 @@ export function offlineDeviceSession(): GatewaySessionRow & { placement: ActiveP
       runner: { kind: "device", status: "offline" },
     },
   };
+}
+
+class RenderTestChatPane extends ChatPane {
+  chatProps: ChatProps | undefined;
+
+  initialize(context: ApplicationContext) {
+    this.context = context;
+    this.state = createPageState(
+      context,
+      { afterCommit: () => () => {}, invalidate: () => {} },
+      this,
+    );
+    return this.state;
+  }
+
+  protected override renderChatPaneLayout(params: { chatProps: ChatProps }) {
+    this.chatProps = params.chatProps;
+    return html``;
+  }
+
+  override applySessionsState(state: ApplicationContext["sessions"]["state"]) {
+    super.applySessionsState(state);
+  }
+}
+
+export function createRenderTestChatPane() {
+  if (!customElements.get("openclaw-chat-render-regression")) {
+    customElements.define("openclaw-chat-render-regression", RenderTestChatPane);
+  }
+  return document.createElement("openclaw-chat-render-regression") as RenderTestChatPane;
 }

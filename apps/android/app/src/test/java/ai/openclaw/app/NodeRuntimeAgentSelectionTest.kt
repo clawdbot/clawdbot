@@ -62,6 +62,43 @@ class NodeRuntimeAgentSelectionTest {
   }
 
   @Test
+  fun currentChatHydrationPreservesSelectionPublishedWhileItWaits() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val loaded = CompletableDeferred<Unit>()
+      val loader =
+        Thread {
+          try {
+            runtime.loadCurrentChat()
+            loaded.complete(Unit)
+          } catch (err: Throwable) {
+            loaded.completeExceptionally(err)
+          }
+        }
+      try {
+        val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        val publicationLock = ReflectionHelpers.getField<Any>(chat, "gatewayScopeApplyLock")
+        synchronized(publicationLock) {
+          loader.start()
+          val deadline = System.nanoTime() + 2_000_000_000L
+          while (loader.state != Thread.State.BLOCKED && !loaded.isCompleted && System.nanoTime() < deadline) {
+            Thread.yield()
+          }
+          assertEquals("Hydration must wait for the selection owner", Thread.State.BLOCKED, loader.state)
+          // New publishes through the controller, independently of the runtime navigation lock.
+          chat.switchSession("selected-after-mount", "scout")
+        }
+        withTimeout(2_000) { loaded.await() }
+
+        assertEquals("selected-after-mount", runtime.chatSessionKey.value)
+        assertEquals("scout", runtime.chatSessionOwnerAgentId.value)
+      } finally {
+        loader.join(2_000)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun manualSessionSelectionWinsOverLateCatalogContinuation() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -282,13 +319,13 @@ class NodeRuntimeAgentSelectionTest {
   fun agentSelectionRestoresLastExplicitSessionForThatAgent() = assertOffPageRememberedSessionSelection(RememberedSessionState.Active)
 
   @Test
-  fun agentSelectionRetriesOffPageSessionAfterDescribeReturnsNull() = assertOffPageRememberedSessionSelection(RememberedSessionState.NullResponse)
+  fun agentSelectionRetriesOffPageSessionAfterHistoryLacksIdentity() = assertOffPageRememberedSessionSelection(RememberedSessionState.MissingIdentity)
 
   @Test
   fun agentSelectionForgetsOffPageArchivedSession() = assertOffPageRememberedSessionSelection(RememberedSessionState.Archived)
 
   @Test
-  fun agentSelectionRetriesOffPageSessionAfterDescribeUnavailable() = assertOffPageRememberedSessionSelection(RememberedSessionState.Unavailable)
+  fun agentSelectionRetriesOffPageSessionAfterHistoryUnavailable() = assertOffPageRememberedSessionSelection(RememberedSessionState.Unavailable)
 
   @Test
   fun inactiveOwnerArchiveRetiresRememberedSelectionBeforeReturn() = assertOffPageRememberedSessionSelection(RememberedSessionState.ArchivedEvent)
@@ -351,7 +388,7 @@ class NodeRuntimeAgentSelectionTest {
 
   private enum class RememberedSessionState {
     Active,
-    NullResponse,
+    MissingIdentity,
     Archived,
     ArchivedEvent,
     ArchivedAck,
@@ -383,7 +420,7 @@ class NodeRuntimeAgentSelectionTest {
     val lookupStarted = AtomicReference<CompletableDeferred<Job>?>(null)
     val preservesChoice = archiveAckOrder !in setOf(ArchiveAckOrder.Active, ArchiveAckOrder.AfterAgentSwitch)
     val archiveSessionId = if (archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity) "replacement-$chosenKey" else "session-$chosenKey"
-    var exactDescriptions = 0
+    var exactLookups = 0
 
     fun sessionId(key: String): String = if (key == chosenKey) chosenSessionId.get() else "session-$key"
     try {
@@ -434,12 +471,20 @@ class NodeRuntimeAgentSelectionTest {
           "sessions.describe" -> {
             check(request.keys.all { it in setOf("key", "includeDerivedTitles", "includeLastMessage") })
             val key = request.getValue("key").jsonPrimitive.content
-            if (key == chosenKey) {
-              exactDescriptions += 1
+            val agentId = requireNotNull(resolveAgentIdFromMainSessionKey(key))
+            """{"session":{"key":"$key","sessionId":"session-$key","agentId":"$agentId","label":"App","archived":false}}"""
+          }
+
+          "chat.history" -> {
+            val key = request.getValue("sessionKey").jsonPrimitive.content
+            if (key == chosenKey && request["limit"] == JsonPrimitive(1)) {
+              assertEquals(JsonPrimitive("scout"), request["agentId"])
+              exactLookups += 1
               lookupStarted.get()?.complete(currentCoroutineContext().job)
               when (description.get()) {
-                RememberedSessionState.NullResponse, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck -> {
-                  """{"session":null}"""
+                RememberedSessionState.MissingIdentity, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck -> {
+                  // A missing Gateway row still projects default sessionInfo fields.
+                  """{"messages":[],"sessionInfo":{"key":"$key","agentId":"scout","archived":false}}"""
                 }
 
                 RememberedSessionState.Unavailable -> {
@@ -448,19 +493,13 @@ class NodeRuntimeAgentSelectionTest {
 
                 else -> {
                   val archived = description.get() == RememberedSessionState.Archived
-                  """{"session":{"key":"$key","sessionId":"${sessionId(key)}","agentId":"scout","updatedAt":10,"archived":$archived}}"""
+                  """{"sessionId":"${sessionId(key)}","messages":[],"sessionInfo":{"key":"$key","sessionId":"${sessionId(key)}","agentId":"scout","updatedAt":10,"archived":$archived}}"""
                 }
               }
             } else {
-              val agentId = requireNotNull(resolveAgentIdFromMainSessionKey(key))
-              """{"session":{"key":"$key","sessionId":"session-$key","agentId":"$agentId","label":"App","archived":false}}"""
+              // Identity comes from live history, not a sessionInfo/list-row shortcut.
+              """{"sessionId":"${sessionId(key)}","messages":[]}"""
             }
-          }
-
-          "chat.history" -> {
-            val key = request.getValue("sessionKey").jsonPrimitive.content
-            // Identity comes from live history, not a sessionInfo/list-row shortcut.
-            """{"sessionId":"${sessionId(key)}","messages":[]}"""
           }
 
           "health" -> {
@@ -589,7 +628,7 @@ class NodeRuntimeAgentSelectionTest {
           if (preservesChoice) assertEquals(chosenSessionId.get(), runtime.chatSessionId.value)
         }
 
-        RememberedSessionState.NullResponse, RememberedSessionState.Unavailable -> {
+        RememberedSessionState.MissingIdentity, RememberedSessionState.Unavailable -> {
           assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
           assertEquals(
             "An unresolved selection must show an action hint",
@@ -599,7 +638,7 @@ class NodeRuntimeAgentSelectionTest {
         }
       }
       if (describedState == RememberedSessionState.ArchivedEvent || (describedState == RememberedSessionState.ArchivedAck && !preservesChoice)) {
-        assertEquals("An acknowledged retirement must not depend on another exact lookup", 0, exactDescriptions)
+        assertEquals("An acknowledged retirement must not depend on another exact lookup", 0, exactLookups)
       }
       if (describedState != RememberedSessionState.Active) {
         description.set(RememberedSessionState.Active)

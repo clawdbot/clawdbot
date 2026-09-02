@@ -891,6 +891,8 @@ describe("memory cli", () => {
             indexIdentity: {
               status: "mismatched",
               reason: "index was built for provider openai, expected ollama",
+              code: "provider",
+              owner: "configuration",
             },
           },
         }),
@@ -902,9 +904,15 @@ describe("memory cli", () => {
 
     expectLogged(log, "Provider: ollama (requested: ollama)");
     expectLogged(log, "Dirty: yes");
-    expectLogged(log, "Index identity: index was built for provider openai, expected ollama");
+    expectLogged(
+      log,
+      "Index identity: index was built for provider openai, expected ollama (owner: configuration, code: provider)",
+    );
     expectLogged(log, "Vector search: paused until memory is rebuilt");
-    expectLogged(log, "Fix: Run: openclaw memory status --index --agent main");
+    expectLogged(
+      log,
+      "Fix: Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
+    );
     expect(close).toHaveBeenCalled();
   });
 
@@ -1551,6 +1559,9 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
+      expect(getMemorySearchManager).toHaveBeenCalledWith(
+        expect.objectContaining({ purpose: "cli" }),
+      );
       const audit = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
       const repaired = audit as {
         entries: Record<string, { conceptTags?: string[] }>;
@@ -2057,6 +2068,7 @@ describe("memory cli", () => {
       cfg: {},
       agentId: "main",
       purpose: "cli",
+      inspectSources: true,
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -2073,6 +2085,7 @@ describe("memory cli", () => {
       cfg: {},
       agentId: "main",
       purpose: "cli",
+      inspectSources: true,
       acquireLocalService,
     });
   });
@@ -2152,7 +2165,9 @@ describe("memory cli", () => {
       status: () =>
         makeMemoryStatus({
           dirty: true,
-          custom: { indexIdentity: { status: "mismatched", reason } },
+          custom: {
+            indexIdentity: { status: "mismatched", reason, code: "model", owner: "configuration" },
+          },
         }),
       close,
     });
@@ -2165,8 +2180,9 @@ describe("memory cli", () => {
     expect(firstWrittenJsonArg(writeJson)).toEqual({
       results: [],
       stale: true,
-      warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
-      action: "Run: openclaw memory status --index --agent main",
+      warning: `Memory index is stale: ${reason} (owner: configuration, code: model). Search results may be incomplete.`,
+      action:
+        "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
   });
 

@@ -309,7 +309,53 @@ class ChatControllerSessionSearchTest {
     }
 
   @Test
-  fun rememberedSelectionRejectsArchiveDescriptionPredatingObservedSuccessor() =
+  fun rememberedUnscopedSelectionUsesCapturedOwnerOutsideRecentPage() =
+    runTest {
+      val owner = ChatAgentSessionSelectionOwner("gateway-a", "scout")
+      val gateway = ScriptedGateway(json)
+      gateway.respond("chat.history") { params ->
+        val key = requireNotNull(paramField(params, "sessionKey"))
+        val agentId = requireNotNull(paramField(params, "agentId"))
+        """{"sessionId":"$agentId-session","messages":[],"sessionInfo":{"key":"$key","sessionId":"$agentId-session","agentId":"$agentId","archived":false}}"""
+      }
+      gateway.respondWith("sessions.list", sessionsListJson(sessionRowJson("agent:scout:newer", updatedAt = 100)))
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope("gateway-a", 1) },
+        )
+      controller.switchSession("global", "scout")
+      runCurrent()
+      assertEquals("scout-session", controller.sessionId.value)
+      controller.switchSession("agent:writer:other", "writer", rememberSelection = false)
+      runCurrent()
+      val historyCalls = gateway.calls.count { it.method == "chat.history" }
+
+      val selection = requireNotNull(controller.resolveSessionSelection(owner, "agent:scout:main"))
+
+      assertEquals("global", selection.targetSessionKey)
+      assertEquals("agent:writer:other", controller.sessionKey.value)
+      assertEquals("writer", controller.sessionOwnerAgentId.value)
+      val lookup =
+        gateway.calls
+          .filter { it.method == "chat.history" }
+          .drop(historyCalls)
+          .single()
+      assertEquals("global", paramField(lookup.paramsJson, "sessionKey"))
+      assertEquals("scout", paramField(lookup.paramsJson, "agentId"))
+      assertEquals("1", paramField(lookup.paramsJson, "limit"))
+
+      controller.restoreSessionSelection(owner, selection, "agent:scout:main")
+      runCurrent()
+      assertEquals("global", controller.sessionKey.value)
+      assertEquals("scout", controller.sessionOwnerAgentId.value)
+      assertEquals("scout-session", controller.sessionId.value)
+    }
+
+  @Test
+  fun rememberedSelectionRejectsArchiveHistoryPredatingObservedSuccessor() =
     runTest {
       val chosenKey = "agent:scout:chosen"
       val mainKey = "agent:scout:main"
@@ -318,18 +364,21 @@ class ChatControllerSessionSearchTest {
       var sessionId = "session-before"
       val descriptionStarted = CompletableDeferred<Unit>()
       val releaseDescription = CompletableDeferred<Unit>()
+      var lookupArchived = true
       val gateway = ScriptedGateway(json)
-      gateway.respond("chat.history") {
-        historyResponse(sessionId, listOf(ReplayHistoryMessage("user", sessionId, 1)))
+      gateway.respond("chat.history") { params ->
+        if (paramField(params, "limit") == "1") {
+          assertEquals(chosenKey, paramField(params, "sessionKey"))
+          assertEquals("scout", paramField(params, "agentId"))
+          val response = """{"sessionId":"$sessionId","messages":[],"sessionInfo":{"key":"$chosenKey","sessionId":"$sessionId","agentId":"scout","archived":$lookupArchived}}"""
+          descriptionStarted.complete(Unit)
+          releaseDescription.await()
+          response
+        } else {
+          historyResponse(sessionId, listOf(ReplayHistoryMessage("user", sessionId, 1)))
+        }
       }
       gateway.respondWith("sessions.list", sessionsListJson(sessionRowJson("agent:scout:newer", updatedAt = 100)))
-      gateway.respond("sessions.describe") { params ->
-        assertEquals(chosenKey, paramField(params, "key"))
-        val response = """{"session":{"key":"$chosenKey","sessionId":"$sessionId","agentId":"scout","archived":true}}"""
-        descriptionStarted.complete(Unit)
-        releaseDescription.await()
-        response
-      }
       val controller =
         ChatController(
           scope = this,
@@ -353,15 +402,12 @@ class ChatControllerSessionSearchTest {
 
         releaseDescription.complete(Unit)
         controller.restoreSessionSelection(owner, requireNotNull(selection.await()), mainKey)
-        assertEquals("An older archive description must not replace live successor history", chosenKey, controller.sessionKey.value)
+        assertEquals("An older archive lookup must not replace live successor history", chosenKey, controller.sessionKey.value)
 
         // The rejected result must not silently retire the remembered intent either.
         controller.switchSession("agent:writer:other", "writer", rememberSelection = false)
         runCurrent()
-        gateway.respondWith(
-          "sessions.describe",
-          """{"session":{"key":"$chosenKey","sessionId":"$sessionId","agentId":"scout","archived":false}}""",
-        )
+        lookupArchived = false
         val next = requireNotNull(controller.resolveSessionSelection(owner, mainKey))
         controller.restoreSessionSelection(owner, next, mainKey)
         runCurrent()

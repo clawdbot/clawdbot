@@ -42,8 +42,7 @@ export function createEmbeddedAgentSubscribeState(
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    lastStreamedAssistant: undefined,
-    lastStreamedAssistantCleaned: undefined,
+    assistantStream: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,

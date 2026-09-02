@@ -51,7 +51,8 @@ Same-parent continuation requires the original root to have been dispatched
 with `fail_fast=false`. The controller verifies that exact logged input before
 any rerun mutation.
 It is also unavailable when that parent produced the sealed candidate or
-publication artifacts, because GitHub reruns make those prior-attempt artifacts unavailable.
+publication artifacts: the continuation controller does not rebind those
+artifacts to a later parent attempt.
 Keep the candidate and Tooling SHAs frozen, supersede the parent, and start a
 fresh all-group Full Release Validation.
 
@@ -321,6 +322,13 @@ sharing the target snapshot. Publication selects its channel's report and
 acknowledgement without rebuilding. Alpha, beta prerelease, and extended-stable
 targets keep their required channel.
 
+If npm qualification fails after source checks and package preparation succeed,
+rerun the failed qualification job. It reuses the exact successful producer jobs
+and package bytes from the earlier attempt, even if that attempt failed or was
+cancelled. Failed or unfinished producer jobs remain ineligible. Final npm
+publication still requires the qualified preflight attempt to complete
+successfully.
+
 `docker-release-prepare.yml` builds both native architectures, retains OCI
 indexes and their SBOM/provenance, and runs image smoke checks before approval.
 OCI export uses gzip level 1 for new layers and reuses cached layers without
@@ -340,6 +348,12 @@ then promotes those bytes to GHCR and Docker Hub. The publication lock covers
 registry writes and selector promotion. Historical evidence without prepared
 images uses the same preparation workflow before promotion. Alpha targets
 retain their existing npm-only preparation contract.
+
+If Docker preparation succeeds but publication fails in the same workflow run,
+rerun the failed publication job. The new publisher attempt verifies the original
+successful preparation job and sealed artifacts without rebuilding. A separate
+publisher run still requires the original producer attempt to be active or
+successful; it cannot adopt a failed producer attempt through this retry path.
 
 Fresh package-facing validation passes the prepared root/core bundle to the
 `Full Release Candidate` reusable workflow. Its registry carries the exact

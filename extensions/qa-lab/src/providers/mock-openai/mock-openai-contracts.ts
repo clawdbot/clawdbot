@@ -88,6 +88,7 @@ export type StreamEvent =
       type: "response.completed";
       response: {
         id: string;
+        object: "response";
         status: "completed";
         output: Array<Record<string, unknown>>;
         usage: {
@@ -97,6 +98,24 @@ export type StreamEvent =
         };
       };
     };
+
+export function buildCompletedResponseEvent(
+  id: string,
+  output: Array<Record<string, unknown>>,
+  outputTokens: number,
+): Extract<StreamEvent, { type: "response.completed" }> {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      // SDK clients use this discriminator to expose output_text.
+      object: "response",
+      status: "completed",
+      output,
+      usage: { input_tokens: 64, output_tokens: outputTokens, total_tokens: 64 + outputTokens },
+    },
+  };
+}
 
 /**
  * Provider variant tag for `body.model`. The mock previously ignored
@@ -479,15 +498,7 @@ export function buildRemoteCompactionV2Events(): [
   };
   return [
     { type: "response.output_item.done", item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_mock_compaction_1",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
+    buildCompletedResponseEvent("resp_mock_compaction_1", [item], 16),
   ];
 }
 

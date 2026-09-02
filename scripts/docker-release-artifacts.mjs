@@ -508,12 +508,8 @@ export function validateDockerReleaseManifest(manifest, expected) {
   return manifest;
 }
 
-/** A reusable workflow can finish while its FRV parent remains active. Trust the
- * exact completed seal job, never infer successful preparation from parent state. */
-export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = ghJson }) {
+function verifyDockerProducerRun(runInfo, manifest, runAttempt) {
   const { repository, toolingSha, producer } = manifest;
-  requireValue(SHA.test(publisherSha), "Invalid Docker publisher tooling SHA.");
-  const runInfo = readApi(`repos/${repository}/actions/runs/${producer.runId}`);
   const workflowPath = String(runInfo.path).split("@", 1)[0];
   const prefix = `${repository}/${workflowPath}@`;
   requireValue(
@@ -533,22 +529,63 @@ export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = 
       fullRef === "refs/heads/main");
   requireValue(
     String(runInfo.id) === producer.runId &&
-      String(runInfo.run_attempt) === producer.runAttempt &&
+      String(runInfo.run_attempt) === runAttempt &&
       runInfo.head_sha === toolingSha &&
       runInfo.repository?.full_name === repository &&
       runInfo.head_repository?.full_name === repository &&
       trustedEvent,
     "Docker producer run/attempt/source mismatch.",
   );
+  return { workflowPath, fullRef };
+}
+
+/** Preparation belongs to its exact successful seal job. A publisher retry
+ * advances the parent attempt without rebuilding that immutable payload. */
+export function verifyDockerReleaseProducer(
+  manifest,
+  { publisherSha, publisherRunId = "", publisherRunAttempt = "", readApi = ghJson },
+) {
+  const { repository, toolingSha, producer } = manifest;
+  requireValue(SHA.test(publisherSha), "Invalid Docker publisher tooling SHA.");
+  const currentRun = readApi(`repos/${repository}/actions/runs/${producer.runId}`);
+  const currentAttempt = String(currentRun.run_attempt);
   requireValue(
-    (runInfo.status === "completed" && runInfo.conclusion === "success") ||
-      (runInfo.status === "in_progress" && runInfo.conclusion === null),
+    POSITIVE_INTEGER.test(currentAttempt) && BigInt(currentAttempt) >= BigInt(producer.runAttempt),
+    "Docker producer attempt is not available.",
+  );
+  const { workflowPath, fullRef } = verifyDockerProducerRun(currentRun, manifest, currentAttempt);
+  requireValue(
+    (currentRun.status === "completed" && currentRun.conclusion === "success") ||
+      (currentRun.status === "in_progress" && currentRun.conclusion === null),
     "Docker producer is neither active nor successfully completed.",
   );
+  let preparedRun = currentRun;
+  if (currentAttempt !== producer.runAttempt) {
+    preparedRun = readApi(
+      `repos/${repository}/actions/runs/${producer.runId}/attempts/${producer.runAttempt}`,
+    );
+    verifyDockerProducerRun(preparedRun, manifest, producer.runAttempt);
+    // Failed publication may reuse its own successful seal; unrelated publishers
+    // still require a successful producer parent, even when that run is retried.
+    const resumingOwnPublication =
+      producer.runId === publisherRunId &&
+      currentAttempt === publisherRunAttempt &&
+      currentRun.head_sha === publisherSha &&
+      currentRun.status === "in_progress" &&
+      preparedRun.status === "completed" &&
+      ["failure", "cancelled", "timed_out"].includes(preparedRun.conclusion);
+    requireValue(
+      (preparedRun.status === "completed" && preparedRun.conclusion === "success") ||
+        resumingOwnPublication,
+      "Historical Docker producer did not qualify for this publication.",
+    );
+  }
+  // Preparation linkage belongs to its recorded attempt; a publisher-only retry
+  // need not list that completed reusable workflow in its current attempt.
   requireValue(
     producer.preparationWorkflowRef === `${repository}/${WORKFLOW_PATH}@${fullRef}` &&
       (workflowPath === WORKFLOW_PATH ||
-        runInfo.referenced_workflows?.some(
+        preparedRun.referenced_workflows?.some(
           (workflow) =>
             workflow.path === `${repository}/${WORKFLOW_PATH}@${toolingSha}` &&
             workflow.sha === toolingSha &&
@@ -604,7 +641,11 @@ function loadPreparedManifest(values, env) {
     runId: values["run-id"],
     runAttempt: values["run-attempt"],
   });
-  return verifyDockerReleaseProducer(manifest, { publisherSha: env.GITHUB_WORKFLOW_SHA });
+  return verifyDockerReleaseProducer(manifest, {
+    publisherSha: env.GITHUB_WORKFLOW_SHA,
+    publisherRunId: env.GITHUB_RUN_ID,
+    publisherRunAttempt: env.GITHUB_RUN_ATTEMPT,
+  });
 }
 
 function verifyFinalTag(manifest, readApi = ghJson) {

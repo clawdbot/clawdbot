@@ -145,6 +145,7 @@ sealed interface ChatOutboxBranchEvidence {
 
   data class History(
     override val previousState: ChatOutboxBranchState,
+    val persistedAttempts: Map<String, Int> = emptyMap(),
   ) : ChatOutboxBranchEvidence
 
   data class BranchListing(
@@ -241,14 +242,6 @@ interface ChatCommandOutbox {
   /** Re-assembles the attachment bytes for one command, in stable position order. */
   suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment>
 
-  /** Returns the number of rows updated (0 when the row no longer exists), so callers can claim. */
-  suspend fun updateStatus(
-    id: String,
-    status: ChatOutboxStatus,
-    retryCount: Int,
-    lastError: String?,
-  ): Int
-
   /** Attempt-scoped transition; stale delivery callbacks must update nothing. */
   suspend fun updateStatusIfAttempt(
     id: String,
@@ -257,25 +250,19 @@ interface ChatCommandOutbox {
     retryCount: Int,
     lastError: String?,
     expectedStatus: ChatOutboxStatus? = null,
-  ): Int = updateStatus(id, status, retryCount, lastError)
+  ): Int
 
   /**
    * Atomically claims a queued row for one dispatch (queued -> sending). Returns 0 when the row
    * vanished or another dispatcher already claimed it, so the direct-send path and the flush
    * loop can never both send the same row.
    */
-  suspend fun claimForSending(
-    id: String,
-    retryCount: Int,
-    lastError: String?,
-  ): Int
-
   suspend fun claimForSendingIfAttempt(
     id: String,
     expectedAttemptVersion: Int,
     retryCount: Int,
     lastError: String?,
-  ): Int = claimForSending(id, retryCount, lastError)
+  ): Int
 
   /**
    * Pins a row enqueued under the pre-hello "main" alias to the canonical session key it first
@@ -290,20 +277,11 @@ interface ChatCommandOutbox {
   /**
    * User-driven retry of a failed row owned by [gatewayId]: back to 'queued' with reset attempts
    * and a fresh createdAt, so an expired row is not immediately re-expired by the flush sweep.
-   * Returns the number of rows transitioned; keeps the row id as the gateway idempotency key.
+   * Retries only the failure version displayed to the user and may mint a fresh client id.
    * Gated rows are re-stamped with the caller's current connection epoch, and queued successors
    * in the same session shift behind the retried row in their original order, so retrying an
    * ambiguous head can never make younger turns of the conversation overtake it.
    */
-  suspend fun requeueForRetry(
-    gatewayId: String,
-    id: String,
-    nowMs: Long,
-    gatedEpoch: Long?,
-    ownerAgentId: String? = null,
-  ): Int
-
-  /** Retries only the failure version displayed to the user and may mint a fresh client id. */
   suspend fun requeueForRetryIfCurrent(
     gatewayId: String,
     id: String,
@@ -314,18 +292,15 @@ interface ChatCommandOutbox {
     gatedEpoch: Long?,
     ownerAgentId: String? = null,
     replacementId: String? = null,
-  ): Int = requeueForRetry(gatewayId, id, nowMs, gatedEpoch, ownerAgentId)
+  ): Int
 
   suspend fun delete(id: String)
 
   /** Deletes only an undispatched row; false means another lane already claimed or retired it. */
   suspend fun deleteIfQueued(id: String): Boolean
 
-  /** Retires rows proven delivered by canonical history; returns how many rows were removed. */
-  suspend fun confirmDelivered(ids: Set<String>): Int
-
-  /** Canonical history confirmation for the currently observed delivery attempts. */
-  suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int = confirmDelivered(ids.keys)
+  /** Retires only the delivery attempts proven by canonical history; returns the removal count. */
+  suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int
 
   suspend fun branchState(
     gatewayId: String,
@@ -343,12 +318,6 @@ interface ChatCommandOutbox {
     gatewayId: String,
     scope: ChatOutboxScope,
     lease: ChatOutboxMutationLease,
-  ): Boolean = false
-
-  suspend fun demoteSessionMutationToReconciliation(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    lease: ChatOutboxMutationLease? = null,
   ): Boolean = false
 
   /** Demotes and returns the same-transaction baseline used to classify later enqueues. */
@@ -844,13 +813,6 @@ class RoomChatCommandOutbox internal constructor(
     }
   }
 
-  override suspend fun updateStatus(
-    id: String,
-    status: ChatOutboxStatus,
-    retryCount: Int,
-    lastError: String?,
-  ): Int = database.outboxDao().updateStatus(id = id, status = status.dbValue, retryCount = retryCount, lastError = lastError)
-
   override suspend fun updateStatusIfAttempt(
     id: String,
     expectedAttemptVersion: Int,
@@ -879,19 +841,6 @@ class RoomChatCommandOutbox internal constructor(
       }
       updated
     }
-
-  override suspend fun claimForSending(
-    id: String,
-    retryCount: Int,
-    lastError: String?,
-  ): Int =
-    database.outboxDao().claimStatus(
-      id = id,
-      fromStatus = ChatOutboxStatus.Queued.dbValue,
-      toStatus = ChatOutboxStatus.Sending.dbValue,
-      retryCount = retryCount,
-      lastError = lastError,
-    )
 
   override suspend fun claimForSendingIfAttempt(
     id: String,
@@ -952,27 +901,6 @@ class RoomChatCommandOutbox internal constructor(
         hadUnacknowledgedSend = delivery.hadUnacknowledgedSend,
       )
     }
-  }
-
-  override suspend fun requeueForRetry(
-    gatewayId: String,
-    id: String,
-    nowMs: Long,
-    gatedEpoch: Long?,
-    ownerAgentId: String?,
-  ): Int {
-    val gateway = scopedGatewayId(gatewayId) ?: return 0
-    val current = load(gateway).firstOrNull { it.id == id } ?: return 0
-    return requeueForRetryIfCurrent(
-      gatewayId = gateway,
-      id = id,
-      expectedAttemptVersion = current.attemptVersion,
-      expectedRetryCount = current.retryCount,
-      expectedLastError = current.lastError,
-      nowMs = nowMs,
-      gatedEpoch = gatedEpoch,
-      ownerAgentId = ownerAgentId,
-    )
   }
 
   override suspend fun requeueForRetryIfCurrent(
@@ -1066,17 +994,6 @@ class RoomChatCommandOutbox internal constructor(
       deleted
     }
 
-  override suspend fun confirmDelivered(ids: Set<String>): Int {
-    if (ids.isEmpty()) return 0
-    return database.withWriteTransaction {
-      var removed = 0
-      for (id in ids) {
-        removed += deleteCommandRowLocked(id)
-      }
-      removed
-    }
-  }
-
   override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int {
     if (ids.isEmpty()) return 0
     return database.withWriteTransaction {
@@ -1145,12 +1062,6 @@ class RoomChatCommandOutbox internal constructor(
     lease: ChatOutboxMutationLease,
   ): Boolean = updateBranchMutationState(gatewayId, scope, needsReconciliation = false, lease = lease) != null
 
-  override suspend fun demoteSessionMutationToReconciliation(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    lease: ChatOutboxMutationLease?,
-  ): Boolean = updateBranchMutationState(gatewayId, scope, needsReconciliation = true, lease = lease) != null
-
   override suspend fun demoteSessionMutationToReconciliationState(
     gatewayId: String,
     scope: ChatOutboxScope,
@@ -1185,7 +1096,28 @@ class RoomChatCommandOutbox internal constructor(
       val previousLeaf = previousState.lastActiveLeafEntryId
       val canAdoptQueuedDuringReconciliation =
         listing != null && previousState.needsReconciliation && !previousState.hadDeliverableCommands
-      val advancedOnActivePath = previousLeaf?.let(activeTranscriptEntryIds::contains) == true
+      // An empty root has no ancestor entry. A persisted current-branch send proves its first
+      // append; unrelated history or a retired attempt must still park earlier input.
+      val advancedOnActivePath =
+        when {
+          previousLeaf != null -> {
+            previousLeaf in activeTranscriptEntryIds
+          }
+
+          leaf != null && evidence is ChatOutboxBranchEvidence.History -> {
+            evidence.persistedAttempts.any { (id, attempt) ->
+              val row = database.outboxDao().command(id)
+              row?.gatewayId == gateway &&
+                row.branchScope() == normalized &&
+                row.lastError?.contains(OUTBOX_BRANCH_PARK_MARKER) != true &&
+                readDeliveryStateLocked(id)?.let { it.attemptVersion == attempt && it.branchEpoch == state.epoch } == true
+            }
+          }
+
+          else -> {
+            false
+          }
+        }
       val knownBranchSwitch =
         leaf != null && previousLeaf != null && previousLeaf != leaf && listing?.leafEntryIds?.contains(previousLeaf) == true
       if (knownBranchSwitch || (previousLeaf != leaf && !advancedOnActivePath && canAdoptQueuedDuringReconciliation)) {
@@ -1246,13 +1178,6 @@ class RoomChatCommandOutbox internal constructor(
       }
     }
   }
-
-  internal suspend fun confirmBranchChange(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    activeLeafEntryId: String?,
-    lastError: String,
-  ): Boolean = confirmBranchChange(gatewayId, scope, activeLeafEntryId, lastError, lease = null)
 
   override suspend fun deleteForSession(
     gatewayId: String,

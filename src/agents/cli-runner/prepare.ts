@@ -1085,13 +1085,16 @@ export async function prepareCliRunContext(
   const projectedToolsBeforePromptBuild =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) &&
     mcpProjectionContext
-      ? resolveProjectedTools({
-          cfg: runConfig,
-          ...mcpProjectionContext,
-          ...(skillWorkshop ? { skillWorkshop } : {}),
-          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
-          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
-        }).tools
+      ? (
+          await resolveProjectedTools({
+            cfg: runConfig,
+            signal: params.abortSignal,
+            ...mcpProjectionContext,
+            ...(skillWorkshop ? { skillWorkshop } : {}),
+            ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
+            ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
+          })
+        ).tools
       : [];
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
     projectedToolsBeforePromptBuild,

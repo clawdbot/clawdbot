@@ -13,7 +13,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
-import { materializeRuntimeCapabilities } from "../../agents/prepared-model-runtime.configured-catalog.js";
+import { materializePreparedModelCatalog } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -644,8 +644,11 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const materializedCatalog = materializeRuntimeCapabilities(
-      [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
+    const materializedCatalog = materializePreparedModelCatalog(
+      {
+        entries: [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
+        routeVariants: [],
+      },
       [
         {
           provider: "anthropic",
@@ -658,7 +661,7 @@ describe("models.list", () => {
           } as never,
         },
       ],
-    );
+    ).entries;
     const { request, respond } = requestModelsList({
       view: "configured",
       runtimeConfig,
@@ -755,8 +758,11 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const materializedCatalog = materializeRuntimeCapabilities(
-      [{ id: modelId, name: "Claude Mythos 5", provider: "anthropic" }],
+    const materializedCatalog = materializePreparedModelCatalog(
+      {
+        entries: [{ id: modelId, name: "Claude Mythos 5", provider: "anthropic" }],
+        routeVariants: [],
+      },
       [
         {
           provider: "anthropic",
@@ -769,7 +775,7 @@ describe("models.list", () => {
           } as never,
         },
       ],
-    );
+    ).entries;
     const { request, respond } = requestModelsList({
       view: "configured",
       runtimeConfig,

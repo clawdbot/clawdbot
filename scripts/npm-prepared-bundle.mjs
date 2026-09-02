@@ -277,12 +277,10 @@ export function verifyNpmBundleProducer({
   ) {
     throw new Error("npm bundle producer run identity mismatch.");
   }
-  const succeeded = run.status === "completed" && run.conclusion === "success";
-  const active =
-    ["in_progress", "pending", "queued", "requested", "waiting"].includes(run.status) &&
-    run.conclusion === null;
-  if (!succeeded && (requireCompletedParent || !active)) {
-    throw new Error("npm bundle producer parent must be successful or still qualifying.");
+  // Qualification retries reuse completed producer jobs from failed attempts.
+  // Publication additionally requires the complete producer attempt to succeed.
+  if (requireCompletedParent && (run.status !== "completed" || run.conclusion !== "success")) {
+    throw new Error("npm publication requires a successful producer parent.");
   }
   const matches = readAttemptJobs(repository, producer, runGh).filter(
     (job) => job.name === producer.jobName,

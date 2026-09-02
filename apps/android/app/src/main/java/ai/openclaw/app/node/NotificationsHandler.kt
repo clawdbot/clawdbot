@@ -50,12 +50,10 @@ private object SystemNotificationsStateProvider : NotificationsStateProvider {
 }
 
 /** Handles notification listing and actions via the Android listener service. */
-class NotificationsHandler private constructor(
+class NotificationsHandler internal constructor(
   private val appContext: Context,
-  private val stateProvider: NotificationsStateProvider,
+  private val stateProvider: NotificationsStateProvider = SystemNotificationsStateProvider,
 ) {
-  constructor(appContext: Context) : this(appContext = appContext, stateProvider = SystemNotificationsStateProvider)
-
   /** Lists the current listener snapshot after nudging Android to reconnect if needed. */
   suspend fun handleNotificationsList(_paramsJson: String?): GatewaySession.InvokeResult {
     val snapshot = readSnapshotWithRebind()
@@ -170,11 +168,4 @@ class NotificationsHandler private constructor(
       ?.contentOrNull
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
-
-  companion object {
-    internal fun forTesting(
-      appContext: Context,
-      stateProvider: NotificationsStateProvider,
-    ): NotificationsHandler = NotificationsHandler(appContext = appContext, stateProvider = stateProvider)
-  }
 }

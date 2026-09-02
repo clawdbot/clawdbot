@@ -87,7 +87,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    emitAssistantCommentaryStreamData(ctx, assistantMessage);
+    emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -239,8 +239,7 @@ export function handleMessageEnd(
     // Late text_end events still use the partial lane's tag/inline state.
     const { thinking, final, inlineCode } = ctx.state.partialBlockState;
     ctx.state.partialBlockState = { thinking, final, inlineCode };
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.assistantStream = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
 

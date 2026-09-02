@@ -3763,7 +3763,8 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
     return false;
   }
   const relative = toRepoRelativeTarget(targetArg, cwd);
-  if (isTestFileTarget(relative)) {
+  // Source files need whole-project coverage; existing directories already define a test scope.
+  if (isTestFileTarget(relative) || isExistingDirectoryTarget(targetArg, cwd)) {
     return false;
   }
   return relative.startsWith("ui/src/");

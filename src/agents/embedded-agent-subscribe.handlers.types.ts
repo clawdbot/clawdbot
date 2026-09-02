@@ -70,6 +70,7 @@ type AssistantStreamDelivery = {
   data: AssistantStreamData;
   eventData?: AssistantStreamData;
   emitPartialReply: boolean;
+  finalMessage?: boolean;
 };
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
@@ -155,8 +156,11 @@ export type EmbeddedAgentSubscribeState = {
   hasFlushedPartialText: boolean;
   blockState: StreamBlockState & { inlineCode: InlineCodeState };
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
-  lastStreamedAssistant?: string;
-  lastStreamedAssistantCleaned?: string;
+  assistantStream?: {
+    raw: string;
+    text: string;
+    sanitized?: { phase: AssistantPhase | undefined; text: string };
+  };
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;

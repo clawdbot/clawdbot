@@ -542,7 +542,7 @@ class ChatControllerStreamReplayTest {
       assertFalse(controller.patchSession(key = "main", label = "Renamed"))
       assertEquals("rename unavailable", controller.errorText.value)
 
-      controller.load("main")
+      controller.loadCurrent("main")
 
       assertEquals("rename unavailable", controller.errorText.value)
       assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
@@ -649,7 +649,7 @@ class ChatControllerStreamReplayTest {
       advanceUntilIdle()
       val historyCallsAfterLiveLoad = gateway.callCount("chat.history")
 
-      controller.load("main")
+      controller.loadCurrent("main")
       assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
 
       gateway.respondWith(
@@ -686,7 +686,7 @@ class ChatControllerStreamReplayTest {
       assertFalse(controller.healthOk.value)
       assertFalse(controller.historyLoading.value)
 
-      controller.load("main")
+      controller.loadCurrent("main")
 
       assertTrue(controller.historyLoading.value)
     }

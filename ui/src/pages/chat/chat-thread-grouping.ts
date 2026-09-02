@@ -23,6 +23,16 @@ import {
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
+function assistantMessageKind(message: unknown) {
+  if (isContextCompactionActivity(message)) {
+    return "compaction";
+  }
+  if (isKeyedAssistantStreamFallbackMessage(message)) {
+    return "commentary";
+  }
+  return messageHasVisibleReplyContent(message) ? "reply" : "activity";
+}
+
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -89,16 +99,11 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
-    const splitsAssistantCommentary =
+    const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&
-      isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
-        isKeyedAssistantStreamFallbackMessage(item.message);
-    const splitsRuntimeActivity =
-      role === "assistant" &&
-      currentGroup?.role === "assistant" &&
-      isContextCompactionActivity(currentGroup.messages[0]?.message) !==
-        isContextCompactionActivity(item.message);
+      assistantMessageKind(currentGroup.messages[0]?.message) !==
+        assistantMessageKind(item.message);
 
     if (
       !currentGroup ||
@@ -106,8 +111,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
       currentUserTurnIdentity !== userTurnIdentity ||
-      splitsAssistantCommentary ||
-      splitsRuntimeActivity ||
+      splitsAssistantKind ||
       (shouldSplitBySender &&
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
@@ -187,7 +191,7 @@ export function coalesceStreamRuns(
   return result;
 }
 
-/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+/** Collapsed rollup of a completed turn's activity (tools, commentary, reasoning). */
 export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
@@ -214,20 +218,26 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
 // Attachment/canvas/media-only replies carry no text but are still the turn's
 // visible outcome; they must never fold into the work rollup. Normalized
 // content passes unknown block types through (e.g. raw image blocks), so
-// anything that is not a tool block counts as visible reply content.
-function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
-  return group.messages.some(({ message }) => {
-    if (includeText && extractTextCached(message)?.trim()) {
-      return true;
+// only tool and thinking blocks are activity rather than visible outcomes.
+function messageHasVisibleReplyContent(message: unknown, includeText = true): boolean {
+  if (includeText && extractTextCached(message)?.trim()) {
+    return true;
+  }
+  const content = safeNormalizeMessage(message)?.content ?? [];
+  return content.some((block) => {
+    if (block.type === "text") {
+      return includeText && Boolean(block.text?.trim());
     }
-    const content = safeNormalizeMessage(message)?.content ?? [];
-    return content.some((block) => {
-      if (block.type === "text") {
-        return includeText && Boolean(block.text?.trim());
-      }
-      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
-    });
+    return (
+      block.type !== "thinking" &&
+      !isToolCallContentType(block.type) &&
+      !isToolResultContentType(block.type)
+    );
   });
+}
+
+function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
+  return group.messages.some(({ message }) => messageHasVisibleReplyContent(message, includeText));
 }
 
 export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
