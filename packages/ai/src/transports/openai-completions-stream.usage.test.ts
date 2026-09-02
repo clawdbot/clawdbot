@@ -14,13 +14,25 @@ import {
 } from "./openai-transport-shared.js";
 
 describe("normalizeOpenAICompletionsTextDelta", () => {
-  it("returns growth from cumulative snapshots and drops long exact replays", () => {
+  it("returns growth from cumulative snapshots and preserves ordinary repeated deltas", () => {
     expect(normalizeOpenAICompletionsTextDelta("", "abc")).toBe("abc");
     expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef")).toBe("def");
-    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh")).toBe("");
-    expect(normalizeOpenAICompletionsTextDelta("abcdefghij", "abcdefgh")).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh")).toBe("abcdefgh");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh again")).toBe(" again");
     expect(normalizeOpenAICompletionsTextDelta("ab", "cd")).toBe("cd");
     expect(normalizeOpenAICompletionsTextDelta("Ha", "Ha")).toBe("Ha");
+  });
+
+  it("suppresses exact and prefix replays only for message-shaped snapshot frames", () => {
+    expect(
+      normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh", { frameKind: "snapshot" }),
+    ).toBe("");
+    expect(
+      normalizeOpenAICompletionsTextDelta("abcdefghij", "abcdefgh", { frameKind: "snapshot" }),
+    ).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef", { frameKind: "snapshot" })).toBe(
+      "def",
+    );
   });
 });
 
@@ -359,14 +371,9 @@ describe("openai completions stream", () => {
     await processCompletionsStream(
       streamChunks([
         makeCompletionsChunk({ role: "assistant" as const, content: prefix }),
-        makeCompletionsChunk({ content: "uv" }),
-        // Compatible providers sometimes replay the full accumulated snapshot.
+        // Cumulative snapshot: longer frame that extends prior text.
         makeCompletionsChunk({ content: `${prefix}uv` }),
-        makeCompletionsChunk({ content: "w" }),
-        // Exact full-text replay must not double the live message.
         makeCompletionsChunk({ content: `${prefix}uvw` }),
-        // Long prefix replay of already-emitted text is also a no-op.
-        makeCompletionsChunk({ content: prefix }),
       ]),
       output,
       model,
@@ -378,6 +385,111 @@ describe("openai completions stream", () => {
       .map((event) => ("delta" in event ? event.delta : undefined));
     expect(textDeltas).toEqual([prefix, "uv", "w"]);
     expect(output.content).toEqual([{ type: "text", text: `${prefix}uvw` }]);
+  });
+
+  it("keeps intentional long repeated OpenAI-compatible delta text", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const phrase = "abcdefgh";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: phrase }),
+        // Ordinary delta equal to prior text must remain incremental.
+        makeCompletionsChunk({ content: phrase }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([phrase, phrase]);
+    expect(output.content).toEqual([{ type: "text", text: `${phrase}${phrase}` }]);
+  });
+
+  it("treats a longer delta that extends prior text as cumulative growth", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const phrase = "abcdefgh";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: phrase }),
+        makeCompletionsChunk({ content: `${phrase} again` }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([phrase, " again"]);
+    expect(output.content).toEqual([{ type: "text", text: `${phrase} again` }]);
+  });
+
+  it("suppresses message-shaped snapshot replays without dropping ordinary deltas", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const text = "abcdefghijklmnop";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: text }),
+        // Compat endpoints may deliver a full message snapshot instead of delta.
+        makeCompletionsChunk({}, null, {
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: text },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        }),
+        makeCompletionsChunk({ content: "!" }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([text, "!"]);
+    expect(output.content).toEqual([{ type: "text", text: `${text}!` }]);
   });
 
   it("keeps intentional short repeated OpenAI-compatible text incremental", async () => {

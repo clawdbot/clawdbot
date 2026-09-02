@@ -40,6 +40,7 @@ import {
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
+  type OpenAICompletionsTextFrameKind,
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
@@ -126,6 +127,7 @@ export async function processCompletionsStream(
   let directTextBlock: TextBlock | null = null;
   let directThinkingBlock: ThinkingBlock | null = null;
   let currentTextSource: OpenAICompletionsTextSource | undefined;
+  let currentTextFrameKind: OpenAICompletionsTextFrameKind = "delta";
   let pendingInterruptedTextBlock: TextBlock | null = null;
   let confirmedInterruptedTextBlock: TextBlock | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
@@ -230,7 +232,9 @@ export async function processCompletionsStream(
       contentBlockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
-    const normalizedText = normalizeOpenAICompletionsTextDelta(currentBlock.text, text);
+    const normalizedText = normalizeOpenAICompletionsTextDelta(currentBlock.text, text, {
+      frameKind: currentTextFrameKind,
+    });
     if (!normalizedText) {
       return;
     }
@@ -517,6 +521,8 @@ export async function processCompletionsStream(
       }
     }
     const rawChoiceDelta = choice.delta ?? choice.message;
+    // Prefer delta when present; message-only chunks are the compat snapshot contract.
+    currentTextFrameKind = choice.delta != null ? "delta" : "snapshot";
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       if (cooperativeScheduler) {

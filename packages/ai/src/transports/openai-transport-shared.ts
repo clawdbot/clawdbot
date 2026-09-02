@@ -56,6 +56,9 @@ export function resolveOpenAIClientBaseUrl(
 
 export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
 
+/** Wire contract for chat.completion.chunk text: incremental delta vs message snapshot. */
+export type OpenAICompletionsTextFrameKind = "delta" | "snapshot";
+
 export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
   | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
@@ -328,22 +331,26 @@ export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   return normalized !== "off" && normalized !== "none";
 }
 
-/** Minimum length before treating an exact/prefix replay as a cumulative snapshot. */
-const OPENAI_COMPLETIONS_TEXT_REPLAY_MIN_CHARS = 8;
-
-/** Turn cumulative OpenAI-compatible `delta.content` snapshots into true increments. */
-export function normalizeOpenAICompletionsTextDelta(accumulated: string, incoming: string): string {
+/** Turn cumulative OpenAI-compatible text snapshots into true increments. */
+export function normalizeOpenAICompletionsTextDelta(
+  accumulated: string,
+  incoming: string,
+  options?: { frameKind?: OpenAICompletionsTextFrameKind },
+): string {
   if (!incoming) {
     return "";
   }
   if (!accumulated) {
     return incoming;
   }
+  // Cumulative snapshot contract: a longer frame that extends prior text.
   if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
     return incoming.slice(accumulated.length);
   }
+  // Exact/prefix replay only for message-shaped frames. Ordinary delta frames stay
+  // incremental so legitimate repeated completions are preserved.
   if (
-    incoming.length >= OPENAI_COMPLETIONS_TEXT_REPLAY_MIN_CHARS &&
+    (options?.frameKind ?? "delta") === "snapshot" &&
     (incoming === accumulated || accumulated.startsWith(incoming))
   ) {
     return "";
