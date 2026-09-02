@@ -21,6 +21,12 @@ export {
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+export { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
+export {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";

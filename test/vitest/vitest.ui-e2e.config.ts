@@ -11,7 +11,7 @@ import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 const mediaTranscriptRealGatewayTest =
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
 const sessionHostCommandStateRealGatewayTest =
-  "test/e2e/qa-lab/runtime/session-host-command-state.real-gateway.e2e.test.ts";
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
 const uiE2eIncludePatterns = [
   "ui/src/**/*.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
