@@ -329,17 +329,25 @@ describe("Gateway Code Mode clock rollback", () => {
           );
 
           const wallClockBeforeRollback = Date.now();
-          const wallClock = vi.spyOn(Date, "now").mockReturnValue(wallClockBeforeRollback - 5_000);
+          const wallClock = vi
+            .spyOn(Date, "now")
+            .mockReturnValue(wallClockBeforeRollback - 60_000);
           try {
             await new Promise<void>((resolve) => {
               setTimeout(resolve, 50);
             });
-            await expect(
-              client.request("plugin.approval.resolve", {
-                id: approvalId,
-                decision: "allow-once",
-              }),
-            ).resolves.toEqual({ ok: true });
+            const resolution = client.request("plugin.approval.resolve", {
+              id: approvalId,
+              decision: "allow-once",
+            });
+            await vi.waitFor(async () => {
+              const pending = (await client.request("plugin.approval.list", {})) as Array<{
+                id?: string;
+              }>;
+              expect(pending.some((entry) => entry.id === approvalId)).toBe(false);
+            });
+            wallClock.mockRestore();
+            await expect(resolution).resolves.toEqual({ ok: true });
           } finally {
             wallClock.mockRestore();
           }
