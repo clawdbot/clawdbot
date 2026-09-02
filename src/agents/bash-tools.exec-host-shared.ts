@@ -482,12 +482,15 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
   // channels may be misconfigured or unavailable.
   // Exceptions:
   // - exact-command durable trust already grants permission, so allow execution.
-  // - askFallback="full" means the host permits execution via fallback, so
-  //   resolve through the normal fallback path instead of hard-denying.
+  // - askFallback="full" with no explicit approval requirement means the host
+  //   permits execution via fallback, so resolve through the normal fallback
+  //   path instead of hard-denying.
+  // - requiresExplicitApproval===true overrides askFallback: even with full
+  //   fallback, explicit approval was demanded and no route exists, so deny.
   if (
     request.unavailableReason !== null &&
     !params.hasExactCommandDurableTrust &&
-    params.askFallback !== "full"
+    (params.requiresExplicitApproval === true || params.askFallback !== "full")
   ) {
     // Create a failed state that will deny execution
     const state = await resolveExecApprovalDecisionState<TTimeoutContext>({
