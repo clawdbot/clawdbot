@@ -95,10 +95,10 @@ flow:
             message:
               expr: "`empty completion did not close at its lifecycle owner: ${JSON.stringify(emptyTask)}`"
         - call: waitForCondition
-          saveAs: requesterVisibleParentMessages
+          saveAs: requesterAcknowledgements
           args:
             - lambda:
-                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED'); return messages.length > 0 ? messages : undefined; })()"
+                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && String(message.text ?? '').trim() === 'QA-SUBAGENT-EMPTY-PARENT-ACK'); return messages.length > 0 ? messages : undefined; })()"
             - 60000
             - 250
         - set: emptyOutboundHistory
@@ -113,6 +113,10 @@ flow:
         - set: emptyTerminalOutbound
           value:
             expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
+        - assert:
+            expr: "requesterAcknowledgements.length === 1"
+            message:
+              expr: "`requester did not receive exactly one parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
         - assert:
             expr: "emptyTerminalOutbound.length === 0"
             message:
@@ -170,4 +174,4 @@ flow:
             expr: "postRestartCompletionRequests.length === 0 && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
               expr: "`Gateway restart retried or exposed empty completion: requests=${JSON.stringify(postRestartRequests)} outbound=${JSON.stringify(postRestartOutbound)}`"
-      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, postRestartCompletionRequestCount: postRestartCompletionRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"
+      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterAcknowledgements.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, postRestartCompletionRequestCount: postRestartCompletionRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"

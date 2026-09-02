@@ -317,7 +317,8 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
     expect(flow).toContain("task.terminalOutcome === 'succeeded'");
     expect(flow).toContain("emptyTerminalOutbound.length === 0");
-    expect(flow).toContain('"saveAs":"requesterVisibleParentMessages"');
+    expect(flow).toContain('"saveAs":"requesterAcknowledgements"');
+    expect(flow).toContain("requesterAcknowledgements.length === 1");
     expect(flow).toContain("request.plannedToolName === 'write'");
     expect(flow).toContain("postRestartCompletionRequests.length === 0");
     expect(flow).not.toContain('"call":"sleep"');
