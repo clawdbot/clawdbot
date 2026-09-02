@@ -76,9 +76,6 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
       usedSlots.add(rawPanel.slot);
       columnPanels.push({ id: panelId, slot: rawPanel.slot });
     }
-    if (columnPanels.length === 0) {
-      continue;
-    }
     const requestedActiveId =
       typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";
     activePanelId = panelIds.get(requestedActiveId) ?? activePanelId;
@@ -92,20 +89,21 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
         : height;
     panels.push(...columnPanels);
   }
-  const columns = panels.length
-    ? [
-        {
-          id: usedColumnIds.values().next().value ?? "side-panel-column",
-          side: "right" as const,
-          panels,
-          activePanelId: panels.some((panel) => panel.id === activePanelId)
-            ? activePanelId
-            : panels[0]!.id,
-          height,
-          width,
-        },
-      ]
-    : [];
+  const columns =
+    usedColumnIds.size > 0 || value.open === true
+      ? [
+          {
+            id: usedColumnIds.values().next().value ?? "side-panel-column",
+            side: "right" as const,
+            panels,
+            activePanelId: panels.some((panel) => panel.id === activePanelId)
+              ? activePanelId
+              : (panels[0]?.id ?? ""),
+            height,
+            width,
+          },
+        ]
+      : [];
   return {
     columns,
     dock: value.dock === "bottom" ? "bottom" : "right",

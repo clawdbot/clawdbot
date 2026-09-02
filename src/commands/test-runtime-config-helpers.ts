@@ -2,6 +2,7 @@
 // Kept under commands because many command tests need the same mock runtime shapes.
 
 import { vi } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
@@ -15,6 +16,31 @@ export const baseConfigSnapshot = {
   issues: [],
   legacyIssues: [],
 };
+
+/** Builds a complete config snapshot while preserving distinct authored and runtime fixtures. */
+export function createTestConfigSnapshot(
+  sourceConfig: OpenClawConfig,
+  runtimeConfig: OpenClawConfig = sourceConfig,
+): ConfigFileSnapshot {
+  // SAFETY: Snapshot source branding preserves the exact caller-owned authored config object.
+  const resolvedSourceConfig = sourceConfig as ConfigFileSnapshot["sourceConfig"];
+  // SAFETY: Snapshot runtime branding preserves the distinct caller-owned runtime config object.
+  const resolvedRuntimeConfig = runtimeConfig as ConfigFileSnapshot["runtimeConfig"];
+  return {
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    sourceConfig: resolvedSourceConfig,
+    resolved: resolvedSourceConfig,
+    valid: true,
+    runtimeConfig: resolvedRuntimeConfig,
+    config: resolvedRuntimeConfig,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
+}
 
 type TestRuntime = {
   log: MockFn<RuntimeEnv["log"]>;
@@ -32,7 +58,7 @@ type CapturingTestRuntime = {
 export function createTestRuntime(): TestRuntime {
   const log = vi.fn() as MockFn<RuntimeEnv["log"]>;
   const error = vi.fn() as MockFn<RuntimeEnv["error"]>;
-  const exit = vi.fn((_: number) => undefined) as MockFn<RuntimeEnv["exit"]>;
+  const exit = vi.fn((_code: number) => undefined) as MockFn<RuntimeEnv["exit"]>;
   return {
     log,
     error,

@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { Value } from "typebox/value";
+import {
+  WorkerGitHubPublishParamsSchema,
+  WorkerPortalParamsSchema,
+  WorkerSessionsSendParamsSchema,
+  WorkerSessionsSpawnParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerGitHubPublishParams,
   WorkerConnectParams,
   WorkerLiveEventParams,
+  WorkerPortalParams,
   WorkerProtocolCloseReason,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
@@ -18,6 +26,10 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceStartResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopParamsSchema,
+  type WorkerSkillWorkshopParams,
+} from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
@@ -34,6 +46,14 @@ import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./place
 import type { WorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
+import {
+  serializeWorkerSessionToolResult,
+  workerSessionToolErrorResult,
+} from "./worker-session-tool-result.js";
+import {
+  createWorkerComputerRpc,
+  type WorkerComputerExecutor,
+} from "./worker-turn-computer-rpc.js";
 
 type WorkerProcessTurnBinding = {
   turnClaim: WorkerSessionTurnClaim;
@@ -99,8 +119,15 @@ type WorkerTurnRpcOptions = {
   }) => Promise<WorkerTranscriptCommitApplicationResult>;
   liveEvents?: Pick<WorkerLiveEventReceiver, "apply">;
   placementStore?: WorkerSessionPlacementGate;
+  executeComputer?: WorkerComputerExecutor;
   executeSessionTool?: (
     params:
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "skill_workshop";
+          request: WorkerSkillWorkshopParams;
+          signal?: AbortSignal;
+        }
       | {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_spawn";
@@ -117,6 +144,12 @@ type WorkerTurnRpcOptions = {
           identity: WorkerConnectionIdentity;
           toolName: "github_publish";
           request: WorkerGitHubPublishParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "portal";
+          request: WorkerPortalParams;
           signal?: AbortSignal;
         },
   ) => Promise<WorkerSessionToolResult>;
@@ -383,27 +416,42 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       return result;
     });
 
+  const validateTool = (
+    identity: WorkerConnectionIdentity,
+    toolName: WorkerSessionToolName | "computer",
+  ) => {
+    const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+      kind: "session-tool",
+    });
+    if (!requestAdmission.ok) {
+      return "closeReason" in requestAdmission
+        ? requestAdmission
+        : { ok: false as const, closeReason: "placement-mismatch" as const };
+    }
+    const binding = placementClaim(identity);
+    if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
+      return { ok: false as const, closeReason: "method-not-allowed" as const };
+    }
+    return { ok: true as const };
+  };
+
+  const executeComputer = createWorkerComputerRpc({
+    execute: options.executeComputer,
+    validate: (identity) => validateTool(identity, "computer"),
+  });
+
   const executeSessionTool = async (
     identity: WorkerConnectionIdentity,
     toolName: WorkerSessionToolName,
-    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams,
+    request:
+      | WorkerSkillWorkshopParams
+      | WorkerSessionsSpawnParams
+      | WorkerSessionsSendParams
+      | WorkerGitHubPublishParams
+      | WorkerPortalParams,
     signal?: AbortSignal,
   ): Promise<WorkerSessionToolServiceResult> => {
-    const validate = () => {
-      const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
-        kind: "session-tool",
-      });
-      if (!requestAdmission.ok) {
-        return "closeReason" in requestAdmission
-          ? requestAdmission
-          : { ok: false as const, closeReason: "placement-mismatch" as const };
-      }
-      const binding = placementClaim(identity);
-      if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
-        return { ok: false as const, closeReason: "method-not-allowed" as const };
-      }
-      return { ok: true as const };
-    };
+    const validate = () => validateTool(identity, toolName);
     const admitted = validate();
     if (!admitted.ok) {
       return admitted;
@@ -411,35 +459,36 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!options.executeSessionTool) {
       return { ok: false, reason: "gateway-unavailable" };
     }
+    const operation =
+      toolName === "skill_workshop" && Value.Check(WorkerSkillWorkshopParamsSchema, request)
+        ? { toolName, request }
+        : toolName === "sessions_spawn" && Value.Check(WorkerSessionsSpawnParamsSchema, request)
+          ? { toolName, request }
+          : toolName === "sessions_send" && Value.Check(WorkerSessionsSendParamsSchema, request)
+            ? { toolName, request }
+            : toolName === "portal" && Value.Check(WorkerPortalParamsSchema, request)
+              ? { toolName, request }
+              : toolName === "github_publish" &&
+                  Value.Check(WorkerGitHubPublishParamsSchema, request)
+                ? { toolName, request }
+                : undefined;
+    if (!operation) {
+      return { ok: false, closeReason: "invalid-frame" };
+    }
     let result: WorkerSessionToolResult;
     try {
-      result = await options.executeSessionTool(
-        toolName === "sessions_spawn"
-          ? {
-              identity,
-              toolName,
-              request: request as WorkerSessionsSpawnParams,
-              ...(signal ? { signal } : {}),
-            }
-          : toolName === "sessions_send"
-            ? {
-                identity,
-                toolName,
-                request: request as WorkerSessionsSendParams,
-                ...(signal ? { signal } : {}),
-              }
-            : {
-                identity,
-                toolName,
-                request,
-                ...(signal ? { signal } : {}),
-              },
-      );
-    } catch {
-      return { ok: false, reason: "gateway-unavailable" };
+      result = await options.executeSessionTool({
+        identity,
+        ...operation,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      result = {
+        resultJson: serializeWorkerSessionToolResult(workerSessionToolErrorResult(error)),
+      };
     }
     // The tool may have awaited provider provisioning or another session turn.
-    // Never return its result after the source turn or placement was revoked.
+    // Neither success nor failure may return after the source turn or placement was revoked.
     const current = validate();
     return current.ok ? { ok: true, result } : current;
   };
@@ -664,6 +713,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     commitTranscript,
     pushLiveEvent,
     executeSessionTool,
+    executeComputer,
     startInference,
     cancelInference,
     cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>

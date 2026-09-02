@@ -418,7 +418,11 @@ struct CLIInstallerTests {
         #expect(status == .ready(location: executable.path, version: "2026.7.3"))
     }
 
-    @Test func `matching external CLI with unsupported Node is unusable`() async throws {
+    @Test(arguments: [("v20.18.0", 0), ("v24.15.0", 1)])
+    func `matching external CLI with an unusable Node runtime needs repair`(
+        version: String,
+        exitCode: Int) async throws
+    {
         let root = FileManager().temporaryDirectory.appendingPathComponent(
             "openclaw-old-node-cli-\(UUID().uuidString)")
         defer { try? FileManager().removeItem(at: root) }
@@ -429,7 +433,7 @@ struct CLIInstallerTests {
             to: executable,
             atomically: true,
             encoding: .utf8)
-        try "#!/bin/sh\necho 'v20.18.0'\n".write(
+        try "#!/bin/sh\necho '\(version)'\nexit \(exitCode)\n".write(
             to: node,
             atomically: true,
             encoding: .utf8)

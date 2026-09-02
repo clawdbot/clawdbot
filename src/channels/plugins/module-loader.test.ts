@@ -27,14 +27,17 @@ function normalizeModuleLoaderTarget(target: string): string {
 }
 
 describe("channel plugin module loader helpers", () => {
-  it("resolves extensionless plugin module specifiers to the first existing extension", () => {
-    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
-    const expectedPath = path.join(rootDir, "src", "checker.mts");
-    fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
-    fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+  it.each(["mts", "mtsx", "ctsx"])(
+    "resolves extensionless plugin module specifiers to %s",
+    (extension) => {
+      const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+      const expectedPath = path.join(rootDir, "src", `checker.${extension}`);
+      fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+      fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
 
-    expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
-  });
+      expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
+    },
+  );
 
   it("preserves explicit JavaScript plugin module specifiers", () => {
     const rootDir = tempDirs.make("openclaw-channel-module-loader-");

@@ -15,8 +15,6 @@ import type {
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
-// Manifest planners convert plugin modelCatalog declarations into normalized
-// rows and suppression entries while enforcing plugin ownership boundaries.
 type ManifestModelCatalogPlugin = {
   id: string;
   providers?: readonly string[];
@@ -114,7 +112,6 @@ export function planManifestModelCatalogRows(params: {
     }
   }
 
-  const rowCandidates: NormalizedModelCatalogRow[] = [];
   const seenRows = new Map<
     string,
     {
@@ -147,30 +144,29 @@ export function planManifestModelCatalogRows(params: {
         row,
         discovery: entry.discovery,
       });
-      rowCandidates.push(row);
     }
   }
 
-  const conflictedMergeKeys = new Set(conflicts.keys());
-  const rows = rowCandidates.filter((row) => {
-    if (conflictedMergeKeys.has(row.mergeKey)) {
-      return false;
+  const rows: NormalizedModelCatalogRow[] = [];
+  for (const { row, discovery } of seenRows.values()) {
+    if (
+      conflicts.has(row.mergeKey) ||
+      (params.selection === "static"
+        ? discovery !== "static"
+        : params.selection === "supplemental" &&
+          discovery === "runtime" &&
+          row.source !== "runtime-refresh")
+    ) {
+      continue;
     }
-    const discovery = seenRows.get(row.mergeKey)?.discovery;
-    if (params.selection === "static") {
-      return discovery === "static";
-    }
-    return (
-      params.selection !== "supplemental" ||
-      discovery !== "runtime" ||
-      row.source === "runtime-refresh"
-    );
-  });
+    rows.push(row);
+  }
 
   return {
     entries,
     conflicts: [...conflicts.values()],
-    rows: rows.toSorted(
+    // oxlint-disable-next-line unicorn/no-array-sort -- Selection owns this array until publication.
+    rows: rows.sort(
       (left, right) =>
         left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
     ),
@@ -244,7 +240,8 @@ function planManifestModelCatalogPluginEntries(params: {
             source: "runtime-refresh",
           })
         : [];
-      const rows = [...manifestRows, ...remoteRows].toSorted(
+      // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private merge array.
+      const rows = [...manifestRows, ...remoteRows].sort(
         (left, right) =>
           left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
       );
@@ -361,7 +358,8 @@ export function planManifestModelCatalogSuppressions(params: {
     }
   }
   return {
-    suppressions: suppressions.toSorted(
+    // oxlint-disable-next-line unicorn/no-array-sort -- This plan owns the newly collected array.
+    suppressions: suppressions.sort(
       (left, right) =>
         left.provider.localeCompare(right.provider) ||
         left.model.localeCompare(right.model) ||

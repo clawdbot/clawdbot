@@ -61,6 +61,34 @@ public struct TalkDirectiveParseResult: Equatable, Sendable {
     }
 }
 
+public enum TalkVoiceAliases {
+    public static func normalizedMap(_ value: AnyCodable?) -> [String: String] {
+        value?.dictionaryValue?.reduce(into: [:]) { result, entry in
+            let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !key.isEmpty, !value.isEmpty else { return }
+            result[key] = value
+        } ?? [:]
+    }
+
+    public static func resolve(_ value: String?, aliases: [String: String]) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let mapped = aliases[trimmed.lowercased()] {
+            return mapped
+        }
+        if aliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            return trimmed
+        }
+        return self.isLikelyID(trimmed) ? trimmed : nil
+    }
+
+    public static func isLikelyID(_ value: String) -> Bool {
+        guard value.count >= 10 else { return false }
+        return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+    }
+}
+
 public enum TalkDirectiveParser {
     public static func parse(_ text: String) -> TalkDirectiveParseResult {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")

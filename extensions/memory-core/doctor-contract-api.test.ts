@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -27,6 +28,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
+import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
 import {
   dreamingTestState as dreamingTesting,
@@ -446,6 +448,7 @@ async function searchMigratedVectorRows(agentPath: string) {
       limit: 1,
       snippetMaxChars: 200,
       ensureVectorReady: async () => true,
+      runVectorKnn: async (request) => runVectorKnnQuery(db, request),
       sourceFilterVec: { sql: "", params: [] },
       sourceFilterChunks: { sql: "", params: [] },
     });
@@ -1461,6 +1464,79 @@ describe("memory-core doctor dreaming migration", () => {
       `Removed empty Memory Core legacy memory index sidecar placeholder: ${legacyPath}`,
     ]);
     await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("ignores a legacy sidecar symlink to the populated canonical agent database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacyPath), agentPath), legacyPath);
+
+    const migration = legacyMemoryIndexMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    expect((await fs.lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.realpath(legacyPath)).resolves.toBe(await fs.realpath(agentPath));
+    expect(readMemoryRows(agentPath).chunks).toEqual([
+      { id: "canonical-chunk", text: "canonical memory remains authoritative" },
+    ]);
+  });
+
+  it("keeps the warning for a legacy sidecar symlink to a different data-bearing database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const unrelatedPath = path.join(rootDir, "unrelated.sqlite");
+    const db = new DatabaseSync(unrelatedPath);
+    try {
+      db.exec("CREATE TABLE unrelated (value TEXT)");
+      db.prepare("INSERT INTO unrelated (value) VALUES (?)").run("preserve me");
+    } finally {
+      db.close();
+    }
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacyPath), unrelatedPath), legacyPath);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped Memory Core legacy memory index import for agent main because the sidecar schema is not a legacy memory index",
+    ]);
+    expect((await fs.lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.realpath(legacyPath)).resolves.toBe(await fs.realpath(unrelatedPath));
+    const preserved = new DatabaseSync(unrelatedPath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT value FROM unrelated").get()).toEqual({
+        value: "preserve me",
+      });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("keeps a corrupt legacy sidecar with an import warning", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const corruptBytes = Buffer.from("not a sqlite database");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, corruptBytes);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported:",
+      ),
+    ]);
+    await expect(fs.readFile(legacyPath)).resolves.toEqual(corruptBytes);
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("preserves the main sidecar when a companion stat fails with ELOOP", async () => {
@@ -2577,6 +2653,13 @@ describe("memory-core doctor dreaming migration", () => {
       "agent",
       "openclaw-agent.sqlite",
     );
+    const retainedResetTranscript = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "session-1.jsonl.reset.2026-08-23T07-10-59.000Z",
+    );
     const invalidAgentQmdHome = path.join(stateDir, "agents", "main!", "qmd");
     const externalModels = path.join(rootDir, "shared-qmd-models");
     const symlinkHomeTarget = path.join(rootDir, "symlink-qmd-home-target");
@@ -2586,6 +2669,7 @@ describe("memory-core doctor dreaming migration", () => {
       path.join(qmdHome, "xdg-config", "qmd", "index.yml"),
       path.join(qmdHome, "sessions", "session.md"),
       canonicalAgentFile,
+      retainedResetTranscript,
       path.join(invalidAgentQmdHome, "index.sqlite"),
       path.join(externalModels, "model.bin"),
       path.join(symlinkHomeTarget, "index.sqlite"),
@@ -2593,6 +2677,14 @@ describe("memory-core doctor dreaming migration", () => {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "derived", "utf8");
     }
+    await fs.writeFile(
+      retainedResetTranscript,
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Retained reset transcript recall fact" },
+      }),
+      "utf8",
+    );
     await fs.symlink(externalModels, path.join(qmdHome, "xdg-cache", "qmd", "models"));
     await fs.mkdir(path.dirname(symlinkHome), { recursive: true });
     await fs.symlink(symlinkHomeTarget, symlinkHome);
@@ -2611,6 +2703,12 @@ describe("memory-core doctor dreaming migration", () => {
 
     await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
+    await expect(fs.readFile(retainedResetTranscript, "utf8")).resolves.toContain(
+      "Retained reset transcript recall fact",
+    );
+    expect((await buildSessionEntry(retainedResetTranscript))?.content).toBe(
+      "User: Retained reset transcript recall fact",
+    );
     await expect(fs.access(invalidAgentQmdHome)).resolves.toBeUndefined();
     await expect(fs.access(path.join(externalModels, "model.bin"))).resolves.toBeUndefined();
     expect((await fs.lstat(symlinkHome)).isSymbolicLink()).toBe(true);

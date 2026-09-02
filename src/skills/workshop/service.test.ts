@@ -15,6 +15,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   applySkillProposal,
@@ -62,7 +63,6 @@ beforeEach(async () => {
   const database = openOpenClawStateDatabase({ env: testEnv });
   database.db.exec(`
     DELETE FROM skill_workshop_proposal_events;
-    DELETE FROM skill_workshop_proposal_origin_runs;
     DELETE FROM skill_workshop_proposal_rollbacks;
     DELETE FROM skill_workshop_proposals;
   `);
@@ -252,8 +252,70 @@ describe("skill workshop proposals", () => {
     });
   });
 
+  it("lets only an operator apply an update to a user-authored skill", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "handwritten");
+    await writeSkill({
+      dir: skillDir,
+      name: "handwritten",
+      description: "Operator-owned skill",
+      body: "# Handwritten\n\nOld body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "handwritten",
+      content: "# Handwritten\n\nNew body.\n",
+    });
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        eventActor: { type: "agent", id: "main" },
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: handwritten");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Old body.",
+    );
+
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      eventActor: { type: "gateway" },
+    });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "New body.",
+    );
+  });
+
+  it("keeps an operator apply when autonomous review holds a stale pending snapshot", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "handwritten"),
+      name: "handwritten",
+      description: "Operator-owned skill",
+      body: "# Handwritten\n\nOld body.\n",
+    });
+    const snapshot = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "handwritten",
+      content: "# Handwritten\n\nNew body.\n",
+    });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: snapshot.record.id,
+      eventActor: { type: "gateway" },
+    });
+
+    await applyAutonomousSkillProposal({ workspaceDir, proposal: snapshot, reason: "review" });
+
+    const inspected = await inspectSkillProposal(snapshot.record.id, { workspaceDir });
+    expect(inspected?.record.status).toBe("applied");
+    expect(inspected?.record.statusReason).toBeUndefined();
+  });
+
   it.runIf(process.platform !== "win32")(
-    "keeps opted-in trusted workspace skills symlink targets read-only without create provenance",
+    "allows a pending operator review for a user-authored trusted symlink skill",
     async () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
@@ -273,15 +335,14 @@ describe("skill workshop proposals", () => {
           workshop: { allowSymlinkTargetWrites: true },
         },
       };
-      await expect(
-        proposeUpdateSkill({
-          workspaceDir,
-          config,
-          skillName: "shared-skill",
-          content: "# Shared Skill\n\nNew body.\n",
-          supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
-        }),
-      ).rejects.toThrow("Skill Workshop does not own this skill path: shared-skill");
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        config,
+        skillName: "shared-skill",
+        content: "# Shared Skill\n\nNew body.\n",
+        supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
+      });
+      expect(proposal.record).toMatchObject({ kind: "update", status: "pending" });
       await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
         "Old body.",
       );
@@ -710,12 +771,14 @@ describe("skill workshop proposals", () => {
     });
 
     const listed = await listSkillProposals({ agentId: "main", workspaceDir: secondWorkspaceDir });
-    expect(listed.proposals).toEqual([
-      expect.objectContaining({ id: second.record.id }),
+    expect(listed.proposals.toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))).toEqual([
       expect.objectContaining({ id: quarantined.record.id, workspaceMismatch: true }),
       expect.objectContaining({ id: first.record.id, workspaceMismatch: true }),
+      expect.objectContaining({ id: second.record.id }),
     ]);
-    expect(listed.proposals[0]).not.toHaveProperty("workspaceMismatch");
+    expect(listed.proposals.find((entry) => entry.id === second.record.id)).not.toHaveProperty(
+      "workspaceMismatch",
+    );
     await expect(
       inspectSkillProposal(first.record.id, {
         agentId: "main",
@@ -910,7 +973,13 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async () => {
+  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
+    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    ctx.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -936,21 +1005,27 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
+    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
+    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,
     });
 
     const manifest = await readSkillProposalManifest();
-    expect(manifest.proposals.map((entry) => [entry.skillKey, entry.status])).toEqual([
+    expect(
+      manifest.proposals
+        .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))
+        .map((entry) => [entry.skillKey, entry.status]),
+    ).toEqual([
+      ["draft-one", "rejected"],
       ["draft-three", "applied"],
       ["draft-two", "quarantined"],
-      ["draft-one", "rejected"],
     ]);
     await expect(
       fs.access(path.join(workspaceDir, "skills", "draft-one", "SKILL.md")),
@@ -1151,6 +1226,53 @@ describe("skill workshop proposals", () => {
         applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
       ).resolves.toMatchObject({ record: { status: "applied" } });
       await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe("Symlink support.\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "recovers a partial create through the quarantine config",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-workshop-quarantine-symlink-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Quarantine Symlink",
+        description: "Recover before quarantining an allowed symlink target",
+        content: "# Quarantine Symlink\n\nRecover before terminal disposal.\n",
+        supportFiles: [{ path: "references/proof.md", content: "Partial support.\n" }],
+      });
+      const targetSupportFile = path.join(
+        targetSkillsDir,
+        "quarantine-symlink",
+        "references",
+        "proof.md",
+      );
+      await writeSkillProposalRollback({
+        proposalId: proposal.record.id,
+        rollback: createSkillProposalRollback({
+          proposalId: proposal.record.id,
+          targetSkillFile: proposal.record.target.skillFile,
+          action: "create",
+          supportFiles: [{ path: "references/proof.md", existed: false }],
+        }),
+      });
+      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
+      await fs.writeFile(targetSupportFile, "Partial support.\n", "utf8");
+
+      closeOpenClawStateDatabaseForTest();
+      await expect(
+        quarantineSkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ status: "quarantined" });
+      await expect(fs.access(targetSupportFile)).rejects.toThrow();
+      await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
     },
   );
 

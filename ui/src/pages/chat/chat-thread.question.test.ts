@@ -121,10 +121,48 @@ describe("question chat items", () => {
     ).toContain("Format: Detailed");
   });
 
-  it("omits questions belonging to another session", () => {
-    const other = prompt("pending");
-    other.sessionKey = "agent:other:main";
+  it("never echoes a secret answer in the terminal transcript summary", () => {
+    const answered = prompt("answered");
+    answered.questions = [
+      {
+        questionId: "api_key",
+        header: "API key",
+        question: "Provide the deployment API key",
+        options: [],
+        isSecret: true,
+        secretStore: { name: "FAKE_DEPLOYMENT_API_KEY", kind: "secret" },
+      },
+    ];
+    answered.answeredElsewhere = true;
+    answered.answers = { answers: { api_key: ["fake-secret-never-render"] } };
+    const container = document.createElement("div");
 
-    expect(items(other, false)).toEqual([]);
+    render(renderChatQuestionSummary(answered), container);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("API key: Answered");
+    expect(container.textContent).not.toContain("fake-secret-never-render");
+    expect(container.innerHTML).not.toContain("fake-secret-never-render");
   });
+
+  it.each(["pending", "answered", "expired", "cancelled"] as const)(
+    "scopes %s questions to the selected session and its equivalent alias",
+    (status) => {
+      const question = prompt(status);
+      const expected =
+        status === "pending"
+          ? []
+          : [
+              {
+                kind: "question",
+                key: "question:question-1",
+                questionId: "question-1",
+                startedAt: 1_000,
+              },
+            ];
+
+      expect(items(question, false)).toEqual(expected);
+      expect(items({ ...question, sessionKey: "main" }, false)).toEqual(expected);
+      expect(items({ ...question, sessionKey: "agent:other:main" }, false)).toEqual([]);
+    },
+  );
 });

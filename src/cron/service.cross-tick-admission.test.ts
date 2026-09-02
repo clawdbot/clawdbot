@@ -367,16 +367,10 @@ describe("cron service cross-tick bounded admission", () => {
             });
             db.prepare(
               `UPDATE cron_jobs
-                  SET running_at_ms = ?,
-                      state_json = json_set(state_json, '$.runningAtMs', ?),
+                  SET state_json = json_set(state_json, '$.runningAtMs', ?),
                       updated_at = updated_at + 1
                 WHERE store_key = ? AND job_id = ?`,
-            ).run(
-              foreignStartedAtMs,
-              foreignStartedAtMs,
-              cronStoreKey(store.storePath),
-              conflicted.id,
-            );
+            ).run(foreignStartedAtMs, cronStoreKey(store.storePath), conflicted.id);
             return receipt;
           });
         }

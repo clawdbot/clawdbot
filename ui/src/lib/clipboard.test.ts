@@ -85,24 +85,55 @@ describe("copyToClipboard", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
-  it("restores focus after the execCommand fallback", async () => {
+  it("keeps deferred focus restoration bound to its document after globals retire", async () => {
     vi.stubGlobal("navigator", {});
-    mockExecCommand(true);
-    const button = document.createElement("button");
-    document.body.append(button);
-    button.focus();
-    const focus = vi.spyOn(button, "focus");
-    button.disabled = true;
-
-    expect(await copyToClipboard("hello")).toBe(true);
-    button.disabled = false;
-    button.blur();
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 0);
-    });
-    expect(document.activeElement).toBe(button);
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
-
-    button.remove();
+    mockExecCommand(false);
+    vi.useFakeTimers();
+    try {
+      expect(await copyToClipboard("hello")).toBe(false);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      vi.stubGlobal("document", undefined);
+      expect(() => vi.runAllTimers()).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
+
+  it.each(["restore", "newer focus", "removed target"] as const)(
+    "restores focus only when still appropriate after the fallback: %s",
+    async (state) => {
+      vi.stubGlobal("navigator", {});
+      mockExecCommand(true);
+      const button = document.createElement("button");
+      const input = document.createElement("input");
+      document.body.append(button);
+      button.focus();
+      const focus = vi.spyOn(button, "focus");
+      button.disabled = true;
+
+      expect(await copyToClipboard("hello")).toBe(true);
+      button.disabled = false;
+      button.blur();
+      if (state === "newer focus") {
+        document.body.append(input);
+        input.focus();
+      } else if (state === "removed target") {
+        button.remove();
+      }
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
+      if (state === "restore") {
+        expect(document.activeElement).toBe(button);
+        expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      } else {
+        expect(document.activeElement).toBe(state === "newer focus" ? input : document.body);
+        expect(focus).not.toHaveBeenCalled();
+      }
+
+      button.remove();
+      input.remove();
+    },
+  );
 });

@@ -1,4 +1,5 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -87,6 +88,30 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
+
+  it("does not let pending legacy exec approvals abort Doctor security checks", async () => {
+    await withTestDir({ prefix: "openclaw-doctor-security-legacy-" }, async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      process.env.HOME = home;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "exec-approvals.json"),
+        `${JSON.stringify({ version: 1 })}\n`,
+        "utf8",
+      );
+      closeOpenClawStateDatabaseForTest();
+      execApprovalsStoreTesting.reset();
+
+      const findings = await collectSecurityWarnings({ approvals: { exec: { enabled: false } } });
+
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
+        ]),
+      );
+    });
+  });
 
   async function withExecApprovalsFile(
     file: Record<string, unknown>,
@@ -352,6 +377,36 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("disables approval forwarding only");
     expect(message).toContain("state/openclaw.sqlite#exec_approvals_config");
     expect(message).toContain("openclaw approvals get --gateway");
+  });
+
+  it("explains how to renew inactive generated exec approvals", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "/usr/bin/git",
+                source: "allow-always",
+                argPattern: "sha256:argv:obsolete",
+              },
+              { pattern: "/usr/bin/python3", argPattern: "^script\\.py$" },
+            ],
+          },
+        },
+      },
+      async () => {
+        const findings = await collectSecurityWarnings({} as OpenClawConfig, {});
+        const finding = findings.find(
+          (candidate) => candidate.checkId === "doctor.exec_approvals_require_cwd_renewal",
+        );
+        expect(finding?.detail).toContain("1 older generated approval is inactive");
+        expect(finding?.remediation).toContain("openclaw doctor --fix");
+        expect(finding?.remediation).toContain('choose "Always allow here"');
+        expect(finding?.remediation).toContain("Manual allowlist rules are unchanged");
+      },
+    );
   });
 
   it("warns when filesystem tools are disabled but exec remains available", async () => {

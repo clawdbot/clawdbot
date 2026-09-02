@@ -1,4 +1,3 @@
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -13,6 +12,7 @@ import type {
   CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import type { CliEventProjectionState } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
@@ -102,44 +102,6 @@ function frameBoundedCliJsonlChunk(
   return true;
 }
 
-/** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
-function normalizeClaudeCliStreamJsonRecord(
-  parsed: Record<string, unknown>,
-): { line: string; omittedRawChars: number } | undefined {
-  if (parsed.type !== "user" || !isRecord(parsed.message)) {
-    return undefined;
-  }
-  const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
-  let normalized = false;
-  let omittedRawChars = 0;
-  for (const result of content) {
-    if (!isRecord(result) || result.type !== "tool_result" || !Array.isArray(result.content)) {
-      continue;
-    }
-    for (const block of result.content) {
-      if (!isRecord(block) || !isRecord(block.source) || block.source.type !== "base64") {
-        continue;
-      }
-      if (
-        block.type !== "image" &&
-        !(block.type === "document" && block.source.media_type === "application/pdf")
-      ) {
-        continue;
-      }
-      const { data, ...source } = block.source;
-      if (typeof data !== "string") {
-        continue;
-      }
-      block.source = source;
-      block.omitted = true;
-      block.bytes = estimateBase64DecodedBytes(data);
-      omittedRawChars += data.length;
-      normalized = true;
-    }
-  }
-  return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
-}
-
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
   if (kind === "line") {
     return `CLI JSONL line exceeded ${limit} characters; refusing to parse output.`;
@@ -155,6 +117,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let assistantText = "";
   let customThinkingText = "";
   let pendingClaudeText = "";
+  let currentClaudeMessageId: string | undefined;
+  let currentClaudeMessageText = "";
   let pendingMessageSeparator = false;
   let currentMessageStart = 0;
   let segmentStart = 0;
@@ -272,6 +236,15 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     currentTaggedReasoningText = "";
   };
 
+  const beginClaudeMessage = (messageId?: string) => {
+    beginTaggedReasoningMessage();
+    pendingMessageSeparator = true;
+    previousMessageHadToolUse = currentMessageHadToolUse;
+    currentMessageHadToolUse = false;
+    currentClaudeMessageId = messageId;
+    currentClaudeMessageText = "";
+  };
+
   const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
     const state: CliEventProjectionState = {
       assistantText,
@@ -374,6 +347,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       isRecord(parsed.message) &&
       !isClaudeSubagentRecord(parsed)
     ) {
+      if (claudeStreamJson) {
+        const messageId = typeof parsed.message.id === "string" ? parsed.message.id : undefined;
+        if (messageId && messageId !== currentClaudeMessageId) {
+          // A stream delta can precede the first identified snapshot for the same message.
+          if (currentClaudeMessageId === undefined) {
+            currentClaudeMessageId = messageId;
+          } else {
+            beginClaudeMessage(messageId);
+          }
+        }
+      }
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {
@@ -507,10 +491,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       // boundary so accumulated text joins with a paragraph break instead of
       // gluing the pre-tool text to the next message's first delta.
       if (evt.type === "message_start") {
-        beginTaggedReasoningMessage();
-        pendingMessageSeparator = true;
-        previousMessageHadToolUse = currentMessageHadToolUse;
-        currentMessageHadToolUse = false;
+        const message = isRecord(evt.message) ? evt.message : undefined;
+        beginClaudeMessage(typeof message?.id === "string" ? message.id : undefined);
       } else if (evt.type === "message_stop") {
         finishTaggedReasoningMessage();
       }
@@ -542,6 +524,21 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       });
     }
 
+    const delta = parseClaudeCliStreamingDelta({
+      backend: params.backend,
+      providerId: params.providerId,
+      parsed,
+      previousText: currentClaudeMessageText,
+    });
+    if (delta) {
+      currentClaudeMessageText = `${currentClaudeMessageText}${delta}`;
+      if (claudeStreamJson) {
+        routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta));
+      } else {
+        emitClaudeVisibleText(delta);
+      }
+    }
+
     if (params.onToolUseStart || params.onToolResult) {
       dispatchGeminiCliStreamingToolEvent({
         backend: params.backend,
@@ -553,21 +550,26 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       });
     }
     if (claudeStreamJson || params.onToolUseStart || params.onToolResult) {
+      const onToolUseStart =
+        claudeStreamJson && parsed.type === "assistant"
+          ? (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
+              sawToolUseSinceText = true;
+              currentMessageHadToolUse = true;
+              if (classifyClaudeCommentary) {
+                flushPendingClaudeCommentaryText();
+              }
+              params.onToolUseStart?.(tool);
+            }
+          : params.onToolUseStart;
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
         providerId: params.providerId,
         parsed,
         tracker: toolTracker,
-        onToolUseStart: params.onToolUseStart,
+        onToolUseStart,
         onToolResult: params.onToolResult,
       });
     }
-
-    const delta = parseClaudeCliStreamingDelta({
-      backend: params.backend,
-      providerId: params.providerId,
-      parsed,
-    });
     if (!delta) {
       if (
         isGeminiStreamJsonDialect(params) &&
@@ -596,13 +598,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           usage,
         };
       }
-      return;
     }
-    if (claudeStreamJson) {
-      routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta));
-      return;
-    }
-    emitClaudeVisibleText(delta);
   };
 
   const handleJsonlLine = (rawLine: string) => {

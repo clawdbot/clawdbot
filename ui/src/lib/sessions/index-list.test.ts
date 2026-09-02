@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
@@ -93,7 +94,7 @@ describe("session list requests", () => {
       boardFace: "dashboard",
       includeGlobal: true,
       includeUnknown: true,
-      limit: 50,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     });
     sessions.dispose();
   });
@@ -182,6 +183,78 @@ describe("session list requests", () => {
       expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:refreshed");
     } finally {
       resolveRequest(listResult());
+      unsubscribe();
+      sessions.dispose();
+    }
+  });
+
+  it.each([
+    { description: "archived", query: { archivedFilter: "archived" as const } },
+    { description: "all", query: { archivedFilter: "all" as const } },
+    { description: "dashboard", query: { boardFace: "dashboard" as const } },
+    { description: "involving-me", query: { involvingMe: true as const } },
+  ])(
+    "honors a forced $description refresh requested during an existing load",
+    async ({ query }) => {
+      let resolveRequest!: (result: SessionsListResult) => void;
+      const pendingResult = new Promise<SessionsListResult>((resolve) => {
+        resolveRequest = resolve;
+      });
+      const request = vi
+        .fn()
+        .mockImplementationOnce(async () => pendingResult)
+        .mockResolvedValue(listResult(["agent:main:current"]));
+      const { sessions } = sessionHarness(request);
+      const scope = { agentId: "main", limit: 50, ...query };
+      const unsubscribe = sessions.subscribeList(scope, () => undefined);
+
+      try {
+        const pending = sessions.refreshList(scope);
+        const forced = sessions.refreshList({ ...scope, force: true });
+        const repeated = sessions.refreshList({ ...scope, force: true });
+        expect(forced).toBe(pending);
+        expect(repeated).toBe(pending);
+
+        resolveRequest(listResult(["agent:main:stale"]));
+        await Promise.all([pending, forced, repeated]);
+
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(sessions.listSnapshot(scope).result?.sessions[0]?.key).toBe("agent:main:current");
+      } finally {
+        resolveRequest(listResult());
+        unsubscribe();
+        sessions.dispose();
+      }
+    },
+  );
+
+  it("does not queue forced filtered pagination behind an in-flight replacement", async () => {
+    let resolveRequest!: (result: SessionsListResult) => void;
+    const pendingResult = new Promise<SessionsListResult>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const firstPage = listResult(["agent:main:first", "agent:main:second"], 4);
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(firstPage)
+      .mockImplementationOnce(async () => pendingResult);
+    const { sessions } = sessionHarness(request);
+    const scope = { archivedFilter: "archived" as const, limit: 2 };
+    const unsubscribe = sessions.subscribeList(scope, () => undefined);
+
+    try {
+      await sessions.refreshList(scope);
+      const pending = sessions.refreshList({ ...scope, force: true });
+      const append = sessions.refreshList({ ...scope, offset: 2, append: true, force: true });
+      expect(append).toBe(pending);
+
+      resolveRequest(firstPage);
+      await Promise.all([pending, append]);
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sessions.listSnapshot(scope).result?.sessions).toEqual(firstPage.sessions);
+    } finally {
+      resolveRequest(firstPage);
       unsubscribe();
       sessions.dispose();
     }

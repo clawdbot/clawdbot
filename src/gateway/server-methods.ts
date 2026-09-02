@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -5,12 +6,17 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../packages/gateway-protocol/src/restart-unavailable.js";
+import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getActivePluginHttpRouteRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
+  getPluginRuntimeGatewayNodeAuthorities,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -84,6 +90,11 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "channel-pairing": () =>
     import("./server-methods/channel-pairing.js").then((module) => module.channelPairingHandlers),
   chat: () => import("./server-methods/chat.js").then((module) => module.chatHandlers),
+  // Cancellation must not wait for unrelated chat history and send workflows to load.
+  "chat-abort": () =>
+    import("./server-methods/chat-abort-handler.js").then((module) => ({
+      "chat.abort": module.handleChatAbortRequest,
+    })),
   commands: () => import("./server-methods/commands.js").then((module) => module.commandsHandlers),
   config: () => import("./server-methods/config.js").then((module) => module.configHandlers),
   conversations: () =>
@@ -164,6 +175,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-create": () =>
     import("./server-methods/sessions-create.js").then((module) => module.sessionCreateHandlers),
+  "sessions-title": () =>
+    import("./server-methods/sessions-title.js").then((module) => module.sessionTitleHandlers),
   "sessions-recover": () =>
     import("./server-methods/sessions-recover.js").then((module) => module.sessionRecoverHandlers),
   "sessions-delete": () =>
@@ -174,6 +187,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-groups": () =>
     import("./server-methods/sessions-groups.js").then((module) => module.sessionGroupHandlers),
+  "sessions-goal": () =>
+    import("./server-methods/sessions-goal.js").then((module) => module.sessionGoalHandlers),
   "sessions-messaging": () =>
     import("./server-methods/sessions-messaging.js").then(
       (module) => module.sessionMessagingHandlers,
@@ -248,10 +263,7 @@ function authorizeGatewayMethod(
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect) {
-    return null;
-  }
-  if (method === "health") {
+  if (!client?.connect || method === "health") {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";
@@ -264,6 +276,11 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
+    return null;
+  }
+  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
+    // Scope recovery must remain reachable from a paired operator whose grant is empty;
+    // the handlers bind both calls to the connection's exact device identity.
     return null;
   }
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -292,8 +309,62 @@ const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.resume",
 ]);
 
-function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
-  return SUSPEND_CONTROL_METHODS.has(method);
+function runGatewayPendingWorkContinuation<T>(params: {
+  method: string;
+  client: GatewayRequestOptions["client"];
+  requestParams: unknown;
+  context: GatewayRequestContext;
+  run: () => Promise<T>;
+}): Promise<T> | null {
+  if (!isRecord(params.requestParams)) {
+    return null;
+  }
+  const request = params.requestParams;
+  if (params.client?.connect.role === "node") {
+    if (getGatewaySuspendAdmissionPhase() !== "draining" && !isGatewayRestartDraining()) {
+      return null;
+    }
+    const invokeId =
+      params.method === "node.invoke.progress"
+        ? request.invokeId
+        : params.method === "node.invoke.result"
+          ? request.id
+          : undefined;
+    if (typeof invokeId !== "string" || typeof request.nodeId !== "string") {
+      return null;
+    }
+    return params.context.nodeRegistry.runPendingInvokeContinuation({
+      invokeId,
+      nodeId: request.nodeId,
+      connId: params.client.connId,
+      run: params.run,
+    });
+  }
+  if (
+    getGatewaySuspendAdmissionPhase() !== "draining" ||
+    params.client?.connect.role !== "operator" ||
+    typeof request.id !== "string"
+  ) {
+    return null;
+  }
+  if (params.method === "question.resolve" || params.method === "question.get") {
+    return params.context.questionManager?.runPendingContinuation(request.id, params.run) ?? null;
+  }
+  const manager =
+    params.method === "exec.approval.resolve"
+      ? params.context.execApprovalManager
+      : params.method === "plugin.approval.resolve"
+        ? params.context.pluginApprovalManager
+        : params.method === "approval.resolve"
+          ? request.kind === "exec"
+            ? params.context.execApprovalManager
+            : request.kind === "plugin"
+              ? params.context.pluginApprovalManager
+              : request.kind === "system-agent"
+                ? params.context.systemAgentApprovalManager
+                : undefined
+          : undefined;
+  return manager?.runPendingContinuation(request.id, params.run) ?? null;
 }
 
 async function authorizeAuthenticatedProfileForMethod(params: {
@@ -505,11 +576,25 @@ export async function runWithGatewayRequestEnvelope<T>(
     return await options.reject(preAdmissionRateLimitError);
   }
   const rootWorkAdmission =
-    tryBeginGatewayRootWorkAdmission() ??
+    tryBeginGatewayRootWorkAdmission(`ws:${method}`) ??
     (method === "gateway.restart.request" &&
     isTargetedNonSafeGatewayRestartRequest(options.requestParams)
       ? tryBeginGatewayPreparedRestartRootWorkAdmission()
       : null);
+  if (!rootWorkAdmission) {
+    // Completion frames arrive on separate socket chains. Their exact pending owner
+    // may settle them without admitting a new root, including rootless shutdown cleanup.
+    const continuation = runGatewayPendingWorkContinuation({
+      method,
+      client,
+      requestParams: options.requestParams,
+      context: options.context,
+      run: invokeWithRequestScope,
+    });
+    if (continuation) {
+      return await continuation;
+    }
+  }
   if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
     return await options.reject(
       errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
@@ -519,7 +604,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }),
     );
   }
-  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method)) {
+  if (!rootWorkAdmission && !SUSPEND_CONTROL_METHODS.has(method)) {
     const restartDraining = isGatewayRestartDraining();
     return await options.reject(
       errorShape(
@@ -530,26 +615,24 @@ export async function runWithGatewayRequestEnvelope<T>(
           retryAfterMs: 1_000,
           details: {
             method,
-            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            reason: restartDraining
+              ? GATEWAY_RESTART_UNAVAILABLE_REASON
+              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
             phase: getGatewaySuspendAdmissionPhase(),
           },
         },
       ),
     );
   }
-  const postAdmissionRateLimitError = isSuspendPrepare
-    ? undefined
-    : rejectRateLimitedControlPlaneWrite();
-  if (postAdmissionRateLimitError) {
+  async function invokeWithRequestScope() {
+    const postAdmissionRateLimitError = isSuspendPrepare
+      ? undefined
+      : rejectRateLimitedControlPlaneWrite();
     // A closed admission must reject first so refused writes do not exhaust the controller's
     // budget and strand it behind rate limiting after suspension resumes.
-    try {
+    if (postAdmissionRateLimitError) {
       return await options.reject(postAdmissionRateLimitError);
-    } finally {
-      rootWorkAdmission?.release();
     }
-  }
-  const invokeWithRequestScope = async () => {
     try {
       const pluginRegistry =
         (options.methodRegistry.pluginRegistry as
@@ -561,8 +644,12 @@ export async function runWithGatewayRequestEnvelope<T>(
       return await withPluginRuntimeGatewayRequestScope(
         {
           context: options.context,
+          // Detached turn admission needs the live instance resolver, not a captured request context.
+          resolveGatewayContext: options.context.resolveGatewayContext,
           client,
           isWebchatConnect: options.isWebchatConnect,
+          // Only an owner-bound in-process stream may retain admitted Full authority.
+          ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
           ...(pluginRegistry ? { pluginRegistry } : {}),
         },
         fn,
@@ -577,7 +664,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }
       throw error;
     }
-  };
+  }
   if (!rootWorkAdmission) {
     return await invokeWithRequestScope();
   }
@@ -630,6 +717,9 @@ export async function handleGatewayRequest(
       respond,
       context,
       ...(signal ? { signal } : {}),
+      ...(opts.sessionMutationCommitGuard
+        ? { sessionMutationCommitGuard: opts.sessionMutationCommitGuard }
+        : {}),
       ...(authorization.sessionMutationAuthorization
         ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
         : {}),

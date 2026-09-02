@@ -36,7 +36,12 @@ type ChatPagePaneRenderOptions = {
     sessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => boolean;
-  onSessionDeleted: (paneId: string, sessionKey: string, replacementSessionKey: string) => void;
+  onSessionDeleted: (
+    paneId: string,
+    sessionKey: string,
+    replacementSessionKey: string,
+    preserveDraft?: boolean,
+  ) => void;
   onSplitDown?: (paneId: string) => void;
   onSplitRight?: (paneId: string) => void;
   ownerKey: string;

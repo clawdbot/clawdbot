@@ -6,6 +6,7 @@ export type PickerOption = {
   value: string;
   label: string;
   description?: string;
+  labelStyle?: string;
   disabled?: boolean;
 };
 
@@ -46,6 +47,7 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
       class=${`settings-select picker-select ${params.className ?? ""}`}
       style="width:100%;min-width:min(138px,100%)"
       title=${params.title ?? nothing}
+      placeholder=${params.value === null ? params.label : nothing}
       placement=${params.placement ?? nothing}
       .value=${params.value}
       ?disabled=${params.disabled}
@@ -75,7 +77,9 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
           >
             ${leading(option)}
             <span class="picker-select__copy">
-              <span class="picker-select__label">${option.label}</span>
+              <span class="picker-select__label" style=${option.labelStyle ?? nothing}
+                >${option.label}</span
+              >
               ${option.description
                 ? html`<span class="picker-select__description">${option.description}</span>`
                 : nothing}

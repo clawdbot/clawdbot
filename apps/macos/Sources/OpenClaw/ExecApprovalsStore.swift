@@ -118,6 +118,7 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
+    private static let cwdBoundArgPatternPrefix = "sha256:cwd-argv:v1:"
 
     #if compiler(>=6.4)
     nonisolated(nonsending) static func withStateDirectory<T>(
@@ -787,6 +788,15 @@ extension ExecApprovalsStore {
         let now = Date().timeIntervalSince1970 * 1000
         for grant in grants {
             let incoming = grant.match
+            if incoming.argPattern?.hasPrefix(self.cwdBoundArgPatternPrefix) == true {
+                // Renewing trust for one executable also clears its inactive
+                // pre-cwd grants, which can never authorize after this upgrade.
+                allowlist.removeAll { item in
+                    item.pattern == incoming.pattern &&
+                        item.source == "allow-always" &&
+                        item.argPattern?.hasPrefix(self.cwdBoundArgPatternPrefix) != true
+                }
+            }
             if let index = allowlist.firstIndex(where: {
                 self.allowlistEntryMatchKey($0) == self.allowlistEntryMatchKey(incoming)
             }) {
@@ -846,7 +856,35 @@ extension ExecApprovalsStore {
     }
 
     private static func shouldRecordLastUsedCommand(for entry: ExecAllowlistEntry) -> Bool {
-        !(entry.argPattern?.hasPrefix("sha256:argv:") ?? false)
+        !(entry.argPattern?.hasPrefix("sha256:") ?? false)
+    }
+
+    @discardableResult
+    static func removeObsoleteGeneratedAllowAlwaysEntries() -> Result<Int, ExecApprovalsMutationError> {
+        var removed = 0
+        let result = self.updateFile { file in
+            var agents = file.agents ?? [:]
+            for (key, var agent) in agents {
+                let current = agent.allowlist ?? []
+                let retained = current.filter { item in
+                    let pattern = item.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let keep = item.source != "allow-always" ||
+                        pattern.hasPrefix("=command:") ||
+                        pattern.hasPrefix("=node-command:") ||
+                        item.argPattern?.hasPrefix(self.cwdBoundArgPatternPrefix) == true
+                    if !keep { removed += 1 }
+                    return keep
+                }
+                if retained.count != current.count {
+                    agent.allowlist = retained
+                    agents[key] = agent
+                }
+            }
+            if removed > 0 {
+                file.agents = agents
+            }
+        }
+        return result.map { removed }
     }
 
     @discardableResult

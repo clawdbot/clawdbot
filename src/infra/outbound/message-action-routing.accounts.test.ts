@@ -7,7 +7,9 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
+  messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
@@ -154,6 +156,50 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleAction).toHaveBeenCalledOnce();
       expect(readFirstPluginCall(handleAction).accountId).toBe("ops");
     });
+
+    it("leaves an omitted account absent when delegating an action to the Gateway", async () => {
+      setTestPlugin(
+        {
+          ...accountPlugin,
+          config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
+          actions: { ...accountPlugin.actions, resolveExecutionMode: () => "gateway" },
+        },
+        "accountchat",
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+      await runMessageAction({
+        cfg: {},
+        action: "send",
+        params: { channel: "accountchat", target: "channel:123", message: "hi" },
+        gateway: { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI },
+      });
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
+      const rpc = requireRecord(readFirstPluginCall(mocks.callGatewayLeastPrivilege).params);
+      expect(rpc.accountId).toBeUndefined();
+      expect(requireRecord(rpc.params).accountId).toBeUndefined();
+    });
+
+    it.each([false, true])(
+      "leaves omitted outbound Gateway account selection remote (dryRun=%s)",
+      async (dryRun) => {
+        setTestPlugin(
+          {
+            ...accountPlugin,
+            config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
+            outbound: { deliveryMode: "gateway" },
+          },
+          "accountchat",
+        );
+        const { prepareMessageRoute } = await import("./message-action-routing.js");
+        const route = await prepareMessageRoute({
+          input: { cfg: {}, action: "send", params: {}, dryRun },
+          actionParams: { channel: "accountchat", target: "channel:123", message: "hi" },
+        });
+        expect(route.accountId).toBeUndefined();
+        expect(route.params).not.toHaveProperty("accountId");
+      },
+    );
 
     it.each([
       { name: "malformed", accountId: "!!!", error: "Invalid account ID" },

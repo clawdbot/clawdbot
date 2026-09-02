@@ -8,6 +8,13 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
+const mobileReleasePaths = [
+  "apps/mobile/version.json",
+  "apps/android/version.json",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/ios/CHANGELOG.md",
+] as const;
 
 type WrapperCase = readonly [scriptPath: string, args: readonly string[], option: string];
 
@@ -156,7 +163,44 @@ describe("iOS release shell wrapper arguments", () => {
     expect(script).toContain('export GIT_COMMIT="${RELEASE_GIT_COMMIT}"');
   });
 
-  function runSharedFastlane(options: { fastlaneExit: number; bundleGemfile?: string }) {
+  it("retires standalone iOS cutting before any shared release artifact changes", () => {
+    const before = new Map(
+      mobileReleasePaths.map((relativePath) => [
+        relativePath,
+        readFileSync(path.join(process.cwd(), relativePath), "utf8"),
+      ]),
+    );
+    const shellResult = runScript(path.join(process.cwd(), "scripts", "ios-release-cut.sh"), []);
+    const directResult = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.join(process.cwd(), "scripts", "ios-release-cut.ts"),
+        "--plan",
+        "/tmp/legacy-ios-plan.json",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shellResult.ok).toBe(false);
+    expect(shellResult.stderr).toContain("Standalone iOS release cutting is retired");
+    expect(shellResult.stderr).not.toContain("fastlane");
+    expect(directResult.status).toBe(1);
+    expect(directResult.stderr).toContain("Standalone iOS release cutting is retired");
+    for (const [relativePath, content] of before) {
+      expect(readFileSync(path.join(process.cwd(), relativePath), "utf8")).toBe(content);
+    }
+  });
+
+  function runSharedFastlane(options: {
+    fastlaneExit: number;
+    bundleGemfile?: string;
+    changeDirectoryAfterSource?: boolean;
+  }) {
     const binDir = tempDirs.make("openclaw-fastlane-test-");
     const bundle = path.join(binDir, "bundle");
     const fastlane = path.join(binDir, "fastlane");
@@ -175,7 +219,12 @@ describe("iOS release shell wrapper arguments", () => {
     chmodSync(fastlane, 0o755);
     return spawnSync(
       BASH_BIN,
-      ["-c", "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan"],
+      [
+        "-c",
+        options.changeDirectoryAfterSource
+          ? "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"
+          : "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan",
+      ],
       {
         cwd: process.cwd(),
         env: {
@@ -197,6 +246,16 @@ describe("iOS release shell wrapper arguments", () => {
   it("overrides a hostile inherited Gemfile in the shared runner", () => {
     const result = runSharedFastlane({
       bundleGemfile: "/tmp/hostile/Gemfile",
+      fastlaneExit: 0,
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("keeps the repository Gemfile after the caller changes directories", () => {
+    const result = runSharedFastlane({
+      bundleGemfile: "/tmp/hostile/Gemfile",
+      changeDirectoryAfterSource: true,
       fastlaneExit: 0,
     });
 

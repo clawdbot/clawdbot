@@ -169,14 +169,6 @@ export function decodeWindowsOutputBuffer(params: {
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
 }): string {
-  if ((params.platform ?? process.platform) !== "win32") {
-    return params.buffer.toString("utf8");
-  }
-  const [first, second] = params.buffer;
-  if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
-    const decoder = createWindowsOutputDecoder(params);
-    return decoder.decode(params.buffer) + decoder.flush();
-  }
   return decodeWindowsBufferWithFallback({
     ...params,
     resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsConsoleEncoding(),
@@ -203,6 +195,13 @@ function decodeWindowsBufferWithFallback(params: {
   const platform = params.platform ?? process.platform;
   if (platform !== "win32") {
     return params.buffer.toString("utf8");
+  }
+
+  // Windows PowerShell files and command output can declare UTF-16 with a BOM;
+  // honor it before consulting either the system or console legacy code page.
+  const [first, second] = params.buffer;
+  if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
+    return new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be").decode(params.buffer);
   }
 
   const utf8 = decodeStrictUtf8(params.buffer);

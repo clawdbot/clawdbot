@@ -6,7 +6,10 @@ import {
   resolvePersistedOverrideModelRef,
 } from "../agents/model-selection-persisted.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
-import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  resolveSessionModelOverrideRouteResolution,
+} from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 /** Model override loaded from the current session or its parent session. */
@@ -90,8 +93,12 @@ export function resolveStoredModelOverride(params: {
   if (!parentKey) {
     return null;
   }
+  const parentEntry = params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey];
+  if (hasSessionActiveAutoModelFallback(parentEntry)) {
+    return null;
+  }
   return resolveStoredOverrideFromEntry({
-    entry: params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey],
+    entry: parentEntry,
     defaultProvider: params.defaultProvider,
     source: "parent",
   });

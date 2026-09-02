@@ -1,23 +1,17 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.voice.LocalSpeechSpeaking
 import ai.openclaw.app.voice.TalkAudioPlaying
 import ai.openclaw.app.voice.TalkSpeakAudio
-import android.content.Context
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -28,24 +22,21 @@ private const val TAG = "MessageSpeech"
 internal enum class MessageSpeechPhase {
   Preparing,
   Speaking,
+  Failed,
 }
 
-/** Playback state for the chat Listen action; null when idle. */
+/** Listen state; a failed request remains retryable without claiming audio or microphone use. */
 internal data class MessageSpeechState(
   val messageId: String,
   val phase: MessageSpeechPhase,
-)
+) {
+  val isActive: Boolean
+    get() = phase != MessageSpeechPhase.Failed
+}
 
 /** Renders message text to an audio clip; null means fall back to local TTS. */
 internal fun interface MessageSpeechSynthesizing {
   suspend fun synthesize(text: String): TalkSpeakAudio?
-}
-
-/** Speaks text with the on-device engine when the gateway cannot render audio. */
-internal interface LocalSpeechSpeaking {
-  suspend fun speak(text: String)
-
-  fun stop()
 }
 
 /** Gateway tts.speak client using the general configured TTS provider chain. */
@@ -141,7 +132,7 @@ internal class MessageSpeechController(
     messageId: String,
     text: String,
   ) {
-    if (_state.value?.messageId == messageId) {
+    if (_state.value?.let { it.messageId == messageId && it.isActive } == true) {
       stop()
       return
     }
@@ -175,8 +166,13 @@ internal class MessageSpeechController(
           if (!playClip(clip) && generation.get() == token) {
             localSpeech.speak(spoken)
           }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          Log.w(TAG, "local speech failed: ${err.message ?: err::class.simpleName}")
+          if (generation.get() == token) _state.value = MessageSpeechState(messageId, MessageSpeechPhase.Failed)
         } finally {
-          if (generation.get() == token) _state.value = null
+          if (generation.get() == token && _state.value?.isActive == true) _state.value = null
         }
       }
   }
@@ -192,112 +188,5 @@ internal class MessageSpeechController(
       Log.w(TAG, "clip playback failed: ${err.message ?: err::class.simpleName}")
       false
     }
-  }
-}
-
-/** Minimal on-device TTS wrapper for the chat Listen fallback voice. */
-internal class SystemSpeechSpeaker(
-  private val context: Context,
-) : LocalSpeechSpeaking {
-  private val lock = Any()
-  private var engine: TextToSpeech? = null
-  private var ready: CompletableDeferred<Boolean>? = null
-  private var active: CompletableDeferred<Unit>? = null
-
-  override suspend fun speak(text: String) {
-    val engine = ensureEngine() ?: return
-    val utteranceId = "chat-listen-${System.nanoTime()}"
-    val done = CompletableDeferred<Unit>()
-    synchronized(lock) {
-      active?.cancel()
-      active = done
-    }
-    withContext(Dispatchers.Main.immediate) {
-      engine.setOnUtteranceProgressListener(
-        object : UtteranceProgressListener() {
-          override fun onStart(id: String?) {}
-
-          override fun onDone(id: String?) {
-            if (id == utteranceId) done.complete(Unit)
-          }
-
-          @Deprecated("Deprecated in Java")
-          override fun onError(id: String?) {
-            if (id == utteranceId) done.complete(Unit)
-          }
-
-          override fun onError(
-            id: String?,
-            errorCode: Int,
-          ) {
-            if (id == utteranceId) done.complete(Unit)
-          }
-        },
-      )
-      if (engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) != TextToSpeech.SUCCESS) {
-        done.complete(Unit)
-      }
-    }
-    try {
-      done.await()
-    } finally {
-      synchronized(lock) {
-        if (active === done) active = null
-      }
-    }
-  }
-
-  override fun stop() {
-    synchronized(lock) {
-      active?.cancel()
-      active = null
-    }
-    engine?.stop()
-  }
-
-  private suspend fun ensureEngine(): TextToSpeech? {
-    val current = synchronized(lock) { ready }
-    val pending = current ?: createEngine()
-    if (pending.await()) return synchronized(lock) { engine }
-
-    // A failed Android TTS service can recover later; do not cache its failed initialization.
-    val failedEngine =
-      synchronized(lock) {
-        if (ready !== pending) return null
-        ready = null
-        engine.also { engine = null }
-      }
-    withContext(Dispatchers.Main.immediate) { failedEngine?.shutdown() }
-    return null
-  }
-
-  private suspend fun createEngine(): CompletableDeferred<Boolean> {
-    val pending = CompletableDeferred<Boolean>()
-    val ownsInitialization =
-      synchronized(lock) {
-        if (ready != null) {
-          false
-        } else {
-          ready = pending
-          true
-        }
-      }
-    if (!ownsInitialization) return synchronized(lock) { checkNotNull(ready) }
-
-    val created =
-      try {
-        // Finish publishing the constructed engine even if the Listen job is stopped mid-init.
-        withContext(NonCancellable + Dispatchers.Main.immediate) {
-          TextToSpeech(context) { status -> pending.complete(status == TextToSpeech.SUCCESS) }
-        }
-      } catch (err: Throwable) {
-        Log.d(TAG, "system TTS initialization failed: ${err.message ?: err::class.simpleName}")
-        pending.complete(false)
-        null
-      }
-    synchronized(lock) {
-      if (ready === pending) engine = created else created?.shutdown()
-    }
-    return pending
   }
 }

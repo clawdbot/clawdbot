@@ -39,15 +39,15 @@ export function createMatrixQaE2eeClientLifecycle(params: {
   drainPendingDecryptions: () => Promise<void>;
   shutdownTimeoutMs: number;
   stopAndPersist: () => Promise<void>;
-  stopWithoutPersist: () => void;
+  stopWithoutPersist: () => Promise<void>;
 }) {
   const activeOperations = new Set<Promise<unknown>>();
   let shutdownStarted = false;
   let stopPromise: Promise<void> | undefined;
 
-  const failShutdown = (phase: string, cause: unknown): never => {
+  const failShutdown = async (phase: string, cause: unknown): Promise<never> => {
     try {
-      params.stopWithoutPersist();
+      await params.stopWithoutPersist();
     } catch {
       // Preserve the lifecycle failure that explains why persistence was skipped.
     }
@@ -70,17 +70,15 @@ export function createMatrixQaE2eeClientLifecycle(params: {
           Promise.allSettled(activeOperations),
           graceMs,
           "active Matrix SDK operations did not settle before shutdown",
-        ).catch((error: unknown) => {
-          failShutdown("waiting for active Matrix SDK operations", error);
-        });
+        ).catch((error: unknown) =>
+          failShutdown("waiting for active Matrix SDK operations", error),
+        );
       }
       await withMatrixQaE2eeTimeout(
         params.drainPendingDecryptions(),
         Math.max(0, deadline - Date.now()),
         "pending Matrix decryptions did not drain before shutdown",
-      ).catch((error: unknown) => {
-        failShutdown("draining pending Matrix decryptions", error);
-      });
+      ).catch((error: unknown) => failShutdown("draining pending Matrix decryptions", error));
       await params.stopAndPersist();
     })();
     return stopPromise;

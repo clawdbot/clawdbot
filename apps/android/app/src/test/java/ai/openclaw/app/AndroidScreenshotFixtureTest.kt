@@ -10,32 +10,33 @@ import org.junit.Test
 
 class AndroidScreenshotFixtureTest {
   private val json = Json { ignoreUnknownKeys = true }
+  private val request = AndroidScreenshotFixture.createRequester()
 
   @Test
   fun providesDeterministicProductionScreenData() {
     val sessions =
       json
-        .parseToJsonElement(AndroidScreenshotFixture.request("sessions.list", null))
+        .parseToJsonElement(request("sessions.list", null))
         .jsonObject["sessions"]
         ?.jsonArray
         .orEmpty()
     val metadata =
       json
-        .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
+        .parseToJsonElement(request("chat.metadata", null))
         .jsonObject
     val cronJobs =
       json
-        .parseToJsonElement(AndroidScreenshotFixture.request("cron.list", null))
+        .parseToJsonElement(request("cron.list", null))
         .jsonObject["jobs"]
         ?.jsonArray
         .orEmpty()
     val cronDetail =
       json
-        .parseToJsonElement(AndroidScreenshotFixture.request("cron.get", null))
+        .parseToJsonElement(request("cron.get", null))
         .jsonObject
     val cronRunEntries =
       json
-        .parseToJsonElement(AndroidScreenshotFixture.request("cron.runs", null))
+        .parseToJsonElement(request("cron.runs", null))
         .jsonObject["entries"]
         ?.jsonArray
     val parsedCronRuns = parseGatewayCronRunHistory(cronRunEntries)
@@ -50,7 +51,7 @@ class AndroidScreenshotFixtureTest {
         ?.content,
     )
     assertEquals(1, metadata["models"]?.jsonArray?.size)
-    assertEquals(1, metadata["commands"]?.jsonArray?.size)
+    assertEquals(6, metadata["commands"]?.jsonArray?.size)
     assertEquals(
       AndroidScreenshotFixture.cronJobName,
       cronJobs
@@ -74,13 +75,13 @@ class AndroidScreenshotFixtureTest {
       val params = "{\"spawnedBy\":\"${AndroidScreenshotFixture.mainSessionKey}\"}"
       val sessions =
         json
-          .parseToJsonElement(AndroidScreenshotFixture.request("sessions.list", params))
+          .parseToJsonElement(request("sessions.list", params))
           .jsonObject["sessions"]
           ?.jsonArray
           .orEmpty()
       val metadata =
         json
-          .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
+          .parseToJsonElement(request("chat.metadata", null))
           .jsonObject
       assertEquals("true", metadata["swarmEnabled"]?.jsonPrimitive?.content)
       assertEquals(5, sessions.size)
@@ -98,12 +99,12 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
-  fun providesDeterministicChatHistory() {
+  fun providesDeterministicRecentChatHistory() {
     val history =
       json
-        .parseToJsonElement(AndroidScreenshotFixture.request("chat.history", null))
+        .parseToJsonElement(request("chat.history", null))
         .jsonObject
-    val messages = history["messages"]?.jsonArray.orEmpty()
+    val messages = history["messages"]?.jsonArray.orEmpty().takeLast(10)
 
     assertEquals(
       listOf(
@@ -166,7 +167,7 @@ class AndroidScreenshotFixtureTest {
     val greeting =
       json
         .parseToJsonElement(
-          AndroidScreenshotFixture.request(
+          request(
             "openclaw.chat",
             """{"sessionId":"android-settings-openclaw-test"}""",
           ),
@@ -174,7 +175,7 @@ class AndroidScreenshotFixtureTest {
     val response =
       json
         .parseToJsonElement(
-          AndroidScreenshotFixture.request(
+          request(
             "openclaw.chat",
             """{"sessionId":"android-settings-openclaw-test","message":"Check status"}""",
           ),
@@ -199,7 +200,7 @@ class AndroidScreenshotFixtureTest {
   fun rejectsUnexpectedGatewayCalls() {
     val error =
       assertThrows(IllegalStateException::class.java) {
-        AndroidScreenshotFixture.request("gateway.unexpected", null)
+        request("gateway.unexpected", null)
       }
 
     assertEquals(

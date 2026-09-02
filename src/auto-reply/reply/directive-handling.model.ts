@@ -367,8 +367,17 @@ export async function maybeHandleModelDirectiveInfo(params: {
   if (params.directives.rawModelRuntime) {
     return { text: "Runtime override requires a model selection.", isError: true };
   }
-  if (params.directives.modelSessionOnly) {
-    return { text: "Session-only scope requires a model selection.", isError: true };
+  if (params.directives.modelScope) {
+    const scopeLabel =
+      params.directives.modelScope === "session"
+        ? "Session-only"
+        : params.directives.modelScope === "agent"
+          ? "Agent"
+          : "Global";
+    return {
+      text: `${scopeLabel} scope requires a model selection.`,
+      isError: true,
+    };
   }
 
   if (wantsLegacyList) {
@@ -420,9 +429,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
           activeRuntimeLine,
           thinkingLine,
           "",
-          "Tap below to switch this session only, or use:",
-          "/model <provider/model> for session + owner/admin default update",
+          "Tap below to select a model, or use:",
           "/model <provider/model> -s for this session only",
+          "/model <provider/model> -a to update this agent's default",
+          "/model <provider/model> -g to update the global default",
           "/model <provider/model> --runtime <runtime> -s to switch harnesses",
           "/model status for details",
         ]
@@ -438,8 +448,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
         activeRuntimeLine,
         thinkingLine,
         "",
-        "Direct: /model <provider/model> (owner/admin requests a default update)",
-        "Session only: /model <provider/model> -s",
+        "Session: /model <provider/model> -s",
+        "Agent default: /model <provider/model> -a",
+        "Global default: /model <provider/model> -g",
         "Runtime: /model <provider/model> --runtime <runtime> -s",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",

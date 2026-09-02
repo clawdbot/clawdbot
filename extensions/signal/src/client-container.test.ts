@@ -1588,19 +1588,6 @@ describe("containerRestRequest edge cases", () => {
     expect(result.items[0]?.id).toBe(0);
     expect(result.items[49_999]?.id).toBe(49_999);
   });
-
-  it("returns undefined for an empty success body via the bounded reader", async () => {
-    // The bounded reader must preserve the existing empty-body -> undefined contract
-    // (no spurious JSON.parse("") throw) so well-behaved 200/empty responses are unchanged.
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      ...bodyStream(""),
-    });
-
-    const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
-    expect(result).toBeUndefined();
-  });
 });
 
 describe("streamContainerEvents", () => {

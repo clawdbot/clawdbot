@@ -2,7 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -89,6 +90,26 @@ describe("gateway caller context wrapper", () => {
     }
 
     expect(seen).toEqual([identity, identity]);
+  });
+
+  it("pins caller identity to the Gateway present at admission", async () => {
+    const admitted = {} as GatewayRequestContext;
+    const replacement = {} as GatewayRequestContext;
+    let current = admitted;
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "agent-a",
+        sessionKey: "agent-a:session",
+        gatewayContextResolver: () => current,
+      },
+      () => {
+        const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+        expect(resolveGatewayContext?.()).toBe(admitted);
+        current = replacement;
+        expect(resolveGatewayContext?.()).toBeUndefined();
+      },
+    );
   });
 
   it("scopes nested approval ownership without replacing the native runtime owner", async () => {
@@ -200,6 +221,9 @@ describe("gateway caller context wrapper", () => {
     const outer = vi.fn(() => outerActive);
     const inner = vi.fn(() => innerActive);
     let receiptAuthority: (() => boolean | void) | undefined;
+    const outerSignal = new AbortController();
+    const innerSignal = new AbortController();
+    let approvalSignals: readonly AbortSignal[] | undefined;
 
     await withGatewayToolCallerIdentity(
       {
@@ -207,6 +231,7 @@ describe("gateway caller context wrapper", () => {
         sessionKey: "agent:outer:session",
         operationalRunInstance,
         receiptAuthority: outer,
+        approvalSignals: [outerSignal.signal],
       },
       async () => {
         await withGatewayToolCallerIdentity(
@@ -215,9 +240,11 @@ describe("gateway caller context wrapper", () => {
             sessionKey: "agent:inner:session",
             operationalRunInstance,
             receiptAuthority: inner,
+            approvalSignals: [innerSignal.signal],
           },
           () => {
             receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
+            approvalSignals = getGatewayToolCallerIdentity()?.approvalSignals;
           },
         );
       },
@@ -231,12 +258,16 @@ describe("gateway caller context wrapper", () => {
     expect(receiptAuthority?.()).toBe(false);
     expect(outer).toHaveBeenCalledTimes(3);
     expect(inner).toHaveBeenCalledTimes(3);
+    expect(approvalSignals).toEqual([outerSignal.signal, innerSignal.signal]);
   });
 
   it("starts distinct admitted runs with a new receipt-authority root", async () => {
     const outer = vi.fn(() => false);
     const child = vi.fn(() => true);
     let receiptAuthority: (() => boolean | void) | undefined;
+    const outerSignal = AbortSignal.abort();
+    const childSignal = new AbortController().signal;
+    let approvalSignals: readonly AbortSignal[] | undefined;
 
     await withGatewayToolCallerIdentity(
       {
@@ -244,6 +275,7 @@ describe("gateway caller context wrapper", () => {
         sessionKey: "agent:outer:session",
         operationalRunInstance: { instanceId: "outer-instance", runId: "outer-run" },
         receiptAuthority: outer,
+        approvalSignals: [outerSignal],
       },
       async () => {
         await withGatewayToolCallerIdentity(
@@ -252,9 +284,11 @@ describe("gateway caller context wrapper", () => {
             sessionKey: "agent:child:session",
             operationalRunInstance: { instanceId: "child-instance", runId: "child-run" },
             receiptAuthority: child,
+            approvalSignals: [childSignal],
           },
           () => {
             receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
+            approvalSignals = getGatewayToolCallerIdentity()?.approvalSignals;
           },
         );
       },
@@ -263,5 +297,6 @@ describe("gateway caller context wrapper", () => {
     expect(receiptAuthority?.()).toBe(true);
     expect(child).toHaveBeenCalledOnce();
     expect(outer).not.toHaveBeenCalled();
+    expect(approvalSignals).toEqual([childSignal]);
   });
 });

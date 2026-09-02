@@ -1,12 +1,12 @@
 // `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  tracePluginLifecyclePhase,
-  tracePluginLifecyclePhaseAsync,
-} from "../plugins/plugin-lifecycle-trace.js";
+import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
+import { resolveInstalledPluginPackageOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
@@ -127,18 +127,29 @@ export async function runPluginsInspectCommand(
     buildPluginSnapshotReport,
     formatPluginCompatibilityNotice,
   } = await import("../plugins/status.js");
-  const { loadInstalledPluginIndexInstallRecords } =
-    await import("../plugins/installed-plugin-index-records.js");
+  const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
   const cfg = tracePluginLifecyclePhase("config read", () => getRuntimeConfig(), {
     command: "inspect",
   });
-  const installRecords = await tracePluginLifecyclePhaseAsync(
-    "install records load",
-    () => loadInstalledPluginIndexInstallRecords(),
+  const { workspaceDir } = resolvePluginControlPlaneWorkspace({ config: cfg });
+  const metadataSnapshot = tracePluginLifecyclePhase(
+    "plugin metadata load",
+    () => loadPluginMetadataSnapshot({ config: cfg, workspaceDir }),
     { command: "inspect" },
   );
+  const resolveInstallRecord = (pluginId: string) => {
+    // Runtime child ids need the package owner's record; ambiguous ownership
+    // must not borrow provenance from an unrelated same-id install.
+    const ownership = resolveInstalledPluginPackageOwnership(metadataSnapshot.index, pluginId);
+    return ownership.ok ? ownership.value.installRecord : undefined;
+  };
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
   const runtimeInspect = opts.runtime === true;
+  const reportParams = { config: cfg, metadataSnapshot, ...loggerParams };
+  const runtimeReportParams = {
+    ...reportParams,
+    runtimeInspection: true,
+  };
   if (opts.all) {
     if (id) {
       failPluginInspect("Pass either a plugin id or --all, not both.", opts.json);
@@ -147,20 +158,12 @@ export async function runPluginsInspectCommand(
     const report = runtimeInspect
       ? tracePluginLifecyclePhase(
           "runtime plugin registry load",
-          () =>
-            buildPluginDiagnosticsReport({
-              config: cfg,
-              ...loggerParams,
-            }),
+          () => buildPluginDiagnosticsReport(runtimeReportParams),
           { command: "inspect", all: true },
         )
       : tracePluginLifecyclePhase(
           "plugin registry snapshot",
-          () =>
-            buildPluginSnapshotReport({
-              config: cfg,
-              ...loggerParams,
-            }),
+          () => buildPluginSnapshotReport(reportParams),
           { command: "inspect", all: true },
         );
     const inspectAll = buildAllPluginInspectReports({
@@ -170,7 +173,7 @@ export async function runPluginsInspectCommand(
     });
     const inspectAllWithInstall = inspectAll.map((inspect) => ({
       ...inspect,
-      install: installRecords[inspect.plugin.id],
+      install: resolveInstallRecord(inspect.plugin.id),
     }));
 
     if (opts.json) {
@@ -228,29 +231,32 @@ export async function runPluginsInspectCommand(
 
   const snapshotReport = tracePluginLifecyclePhase(
     "plugin registry snapshot",
-    () =>
-      buildPluginSnapshotReport({
-        config: cfg,
-        ...loggerParams,
-      }),
+    () => buildPluginSnapshotReport(reportParams),
     { command: "inspect" },
   );
-  const targetPlugin = snapshotReport.plugins.find((entry) => entry.id === id || entry.name === id);
+  const targetPlugin =
+    snapshotReport.plugins.find((entry) => entry.id === id) ??
+    snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
     if (id === "skill-workshop") {
       const { detectSkillWorkshopToolPolicyDiagnostic } =
         await import("../skills/workshop/tool-policy-diagnostic.js");
-      const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-        config: cfg,
-        // Invoking the legacy inspect id is explicit Workshop intent even when
-        // autonomous capture is off; report manual-tool availability too.
-        workshopEnabled: true,
-      });
+      // An explicit multi-agent roster has no single default diagnostic owner.
+      const agentIds = listAgentIds(cfg);
       const lines = [
         "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
       ];
-      if (diagnostic) {
-        lines.push(diagnostic.message);
+      for (const agentId of agentIds.length > 0 ? agentIds : [undefined]) {
+        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+          config: cfg,
+          // Invoking the legacy inspect id is explicit Workshop intent even when
+          // autonomous capture is off; report manual-tool availability too.
+          workshopEnabled: true,
+          ...(agentId ? { agentId } : {}),
+        });
+        if (diagnostic) {
+          lines.push(diagnostic.message);
+        }
       }
       failPluginInspect(lines.join("\n"), opts.json);
       return;
@@ -263,8 +269,7 @@ export async function runPluginsInspectCommand(
         "runtime plugin registry load",
         () =>
           buildPluginDiagnosticsReport({
-            config: cfg,
-            ...loggerParams,
+            ...runtimeReportParams,
             onlyPluginIds: [targetPlugin.id],
           }),
         { command: "inspect", pluginId: targetPlugin.id },
@@ -283,7 +288,7 @@ export async function runPluginsInspectCommand(
     );
     return;
   }
-  const install = installRecords[inspect.plugin.id];
+  const install = resolveInstallRecord(inspect.plugin.id);
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -365,6 +370,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
+  lines.push(...formatInspectSection("Gateway discovery", inspect.gatewayDiscoveryServices));
   lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(
@@ -413,7 +419,9 @@ export async function runPluginsInspectCommand(
   );
   lines.push(...formatInspectSection("Install", formatInstallLines(install)));
   if (inspect.plugin.error) {
-    lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
+    const label =
+      inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
+    lines.push("", `${label} ${inspect.plugin.error}`);
   }
   defaultRuntime.log(lines.join("\n"));
 }

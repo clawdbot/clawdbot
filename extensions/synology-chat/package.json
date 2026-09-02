@@ -19,13 +19,9 @@
       "id": "synology-chat",
       "configuredState": {
         "env": {
-          "anyOf": [
+          "allOf": [
             "SYNOLOGY_CHAT_TOKEN",
-            "SYNOLOGY_CHAT_INCOMING_URL",
-            "SYNOLOGY_NAS_HOST",
-            "SYNOLOGY_ALLOWED_USER_IDS",
-            "SYNOLOGY_RATE_LIMIT",
-            "OPENCLAW_BOT_NAME"
+            "SYNOLOGY_CHAT_INCOMING_URL"
           ]
         }
       },

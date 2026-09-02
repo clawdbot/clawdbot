@@ -24,8 +24,8 @@ import { applyDiscordModelPickerSelection } from "./native-command-model-picker-
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
-  replyWithDiscordModelPickerProviders,
-} from "./native-command-ui.js";
+} from "./native-command-model-picker-interaction.js";
+import { replyWithDiscordModelPickerProviders } from "./native-command-model-picker-ui.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });

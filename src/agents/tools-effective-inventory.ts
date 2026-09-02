@@ -18,13 +18,10 @@ import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtim
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  acquireReadOnlyPreparedModelRuntime,
-} from "./prepared-model-runtime.js";
+import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
@@ -156,29 +153,8 @@ function resolveConfiguredFallbackApi(
     : "openai-responses";
 }
 
-function resolveDynamicRuntimeModelContext(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
-}): { modelApi?: string; runtimeModel?: ProviderRuntimeModel } {
-  const runtimeModel = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-    agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-  }).model as ProviderRuntimeModel | undefined;
-  if (!runtimeModel) {
-    return {};
-  }
-  return {
-    modelApi: runtimeModel.api,
-    runtimeModel,
-  };
-}
-
-/** Resolves the runtime model metadata needed to filter model-compatible tools. */
-function resolveEffectiveToolInventoryRuntimeModelContext(params: {
+/** Resolves configured or bundled metadata without starting provider discovery. */
+function resolveStaticToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
@@ -241,14 +217,7 @@ function resolveEffectiveToolInventoryRuntimeModelContext(params: {
     };
   }
   if (!bundledStaticModel) {
-    return resolveDynamicRuntimeModelContext({
-      cfg: params.cfg,
-      agentId,
-      agentDir: params.agentDir,
-      workspaceDir,
-      provider,
-      modelId,
-    });
+    return {};
   }
   const runtimeModel = applyProviderTransportNormalization({
     cfg: params.cfg,
@@ -268,14 +237,11 @@ function resolveEffectiveToolInventoryRuntimeModelContext(params: {
 
 /** Resolves dynamic model metadata after publishing a request-owned read snapshot when needed. */
 export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
-  params: Parameters<typeof resolveEffectiveToolInventoryRuntimeModelContext>[0],
-): Promise<ReturnType<typeof resolveEffectiveToolInventoryRuntimeModelContext>> {
-  try {
-    return resolveEffectiveToolInventoryRuntimeModelContext(params);
-  } catch (error) {
-    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-      throw error;
-    }
+  params: Parameters<typeof resolveStaticToolInventoryRuntimeModelContext>[0],
+): Promise<ReturnType<typeof resolveStaticToolInventoryRuntimeModelContext>> {
+  const staticContext = resolveStaticToolInventoryRuntimeModelContext(params);
+  if (staticContext.runtimeModel) {
+    return staticContext;
   }
 
   const provider = normalizeProviderId(params.modelProvider ?? "");
@@ -291,6 +257,9 @@ export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
     agentDir,
     config: params.cfg,
     workspaceDir,
+    // The selected provider owner must join the generation before dynamic hooks resolve.
+    loadRuntimePlugins: true,
+    runtimePluginSelections: [{ provider, modelId, agentId }],
   });
   try {
     const stores = lease.snapshot.createStores();
@@ -352,7 +321,7 @@ export function resolveEffectiveToolInventory(
           modelApi: params.modelApi ?? params.runtimeModel?.api,
           runtimeModel: params.runtimeModel,
         }
-      : resolveEffectiveToolInventoryRuntimeModelContext({
+      : resolveStaticToolInventoryRuntimeModelContext({
           cfg: params.cfg,
           agentId,
           agentDir,

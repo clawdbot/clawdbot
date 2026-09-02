@@ -91,6 +91,7 @@ function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMeta
     ...(spec.package ? { package: spec.package } : {}),
     ...(spec.module ? { module: spec.module } : {}),
     ...(spec.url ? { url: spec.url } : {}),
+    ...(spec.sha256 ? { sha256: spec.sha256 } : {}),
     ...(spec.archive ? { archive: spec.archive } : {}),
     ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
     ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),

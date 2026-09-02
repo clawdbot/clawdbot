@@ -1,5 +1,5 @@
 // Memory Host SDK tests cover batch output behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./batch-output.js";
 
 function streamingResponse(chunks: Uint8Array[]): {
@@ -30,6 +30,55 @@ function streamingResponse(chunks: Uint8Array[]): {
 }
 
 describe("readEmbeddingBatchJsonl", () => {
+  it.each(["enough records", "invalid record"])(
+    "settles %s before a response clone is released",
+    async (kind) => {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(kind === "enough records" ? '{"value":1}\n' : "invalid\n"),
+            );
+          },
+          cancel,
+        }),
+      );
+      const capture = response.clone();
+      const records: unknown[] = [];
+      const operation = readEmbeddingBatchJsonl(response, {
+        label: "fixture",
+        maxRecords: 1,
+        onRecord(record) {
+          records.push(record);
+          return false;
+        },
+      }).then(
+        () => ({ records }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        const result = await Promise.race([
+          operation,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        expect(result).toEqual(
+          kind === "enough records"
+            ? { records: [{ value: 1 }] }
+            : { error: new Error("fixture: malformed JSONL record") },
+        );
+        expect(response.body?.locked).toBe(false);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await operation;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   it("frames split UTF-8, CRLF, and an unterminated final record", async () => {
     const bytes = new TextEncoder().encode('{"value":"😀"}\r\n{"value":2}');
     const streamed = streamingResponse(Array.from(bytes, (byte) => Uint8Array.of(byte)));

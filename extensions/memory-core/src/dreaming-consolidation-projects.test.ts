@@ -1,8 +1,11 @@
 // Memory Core tests cover project isolation across consolidation passes.
 import { describe, expect, it, vi } from "vitest";
-import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
+import { applyMemoryConsolidationPlan } from "./dreaming-consolidation.js";
 import type { PromotionCandidate } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import {
+  consolidateMemoryForTests as consolidateMemory,
+  createMemoryCoreTestHarness,
+} from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const logger = { info: vi.fn(), warn: vi.fn() };
@@ -118,7 +121,9 @@ describe("memory consolidation project groups", () => {
     expect(promptedGroups).toEqual([[null], ["github.com/acme/alpha"], ["github.com/acme/beta"]]);
     expect(
       subagent.run.mock.calls.every(
-        ([options]) => (options as { disableTools?: boolean }).disableTools === true,
+        ([options]) =>
+          (options as { disableTools?: boolean; promptMode?: string }).disableTools === true &&
+          (options as { promptMode?: string }).promptMode === "minimal",
       ),
     ).toBe(true);
 

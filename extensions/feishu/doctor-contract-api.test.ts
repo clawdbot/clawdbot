@@ -20,4 +20,32 @@ describe("feishu doctor contract artifact", () => {
     expect(feishu.streaming).toEqual({ mode: "partial" });
     expect(result.changes.length).toBeGreaterThan(0);
   });
+
+  it("moves stray plugin-entry config into channels.feishu and clears the entry", () => {
+    const cfg = {
+      plugins: {
+        entries: { feishu: { enabled: true, config: { appId: "cli_a1", appSecret: "s3cret" } } },
+      },
+    } as never;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([
+      "Moved plugins.entries.feishu.config.appId to channels.feishu.appId.",
+      "Moved plugins.entries.feishu.config.appSecret to channels.feishu.appSecret.",
+    ]);
+    expect(result.config.channels?.feishu).toEqual({ appId: "cli_a1", appSecret: "s3cret" });
+    expect(result.config.plugins?.entries?.feishu).toEqual({ enabled: true });
+  });
+
+  it("leaves unmergeable stray plugin-entry config in place", () => {
+    const cfg = {
+      plugins: { entries: { feishu: { config: { appId: 42 } } } },
+    } as never;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.plugins?.entries?.feishu).toEqual({ config: { appId: 42 } });
+  });
 });

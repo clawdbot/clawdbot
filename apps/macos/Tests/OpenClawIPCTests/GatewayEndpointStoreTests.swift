@@ -151,6 +151,7 @@ private actor GatewayEndpointRemoteEnsureGate {
     }
 }
 
+@Suite(.gatewayTLSStoreIsolated)
 struct GatewayEndpointStoreTests {
     @MainActor
     @Test func `live local source uses canonical default and named profile ports`() async throws {
@@ -718,26 +719,24 @@ extension GatewayEndpointStoreTests {
     }
 
     @Test func `persisting active first use pin keeps endpoint revision stable`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
-                let url = try #require(URL(string: "wss://gateway.example.invalid"))
-                let storeKey = GatewayTLSRoute.storeKey(for: url)
-                let source = self.source(
-                    mode: .remote,
-                    transport: .direct,
-                    directURL: url)
-                let store = self.makeStore(sourceSnapshot: { source })
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let url = try #require(URL(string: "wss://gateway.example.invalid"))
+            let storeKey = GatewayTLSRoute.storeKey(for: url)
+            let source = self.source(
+                mode: .remote,
+                transport: .direct,
+                directURL: url)
+            let store = self.makeStore(sourceSnapshot: { source })
 
-                let first = try await store.requireEndpoint()
-                let fingerprint = String(repeating: "a", count: 64)
-                _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
-                let second = try await store.requireEndpoint()
+            let first = try await store.requireEndpoint()
+            let fingerprint = String(repeating: "a", count: 64)
+            _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
+            let second = try await store.requireEndpoint()
 
-                #expect(first.revision == second.revision)
-                #expect(second.tls?.params.allowTOFU == false)
-                #expect(second.tls?.params.expectedFingerprint == fingerprint)
-                #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
-            }
+            #expect(first.revision == second.revision)
+            #expect(second.tls?.params.allowTOFU == false)
+            #expect(second.tls?.params.expectedFingerprint == fingerprint)
+            #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
         }
     }
 

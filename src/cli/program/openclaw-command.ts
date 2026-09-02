@@ -9,6 +9,7 @@ import {
   setCommanderErrorCommand,
 } from "./commander-parse-facts.js";
 import { createCliParseError } from "./error-output.js";
+import { isCommandJsonOutputMode } from "./json-mode.js";
 
 // Commander 15 declares this help hook only in its runtime class, not its types.
 // Declaring it here lets the subclass override and delegate through `super`
@@ -32,12 +33,16 @@ export class OpenClawCommand extends Command {
       if (
         error instanceof CommanderError &&
         error.exitCode !== 0 &&
-        isJsonOutputModeActive(process.argv)
+        (isJsonOutputModeActive(process.argv) || isCommandJsonOutputMode(this, process.argv))
       ) {
-        if (!hasCommanderOptionToken(this, process.argv, new Set(["--json"]), "flag")) {
+        if (
+          !isCommandJsonOutputMode(this, process.argv) &&
+          !hasCommanderOptionToken(this, process.argv, new Set(["--json"]), "flag")
+        ) {
           applyResolvedCommandOutputMode(false);
           throw error;
         }
+        applyResolvedCommandOutputMode(true);
         throw createCliParseError(
           message,
           {

@@ -58,6 +58,37 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
+  it("fits a tall widget instead of scrolling it inside the frame", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_tall_widget",
+          url: "/__openclaw__/canvas/documents/cv_tall_widget/index.html",
+          sandbox: "scripts",
+        } as const,
+        "chat_message",
+        { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one" },
+      ),
+      host,
+    );
+    const frame = host.querySelector<HTMLIFrameElement>("iframe");
+    frame?.dispatchEvent(new Event("load"));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "openclaw:widget-size", height: 3000 },
+        source: frame?.contentWindow,
+      }),
+    );
+    expect(frame?.style.height).toBe("3000px");
+    expect(frame?.style.minHeight).toBe("3000px");
+    host.remove();
+  });
+
   it("keeps a short reported frame height across a capability rotation", () => {
     const preview = {
       kind: "canvas",

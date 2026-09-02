@@ -1,4 +1,4 @@
-title: Heartbeat active-hours scheduling evidence
+title: Heartbeat active-hours automation evidence
 
 scenario:
   id: heartbeat-active-hours
@@ -8,17 +8,18 @@ scenario:
     secondary:
       - automation.active-hours
       - automation.heartbeat-scheduling
-  objective: Link active-hours heartbeat scheduler e2e coverage to automation maturity accounting.
+  objective: Prove cron-owned heartbeat wakes honor active hours and configuration reloads.
   successCriteria:
-    - A bounded real-timer scheduler fires with an explicit all-day UTC active-hours window.
-    - Heartbeat timers skip quiet-hours phase slots.
-    - In-window phase slots fire without duplicate scheduling loops.
-    - Hot reload recomputes active-hours and timezone schedule changes.
+    - An active-hours heartbeat wake runs while its configured window is open.
+    - A heartbeat wake skips execution during quiet hours.
+    - Updating the active-hours configuration allows the next eligible wake.
   docsRefs:
-    - docs/help/testing.md
+    - docs/gateway/heartbeat.md
   codeRefs:
-    - src/infra/heartbeat-runner.active-hours-schedule.e2e.test.ts
+    - src/infra/heartbeat-active-hours.ts
+    - test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts
+    - test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts
   execution:
     kind: vitest
-    path: src/infra/heartbeat-runner.active-hours-schedule.e2e.test.ts
-    summary: Vitest e2e coverage for bounded real and fake-time active-hours-aware heartbeat scheduling.
+    path: test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts
+    summary: Prove active execution, quiet-hours suppression, and reloaded automation behavior.

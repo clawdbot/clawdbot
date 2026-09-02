@@ -1,5 +1,7 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AppearanceThemeFamily
+import ai.openclaw.app.AppearanceThemeMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -81,5 +83,43 @@ class NodeUtilsTest {
       assertEquals(source, expected, resolveGatewayAccentArgb(config))
     }
     assertNull(resolveGatewayAccentArgb(null))
+  }
+
+  @Test
+  fun resolveGatewayThemeFallbacksHonorPrefsAndWebDefaults() {
+    val configured =
+      json.parseToJsonElement(
+        """{"ui":{"prefs":{"theme":"dash","themeMode":"light"}}}""",
+      ) as JsonObject
+    val invalid =
+      json.parseToJsonElement(
+        """{"ui":{"prefs":{"theme":"unknown","themeMode":"unknown"}}}""",
+      ) as JsonObject
+
+    assertEquals(AppearanceThemeFamily.Dash, resolveGatewayThemeFamily(configured))
+    assertEquals(AppearanceThemeMode.Light, resolveGatewayThemeMode(configured))
+    assertEquals(AppearanceThemeFamily.Claw, resolveGatewayThemeFamily(invalid))
+    assertEquals(AppearanceThemeMode.System, resolveGatewayThemeMode(invalid))
+    assertEquals(AppearanceThemeFamily.Claw, resolveGatewayThemeFamily(null))
+    assertEquals(AppearanceThemeMode.System, resolveGatewayThemeMode(null))
+  }
+
+  @Test
+  fun resolveProfileAccentArgb_readsUiAccentEntryStrictly() {
+    val cases =
+      linkedMapOf(
+        """{"ui.accent":"#123456"}""" to 0xFF123456L,
+        """{"ui.accent":"ABCDEF"}""" to 0xFFABCDEFL,
+        """{"ui.accent":"invalid"}""" to null,
+        """{"ui.accent":123}""" to null,
+        """{"ui.accent":null}""" to null,
+        """{}""" to null,
+      )
+
+    for ((source, expected) in cases) {
+      val entries = json.parseToJsonElement(source) as JsonObject
+      assertEquals(source, expected, resolveProfileAccentArgb(entries))
+    }
+    assertNull(resolveProfileAccentArgb(null))
   }
 }

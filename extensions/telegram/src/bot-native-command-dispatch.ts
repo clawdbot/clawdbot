@@ -641,6 +641,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
           silent:
             dispatch.runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
           onPlatformSendDispatch: info.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         });
         if (result.delivered) {
           deliveryState.delivered = true;

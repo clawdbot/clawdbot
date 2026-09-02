@@ -26,7 +26,7 @@ describe("parsePostContent", () => {
     expect(result.textContent).toBe(
       "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`",
     );
-    expect(result.imageKeys).toStrictEqual([]);
+    expect(result.attachments).toStrictEqual([]);
     expect(result.mentionedOpenIds).toStrictEqual([]);
   });
 
@@ -54,7 +54,7 @@ describe("parsePostContent", () => {
     expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });
 
-  it("inserts image placeholders and collects image keys", () => {
+  it("inserts image placeholders and collects image attachments", () => {
     const content = JSON.stringify({
       title: "",
       content: [
@@ -70,12 +70,37 @@ describe("parsePostContent", () => {
     const result = parsePostContent(content);
 
     expect(result.textContent).toBe("Before ![image] after\n![image]");
-    expect(result.imageKeys).toEqual(["img_1", "img_2"]);
+    expect(result.attachments).toEqual([
+      { kind: "image", key: "img_1" },
+      { kind: "image", key: "img_2" },
+    ]);
     expect(result.mentionedOpenIds).toStrictEqual([]);
     expect(
       parsePostContent(content, { renderMediaPlaceholders: false, emptyTextFallback: "" })
         .textContent,
     ).toBe("Before  after");
+  });
+
+  it("preserves interleaved rich-post attachment occurrences in their original order", () => {
+    const content = JSON.stringify({
+      title: "Attachments",
+      content: [
+        [
+          { tag: "media", file_key: "file_first", file_name: "first.mov" },
+          { tag: "img", image_key: "img_shared" },
+          { tag: "media", file_key: "file_last", file_name: "last.mov" },
+          { tag: "img", image_key: "img_shared" },
+          { tag: "media", file_key: "invalid/key" },
+        ],
+      ],
+    });
+
+    expect(parsePostContent(content).attachments).toEqual([
+      { kind: "file", key: "file_first", fileName: "first.mov" },
+      { kind: "image", key: "img_shared" },
+      { kind: "file", key: "file_last", fileName: "last.mov" },
+      { kind: "image", key: "img_shared" },
+    ]);
   });
 
   it("supports locale wrappers", () => {
@@ -96,14 +121,12 @@ describe("parsePostContent", () => {
 
     expect(parsePostContent(wrappedByPost)).toEqual({
       textContent: "标题\n\n内容A",
-      imageKeys: [],
-      mediaKeys: [],
+      attachments: [],
       mentionedOpenIds: [],
     });
     expect(parsePostContent(wrappedByLocale)).toEqual({
       textContent: "标题\n\n内容B",
-      imageKeys: [],
-      mediaKeys: [],
+      attachments: [],
       mentionedOpenIds: [],
     });
   });

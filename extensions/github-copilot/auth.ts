@@ -4,14 +4,18 @@ import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plu
 import {
   coerceSecretRef,
   ensureAuthProfileStore,
+  findNormalizedProviderValue,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
+  resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveConfiguredSecretInputWithFallback,
   resolveRequiredConfiguredSecretRefInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 import { PROVIDER_ID } from "./models.js";
+import { formatGithubCopilotApiKey, parseGithubCopilotApiKey } from "./oauth.js";
 
 export async function resolveFirstGithubToken(params: {
   agentDir?: string;
@@ -21,6 +25,7 @@ export async function resolveFirstGithubToken(params: {
   authProfileMode?: ProviderPrepareDynamicModelContext["authProfileMode"];
 }): Promise<{
   githubToken: string;
+  githubDomain?: string;
   hasProfile: boolean;
 }> {
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -73,10 +78,33 @@ export async function resolveFirstGithubToken(params: {
     return { githubToken: resolved.value?.trim() || githubToken, hasProfile: false };
   }
 
+  const explicitProfileOrder =
+    findNormalizedProviderValue(authStore.order, PROVIDER_ID) ??
+    findNormalizedProviderValue(params.config?.auth?.order, PROVIDER_ID);
+  // Preserve discovery's existing first-profile default; authored order alone
+  // delegates eligibility and cooldown handling to the canonical auth owner.
   const profileId = requestedProfileId
     ? profileIds.find((candidate) => candidate === requestedProfileId)
-    : profileIds[0];
+    : explicitProfileOrder === undefined
+      ? profileIds[0]
+      : resolveAuthProfileOrder({
+          cfg: params.config,
+          store: authStore,
+          provider: PROVIDER_ID,
+        })[0];
   const profile = profileId ? authStore.profiles[profileId] : undefined;
+  if (profile?.type === "oauth") {
+    const formatted = formatGithubCopilotApiKey(profile);
+    if (!normalizeOptionalSecretInput(profile.refresh)) {
+      return { githubToken: "", hasProfile };
+    }
+    const parsed = parseGithubCopilotApiKey(formatted);
+    return {
+      ...parsed,
+      githubDomain: parsed.githubDomain ?? PUBLIC_GITHUB_COPILOT_DOMAIN,
+      hasProfile,
+    };
+  }
   if (profile?.type !== "token") {
     return { githubToken: "", hasProfile };
   }

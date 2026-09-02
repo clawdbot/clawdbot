@@ -9,6 +9,14 @@ import {
   root,
 } from "openclaw/plugin-sdk/security-runtime";
 import { inspectStrictBase64 } from "../shared/base64.js";
+import {
+  fileIdentity,
+  matchesFileIdentity,
+  readPathBinding,
+  type FileIdentity,
+  type PathBinding,
+} from "../shared/path-binding.js";
+import { rejectCanonicalPathChange } from "./path-errors.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
 
@@ -20,6 +28,8 @@ type FileWriteParams = {
   expectedSha256?: string;
   followSymlinks?: boolean;
   preflightOnly?: boolean;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type FileWriteSuccess = {
@@ -28,6 +38,7 @@ type FileWriteSuccess = {
   size: number;
   sha256: string;
   overwritten: boolean;
+  binding: PathBinding;
 };
 
 type FileWriteError = {
@@ -76,6 +87,143 @@ function writeFsSafeError(error: FsSafeError, targetPath: string): FileWriteErro
     return err("EXISTS_NO_OVERWRITE", `file already exists and overwrite is false: ${targetPath}`);
   }
   return err("WRITE_ERROR", error.message, targetPath);
+}
+
+async function captureWriteBinding(
+  canonicalTargetPath: string,
+  targetIdentity?: FileIdentity,
+): Promise<Extract<PathBinding, { kind: "write" }>> {
+  let anchorPath = path.dirname(canonicalTargetPath);
+  for (;;) {
+    try {
+      const stats = await fs.stat(anchorPath, { bigint: true });
+      if (!stats.isDirectory()) {
+        throw new Error(`write anchor is not a directory: ${anchorPath}`);
+      }
+      const anchor = fileIdentity(stats);
+      return {
+        kind: "write",
+        anchorPath,
+        anchorDevice: anchor.device,
+        anchorInode: anchor.inode,
+        ...(targetIdentity
+          ? { targetDevice: targetIdentity.device, targetInode: targetIdentity.inode }
+          : {}),
+      };
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+      const parent = path.dirname(anchorPath);
+      if (parent === anchorPath) {
+        throw error;
+      }
+      anchorPath = parent;
+    }
+  }
+}
+
+async function writeBoundTarget(input: {
+  binding: Extract<PathBinding, { kind: "write" }>;
+  buffer: Buffer;
+  canonicalTargetPath: string;
+}): Promise<
+  { ok: true; path: string; overwritten: boolean; identity: FileIdentity } | FileWriteError
+> {
+  const expectedTarget =
+    input.binding.targetDevice && input.binding.targetInode
+      ? { device: input.binding.targetDevice, inode: input.binding.targetInode }
+      : undefined;
+  if (expectedTarget) {
+    let handle: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      handle = await fs.open(input.canonicalTargetPath, "r+");
+    } catch {
+      return err(
+        "CANONICAL_PATH_CHANGED",
+        "filesystem identity differs from the authorized target",
+        input.canonicalTargetPath,
+      );
+    }
+    try {
+      const stats = await handle.stat({ bigint: true });
+      if (!stats.isFile() || !matchesFileIdentity(stats, expectedTarget)) {
+        return err(
+          "CANONICAL_PATH_CHANGED",
+          "filesystem identity differs from the authorized target",
+          input.canonicalTargetPath,
+        );
+      }
+      await handle.truncate(0);
+      await handle.writeFile(input.buffer);
+      await handle.sync();
+      return {
+        ok: true,
+        path: input.canonicalTargetPath,
+        overwritten: true,
+        identity: fileIdentity(stats),
+      };
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
+
+  let anchorRoot: Awaited<ReturnType<typeof root>>;
+  try {
+    anchorRoot = await root(input.binding.anchorPath);
+    const anchorStats = await fs.stat(anchorRoot.rootReal, { bigint: true });
+    if (
+      !matchesFileIdentity(anchorStats, {
+        device: input.binding.anchorDevice,
+        inode: input.binding.anchorInode,
+      })
+    ) {
+      throw new Error("write anchor changed");
+    }
+  } catch {
+    return err(
+      "CANONICAL_PATH_CHANGED",
+      "filesystem identity differs from the authorized target",
+      input.canonicalTargetPath,
+    );
+  }
+  const relativeTarget = path.relative(anchorRoot.rootReal, input.canonicalTargetPath);
+  if (
+    !relativeTarget ||
+    path.isAbsolute(relativeTarget) ||
+    relativeTarget === ".." ||
+    relativeTarget.startsWith(`..${path.sep}`)
+  ) {
+    return err("WRITE_ERROR", "write target is outside the authorized anchor");
+  }
+  try {
+    await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
+    const opened = await anchorRoot.open(relativeTarget);
+    try {
+      const stats = await opened.handle.stat({ bigint: true });
+      return {
+        ok: true,
+        path: opened.realPath,
+        overwritten: false,
+        identity: fileIdentity(stats),
+      };
+    } finally {
+      await opened.handle.close().catch(() => undefined);
+    }
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "already-exists") {
+      return err(
+        "CANONICAL_PATH_CHANGED",
+        "filesystem identity differs from the authorized target",
+        input.canonicalTargetPath,
+      );
+    }
+    if (error instanceof FsSafeError) {
+      return writeFsSafeError(error, input.canonicalTargetPath);
+    }
+    return err("WRITE_ERROR", `failed to write file: ${String(error)}`);
+  }
 }
 
 export async function handleFileWrite(
@@ -151,6 +299,23 @@ export async function handleFileWrite(
     throw error;
   }
 
+  const canonicalTargetPath = await canonicalPathFromExistingAncestor(targetPath);
+  const canonicalPathChange = rejectCanonicalPathChange(
+    params.expectedCanonicalPath,
+    canonicalTargetPath,
+  );
+  if (canonicalPathChange) {
+    return canonicalPathChange;
+  }
+  const expectedBinding = readPathBinding(params.expectedBinding);
+  if (params.expectedBinding !== undefined && expectedBinding?.kind !== "write") {
+    return err(
+      "CANONICAL_PATH_CHANGED",
+      "filesystem identity differs from the authorized target",
+      canonicalTargetPath,
+    );
+  }
+
   if (!parentExists) {
     if (!createParents) {
       return err("PARENT_NOT_FOUND", `parent directory does not exist: ${parentDir}`);
@@ -166,17 +331,20 @@ export async function handleFileWrite(
       }
       return {
         ok: true,
-        path: await canonicalPathFromExistingAncestor(targetPath),
+        path: canonicalTargetPath,
         size: buf.length,
         sha256: computedSha256,
         overwritten: false,
+        binding: await captureWriteBinding(canonicalTargetPath),
       };
     }
-    try {
-      await fs.mkdir(parentDir, { recursive: true });
-    } catch (mkdirErr) {
-      const message = mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr);
-      return err("WRITE_ERROR", `failed to create parent directories: ${message}`);
+    if (!expectedBinding) {
+      try {
+        await fs.mkdir(parentDir, { recursive: true });
+      } catch (mkdirErr) {
+        const message = mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr);
+        return err("WRITE_ERROR", `failed to create parent directories: ${message}`);
+      }
     }
   }
 
@@ -192,10 +360,10 @@ export async function handleFileWrite(
   }
 
   const targetFileName = path.basename(targetPath);
-  const parentRoot = await root(parentDir);
   let overwritten = false;
+  let existingIdentity: FileIdentity | undefined;
   try {
-    const existingLStat = await fs.lstat(targetPath);
+    const existingLStat = await fs.lstat(targetPath, { bigint: true });
     if (existingLStat.isSymbolicLink()) {
       return err(
         "SYMLINK_TARGET_DENIED",
@@ -212,6 +380,7 @@ export async function handleFileWrite(
       );
     }
     overwritten = true;
+    existingIdentity = fileIdentity(existingLStat);
   } catch (statErr: unknown) {
     const statErrorCode =
       statErr instanceof FsSafeError ? statErr.code : (statErr as NodeJS.ErrnoException).code;
@@ -241,12 +410,34 @@ export async function handleFileWrite(
   if (preflightOnly) {
     return {
       ok: true,
-      path: await canonicalPathFromExistingAncestor(targetPath),
+      path: canonicalTargetPath,
       size: buf.length,
       sha256: computedSha256,
       overwritten,
+      binding: await captureWriteBinding(canonicalTargetPath, existingIdentity),
     };
   }
+
+  if (expectedBinding?.kind === "write") {
+    const writeResult = await writeBoundTarget({
+      binding: expectedBinding,
+      buffer: buf,
+      canonicalTargetPath,
+    });
+    if (!writeResult.ok) {
+      return writeResult;
+    }
+    return {
+      ok: true,
+      path: writeResult.path,
+      size: buf.length,
+      sha256: computedSha256,
+      overwritten: writeResult.overwritten,
+      binding: { kind: "existing", ...writeResult.identity },
+    };
+  }
+
+  const parentRoot = await root(parentDir);
 
   try {
     if (overwrite) {
@@ -266,9 +457,11 @@ export async function handleFileWrite(
   }
 
   let canonicalPath = targetPath;
+  let finalIdentity: FileIdentity | undefined;
   try {
     const opened = await parentRoot.open(targetFileName);
     canonicalPath = opened.realPath;
+    finalIdentity = fileIdentity(await opened.handle.stat({ bigint: true }));
     await opened.handle.close().catch(() => undefined);
   } catch (openErr) {
     if (openErr instanceof FsSafeError) {
@@ -282,5 +475,9 @@ export async function handleFileWrite(
     size: buf.length,
     sha256: computedSha256,
     overwritten,
+    binding: {
+      kind: "existing",
+      ...(finalIdentity ?? fileIdentity(await fs.stat(canonicalPath, { bigint: true }))),
+    },
   };
 }

@@ -32,6 +32,11 @@ export type BoundedUnsignedDecimalResult =
   | { kind: "value"; value: number };
 
 export function readFlagValue(args: readonly string[], name: string): string | undefined;
+export function requireOptionArgument(
+  argv: readonly string[],
+  index: number,
+  optionName: string,
+): string;
 export function stripLeadingPackageManagerSeparator(argv: string[]): string[];
 export function parseStrictBooleanArg(value: unknown, label: string): boolean;
 export function classifyBoundedUnsignedDecimal(

@@ -115,6 +115,10 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) as RuntimeEnv;
 
+// Mirrors the server's acknowledgement of a valid authentication_challenge.
+const authOkFrame = (seq: number): Buffer =>
+  Buffer.from(JSON.stringify({ status: "OK", seq_reply: seq }));
+
 async function startStalledWebSocketHandshakeServer(): Promise<{
   url: string;
   close: () => Promise<void>;
@@ -175,6 +179,140 @@ describe("mattermost websocket monitor", () => {
     expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
   });
 
+  it("reports a transient pre-authentication close without asserting a token failure", async () => {
+    const socket = new FakeWebSocket();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "valid-token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+    });
+
+    queueMicrotask(() => {
+      socket.emitOpen();
+      // A restarting server or resetting proxy closes mid-authentication with
+      // the same client-visible shape as a token rejection.
+      socket.emitClose(1001, "server restarting");
+    });
+
+    let failure: unknown;
+    try {
+      await connectOnce();
+    } catch (caught) {
+      failure = caught;
+    }
+    expect(failure).toMatchObject({
+      name: "WebSocketClosedBeforeAuthenticationError",
+      code: 1001,
+      reason: "server restarting",
+    });
+    // The client cannot distinguish the causes, so the diagnostic must keep
+    // both visible instead of pinning the close on the token alone.
+    const message = (failure as Error).message;
+    expect(message).toContain("closed before authentication completed (code 1001)");
+    expect(message).toContain("bot token");
+    expect(message).toContain("connection dropped");
+  });
+
+  it("backs off across attempts when authentication never completes", async () => {
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "revoked-token",
+      runtime: testRuntime(),
+      nextSeq: (() => {
+        let seq = 1;
+        return () => seq++;
+      })(),
+      onPosted: async () => {},
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket();
+        queueMicrotask(() => {
+          socket.emitOpen();
+          socket.emitClose(1006);
+        });
+        return socket;
+      },
+    });
+
+    const connectErrors: string[] = [];
+    const reconnectDelays: number[] = [];
+    await runWithReconnect(connectOnce, {
+      initialDelayMs: 10,
+      maxDelayMs: 1000,
+      jitterRatio: 0,
+      shouldReconnect: ({ attempt }) => attempt < 2,
+      onError: (err) => {
+        connectErrors.push(err instanceof Error ? err.name : String(err));
+      },
+      onReconnect: (delayMs) => reconnectDelays.push(delayMs),
+    });
+
+    // Every attempt fails authentication, so the delay doubles instead of resetting to the floor.
+    expect(connectErrors).toEqual([
+      "WebSocketClosedBeforeAuthenticationError",
+      "WebSocketClosedBeforeAuthenticationError",
+      "WebSocketClosedBeforeAuthenticationError",
+    ]);
+    expect(reconnectDelays).toEqual([10, 20]);
+  });
+
+  it("terminates the connection when the authentication reply never arrives", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(socket.terminateCalls).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost websocket authentication timed out — reconnecting",
+    );
+
+    socket.emitClose(1006);
+    await expect(connected).rejects.toMatchObject({
+      name: "WebSocketClosedBeforeAuthenticationError",
+    });
+    vi.useRealTimers();
+  });
+
+  it("does not trip the auth deadline once the challenge is acknowledged", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(socket.terminateCalls).toBe(0);
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
+
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
@@ -202,6 +340,7 @@ describe("mattermost websocket monitor", () => {
             return;
           }
           socket.emitOpen();
+          socket.emitMessage(authOkFrame(1));
           socket.emitClose(1000);
         });
         return socket;
@@ -223,7 +362,7 @@ describe("mattermost websocket monitor", () => {
       data: { token: "token" },
       seq: 1,
     });
-    expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
+    expect(countMatching(patches, (patch) => patch.connected === true)).toBe(2);
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(3);
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "recovering" }));
@@ -289,6 +428,7 @@ describe("mattermost websocket monitor", () => {
     const onPosted = vi.fn(async () => {});
     server.on("connection", (socket) => {
       socket.once("message", () => {
+        socket.send(JSON.stringify({ status: "OK", seq_reply: 1 }));
         socket.send(
           JSON.stringify({
             event: "posted",
@@ -344,6 +484,7 @@ describe("mattermost websocket monitor", () => {
     const connected = connectOnce();
     queueMicrotask(() => {
       socket.emitOpen();
+      socket.emitMessage(authOkFrame(1));
       socket.emitMessage(
         Buffer.from(
           JSON.stringify({
@@ -404,6 +545,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
     socket.emitMessage(
       Buffer.from(
         JSON.stringify({
@@ -445,6 +587,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     // Let initial getBotUpdateAt resolve
     await vi.advanceTimersByTimeAsync(0);
@@ -482,6 +625,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(300);
@@ -508,6 +652,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     await vi.advanceTimersByTimeAsync(100);
     expect(socket.pingCalls).toBe(1);
@@ -547,6 +692,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     await vi.advanceTimersByTimeAsync(0);
     expect(pollCount).toBe(1);
@@ -591,6 +737,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     await vi.advanceTimersByTimeAsync(0);
 
@@ -631,6 +778,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     await vi.advanceTimersByTimeAsync(0);
     expect(runtime.error).toHaveBeenCalledWith(
@@ -674,6 +822,7 @@ describe("mattermost websocket monitor", () => {
 
     const connected = connectOnce();
     socket.emitOpen();
+    socket.emitMessage(authOkFrame(1));
 
     await vi.advanceTimersByTimeAsync(0);
     expect(pollCount).toBe(1);

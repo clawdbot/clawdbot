@@ -32,11 +32,16 @@ func cacheMessage(
         idempotencyKey: idempotencyKey)
 }
 
-func cacheSessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
+func cacheSessionEntry(
+    key: String,
+    updatedAt: Double,
+    agentID: String? = nil) -> OpenClawChatSessionEntry
+{
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
         displayName: nil,
+        agentId: agentID,
         surface: nil,
         subject: nil,
         room: nil,
@@ -206,7 +211,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         activeLeafEntryID: String? = "leaf-b",
         branchLeafEntryIDs: Set<String> = ["leaf-b"]) async -> [OpenClawChatOutboxCommand]?
     {
-        await self.reconcileBranchScope(
+        await reconcileBranchScope(
             scope,
             previousState: previousState,
             activeLeafEntryID: activeLeafEntryID,
@@ -275,6 +280,88 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(messageRows.map(\.idempotencyKey) == ["run-1:user", "run-1"])
         #expect(messageRows[0].payloadJSON.contains("\"role\":\"user\""))
         #expect(!messageRows[0].payloadJSON.hasPrefix("["))
+    }
+
+    @Test func `agent session snapshots preserve another agents offline roster`() async throws {
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
+        ], agentID: "agent-a")
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-b"),
+        ], agentID: "agent-b")
+
+        #expect(await store.loadSessions(agentID: "agent-a").map(\.agentId) == ["agent-a"])
+        #expect(await store.loadSessions(agentID: "agent-b").map(\.agentId) == ["agent-b"])
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        #expect(await reopened.store(gatewayID: "gw-a").loadSessions(agentID: "agent-a").map(\.agentId) == [
+            "agent-a",
+        ])
+        #expect(await reopened.store(gatewayID: "gw-a").loadSessions(agentID: "agent-b").map(\.agentId) == [
+            "agent-b",
+        ])
+    }
+
+    @Test func `empty or rejected agent snapshot cannot erase another roster`() async {
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
+        ], agentID: "agent-a")
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-b"),
+        ], agentID: "agent-b")
+
+        await store.storeSessions([
+            cacheSessionEntry(key: "agent:agent-a:main", updatedAt: 3, agentID: "agent-a"),
+        ], agentID: "agent-b")
+
+        #expect(await store.loadSessions(agentID: "agent-a").map(\.agentId) == ["agent-a"])
+        #expect(await store.loadSessions(agentID: "agent-b").map(\.agentId) == ["agent-b"])
+
+        await store.storeSessions([], agentID: "agent-b")
+
+        #expect(await store.loadSessions(agentID: "agent-a").map(\.agentId) == ["agent-a"])
+        #expect(await store.loadSessions(agentID: "agent-b").isEmpty)
+    }
+
+    @Test func `agent session owner partitions remain bounded`() async throws {
+        for index in 0...OpenClawChatSQLiteTranscriptCache.maxCachedSessionOwners {
+            let agentID = "agent-\(index)"
+            await store.storeSessions([
+                cacheSessionEntry(key: "global", updatedAt: Double(index), agentID: agentID),
+            ], agentID: agentID)
+        }
+
+        let counts = try await databases.cacheQueue.read { db in
+            try (
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_session_rosters WHERE gateway_id = 'gw-a'"),
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_agent_sessions WHERE gateway_id = 'gw-a'"))
+        }
+        #expect(counts.0 == OpenClawChatSQLiteTranscriptCache.maxCachedSessionOwners)
+        #expect(counts.1 == OpenClawChatSQLiteTranscriptCache.maxCachedSessionOwners)
+    }
+
+    @Test func `agent snapshot discards legacy roster without touching transcripts`() async throws {
+        await store.storeTestTranscript(
+            sessionKey: "global",
+            agentID: "agent-a",
+            messages: [cacheMessage(role: "assistant", text: "preserved", timestamp: 1)])
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO cached_sessions(gateway_id, session_key, position, updated_at, payload_json)
+                VALUES ('gw-a', 'global', 0, 1, '{}')
+                """)
+        }
+
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-a"),
+        ], agentID: "agent-a")
+
+        #expect(try await databases.cacheQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_sessions WHERE gateway_id = 'gw-a'")
+        } == 0)
+        #expect(await messageTexts(store.loadTranscript(sessionKey: "global", agentID: "agent-a")) == ["preserved"])
     }
 
     @Test func `cache format mismatch rebuilds without touching client state`() async throws {
@@ -421,21 +508,33 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
     }
 
     @Test func `malformed cache partitions are discarded atomically`() async throws {
-        await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
+        ], agentID: "agent-a")
+        await store.storeSessions([
+            cacheSessionEntry(key: "global", updatedAt: 2, agentID: "agent-b"),
+        ], agentID: "agent-b")
         await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "assistant", text: "cached", timestamp: 1)])
         try await databases.cacheQueue.write { db in
             try db.execute(
-                sql: "UPDATE cached_sessions SET payload_json = 'not-json' WHERE gateway_id = 'gw-a'")
+                sql: """
+                UPDATE cached_agent_sessions SET payload_json = 'not-json'
+                WHERE gateway_id = 'gw-a' AND agent_id = 'agent-a'
+                """)
             try db.execute(
                 sql: "UPDATE cached_messages SET payload_json = 'not-json' WHERE gateway_id = 'gw-a'")
         }
 
-        #expect(await store.loadSessions().isEmpty)
+        #expect(await store.loadSessions(agentID: "agent-a").isEmpty)
+        #expect(await store.loadSessions(agentID: "agent-b").map(\.agentId) == ["agent-b"])
         #expect(await store.loadTranscript(sessionKey: "main").isEmpty)
         #expect(try await databases.cacheQueue.read { db in
-            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_sessions WHERE gateway_id = 'gw-a'")
+            try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM cached_agent_sessions
+            WHERE gateway_id = 'gw-a' AND agent_id = 'agent-a'
+            """)
         } == 0)
         #expect(try await databases.cacheQueue.read { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_transcripts WHERE gateway_id = 'gw-a'")
@@ -746,6 +845,8 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-agent-id-v4",
             "client-state-outbox-attempt-scope-v5",
             "client-state-outbox-attachment-rekey-v6",
+            "client-state-outbox-settings-expectation-v7",
+            "client-state-outbox-settings-claim-v8",
         ])
     }
 }
@@ -1010,6 +1111,158 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
 }
 
 final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sendable {
+    @Test func `session settings expectation survives a cold outbox reopen`() async throws {
+        let expectation = OpenClawChatSessionSettingsExpectation(
+            permissionMode: .guarded,
+            toolOverrides: OpenClawChatSessionToolOverrides(
+                webSearch: false,
+                mcpToolsDeny: ["github": ["delete_issue"]]))
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "settings-bound",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "safe replay",
+            thinking: "off",
+            expectedSessionSettings: expectation,
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        #expect(await reopened.store(gatewayID: "gw-a").loadCommands().first?.expectedSessionSettings == expectation)
+    }
+
+    @Test func `legacy null settings row cannot claim or retry without current client authorization`() async throws {
+        try databases.close()
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, """
+            INSERT INTO outbox_commands(
+                gateway_id, client_uuid, session_key, delivery_session_key,
+                routing_contract, agent_id, text, thinking, created_at, status
+            ) VALUES (
+                'gw-a', 'legacy-null-settings', 'main', 'agent:main:main',
+                'per-sender|main|main', 'main', 'legacy replay', 'off', 1, 'queued'
+            );
+            UPDATE outbox_commands
+            SET status = 'sending'
+            WHERE client_uuid = 'legacy-null-settings';
+            """)
+        }
+
+        let claimed = try OpenClawClientDatabases(directoryURL: directory)
+        let claimedCommand = try #require(await claimed.store(gatewayID: "gw-a").loadCommands().first)
+        #expect(claimedCommand.status == .failed)
+        #expect(claimedCommand.lastError == OpenClawChatSQLiteTranscriptCache.outboxSettingsUpgradeRequiredError)
+        #expect(claimedCommand.expectedSessionSettings == nil)
+        try claimed.close()
+
+        try withRawDatabase(at: stateURL) { raw in
+            let result = sqlite3_exec(
+                raw,
+                """
+                UPDATE outbox_commands
+                SET status = 'queued'
+                WHERE client_uuid = 'legacy-null-settings';
+                """,
+                nil,
+                nil,
+                nil)
+            #expect(result == SQLITE_CONSTRAINT)
+        }
+
+        let retried = try OpenClawClientDatabases(directoryURL: directory)
+        let retriedCommand = try #require(await retried.store(gatewayID: "gw-a").loadCommands().first)
+        #expect(retriedCommand.status == .failed)
+        #expect(retriedCommand.expectedSessionSettings == nil)
+    }
+
+    @Test func `pre v7 upgrade reopens and fences a settings bound retry`() async throws {
+        try databases.close()
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, """
+            DROP TRIGGER outbox_settings_claim_guard;
+            DROP TRIGGER outbox_settings_retry_guard;
+            ALTER TABLE outbox_commands DROP COLUMN settings_retry_authorization;
+            ALTER TABLE outbox_commands DROP COLUMN expected_settings_json;
+            DELETE FROM grdb_migrations WHERE identifier IN (
+                'client-state-outbox-settings-expectation-v7',
+                'client-state-outbox-settings-claim-v8'
+            );
+            INSERT INTO outbox_commands(
+                gateway_id, client_uuid, session_key, delivery_session_key,
+                routing_contract, agent_id, text, thinking, created_at, status
+            ) VALUES (
+                'gw-a', 'pre-v7-preserved', 'main', 'agent:main:main',
+                'per-sender|main|main', 'main', 'preserve across upgrade', 'off', 1, 'queued'
+            );
+            """)
+        }
+
+        let upgraded = try OpenClawClientDatabases(directoryURL: directory)
+        let upgradedStore = upgraded.store(gatewayID: "gw-a")
+        let preserved = try #require(await upgradedStore.loadCommands().first(where: {
+            $0.id == "pre-v7-preserved"
+        }))
+        #expect(preserved.text == "preserve across upgrade")
+        #expect(preserved.expectedSessionSettings == nil)
+        let expectation = OpenClawChatSessionSettingsExpectation(
+            permissionMode: .readOnly,
+            toolOverrides: OpenClawChatSessionToolOverrides(webSearch: false))
+        #expect(await upgradedStore.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "legacy-writer-settings",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "preserve authority",
+            thinking: "off",
+            expectedSessionSettings: expectation,
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        try upgraded.close()
+
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, """
+            UPDATE outbox_commands
+            SET status = 'sending'
+            WHERE client_uuid = 'legacy-writer-settings';
+            """)
+        }
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        let reopenedStore = reopened.store(gatewayID: "gw-a")
+        let failed = try #require(await reopenedStore.loadCommands().first(where: {
+            $0.id == "legacy-writer-settings"
+        }))
+        #expect(failed.status == .failed)
+        #expect(failed.lastError == OpenClawChatSQLiteTranscriptCache.outboxSettingsUpgradeRequiredError)
+        #expect(failed.expectedSessionSettings == expectation)
+        #expect(await reopenedStore.markCommandRetriedIfPresent(
+            id: failed.id,
+            expectation: retryExpectation(failed),
+            agentID: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            expectedSessionSettings: expectation,
+            replacementID: nil) == .updated)
+        try reopened.close()
+
+        let retried = try OpenClawClientDatabases(directoryURL: directory)
+        let retriedCommand = try #require(await retried.store(gatewayID: "gw-a").loadCommands().first(where: {
+            $0.id == "legacy-writer-settings"
+        }))
+        #expect(retriedCommand.status == .queued)
+        #expect(retriedCommand.expectedSessionSettings == expectation)
+    }
+
     @Test func `nil agent rows use the canonical empty scope owner`() async throws {
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
         #expect(await store.updateLastActiveLeafEntryID("leaf-a", expectedEpoch: 0, for: scope))
@@ -1035,6 +1288,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             id: parkedSending.id,
             expectation: retryExpectation(parkedSending),
             agentID: "main", deliverySessionKey: "sending", routingContract: "per-sender|sending|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
             replacementID: "sending-retry") == .updated)
         let retriedSending = try #require(await store.loadCommands().first(where: { $0.id == "sending-retry" }))
         #expect(retriedSending.attemptVersion == 1)
@@ -1049,6 +1303,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             id: parkedQueued.id,
             expectation: retryExpectation(parkedQueued),
             agentID: "main", deliverySessionKey: "queued", routingContract: "per-sender|queued|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
             replacementID: "unused") == .updated)
         #expect(await store.loadCommands().contains(where: { $0.id == "queued" && $0.attemptVersion == 2 }))
 
@@ -1074,6 +1329,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             id: parkedRequeued.id,
             expectation: retryExpectation(parkedRequeued),
             agentID: "main", deliverySessionKey: "requeued", routingContract: "per-sender|requeued|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
             replacementID: "requeued-retry") == .updated)
         #expect(await stickyFixture.store.loadCommands()
             .contains(where: { $0.id == "requeued-retry" && $0.attemptVersion == 1 }))
@@ -1103,6 +1359,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             agentID: "main",
             deliverySessionKey: "main",
             routingContract: "per-sender|main|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
             replacementID: "attached-retry") == .updated)
         let retried = try #require(await store.loadCommands().first)
         #expect(retried.id == "attached-retry")
@@ -1152,6 +1409,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             id: parked.id,
             expectation: retryExpectation(parked),
             agentID: "main", deliverySessionKey: "main", routingContract: "per-sender|main|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
             replacementID: "failed-retry") == .updated)
         #expect(await store.loadCommands().first?.id == "failed-retry")
     }
@@ -1284,6 +1542,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             agentID: "Agent-B",
             deliverySessionKey: "agent:agent-b:main",
             routingContract: "per-sender|main|agent-b",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
             replacementID: nil) == .updated)
         let command = try #require(await store.loadCommands().first)
         #expect(command.status == .queued)

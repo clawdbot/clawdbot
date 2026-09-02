@@ -176,6 +176,45 @@ describe("Hermes migration model apply", () => {
     expect(lateConfig.agents?.defaults?.model).toBe("anthropic/claude-sonnet-4.6");
   });
 
+  it.each([undefined, { primary: "old/model", fallbacks: ["backup/model"] }])(
+    "applies an explicit target agent without changing shared or sibling models (%j)",
+    async (model) => {
+      const root = testWorkspace.dir;
+      const source = path.join(root, "hermes");
+      const workspaceDir = path.join(root, "workspace");
+      await writeFile(path.join(source, "config.yaml"), "model: imported/model\n");
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: workspaceDir, model: "shared/model" },
+          entries: {
+            main: { default: true, model: "main/model" },
+            research: { workspace: workspaceDir, model },
+          },
+        },
+      };
+      const ctx = makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir,
+        config,
+        targetAgentId: "research",
+        overwrite: true,
+        runtime: makeConfigRuntime(config),
+      });
+      const provider = buildHermesMigrationProvider();
+      const plan = await provider.plan(ctx);
+      const result = await provider.apply(ctx, plan);
+
+      expect(result.summary.errors).toBe(0);
+      expect(config.agents?.defaults?.model).toBe("shared/model");
+      expect(config.agents?.entries?.main?.model).toBe("main/model");
+      expect(config.agents?.entries?.research?.model).toEqual(
+        model ? { ...model, primary: "imported/model" } : "imported/model",
+      );
+      expect(plan.items[0]?.target).toContain("research");
+    },
+  );
+
   it("does not apply a custom default after its provider develops a late conflict", async () => {
     const root = testWorkspace.dir;
     const source = path.join(root, "hermes");

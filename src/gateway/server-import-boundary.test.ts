@@ -226,9 +226,6 @@ describe("gateway startup import boundaries", () => {
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);
     expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(serverImpl.slice(postReadyStart, cleanupCall + 300)).not.toContain(
-      "startupConfigLoad.pluginMetadataSnapshot?.index.installRecords",
-    );
     expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
@@ -257,6 +254,24 @@ describe("gateway startup import boundaries", () => {
       "pinnedHostKey: sshEndpoint.hostKey",
     );
     expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
+  });
+
+  it("keeps worker session tools out of idle worker startup", () => {
+    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
+    const startupFunction = workerStartup.indexOf(
+      "export async function createGatewayWorkerEnvironmentRuntime",
+    );
+    const eagerImportsStart = workerStartup.indexOf("const [", startupFunction);
+    const eagerImportsEnd = workerStartup.indexOf("]);", eagerImportsStart);
+    const eagerImports = workerStartup.slice(eagerImportsStart, eagerImportsEnd);
+
+    expect(eagerImports).not.toContain(
+      'import("./worker-environments/worker-session-tool-executor.js")',
+    );
+    expect(workerStartup).toContain(
+      "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
+    );
+    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
   });
 
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {

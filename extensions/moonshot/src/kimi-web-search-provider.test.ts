@@ -1,9 +1,8 @@
-// Moonshot tests cover kimi web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
+import { testing } from "./kimi-web-search-provider.runtime.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 
@@ -14,9 +13,12 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-async function executeKimiSearch(query: string): Promise<Record<string, unknown>> {
+async function executeKimiSearch(
+  query: string,
+  cacheTtlMinutes?: number,
+): Promise<Record<string, unknown>> {
   const provider = createKimiWebSearchProvider();
-  const tool = provider.createTool({ config: {}, searchConfig: {} });
+  const tool = provider.createTool({ config: {}, searchConfig: { cacheTtlMinutes } });
   if (!tool) {
     throw new Error("Expected tool definition");
   }
@@ -31,6 +33,7 @@ function expectStringFieldContains(result: Record<string, unknown>, field: strin
 
 describe("kimi web search provider", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -329,6 +332,51 @@ describe("kimi web search provider", () => {
         "count must be an integer from 1 to 10.",
       );
       expect(fetchMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([0, 1])("honors the current Kimi cache TTL of %s minutes", async (cacheTtlMinutes) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    let content = "Original grounded answer";
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        search_results: [{ url: "https://example.com/kimi" }],
+        choices: [{ finish_reason: "stop", message: { content } }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      const query = `Kimi current request cache TTL ${cacheTtlMinutes}`;
+      await executeKimiSearch(query, 15);
+      await expect(executeKimiSearch(query, 15)).resolves.toMatchObject({
+        cached: true,
+        content: expect.stringContaining("Original grounded answer"),
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      now.mockReturnValue(1_060_000);
+      content = "Fresh grounded answer";
+      const fresh = await executeKimiSearch(query, cacheTtlMinutes);
+      expect(fresh).not.toHaveProperty("cached");
+      expectStringFieldContains(fresh, "content", "Fresh grounded answer");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        await expect(executeKimiSearch(query, 0)).resolves.not.toHaveProperty("cached");
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        await expect(executeKimiSearch(query, 15)).resolves.toMatchObject({
+          cached: true,
+          content: expect.stringContaining("Original grounded answer"),
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      } else {
+        await expect(executeKimiSearch(query, cacheTtlMinutes)).resolves.toEqual({
+          ...fresh,
+          cached: true,
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
     });
   });
 

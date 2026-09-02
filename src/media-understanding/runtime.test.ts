@@ -12,6 +12,7 @@ import {
   describeImageFileWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
+  resolveAudioInputBudget,
   transcribeAudioFile,
 } from "./runtime.js";
 
@@ -30,7 +31,6 @@ const mocks = vi.hoisted(() => {
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
-    readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     runCapability: vi.fn(),
@@ -57,10 +57,6 @@ vi.mock("./provider-registry.js", () => ({
   getMediaUnderstandingProvider: mocks.getMediaUnderstandingProvider,
 }));
 
-vi.mock("../infra/fs-safe.js", () => ({
-  readLocalFileSafely: mocks.readLocalFileSafely,
-}));
-
 vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
@@ -80,6 +76,84 @@ function requireRunCapabilityRequest(): unknown {
 }
 
 describe("media-understanding runtime", () => {
+  it.each([
+    { name: "automatic selection", cfg: {}, maxBytes: 20 * 1024 * 1024 },
+    {
+      name: "automatic input override",
+      cfg: { tools: { media: { audio: { maxBytes: 4096 } } } },
+      maxBytes: 4096,
+    },
+    {
+      name: "larger audio fallback but not an image entry",
+      cfg: {
+        tools: {
+          media: {
+            audio: { maxBytes: 256 },
+            models: [
+              { provider: "first", capabilities: ["audio"], maxBytes: 1024 },
+              { provider: "second", capabilities: ["audio"], maxBytes: 4096 },
+              { provider: "image", capabilities: ["image"], maxBytes: 8192 },
+            ],
+          },
+        },
+      },
+      maxBytes: 4096,
+    },
+    {
+      name: "explicit local CLI override",
+      cfg: {
+        tools: {
+          media: {
+            audio: { maxBytes: 4096 },
+            models: [
+              { type: "cli", command: "fixture-asr", capabilities: ["audio"], maxBytes: 1024 },
+            ],
+          },
+        },
+      },
+      maxBytes: 1024,
+    },
+    {
+      name: "local CLI inheriting audio input limit",
+      cfg: {
+        tools: {
+          media: {
+            audio: { maxBytes: 4096 },
+            models: [{ type: "cli", command: "fixture-asr", capabilities: ["audio"] }],
+          },
+        },
+      },
+      maxBytes: 4096,
+    },
+    {
+      name: "inferred provider capability",
+      cfg: {
+        tools: {
+          media: {
+            models: [{ provider: "registered-audio", maxBytes: 8192 }],
+          },
+        },
+      },
+      maxBytes: 8192,
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig; maxBytes: number }>)(
+    "prepares the existing transcription input budget for $name",
+    async ({ cfg, maxBytes }) => {
+      mocks.buildProviderRegistry.mockReturnValue(
+        new Map([["registered-audio", { capabilities: ["audio"] }]]),
+      );
+      await expect(resolveAudioInputBudget({ cfg })).resolves.toEqual({ enabled: true, maxBytes });
+      expect(mocks.runCapability).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not load providers to prepare disabled audio input", async () => {
+    await expect(
+      resolveAudioInputBudget({ cfg: { tools: { media: { audio: { enabled: false } } } } }),
+    ).resolves.toEqual({ enabled: false });
+    expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     mocks.buildProviderRegistry.mockReset();
     mocks.createMediaAttachmentCache.mockReset();
@@ -91,8 +165,6 @@ describe("media-understanding runtime", () => {
     mocks.normalizeMediaProviderId.mockReset();
     mocks.buildMediaUnderstandingRegistry.mockReset();
     mocks.getMediaUnderstandingProvider.mockReset();
-    mocks.readLocalFileSafely.mockReset();
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image") });
     mocks.describeImageWithModel.mockReset();
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
@@ -523,6 +595,12 @@ describe("media-understanding runtime", () => {
   });
 
   it("uses the generic model-backed image runtime for explicit models without media hooks", async () => {
+    mocks.getBuffer.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      fileName: "sample.jpg",
+      mime: "image/jpeg",
+      size: 5,
+    });
     mocks.buildProviderRegistry.mockReturnValue(
       new Map([["zai", { id: "zai", capabilities: ["image"] }]]),
     );
@@ -553,28 +631,6 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("prefers local image bytes over conflicting explicit MIME metadata", async () => {
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: PNG_1X1 });
-
-    await describeImageFileWithModel({
-      filePath: "/tmp/sample.jpg",
-      mime: "application/pdf",
-      provider: "zai",
-      model: "glm-4.6v",
-      prompt: "Describe it",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    });
-
-    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        buffer: PNG_1X1,
-        fileName: "sample.jpg",
-        mime: "image/png",
-      }),
-    );
-  });
-
   it.each([
     {
       name: "HEIC",
@@ -594,7 +650,12 @@ describe("media-understanding runtime", () => {
   ])(
     "normalizes local $name explicit image descriptions before provider execution",
     async (testCase) => {
-      mocks.readLocalFileSafely.mockResolvedValue({ buffer: testCase.bytes });
+      mocks.getBuffer.mockResolvedValue({
+        buffer: testCase.bytes,
+        fileName: "sample.bin",
+        mime: testCase.mime,
+        size: testCase.bytes.length,
+      });
 
       await describeImageFileWithModel({
         filePath: "/tmp/sample.bin",
@@ -693,13 +754,12 @@ describe("media-understanding runtime", () => {
       }),
     ).resolves.toEqual({ text: "generic image ok", model: "vision" });
 
-    expect(mocks.readLocalFileSafely).not.toHaveBeenCalled();
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
       media: [{ url: "https://httpbin.org/image/png", contentType: "image/*" }],
     });
     expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith(
       [{ index: 0, url: "https://httpbin.org/image/png", mime: "image/png" }],
-      { ssrfPolicy: undefined },
+      { localPathRoots: undefined, ssrfPolicy: undefined },
     );
     expect(mocks.getBuffer).toHaveBeenCalledWith({
       attachmentIndex: 0,
@@ -750,7 +810,12 @@ describe("media-understanding runtime", () => {
     mocks.buildProviderRegistry.mockReturnValue(
       new Map([["gemini", { id: "gemini", capabilities: ["image"], describeImage }]]),
     );
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image-bytes") });
+    mocks.getBuffer.mockResolvedValue({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "sample.jpg",
+      mime: "image/jpeg",
+      size: 11,
+    });
 
     await expect(
       describeImageFileWithModel({
@@ -796,7 +861,12 @@ describe("media-understanding runtime", () => {
   });
 
   it("resolves the agent directory when direct image description only names an agent", async () => {
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image-bytes") });
+    mocks.getBuffer.mockResolvedValue({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "sample.jpg",
+      mime: "image/jpeg",
+      size: 11,
+    });
 
     await describeImageFileWithModel({
       filePath: "/tmp/sample.jpg",

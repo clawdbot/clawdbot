@@ -44,6 +44,23 @@
             }
           },
           {
+            "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "name": "Nemotron 3.5 Lightning 30B",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
             "id": "nvidia/nemotron-3-super-120b-a12b",
             "name": "Nemotron 3 Super 120B",
             "input": ["text"],

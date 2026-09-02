@@ -1,4 +1,5 @@
-import type { Event, Relay } from "nostr-tools";
+import type { Event, Filter, Relay } from "nostr-tools";
+import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
@@ -9,7 +10,8 @@ import {
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import {
   BUZZ_ROOM_SYSTEM_KIND,
-  isNewerBuzzRoomMembership,
+  BUZZ_ROOM_MEMBERSHIP_KIND,
+  parseBuzzRoomMembershipEvent,
   parseBuzzRoomMembershipChangeEvent,
   type BuzzRoomMembership,
 } from "./room-membership.js";
@@ -57,7 +59,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   channelIds: string[];
   botPublicKey: string;
   since: number;
-  messageSince: number;
+  messageSince: (channelId: string) => number;
   messageLimit: number;
   reserveDispatchCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
   onMessageEvent: (
@@ -137,6 +139,17 @@ export async function createBuzzRoomMembershipTracker(params: {
     params.onFatalError?.(error instanceof Error ? error : new Error(String(error)));
     params.relay.close();
   };
+  const replaceMembership = (membership: BuzzRoomMembership) => {
+    if (
+      membership.roles.get(params.botPublicKey) !== "bot" ||
+      !membership.members.has(params.botPublicKey)
+    ) {
+      blockedRooms.add(membership.roomId);
+      throw new Error(`Buzz bot no longer has the Bot role in room ${membership.roomId}`);
+    }
+    memberships.set(membership.roomId, membership);
+    params.onMembershipsChanged?.(effectiveMemberships());
+  };
   const queryMembership = (channelId: string): Promise<BuzzRoomMembership | undefined> => {
     const query = membershipQueryTail.then(async () =>
       (
@@ -156,10 +169,6 @@ export async function createBuzzRoomMembershipTracker(params: {
   };
 
   const refreshMembership = async (channelId: string, state: RefreshState): Promise<void> => {
-    const baseline = memberships.get(channelId);
-    if (!baseline) {
-      throw new Error(`Missing Buzz room membership for ${channelId}`);
-    }
     for (const delayMs of MEMBERSHIP_REFRESH_DELAYS_MS) {
       const generation = state.generation;
       state.lastAttemptedGeneration = generation;
@@ -179,31 +188,24 @@ export async function createBuzzRoomMembershipTracker(params: {
       if (state.generation !== generation || !refreshed) {
         continue;
       }
+      // A live roster may have advanced while this query was in flight.
+      const current = memberships.get(channelId);
+      if (current && isNewerBuzzRevision(current, refreshed)) {
+        refreshed = current;
+      }
       const pending = pendingMemberships.get(channelId);
       const pendingMatches =
         !pending ||
         [...pending].every(
           ([publicKey, expected]) => refreshed.members.has(publicKey) === (expected === "present"),
         );
-      const botMembershipChanged = pending?.has(params.botPublicKey) === true;
-      if (
-        !pendingMatches ||
-        (botMembershipChanged && !isNewerBuzzRoomMembership(refreshed, baseline))
-      ) {
+      if (!pendingMatches) {
         continue;
       }
-      if (
-        refreshed.roles.get(params.botPublicKey) !== "bot" ||
-        !refreshed.members.has(params.botPublicKey)
-      ) {
-        blockedRooms.add(channelId);
-        throw new Error(`Buzz bot no longer has the Bot role in room ${channelId}`);
-      }
-      memberships.set(channelId, refreshed);
       pendingMemberships.delete(channelId);
       deniedMembers.delete(channelId);
       blockedRooms.delete(channelId);
-      params.onMembershipsChanged?.(effectiveMemberships());
+      replaceMembership(refreshed);
       return;
     }
     if (state.generation !== state.lastAttemptedGeneration) {
@@ -281,6 +283,21 @@ export async function createBuzzRoomMembershipTracker(params: {
     return refreshMembershipOnce(channelId);
   };
   const handleRoomEvent = (event: Event, reservation?: BuzzReplayDispatchReservation) => {
+    if (event.kind === BUZZ_ROOM_MEMBERSHIP_KIND) {
+      const membership = parseBuzzRoomMembershipEvent(event, params.relayPublicKey);
+      if (
+        membership &&
+        memberships.has(membership.roomId) &&
+        isNewerBuzzRevision(membership, memberships.get(membership.roomId))
+      ) {
+        try {
+          replaceMembership(membership);
+        } catch (error) {
+          reportSystemEventError(error);
+        }
+      }
+      return;
+    }
     if (isBuzzInboundMessageKind(event.kind)) {
       params.onMessageEvent(event, isMember, reservation);
       return;
@@ -311,22 +328,29 @@ export async function createBuzzRoomMembershipTracker(params: {
     // Buzz emits these filters in order: system changes since session start
     // update or deny membership before the following message history is handled.
     for (const channelId of params.channelIds) {
+      const filters: Filter[] = [
+        {
+          kinds: [BUZZ_ROOM_SYSTEM_KIND, BUZZ_ROOM_METADATA_EDIT_KIND],
+          "#h": [channelId],
+          since: params.since,
+        },
+        {
+          kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
+          authors: [params.relayPublicKey],
+          "#d": [channelId],
+          limit: 1,
+        },
+        {
+          kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
+          "#h": [channelId],
+          since: params.messageSince(channelId),
+          limit: params.messageLimit,
+        },
+      ];
       subscriptions.push(
         openBuzzRelaySubscription(
           params.relay,
-          [
-            {
-              kinds: [BUZZ_ROOM_SYSTEM_KIND, BUZZ_ROOM_METADATA_EDIT_KIND],
-              "#h": [channelId],
-              since: params.since,
-            },
-            {
-              kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
-              "#h": [channelId],
-              since: params.messageSince,
-              limit: params.messageLimit,
-            },
-          ],
+          filters,
           {
             onevent: (event) => {
               if (!historicalRooms.has(channelId) && isBuzzInboundMessageKind(event.kind)) {
@@ -363,6 +387,10 @@ export async function createBuzzRoomMembershipTracker(params: {
               }
             },
           },
+          // Buzz routes only all-#h requests to room topics and matches #h against
+          // stored channel metadata. Signed rosters contain #d, not #h, so keep
+          // the client filters unchanged for nostr-tools signature/tag validation.
+          filters.map((filter) => Object.assign({}, filter, { "#h": [channelId] })),
         ),
       );
     }
@@ -395,7 +423,7 @@ export async function createBuzzRoomMembershipTracker(params: {
           const outcome = await catchUpBuzzRoomHistory({
             relay: params.relay,
             channelId,
-            since: params.messageSince,
+            since: params.messageSince(channelId),
             until: page.oldest,
             limit: params.messageLimit,
             reserveCapacity: params.reserveDispatchCapacity,

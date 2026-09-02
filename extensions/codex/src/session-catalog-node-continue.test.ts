@@ -1,7 +1,9 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  transcriptMirrorMocks,
+  nodeHostMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_CLI_SESSION_RESUME_COMMAND,
@@ -10,6 +12,7 @@ import {
   readCodexSessionTranscript,
   registerCodexSessionCatalog,
   config,
+  idleThread,
   compatibilityOwnerConfig,
   createControl,
   createEligibleControl,
@@ -23,107 +26,13 @@ import {
   resolveDefaultAgentDir,
   createCodexTestBindingStore,
   CODEX_TERMINAL_RESUME_COMMAND,
+  CODEX_TERMINAL_START_COMMAND,
+  createCodexSessionCatalogNodeHostCommands,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogNodeInvokePolicies,
   type OpenClawConfig,
   type PluginRuntime,
-  originalPath,
 } from "./session-catalog.test-helpers.js";
-
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("Codex supervision actions", () => {
   it("advertises creation from startup config before the live snapshot is available", () => {
@@ -222,15 +131,17 @@ describe("Codex supervision actions", () => {
   });
 
   it("adopts a paired-node session with bounded history and an executable binding", async () => {
-    let runtimeConfig = compatibilityOwnerConfig();
+    const remoteThreadId = "123e4567-e89b-12d3-a456-426614174001";
+    const sessionFamilyId = "123e4567-e89b-12d3-a456-426614174002";
+    let runtimeConfig = compatibilityOwnerConfig("beta");
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ command }) => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
             sessions: [
               {
-                threadId: "thread-remote",
-                sessionId: "cli-session-remote",
+                threadId: remoteThreadId,
+                sessionId: sessionFamilyId,
                 name: "Remote task",
                 cwd: "/remote/repo",
                 status: "idle",
@@ -282,7 +193,7 @@ describe("Codex supervision actions", () => {
     const first = await provider?.continueSession?.({
       agentId: "alpha",
       hostId: "node:devbox",
-      threadId: "thread-remote",
+      threadId: remoteThreadId,
       clientScopes: ["operator.admin"],
     });
     const pendingList = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
@@ -294,7 +205,7 @@ describe("Codex supervision actions", () => {
     const second = await provider?.continueSession?.({
       agentId: "alpha",
       hostId: "node:devbox",
-      threadId: "thread-remote",
+      threadId: remoteThreadId,
       clientScopes: ["operator.admin"],
     });
     await second?.afterConversationBound?.();
@@ -306,8 +217,8 @@ describe("Codex supervision actions", () => {
           kind: "codex-cli-node-session",
           version: 1,
           nodeId: "devbox",
-          // codex exec resume needs the CLI session id, not the thread id.
-          sessionId: "cli-session-remote",
+          // Forks share a session family; resume must select the exact listed thread.
+          sessionId: remoteThreadId,
           agentId: "alpha",
           cwd: "/remote/repo",
         },
@@ -317,9 +228,10 @@ describe("Codex supervision actions", () => {
       conversationBinding: { data: { agentId: "alpha" } },
     });
     expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Remote task",
+        displayName: "Remote task",
         spawnedCwd: "/remote/repo",
         initialEntry: expect.objectContaining({
           agentHarnessId: "codex",
@@ -328,7 +240,7 @@ describe("Codex supervision actions", () => {
             codex: {
               sessionCatalog: expect.objectContaining({
                 sourceHostId: "node:devbox",
-                sourceThreadId: "thread-remote",
+                sourceThreadId: remoteThreadId,
                 nodeId: "devbox",
                 initializing: true,
               }),
@@ -341,7 +253,7 @@ describe("Codex supervision actions", () => {
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: expect.objectContaining({
-          id: "thread-remote",
+          id: remoteThreadId,
           turns: [expect.objectContaining({ id: "turn-1" })],
         }),
         throughTurnId: "turn-1",
@@ -353,7 +265,7 @@ describe("Codex supervision actions", () => {
 
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
-      threadId: "thread-remote",
+      threadId: remoteThreadId,
       sessionKey: first?.sessionKey,
     });
   });
@@ -578,6 +490,14 @@ describe("Codex supervision actions", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
     const control = createEligibleControl({
+      requireEligibleThread: vi.fn(async () =>
+        idleThread({
+          id: threadId,
+          status: { type: "active" },
+          source: "cli",
+          cwd: "/workspace/local",
+        }),
+      ),
       listPage: vi.fn(async () => ({
         sessions: [
           { threadId, status: "active", source: "cli", cwd: "/workspace/local", archived: false },
@@ -616,6 +536,28 @@ describe("Codex supervision actions", () => {
     expect(policy.handle({ command: CODEX_TERMINAL_RESUME_COMMAND, invokeNode } as never)).toEqual({
       ok: true,
     });
+    for (const [terminal, admin, allowed] of [
+      [undefined, true, true],
+      [true, true, true],
+      [false, true, false],
+      [undefined, false, false],
+    ] as const) {
+      expect(
+        await policy.handle({
+          command: CODEX_TERMINAL_START_COMMAND,
+          nodeId: "node",
+          params: {},
+          invokeNode,
+          config: {
+            gateway: {
+              cliAgents: { enabled: true },
+              ...(terminal === undefined ? {} : { terminal: { enabled: terminal } }),
+            },
+          },
+          client: { scopes: admin ? ["operator.admin"] : [] },
+        }),
+      ).toMatchObject({ ok: allowed });
+    }
     expect(invokeNode).not.toHaveBeenCalled();
     const node = {
       nodeId: "devbox",
@@ -662,7 +604,14 @@ describe("Codex supervision actions", () => {
         cwd: "/workspace/node-new",
         nodeId: "devbox",
       }),
-    ).rejects.toThrow("omit hostId to start on the gateway host");
+    ).resolves.toEqual({
+      kind: "node",
+      nodeId: "devbox",
+      command: CODEX_TERMINAL_START_COMMAND,
+      paramsJSON: JSON.stringify({ cwd: "/workspace/node-new" }),
+      cwd: "/workspace/node-new",
+      title: "codex",
+    });
 
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
@@ -718,6 +667,99 @@ describe("Codex supervision actions", () => {
     await expect(
       getProvider()?.startTerminalSession?.({ agentId: "main", cwd: "/workspace/blank" }),
     ).resolves.toMatchObject({ argv: [executable], cwd: "/workspace/blank" });
+    const fresh = createCodexSessionCatalogNodeHostCommands(control, {
+      getPluginConfig: () => pluginConfig,
+      getRuntimeConfig: () => ({ agents: { ownership: "explicit", entries: { unrelated: {} } } }),
+    }).find((command) => command.command === CODEX_TERMINAL_START_COMMAND)!;
+    process.env.PATH = binDir;
+    const io = { signal: new AbortController().signal, emitChunk: vi.fn(), onInput: vi.fn() };
+    await fresh.handle(
+      JSON.stringify({ cwd: binDir, initialMessage: "--help", cols: 100, rows: 30 }),
+      io,
+    );
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      {
+        file: executable,
+        args: ["--", "--help"],
+        cwd: binDir,
+        requiredCwd: true,
+        cols: 100,
+        rows: 30,
+      },
+      io,
+    );
+    for (const field of ["agentId", "argv", "env", "executable"]) {
+      await expect(
+        fresh.handle(JSON.stringify({ cwd: binDir, cols: 80, rows: 24, [field]: "injected" }), io),
+      ).rejects.toThrow("unknown terminal start parameter");
+    }
+    const hosts = [
+      { nodeId: "ready", connected: true, invocableCommands: [CODEX_TERMINAL_START_COMMAND] },
+      {
+        nodeId: "resume-only",
+        connected: true,
+        invocableCommands: [CODEX_TERMINAL_RESUME_COMMAND],
+      },
+      { nodeId: "offline", connected: false, invocableCommands: [CODEX_TERMINAL_START_COMMAND] },
+      {
+        nodeId: "denied",
+        connected: true,
+        commands: [CODEX_TERMINAL_START_COMMAND],
+        invocableCommands: [],
+      },
+    ];
+    const localList = vi.spyOn(control, "listPage").mockRejectedValue(new Error("app-server down"));
+    const localProgress = vi.fn();
+    let rejectNodes!: (error: Error) => void;
+    const pending = getProvider()!.list({
+      onHost: localProgress,
+      listNodes: () =>
+        new Promise((_, reject) => {
+          rejectNodes = reject;
+        }),
+    });
+    await vi.waitFor(() =>
+      expect(localProgress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          connected: false,
+          canStartTerminal: true,
+        }),
+      ),
+    );
+    rejectNodes(new Error("node registry down"));
+    expect(await pending).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hostId: CODEX_LOCAL_SESSION_HOST_ID, canStartTerminal: true }),
+        expect.objectContaining({ hostId: "node:registry", canStartTerminal: false }),
+      ]),
+    );
+    localList.mockRestore();
+    invoke.mockClear();
+    const onHost = vi.fn();
+    const catalogHosts = await getProvider()?.list({
+      onHost,
+      agentId: "main",
+      listNodes: async () => ({ nodes: hosts }),
+    });
+    const terminalHosts = catalogHosts?.filter((host) => host.canStartTerminal);
+    expect(terminalHosts?.filter((host) => host.hostId.startsWith("node:"))).toEqual([
+      expect.objectContaining({ hostId: "node:ready", label: "ready", sessions: [] }),
+    ]);
+    expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(catalogHosts!));
+    expect(invoke).not.toHaveBeenCalled();
+    const userSource = terminalHosts?.find((host) => host.label === "Local Codex · user");
+    expect(userSource).toBeDefined();
+    await expect(
+      getProvider()?.startTerminalSession?.({
+        agentId: "main",
+        hostId: userSource!.hostId,
+        cwd: binDir,
+      }),
+    ).resolves.toMatchObject({
+      env: { CODEX_HOME: resolveCodexAppServerUserHomeDir(process.env) },
+      cwd: binDir,
+    });
     pluginConfig = { appServer: { homeScope: "user" } };
     registerCodexSessionCatalog({
       api,

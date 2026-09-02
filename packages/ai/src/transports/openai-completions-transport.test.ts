@@ -69,6 +69,7 @@ describe("openai completions transport", () => {
     expect(buildOpenAISdkRequestOptions(model, signal)).toEqual({
       signal,
       timeout: 900_000,
+      maxRetries: 0,
     });
     expect(
       buildOpenAISdkRequestOptions(
@@ -182,7 +183,7 @@ describe("openai completions transport", () => {
       id: "qwen-coder-plus",
       name: "qwen-coder-plus",
       provider: "qwen",
-      baseUrl: "",
+      baseUrl: "https://modelstudio.example/v1",
       reasoning: false,
       contextWindow: 4096,
       maxTokens: 256,

@@ -7,14 +7,14 @@ import {
   withOpenClawStateLease,
   type OpenClawStateLeaseContext,
 } from "../state/openclaw-state-lease.js";
-import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 
 const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
 const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
   databasePath: string;
 };
 
@@ -105,11 +105,9 @@ export async function withPluginLifecycleLease<T>(
         assertOwned: () => lease.assertOwned(),
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };
-      // Another process may have committed while this process waited for ownership.
-      clearLoadInstalledPluginIndexInstallRecordsCache();
-      return await activePluginLifecycleLease.run(
-        { databasePath, lease: pluginLease },
-        async () => await run(pluginLease),
+      // Capture fresh facts only after ownership: another process may have committed while we waited.
+      return await activePluginLifecycleLease.run({ databasePath, lease: pluginLease }, () =>
+        withPluginCache(createPluginCache(), () => run(pluginLease)),
       );
     },
   );

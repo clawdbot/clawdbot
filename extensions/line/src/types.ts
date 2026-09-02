@@ -20,6 +20,7 @@ interface LineThreadBindingsConfig {
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
+  joinIntro?: boolean;
   channelAccessToken?: string;
   channelSecret?: string;
   tokenFile?: string;
@@ -31,6 +32,7 @@ interface LineAccountBaseConfig {
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
   mediaMaxMb?: number;
+  historyLimit?: number;
   webhookPath?: string;
   threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;
@@ -71,6 +73,17 @@ export interface LineSendResult {
   receipt: MessageReceipt;
 }
 
+/**
+ * LINE's own view of an account's monthly message allowance.
+ *
+ * The plan decides whether a limit exists at all, so the two cases stay separate
+ * shapes instead of encoding "unlimited" as a sentinel number that every caller
+ * would have to remember to special-case.
+ */
+export type LineMessageQuota =
+  | { kind: "unlimited" }
+  | { kind: "limited"; limit: number; used: number };
+
 export type LineProbeResult = BaseProbeResult<string> & {
   elapsedMs?: number;
   bot?: {
@@ -79,6 +92,7 @@ export type LineProbeResult = BaseProbeResult<string> & {
     basicId?: string;
     pictureUrl?: string;
   };
+  quota?: LineMessageQuota;
 };
 
 type LineFlexMessagePayload = {

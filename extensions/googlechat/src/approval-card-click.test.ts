@@ -31,7 +31,7 @@ function createApprovalResolveResult(params: {
     params.approvalKind === "exec"
       ? {
           kind: "exec" as const,
-          commandText: "echo hi",
+          commandText: `<tag> & &amp; "double" 'single'`,
           commandPreview: null,
           allowedDecisions: ["allow-once" as const, "deny" as const],
         }
@@ -175,7 +175,11 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       cardsV2: expect.any(Array),
     });
     const cardJson = JSON.stringify(updateGoogleChatMessage.mock.calls[0]?.[0]);
+    const cardText =
+      updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2[0].card.sections[0].widgets[0]
+        .textParagraph.text;
     expect(cardJson).toContain("Exec Approval: Allowed once");
+    expect(cardText).toBe(`&lt;tag&gt; &amp; &amp;amp; "double" 'single'`);
     expect(cardJson).toContain("Resolved by this action");
     expect(cardJson).not.toContain("buttonList");
   });

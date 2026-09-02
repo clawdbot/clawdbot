@@ -45,6 +45,13 @@ describe("agent end side effects", () => {
         sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
         trigger: "user",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/agent",
+          workspaceDir: "/workspace",
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+        },
         config: {
           skills: {
             workshop: {
@@ -79,10 +86,33 @@ describe("agent end side effects", () => {
       ctx: {
         runId: "run-1",
         workspaceDir: "/workspace",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/agent",
+          workspaceDir: "/workspace",
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+        },
       },
     });
 
     expect(mockExperienceReview).toHaveBeenCalledTimes(1);
+    expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips experience review for CLI hook contexts", async () => {
+    await awaitAgentEndSideEffects({
+      event: {
+        messages: [],
+        success: true,
+      },
+      ctx: {
+        runId: "run-1",
+        workspaceDir: "/workspace",
+      },
+    });
+
+    expect(mockExperienceReview).not.toHaveBeenCalled();
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
   });
 });

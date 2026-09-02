@@ -133,8 +133,7 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
 
-    // Coalesce rapid connecting/degraded oscillations so SwiftUI does not churn
-    // MenuBarExtra status items while the gateway connection is unstable.
+    // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
     private var pendingStateTask: Task<Void, Never>?
     private var stateDebouncer = ControlChannelStateDebouncer()
 
@@ -222,23 +221,15 @@ final class ControlChannel {
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
-        do {
-            let start = Date()
-            var params: [String: AnyHashable]?
-            if let timeout {
-                params = ["timeout": AnyHashable(Int(timeout * 1000))]
-            }
-            let timeoutMs = (timeout ?? 15) * 1000
-            let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
-            let ms = Date().timeIntervalSince(start) * 1000
-            self.lastPingMs = ms
-            self.setStateThrottled(.connected)
-            return payload
-        } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
-            throw ControlChannelError.badResponse(message)
+        let start = Date()
+        var params: [String: AnyHashable]?
+        if let timeout {
+            params = ["timeout": AnyHashable(Int(timeout * 1000))]
         }
+        let timeoutMs = (timeout ?? 15) * 1000
+        let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
+        self.lastPingMs = Date().timeIntervalSince(start) * 1000
+        return payload
     }
 
     func lastHeartbeat() async throws -> ControlHeartbeatEvent? {
@@ -252,21 +243,15 @@ final class ControlChannel {
         timeoutMs: Double? = nil,
         retryTransportFailures: Bool = true) async throws -> Data
     {
-        do {
+        try await self.performRequest {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
                 $0[$1.key] = OpenClawKit.AnyCodable($1.value.base)
             }
-            let data = try await GatewayConnection.shared.request(
+            return try await GatewayConnection.shared.request(
                 method: method,
                 params: rawParams,
                 timeoutMs: timeoutMs,
                 retryTransportFailures: retryTransportFailures)
-            self.setStateThrottled(.connected)
-            return data
-        } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
-            throw ControlChannelError.badResponse(message)
         }
     }
 
@@ -274,13 +259,22 @@ final class ControlChannel {
         _ request: OpenClawChatGatewayRequest,
         retryTransportFailures: Bool = true) async throws -> Data
     {
+        try await self.performRequest {
+            try await GatewayConnection.shared.request(request, retryTransportFailures: retryTransportFailures)
+        }
+    }
+
+    private func performRequest(_ operation: () async throws -> Data) async throws -> Data {
+        try Task.checkCancellation()
         do {
-            let data = try await GatewayConnection.shared.request(
-                request,
-                retryTransportFailures: retryTransportFailures)
+            let data = try await operation()
+            try Task.checkCancellation()
             self.setStateThrottled(.connected)
             return data
         } catch {
+            // Closing a view cancels its requests, not the shared connection.
+            // Only failures belonging to a live caller may trigger recovery.
+            try Task.checkCancellation()
             let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
             self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
@@ -505,10 +499,44 @@ final class ControlChannel {
             }
         case let .event(evt) where evt.event == "shutdown":
             self.setStateThrottled(.degraded("gateway shutdown"))
+        case let .event(evt) where evt.event == "users.prefs.changed":
+            // The gateway targets this event at connections bound to the
+            // caller's own profile; receipt means our profile appearance
+            // changed on another device.
+            self.refreshProfileAccent()
         case .snapshot:
             self.setStateThrottled(.connected)
+            self.refreshProfileAccent()
         default:
             break
+        }
+    }
+
+    private func refreshProfileAccent() {
+        Task {
+            let accent = await Self.fetchProfileAccentHex()
+            AppStateStore.shared.profileAccentHex = accent
+        }
+    }
+
+    /// Caller's per-profile accent (users.prefs.get). nil covers profile-less
+    /// connections (no_durable_identity), older gateways without the method,
+    /// and malformed stored values, so the gateway seam color stays the
+    /// fallback. Goes straight through GatewayConnection: routing this through
+    /// ControlChannel.request would mark the channel degraded on the expected
+    /// older-gateway failure.
+    private static func fetchProfileAccentHex() async -> String? {
+        do {
+            let data = try await GatewayConnection.shared.requestRaw(
+                method: "users.prefs.get",
+                params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
+                timeoutMs: 8000)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["status"] as? String == "ok"
+            else { return nil }
+            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+        } catch {
+            return nil
         }
     }
 

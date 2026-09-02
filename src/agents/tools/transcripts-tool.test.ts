@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type {
@@ -378,12 +379,11 @@ describe("transcripts tool", () => {
 
   it("reserves a session id while provider startup is pending", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    let releaseStart: (() => void) | undefined;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
+    const started = createDeferred();
+    const startGate = createDeferred();
     const start = vi.fn(async (request) => {
-      await startGate;
+      started.resolve();
+      await startGate.promise;
       return { ok: true as const, session: request.session };
     });
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "shared-session" }));
@@ -402,26 +402,30 @@ describe("transcripts tool", () => {
       undefined,
       vi.fn(),
     );
-    await vi.waitFor(() => {
-      expect(start).toHaveBeenCalledOnce();
-    });
-
-    await expect(
-      tool.execute(
-        "call-2",
-        { action: "start", providerId: "proof-live", sessionId: "shared-session" },
+    await started.promise;
+    try {
+      await expect(
+        tool.execute(
+          "call-2",
+          { action: "start", providerId: "proof-live", sessionId: "shared-session" },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow("transcripts session already active: shared-session");
+      await expect(
+        tool.execute("stop-pending", { action: "stop", sessionId: "shared-session" }),
+      ).resolves.toMatchObject({ details: { sessionId: "shared-session", skipped: true } });
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      startGate.resolve();
+      await firstStart;
+      await tool.execute(
+        "call-3",
+        { action: "stop", sessionId: "shared-session" },
         undefined,
         vi.fn(),
-      ),
-    ).rejects.toThrow("transcripts session already active: shared-session");
-    releaseStart?.();
-    await firstStart;
-    await tool.execute(
-      "call-3",
-      { action: "stop", sessionId: "shared-session" },
-      undefined,
-      vi.fn(),
-    );
+      );
+    }
 
     expect(start).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
@@ -694,6 +698,9 @@ describe("transcripts tool", () => {
     );
 
     expect(stop).not.toHaveBeenCalled();
+    await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
+      stoppedAt: olderSession.stoppedAt,
+    });
     await expect(
       fs.readFile(
         path.join(stateDir, "transcripts", "2026-05-21", "standup", "summary.md"),

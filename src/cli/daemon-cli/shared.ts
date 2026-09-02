@@ -12,14 +12,12 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
-export { resolveDaemonContainerContext };
 
 /** Create install action context with JSON flag normalization. */
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
@@ -68,11 +66,6 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
-/** Extract `--port` from service ProgramArguments. */
-export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
-  return parseTcpPortFromArgs(programArguments);
-}
-
 /** Pick the best local probe host for a configured Gateway bind mode. */
 export function pickProbeHostForBind(
   bindMode: string,
@@ -85,12 +78,9 @@ export function pickProbeHostForBind(
   if (bindMode === "tailnet") {
     return tailnetIPv4 ?? "127.0.0.1";
   }
-  if (bindMode === "lan") {
-    // Same as call.ts: self-connections should always target loopback.
-    // bind=lan controls which interfaces the server listens on (0.0.0.0),
-    // but co-located CLI probes should connect via 127.0.0.1.
-    return "127.0.0.1";
-  }
+  // Same as call.ts: self-connections should always target loopback.
+  // bind=lan controls which interfaces the server listens on (0.0.0.0),
+  // but co-located CLI probes should connect via 127.0.0.1.
   return "127.0.0.1";
 }
 
@@ -205,7 +195,7 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
   const container = resolveDaemonContainerContext(env);
   const hints = buildPlatformServiceStartHints({
     installCommand: formatCliCommand("openclaw gateway install", env),
-    startCommand: formatCliCommand("openclaw gateway", env),
+    startCommand: formatCliCommand("openclaw gateway start", env),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),

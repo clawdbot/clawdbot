@@ -1,0 +1,146 @@
+title: Telegram command prompt preserves channel context
+
+scenario:
+  id: telegram-command-prompt-context
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - telegram.built-in-commands
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom:
+        - telegram:100001
+  regressionRefs:
+    - openclaw/openclaw#20837
+  objective: Verify a Telegram topic export reconstructs the session prompt with Telegram runtime context.
+  successCriteria:
+    - The real Telegram plugin receives a native export command in topic 928.
+    - The export acknowledgement is delivered back to topic 928.
+    - The exported system prompt identifies Telegram and its runtime capabilities.
+  codeRefs:
+    - src/auto-reply/reply/commands-export-session.ts
+    - src/auto-reply/reply/commands-system-prompt.ts
+    - src/agents/runtime-prompt.ts
+    - extensions/qa-lab/src/crabline-transport.ts
+  execution:
+    kind: flow
+    channel: telegram
+    suiteIsolation: isolated
+    isolationReason: Creates and reads a session export in the isolated Gateway workspace.
+    summary: Export a Telegram topic session through Crabline and inspect its reconstructed prompt.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
+      conversationId: "-1001234567890"
+      senderId: "100001"
+      threadId: "928"
+      replyMarker: QA-TELEGRAM-COMMAND-PROMPT-CONTEXT-OK
+      exportPath: qa-telegram-command-prompt-context.html
+
+flow:
+  steps:
+    - name: native export preserves Telegram topic prompt context
+      actions:
+        - assert:
+            expr: env.providerMode === config.requiredProviderMode
+            message: this deterministic command prompt proof requires mock-openai
+        - assert:
+            expr: transport.id === config.requiredChannelDriver
+            message: this proof requires the Crabline Telegram provider boundary
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForTransportReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: exportFile
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.exportPath)"
+        - try:
+            actions:
+              - set: initialStartIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - sendInbound:
+                  conversation:
+                    id:
+                      ref: config.conversationId
+                    kind: group
+                  senderId:
+                    ref: config.senderId
+                  senderName: QA Command Prompt Operator
+                  threadId:
+                    ref: config.threadId
+                  text:
+                    expr: "`Reply exactly: ${config.replyMarker}`"
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      ref: config.conversationId
+                    kind: group
+                  sinceIndex:
+                    ref: initialStartIndex
+                  textIncludes:
+                    ref: config.replyMarker
+                  threadId:
+                    ref: config.threadId
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 45000)
+                saveAs: initialReply
+              - set: commandStartIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - sendNativeCommand:
+                  command:
+                    expr: "`export_session ${config.exportPath}`"
+                  conversation:
+                    id:
+                      ref: config.conversationId
+                    kind: group
+                  senderId:
+                    ref: config.senderId
+                  senderName: QA Command Prompt Operator
+                  threadId:
+                    ref: config.threadId
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      ref: config.conversationId
+                    kind: group
+                  sinceIndex:
+                    ref: commandStartIndex
+                  textIncludes: Session exported!
+                  threadId:
+                    ref: config.threadId
+                  timeoutMs: 60000
+                saveAs: exportReply
+              - call: fs.readFile
+                saveAs: exportHtml
+                args:
+                  - ref: exportFile
+                  - utf8
+              - set: encodedSessionData
+                value:
+                  expr: 'exportHtml.match(/id="session-data"[\s\S]*?>([^<]+)<\/script>/u)?.[1]?.trim()'
+              - assert:
+                  expr: Boolean(encodedSessionData)
+                  message: session export did not contain its encoded session data
+              - set: exportedSession
+                value:
+                  expr: "JSON.parse(Buffer.from(encodedSessionData, 'base64').toString('utf8'))"
+              - assert:
+                  expr: "typeof exportedSession.systemPrompt === 'string' && exportedSession.systemPrompt.includes('Runtime:') && exportedSession.systemPrompt.includes('channel=telegram') && exportedSession.systemPrompt.includes('capabilities=')"
+                  message: exported system prompt did not preserve Telegram runtime context
+              - assert:
+                  expr: "initialReply.threadId === config.threadId && exportReply.threadId === config.threadId"
+                  message: Telegram topic reply escaped topic 928
+            finally:
+              - call: fs.rm
+                args:
+                  - ref: exportFile
+                  - force: true
+      detailsExpr: "JSON.stringify({ channel: 'telegram', topic: config.threadId, promptHasRuntime: exportedSession.systemPrompt.includes('Runtime:'), promptHasTelegram: exportedSession.systemPrompt.includes('channel=telegram'), promptHasCapabilities: exportedSession.systemPrompt.includes('capabilities=') })"

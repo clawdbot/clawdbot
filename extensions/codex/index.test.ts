@@ -62,6 +62,12 @@ describe("codex plugin", () => {
     expect(manifest.providers).toBeUndefined();
   });
 
+  it("keeps only Codex sub-plugin policy changes on the live thread-rotation path", () => {
+    expect(plugin.reload).toEqual({
+      noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+    });
+  });
+
   it("does not select an agent or open plugin state while registering", () => {
     const openSyncKeyedStore = vi.fn(() => {
       throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
@@ -154,12 +160,20 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerService).toHaveBeenCalledOnce();
-    expect(mockCallArg(registerService)).toMatchObject({
-      id: "codex-app-server-connection-health",
-      start: expect.any(Function),
-      stop: expect.any(Function),
-    });
+    expect(registerService).toHaveBeenCalledTimes(3);
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
+      }),
+    );
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-connection-health",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
   });
 
   it("does not start remote connection monitoring for local Codex transports", () => {
@@ -178,7 +192,16 @@ describe("codex plugin", () => {
         }),
       );
 
-      expect(registerService).not.toHaveBeenCalled();
+      expect(registerService).toHaveBeenCalledTimes(2);
+      expect(mockCallArg(registerService)).toMatchObject({
+        id: "codex-desktop-generation",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      });
+      expect(mockCallArg(registerService, 1)).toMatchObject({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
+      });
     }
   });
 

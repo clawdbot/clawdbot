@@ -35,11 +35,7 @@ export async function captureTopVisibleVirtualRow(thread: Locator): Promise<Visi
       element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
     ).find((candidate) => {
       const rect = candidate.getBoundingClientRect();
-      return (
-        candidate.dataset.virtualRowKey !== "history" &&
-        rect.bottom > viewport.top &&
-        rect.top < viewport.bottom
-      );
+      return rect.bottom > viewport.top && rect.top < viewport.bottom;
     });
     if (!row) {
       throw new Error("expected a visible virtual transcript row");
@@ -82,11 +78,7 @@ export async function startVirtualRowPaintProbe(thread: Locator, anchor: Visible
       const viewport = element.getBoundingClientRect();
       const row = Array.from(
         element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-      ).find(
-        (candidate) =>
-          candidate.dataset.virtualRowKey !== "history" &&
-          candidate.dataset.virtualRowKey === expected.key,
-      );
+      ).find((candidate) => candidate.dataset.virtualRowKey === expected.key);
       const rect = row?.getBoundingClientRect();
       const index = row ? Number.parseInt(row.dataset.index ?? "", 10) : Number.NaN;
       probe.samples.push({

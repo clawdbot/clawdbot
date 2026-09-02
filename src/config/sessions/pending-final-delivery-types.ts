@@ -19,5 +19,5 @@ export type PendingDeliveryNoticeState = {
   createdAt: number;
   context: DeliveryContext;
   intentId: string;
-  state: "owed" | "unresolved";
+  state: "owed" | "unresolved" | "acknowledged";
 };

@@ -93,8 +93,7 @@ function buildCompat(
   props: LlamaServerPropsWire | undefined,
 ): NonNullable<ModelDefinitionConfig["compat"]> {
   const caps = props?.chat_template_caps;
-  const supportsTools =
-    asBoolean(caps?.supports_tools) === true && asBoolean(caps?.supports_tool_calls) === true;
+  const supportsTools = asBoolean(caps?.supports_tool_calls) === true;
   const supportsTypedContent = asBoolean(caps?.supports_typed_content) === true;
   return {
     supportsStore: false,

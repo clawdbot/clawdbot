@@ -29,6 +29,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("skills.changed");
   });
 
+  it("advertises profile-scoped preference invalidation updates", () => {
+    expect(GATEWAY_EVENTS).toContain("users.prefs.changed");
+  });
+
   it("advertises portal replace-set updates", () => {
     expect(GATEWAY_EVENTS).toContain("portal.changed");
   });
@@ -53,6 +57,84 @@ describe("GATEWAY_EVENTS", () => {
 });
 
 describe("listGatewayMethods", () => {
+  const expectedMethodsAfterModelProbe = [
+    "models.probe",
+    "migrations.memory.plan",
+    "migrations.memory.apply",
+    "ui.command",
+    "approval.history",
+    "plugin.surface.refresh",
+    "conversations.list",
+    "session.discussion.info",
+    "session.discussion.open",
+    "board.prompt.authorize",
+    "board.data.read",
+    "board.action",
+    "sessions.observer.visibility",
+    "session.visibility.set",
+    "session.members.list",
+    "session.members.add",
+    "session.members.remove",
+    "session.suggestions.add",
+    "session.suggestions.list",
+    "session.suggestions.resolve",
+    "session.typing",
+    "sessions.companion.ask",
+    "sessions.companion.state",
+    "sessions.companion.reset",
+    "memory.search",
+    "skills.proposals.events.list",
+    "skills.proposals.evaluate",
+    "hooks.status",
+    "tasks.retry",
+    "tasks.dismiss",
+    "audit.run.inspect",
+    "sessions.patchMany",
+    "update.hold",
+    "sessions.catalog.startTerminal",
+    "worker.desktop.observe",
+    "projects.list",
+    "projects.register",
+    "projects.remove",
+    "worker.desktop.launch",
+    "secrets.store.list",
+    "secrets.store.set",
+    "secrets.store.delete",
+    "users.prefs.get",
+    "users.prefs.set",
+    "projects.add",
+    "projects.searchRemote",
+    "desktop.observe",
+    "desktop.launch",
+    "device.scopes.requestUpgrade",
+    "device.scopes.waitUpgrade",
+    "portal.list",
+    "portal.open",
+    "portal.close",
+    "sessions.move",
+    "sessions.assignOwner",
+    "progressCard.get",
+    "progressCard.put",
+    "tools.github.status",
+    "tools.github.configure",
+    "tools.github.authorize.start",
+    "tools.github.authorize.poll",
+    "tools.github.authorize.cancel",
+    "sessions.github.publish",
+    "diagnostics.lanes",
+    "session.members.listEvidence",
+    "plugins.inspect",
+    "users.github.status",
+    "users.github.authorize.start",
+    "users.github.authorize.poll",
+    "users.github.authorize.cancel",
+    "users.github.disconnect",
+    "sessions.github.options",
+    "sessions.github.status",
+    "sessions.github.confirm",
+    "sessions.title.prepare",
+  ];
+
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
@@ -73,72 +155,9 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-64)).toEqual([
-      "models.probe",
-      "migrations.memory.plan",
-      "migrations.memory.apply",
-      "ui.command",
-      "approval.history",
-      "plugin.surface.refresh",
-      "conversations.list",
-      "session.discussion.info",
-      "session.discussion.open",
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
-      "sessions.observer.visibility",
-      "session.visibility.set",
-      "session.members.list",
-      "session.members.add",
-      "session.members.remove",
-      "session.suggestions.add",
-      "session.suggestions.list",
-      "session.suggestions.resolve",
-      "session.typing",
-      "sessions.companion.ask",
-      "sessions.companion.state",
-      "sessions.companion.reset",
-      "memory.search",
-      "skills.proposals.events.list",
-      "skills.proposals.evaluate",
-      "hooks.status",
-      "tasks.retry",
-      "tasks.dismiss",
-      "audit.run.inspect",
-      "sessions.patchMany",
-      "update.hold",
-      "sessions.catalog.startTerminal",
-      "worker.desktop.observe",
-      "projects.list",
-      "projects.register",
-      "projects.remove",
-      "worker.desktop.launch",
-      "secrets.store.list",
-      "secrets.store.set",
-      "secrets.store.delete",
-      "users.prefs.get",
-      "users.prefs.set",
-      "projects.add",
-      "projects.searchRemote",
-      "desktop.observe",
-      "desktop.launch",
-      "device.scopes.requestUpgrade",
-      "device.scopes.waitUpgrade",
-      "portal.list",
-      "portal.open",
-      "portal.close",
-      "sessions.move",
-      "sessions.assignOwner",
-      "progressCard.get",
-      "progressCard.put",
-      "tools.github.status",
-      "tools.github.configure",
-      "tools.github.authorize.start",
-      "tools.github.authorize.poll",
-      "tools.github.authorize.cancel",
-      "sessions.github.publish",
-      "diagnostics.lanes",
-    ]);
+    expect(listGatewayMethods().slice(-expectedMethodsAfterModelProbe.length)).toEqual(
+      expectedMethodsAfterModelProbe,
+    );
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
       methods.indexOf("node.describe") + 1,
@@ -229,6 +248,16 @@ describe("listGatewayMethods", () => {
     expect(methods).not.toContain("sessions.usage");
   });
 
+  it("rate-limits speculative inference under operator write authority", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    expect(
+      descriptors.find((descriptor) => descriptor.name === "sessions.title.prepare"),
+    ).toMatchObject({
+      scope: "operator.write",
+      controlPlaneWrite: true,
+    });
+  });
+
   it("registers the hidden node protocol feature publication method", () => {
     const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
       (candidate) => candidate.name === "node.runnerInventory.update",
@@ -260,7 +289,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-71)).toEqual([
+    const expectedCoreSuffix = [
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -268,71 +297,9 @@ describe("listGatewayMethods", () => {
       "sessions.search",
       "sessions.dispatch",
       "sessions.reclaim",
-      "models.probe",
-      "migrations.memory.plan",
-      "migrations.memory.apply",
-      "ui.command",
-      "approval.history",
-      "plugin.surface.refresh",
-      "conversations.list",
-      "session.discussion.info",
-      "session.discussion.open",
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
-      "sessions.observer.visibility",
-      "session.visibility.set",
-      "session.members.list",
-      "session.members.add",
-      "session.members.remove",
-      "session.suggestions.add",
-      "session.suggestions.list",
-      "session.suggestions.resolve",
-      "session.typing",
-      "sessions.companion.ask",
-      "sessions.companion.state",
-      "sessions.companion.reset",
-      "memory.search",
-      "skills.proposals.events.list",
-      "skills.proposals.evaluate",
-      "hooks.status",
-      "tasks.retry",
-      "tasks.dismiss",
-      "audit.run.inspect",
-      "sessions.patchMany",
-      "update.hold",
-      "sessions.catalog.startTerminal",
-      "worker.desktop.observe",
-      "projects.list",
-      "projects.register",
-      "projects.remove",
-      "worker.desktop.launch",
-      "secrets.store.list",
-      "secrets.store.set",
-      "secrets.store.delete",
-      "users.prefs.get",
-      "users.prefs.set",
-      "projects.add",
-      "projects.searchRemote",
-      "desktop.observe",
-      "desktop.launch",
-      "device.scopes.requestUpgrade",
-      "device.scopes.waitUpgrade",
-      "portal.list",
-      "portal.open",
-      "portal.close",
-      "sessions.move",
-      "sessions.assignOwner",
-      "progressCard.get",
-      "progressCard.put",
-      "tools.github.status",
-      "tools.github.configure",
-      "tools.github.authorize.start",
-      "tools.github.authorize.poll",
-      "tools.github.authorize.cancel",
-      "sessions.github.publish",
-      "diagnostics.lanes",
-    ]);
+      ...expectedMethodsAfterModelProbe,
+    ];
+    expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
@@ -372,6 +339,9 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
     expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
     expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
+    expect(methods.indexOf("session.members.listEvidence")).toBe(
+      methods.indexOf("diagnostics.lanes") + 1,
+    );
   });
 
   it("advertises the versioned Talk session RPCs", () => {

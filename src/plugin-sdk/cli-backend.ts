@@ -18,6 +18,7 @@ export type {
   CliBackendParsedJsonlEvent,
   CliBackendPlugin,
   CliBackendPreparedExecution,
+  CliBackendPromptContext,
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,

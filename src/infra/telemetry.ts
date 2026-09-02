@@ -2,6 +2,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { isBuiltInModelProviderOverlayId } from "../config/model-provider-config.js";
 import { resolveIsNixMode } from "../config/paths.js";
@@ -54,6 +55,7 @@ type TelemetryPayload = {
 
 type TelemetryStatusReason =
   | "enabled"
+  | "automated-environment"
   | "do-not-track"
   | "config-disabled"
   | "never-asked"
@@ -73,10 +75,24 @@ const TelemetryResponseSchema = z.object({
 let lastFailedAttempt: { at: number; endpoint: string; stateDirectory?: string } | undefined;
 let inFlightUpdate: Promise<TelemetryUpdate | null> | undefined;
 
+/**
+ * CI jobs are not installs. Left unchecked they outnumber operators by orders of
+ * magnitude and make version and platform counts meaningless, and someone else's
+ * pipeline should not report to us on every job either. A configured endpoint
+ * means the caller is deliberately exercising this path, so it still reports.
+ */
+function isAutomatedEnvironment(): boolean {
+  if (process.env.OPENCLAW_TELEMETRY_ENDPOINT?.trim()) {
+    return false;
+  }
+  return isTruthyEnvValue(process.env.CI);
+}
+
 function isUpdateCheckDisabled(config: OpenClawConfig): boolean {
   return (
     config.update?.checkOnStart === false ||
     isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) ||
+    isAutomatedEnvironment() ||
     resolveIsNixMode()
   );
 }
@@ -132,7 +148,9 @@ export function resolveTelemetryStatus(config: OpenClawConfig): {
   lastPingAt?: number;
 } {
   let reason: TelemetryStatusReason;
-  if (isUpdateCheckDisabled(config)) {
+  if (isAutomatedEnvironment()) {
+    reason = "automated-environment";
+  } else if (isUpdateCheckDisabled(config)) {
     reason = "update-disabled";
   } else if (isDoNotTrackEnabled()) {
     reason = "do-not-track";
@@ -268,14 +286,12 @@ export async function checkTelemetryUpdate(
         lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
         return cached;
       }
-      const parsed = TelemetryResponseSchema.safeParse(await response.json());
-      if (!parsed.success) {
-        lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
-        return cached;
-      }
-      const note = parsed.data.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
+      const parsed = TelemetryResponseSchema.parse(
+        await readProviderJsonResponse(response, "Telemetry update response"),
+      );
+      const note = parsed.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
       const update = {
-        version: parsed.data.version,
+        version: parsed.version,
         ...(note ? { note } : {}),
       };
       writeConfigMachineState(TELEMETRY_STATE_KEY, {

@@ -118,7 +118,7 @@ describe("BoardWidgetSandboxHost", () => {
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenCalledWith(
       "https://gateway.example/__openclaw__/board/weather?bt=ticket",
-      { cache: "no-store" },
+      { cache: "no-store", signal: expect.any(AbortSignal) },
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({

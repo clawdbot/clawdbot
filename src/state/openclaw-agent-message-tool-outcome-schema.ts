@@ -5,7 +5,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 export const MESSAGE_TOOL_RUN_OUTCOMES_TABLE = "message_tool_run_outcomes";
 
 const SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${MESSAGE_TOOL_RUN_OUTCOMES_TABLE} (`;
-const SCHEMA_END = "CREATE TABLE IF NOT EXISTS transcript_events (";
+const SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_goal_operations (";
 const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
 
 function messageToolRunOutcomeSchemaSql(): string {

@@ -233,3 +233,6 @@ extensions/discord/assets/embedded-app-sdk.mjs
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
+.build/

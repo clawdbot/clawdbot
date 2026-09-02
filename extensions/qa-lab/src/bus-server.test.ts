@@ -1,8 +1,9 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
+import { closeQaHttpServer, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import type { QaBusPollResult } from "./runtime-api.js";
 
@@ -523,71 +524,30 @@ describe("qa-bus server", () => {
 });
 
 describe("handleQaBusRequest", () => {
-  it.each(["/v1/inbound/message", "/v1/outbound/message"] as const)(
-    "returns a controlled error when the %s body exceeds the media limit",
-    async (pathname) => {
-      const req = {
-        method: "POST",
-        url: pathname,
-        headers: { "content-length": String(16 * 1024 * 1024 + 1) },
-        destroyed: false,
-        destroy() {
-          this.destroyed = true;
-        },
-      };
-      const res = {
-        statusCode: 0,
-        body: "",
-        writeHead(statusCode: number) {
-          this.statusCode = statusCode;
-        },
-        end(payload: string) {
-          this.body = payload;
-        },
-      };
+  it.each([
+    { pathname: "/v1/inbound/message", limit: 16 * 1024 * 1024 },
+    { pathname: "/v1/outbound/message", limit: 16 * 1024 * 1024 },
+    { pathname: "/v1/reset", limit: 1024 * 1024 },
+  ])(
+    "delivers 413 over the wire and closes when the $pathname body exceeds its limit",
+    async ({ pathname, limit }) => {
+      const bus = await startQaBusServer({ state: createQaBusState() });
+      try {
+        // Declared over-cap length: rejected from the header alone, while the sender is
+        // still mid-upload and can only learn the outcome from what reaches it.
+        const result = await postRawWebhook({
+          url: `${bus.baseUrl}${pathname}`,
+          body: "{}",
+          contentLength: limit + 1,
+          headers: { "content-type": "application/json" },
+        });
 
-      const handled = await handleQaBusRequest({
-        req: req as never,
-        res: res as never,
-        state: createQaBusState(),
-      });
-
-      expect(handled).toBe(true);
-      expect(req.destroyed).toBe(true);
-      expect(res.statusCode).toBe(413);
-      expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+        expect(result.closedByServer).toBe(true);
+      } finally {
+        await bus.stop();
+      }
     },
   );
-
-  it("returns a controlled error when a v1 POST body exceeds the limit", async () => {
-    const req = {
-      method: "POST",
-      url: "/v1/reset",
-      headers: { "content-length": String(1024 * 1024 + 1) },
-      destroyed: false,
-      destroy() {
-        this.destroyed = true;
-      },
-    };
-    const res = {
-      statusCode: 0,
-      body: "",
-      writeHead(statusCode: number) {
-        this.statusCode = statusCode;
-      },
-      end(payload: string) {
-        this.body = payload;
-      },
-    };
-
-    const handled = await handleQaBusRequest({
-      req: req as never,
-      res: res as never,
-      state: createQaBusState(),
-    });
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(413);
-    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
-  });
 });

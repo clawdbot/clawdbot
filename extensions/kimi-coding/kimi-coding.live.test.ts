@@ -1,3 +1,4 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
   type AssistantMessage,
@@ -15,11 +16,9 @@ import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-
 const describeLive =
   isLiveTestEnabled() && process.env.KIMI_API_KEY?.trim() ? describe : describe.skip;
 
-async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantMessage; error?: AssistantMessage }>,
-): Promise<AssistantMessage> {
+async function collectDoneMessage(stream: ReturnType<StreamFn>): Promise<AssistantMessage> {
   let doneMessage: AssistantMessage | undefined;
-  for await (const event of stream) {
+  for await (const event of await stream) {
     if (event.type === "error") {
       throw new Error(event.error?.errorMessage || "Kimi live request failed");
     }
@@ -90,11 +89,7 @@ async function runReasoningScenario(params: {
     wrapped(resolveModel(params.modelId), context, {
       apiKey: process.env.KIMI_API_KEY?.trim() ?? "",
       maxTokens: 4096,
-    }) as AsyncIterable<{
-      type: string;
-      message?: AssistantMessage;
-      error?: AssistantMessage;
-    }>,
+    }),
   );
 }
 
@@ -150,11 +145,7 @@ describeLive("Kimi Code K3 reasoning live", () => {
         resolveModel("k3"),
         { messages: [firstUser], tools: [tool] },
         { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 },
-      ) as AsyncIterable<{
-        type: string;
-        message?: AssistantMessage;
-        error?: AssistantMessage;
-      }>,
+      ),
     );
     expect(countContentChars(first, "thinking")).toBeGreaterThan(0);
     const toolCall = first.content.find((block) => block.type === "toolCall");
@@ -187,11 +178,7 @@ describeLive("Kimi Code K3 reasoning live", () => {
           tools: [tool],
         },
         { apiKey: process.env.KIMI_API_KEY?.trim() ?? "", maxTokens: 4096 },
-      ) as AsyncIterable<{
-        type: string;
-        message?: AssistantMessage;
-        error?: AssistantMessage;
-      }>,
+      ),
     );
     expect(countContentChars(second, "text")).toBeGreaterThan(0);
   }, 180_000);

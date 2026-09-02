@@ -63,7 +63,11 @@ import {
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
 } from "./memory-state.test-fixtures.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  activatePluginRecordLifecycleEpoch,
+  isPluginRecordLifecycleEpochActive,
+  isPluginRegistryRetired,
+} from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -393,6 +397,10 @@ describe("loadOpenClawPlugins", () => {
     const priorKey = getActivePluginRegistryKey();
     const priorMode = getActivePluginRuntimeSubagentMode();
     const priorWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+    const priorRecord = priorRegistry.plugins.find((entry) => entry.id === "activation-prior");
+    expect(priorRecord).toBeDefined();
+    const priorEpoch = activatePluginRecordLifecycleEpoch(priorRegistry, priorRecord!);
+    expect(priorEpoch).toBeDefined();
 
     const replacement = writePlugin({
       id: "activation-replacement",
@@ -437,10 +445,14 @@ describe("loadOpenClawPlugins", () => {
     expect(getActivePluginRuntimeSubagentMode()).toBe(priorMode);
     expect(getActivePluginRegistryWorkspaceDir()).toBe(priorWorkspaceDir);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
+    expect(isPluginRecordLifecycleEpochActive(priorRegistry, priorRecord!, priorEpoch!)).toBe(true);
 
     const activated = loadOpenClawPlugins(replacementOptions);
     expect(activated.commands.map((entry) => entry.command.name)).toEqual(["replacement"]);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["replacement"]);
+    expect(isPluginRecordLifecycleEpochActive(priorRegistry, priorRecord!, priorEpoch!)).toBe(
+      false,
+    );
   });
 
   it("fails plugin registration when a hook is missing its required name", () => {
@@ -1039,7 +1051,7 @@ describe("loadOpenClawPlugins", () => {
     expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
   });
 
-  it("restores cached detached task runtime registrations on cache hits", () => {
+  it("restores detached task runtime registrations after registry replacement", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-detached-runtime",
@@ -1084,7 +1096,7 @@ describe("loadOpenClawPlugins", () => {
     expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
   });
 
-  it("restores cached legacy internal hook registrations on cache hits", async () => {
+  it("restores legacy internal hook registrations after registry replacement", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-legacy-hook",
@@ -1127,7 +1139,7 @@ describe("loadOpenClawPlugins", () => {
     expect(cachedEvent.messages).toEqual(["cached-hook-fired"]);
   });
 
-  it("restores cached command and interactive handler registrations on cache hits", () => {
+  it("preserves commands and interactive handlers across cache hits and registry replacement", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cached-command-interactive",
@@ -1216,7 +1228,7 @@ describe("loadOpenClawPlugins", () => {
     expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
   });
 
-  it("restores cached memory capability public artifacts on cache hits", async () => {
+  it("restores memory capability public artifacts with a fresh registry after replacement", async () => {
     useNoBundledPlugins();
     const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
@@ -1277,7 +1289,9 @@ describe("loadOpenClawPlugins", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 
     const second = loadOpenClawPlugins(options);
-    expect(second).toBe(first);
+    // Scalar comparisons avoid materializing the registry's lazy runtime in failure output.
+    expect(second === first).toBe(false);
+    expect(loadOpenClawPlugins(options) === second).toBe(true);
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );

@@ -4,12 +4,63 @@ import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
-  retireCodexAppServerClientAfterTimedOutTurn,
   unsubscribeCodexThreadBestEffort,
+  terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
 import { createClientHarness } from "./test-support.js";
 
 describe("Codex app-server attempt client cleanup", () => {
+  it.each([true, false])(
+    "drains the full terminal inventory and accepts a concurrent exit (%s)",
+    async (terminated) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          data: [{ processId: "10" }, { processId: "20" }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({ terminated })
+        .mockResolvedValueOnce({ terminated: true })
+        .mockResolvedValueOnce({ data: [], nextCursor: null });
+      await expect(
+        terminateCodexBackgroundTerminals({ request } as never, "thread-1"),
+      ).resolves.toBeUndefined();
+      expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+        ["thread/backgroundTerminals/list", { threadId: "thread-1" }],
+        ["thread/backgroundTerminals/terminate", { threadId: "thread-1", processId: "10" }],
+        ["thread/backgroundTerminals/terminate", { threadId: "thread-1", processId: "20" }],
+        ["thread/backgroundTerminals/list", { threadId: "thread-1", limit: 1 }],
+      ]);
+    },
+  );
+
+  it("reports a terminal that remains running after termination", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [{ processId: "10" }], nextCursor: null })
+      .mockResolvedValueOnce({ terminated: false })
+      .mockResolvedValueOnce({ data: [{ processId: "10" }], nextCursor: null });
+    await expect(
+      terminateCodexBackgroundTerminals({ request } as never, "thread-1"),
+    ).rejects.toThrow("Codex background-terminal cleanup failed");
+  });
+
+  it("bounds the entire terminal inventory request without closing the shared client", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    const close = vi.spyOn(harness.client, "close");
+    try {
+      const cleanup = terminateCodexBackgroundTerminals(harness.client, "thread-1");
+      const rejected = expect(cleanup).rejects.toThrow("Codex background-terminal cleanup failed");
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejected;
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      harness.client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps strict startup retirement failures visible to lifecycle owners", async () => {
     const closeAndWait = vi.fn(async () => {
       throw new Error("strict client retirement failed");
@@ -156,57 +207,5 @@ describe("Codex app-server attempt client cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 123 },
     );
-  });
-
-  it("closes only the isolated client after timed-out turn cleanup", async () => {
-    const notificationHandlers = new Set<(notification: unknown) => void>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "turn/interrupt") {
-        queueMicrotask(() => {
-          for (const handler of notificationHandlers) {
-            handler({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: { id: "turn-1", status: "interrupted" },
-              },
-            });
-          }
-        });
-      }
-      return {};
-    });
-    const close = vi.fn();
-
-    await retireCodexAppServerClientAfterTimedOutTurn(
-      {
-        request,
-        close,
-        addNotificationHandler: (handler: (notification: unknown) => void) => {
-          notificationHandlers.add(handler);
-          return () => notificationHandlers.delete(handler);
-        },
-        addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
-      } as never,
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        reason: "turn_terminal_idle_timeout",
-        suspectPhysicalClient: true,
-      },
-    );
-
-    expect(request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      { threadId: "thread-1", turnId: "turn-1" },
-      { timeoutMs: 5_000 },
-    );
-    expect(request).toHaveBeenCalledWith(
-      "thread/unsubscribe",
-      { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
-    );
-    expect(close).toHaveBeenCalledTimes(1);
   });
 });

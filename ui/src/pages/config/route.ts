@@ -4,8 +4,12 @@ import { html, nothing } from "lit";
 import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ConfigPageId } from "./config-sections.ts";
-import { configRouteData, configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
-import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
+import {
+  configRouteData,
+  configTargetIdFromHash,
+  SETTINGS_ROUTE_TARGETS,
+  type ConfigRouteData,
+} from "./route-data.ts";
 
 function loadConfigRoute(
   context: ApplicationContext,
@@ -44,8 +48,8 @@ const removedGeneralRedirectPage = definePage({
   loader: (context: ApplicationContext, { location }) => {
     const target =
       configTargetIdFromHash(location.hash) === "settings-general-model"
-        ? SETTINGS_SEARCH_TARGETS.modelBehavior
-        : SETTINGS_SEARCH_TARGETS.appearanceLanguage;
+        ? SETTINGS_ROUTE_TARGETS.modelBehavior
+        : SETTINGS_ROUTE_TARGETS.appearanceLanguage;
     return redirect({
       pathname: pathForRoute(target.routeId, context.basePath),
       search: "search" in target ? target.search : "",

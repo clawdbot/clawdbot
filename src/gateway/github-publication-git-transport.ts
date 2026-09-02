@@ -1,10 +1,68 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runCommandBuffered } from "../process/exec.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
 
-type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
+type GitCommandOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  input?: string;
+  maxOutputBytes?: number;
+};
 type GitCommandResult = { code: number | null; stdout: Buffer };
+
+export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
+  return await runCommandBuffered(argv, {
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: {
+      ...(options.env ?? process.env),
+      GIT_NO_REPLACE_OBJECTS: "1",
+      // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.hooksPath",
+      GIT_CONFIG_VALUE_0: os.devNull,
+    },
+    ...(options.input !== undefined ? { input: options.input } : {}),
+    timeoutMs: 60_000,
+    maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
+  });
+}
+
+export async function requirePublicationCommand(
+  argv: string[],
+  options: GitCommandOptions = {},
+): Promise<string> {
+  const result = await runPublicationCommand(argv, options);
+  if (result.code !== 0) {
+    throw new Error(`${argv[0]} command failed`);
+  }
+  return result.stdout.toString("utf8").trim();
+}
+
+// Guard ordinary steps on both sides of the await. Effects whose observations
+// must survive revocation use the raw transport and record before rechecking.
+export function createGitHubPublicationCommandRunner(assertCurrent?: () => void) {
+  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
+    assertCurrent?.();
+    const result = await operation();
+    assertCurrent?.();
+    return result;
+  };
+  return {
+    step,
+    run: (...args: Parameters<typeof runPublicationCommand>) =>
+      step(() => runPublicationCommand(...args)),
+    require: (...args: Parameters<typeof requirePublicationCommand>) =>
+      step(() => requirePublicationCommand(...args)),
+  };
+}
+
+// A recursive tree listing scales with repository size (openclaw itself is
+// ~3.3MB), far past the default per-command cap above. Without this explicit
+// bound the attribute scan dies as an output-limit "verification" failure on
+// any real repository.
+const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 export async function assertSafeGitPublicationWorkspace(
   cwd: string,
@@ -76,12 +134,15 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   }
 }
 
-export async function assertGitHubPublicationTreeHasNoFilters(
+async function assertGitHubPublicationTreeHasNoFilters(
   cwd: string,
   workspaceTree: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
 ): Promise<void> {
-  const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], { cwd });
+  const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], {
+    cwd,
+    maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
+  });
   if (listing.code !== 0) {
     throw new Error("GitHub publication workspace attributes could not be verified.");
   }
@@ -139,6 +200,41 @@ export async function assertGitHubPublicationTreeHasNoFilters(
   }
 }
 
+export async function captureGitHubPublicationWorkspaceSnapshot(params: {
+  cwd: string;
+  assertCurrent?: () => void;
+}): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
+  const { step, require: command } = createGitHubPublicationCommandRunner(params.assertCurrent);
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
+      cwd: params.cwd,
+      env,
+    });
+  await step(() => assertSafeGitPublicationWorkspace(params.cwd, runPublicationCommand));
+  const sourceHeadCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
+    cwd: params.cwd,
+  });
+  const sourceIndexTree = await git(["write-tree"]);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
+  try {
+    const env: NodeJS.ProcessEnv = {
+      GIT_ATTR_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_INDEX_FILE: path.join(tempDir, "index"),
+    };
+    await git(["read-tree", sourceHeadCommit], env);
+    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    const workspaceTree = await git(["write-tree"], env);
+    await step(() =>
+      assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runPublicationCommand),
+    );
+    return { sourceHeadCommit, sourceIndexTree, workspaceTree };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 const GITHUB_CREDENTIAL_ARGS = [
   "git",
   "-c",
@@ -173,6 +269,8 @@ export function githubPublicationPushArgs(
 ): string[] {
   return [
     ...GITHUB_CREDENTIAL_ARGS,
+    "-c",
+    `core.hooksPath=${os.devNull}`,
     "push",
     "--porcelain",
     "--no-follow-tags",

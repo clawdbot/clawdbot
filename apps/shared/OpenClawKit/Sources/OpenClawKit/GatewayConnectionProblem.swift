@@ -343,7 +343,7 @@ public enum GatewayConnectionProblemMapper {
                     retryable: false,
                     pauseReconnect: true),
                 authError: authError)
-        case .authRequired, .authUnauthorized, .none:
+        case .authRequired, .authUnauthorized, .authVerifiedUserRequired, .none:
             self.problem(
                 .init(
                     kind: .unknown,

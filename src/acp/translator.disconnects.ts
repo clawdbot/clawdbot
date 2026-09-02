@@ -1,5 +1,4 @@
 /** Gateway disconnect grace period and pending-prompt reconciliation. */
-import type { StopReason } from "@agentclientprotocol/sdk";
 import type { GatewayClient } from "../gateway/client.js";
 import type {
   AcpAgentWaitResult,
@@ -21,10 +20,10 @@ export class AcpTranslatorDisconnects {
       sessionId: string,
       runId: string,
     ) => AcpPendingPrompt | undefined,
-    private readonly finishPrompt: (
+    private readonly settleRecoveredPrompt: (
       sessionId: string,
       pending: AcpPendingPrompt,
-      stopReason: StopReason,
+      result: AcpAgentWaitResult,
     ) => Promise<void>,
     private readonly rejectPendingPrompt: (
       pending: AcpPendingPrompt,
@@ -195,12 +194,13 @@ export class AcpTranslatorDisconnects {
     if (!currentPending) {
       return false;
     }
-    if (result?.status === "ok") {
-      await this.finishPrompt(sessionId, currentPending, "end_turn");
-      return false;
-    }
-    if (result?.status === "error") {
-      void this.finishPrompt(sessionId, currentPending, "end_turn");
+    const hasVisibleReply = result?.terminalReply?.disposition === "visible";
+    if (
+      result?.status === "ok" ||
+      result?.status === "error" ||
+      (result?.status === "timeout" && hasVisibleReply)
+    ) {
+      await this.settleRecoveredPrompt(sessionId, currentPending, result);
       return false;
     }
     if (deadlineExpired) {

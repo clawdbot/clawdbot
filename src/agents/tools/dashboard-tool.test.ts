@@ -1,8 +1,18 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardCommand, BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createGatewayMethodDescriptorsFromHandlers,
+  createGatewayMethodRegistry,
+} from "../../gateway/methods/registry.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "../../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const snapshot: BoardSnapshot = {
@@ -31,6 +41,32 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
       return 2;
     },
   };
+}
+
+function createGatewayAffinityHarness(revision: number) {
+  const requests: GatewayRequestHandlerOptions["req"][] = [];
+  const broadcastToConnIds = vi.fn();
+  const handlers: GatewayRequestHandlers = {
+    "board.get": ({ req, respond }) => {
+      requests.push(req);
+      respond(true, { ...snapshot, revision });
+    },
+  };
+  const methodRegistry = createGatewayMethodRegistry(
+    createGatewayMethodDescriptorsFromHandlers({
+      handlers,
+      owner: { kind: "core", area: "dashboard-affinity-test" },
+      defaultScope: "operator.read",
+    }),
+  );
+  const context = {
+    broadcastToConnIds,
+    getClientConnIds: () => new Set([`control-ui-${revision}`]),
+    getGatewayMethodRegistry: () => methodRegistry,
+    getRuntimeConfig: () => ({}),
+    resolveGatewayContext: () => context,
+  } as unknown as GatewayRequestContext;
+  return { broadcastToConnIds, context, requests };
 }
 
 describe("dashboard tool", () => {
@@ -92,6 +128,58 @@ describe("dashboard tool", () => {
       type: "text",
       text: expect.stringContaining('"revision":3'),
     });
+  });
+
+  it("dispatches through the admitted Gateway and fences replacement or retirement", async () => {
+    const admitted = createGatewayAffinityHarness(11);
+    const replacement = createGatewayAffinityHarness(22);
+    let current: GatewayRequestContext | undefined = admitted.context;
+    const tool = createDashboardTool({ agentSessionKey: "agent:main:main" });
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        context: replacement.context,
+        isWebchatConnect: () => false,
+      },
+      async () =>
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            gatewayContextResolver: () => current,
+          },
+          async () => {
+            const read = await tool.execute("read", { action: "read" });
+            const command = await tool.execute("focus", {
+              action: "focus_tab",
+              tabId: "main",
+            });
+            expect(read.details).toMatchObject({ revision: 11 });
+            expect(command.details).toEqual({ ok: true, delivered: 1 });
+
+            current = replacement.context;
+            await expect(tool.execute("late-read", { action: "read" })).rejects.toThrow(
+              /dashboard|Gateway|gateway|unavailable/u,
+            );
+            current = undefined;
+            await expect(
+              tool.execute("late-focus", { action: "focus_tab", tabId: "main" }),
+            ).rejects.toThrow(/dashboard|Gateway|gateway|unavailable/u);
+          },
+        ),
+    );
+
+    expect(admitted.requests).toEqual([
+      expect.objectContaining({
+        type: "req",
+        id: expect.stringMatching(/^plugin-subagent-/u),
+        method: "board.get",
+        params: expect.objectContaining({ sessionKey: "agent:main:main" }),
+      }),
+    ]);
+    expect(replacement.requests).toEqual([]);
+    expect(admitted.broadcastToConnIds).toHaveBeenCalledOnce();
+    expect(replacement.broadcastToConnIds).not.toHaveBeenCalled();
   });
 
   it("returns content ownership and valid update paths in model-visible snapshot details", async () => {

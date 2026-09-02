@@ -1,7 +1,7 @@
 // Microsoft Teams helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
   MSTeamsReplyStyleSchema,
@@ -74,15 +74,17 @@ function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
   }
 }
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["name", "mentionPatterns", "replyToMode"],
+  allowFrom: z.array(z.string()).optional(),
+  groupAllowFrom: z.array(z.string()).optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
+});
+
 export const MSTeamsConfigSchema = z
   .object({
-    ...buildCommonChannelAccountShape({
-      useDefaults: true,
-      omit: ["name", "mentionPatterns", "replyToMode"],
-      allowFrom: z.array(z.string()).optional(),
-      groupAllowFrom: z.array(z.string()).optional(),
-      streaming: ChannelPreviewStreamingConfigSchema.optional(),
-    }),
+    ...accountShape,
+    ...rootPolicyShape,
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     appId: z.string().optional(),
     appPassword: registerSensitiveConfigSchema(SecretInputSchema.optional()),

@@ -12,5 +12,11 @@ export {
 } from "../process/exec.js";
 export { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
-export { killProcessTree } from "../process/kill-tree.js";
-export { isPidAlive } from "../shared/pid-alive.js";
+export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+export {
+  getFileLockProcessStartTime,
+  isPidAlive,
+  isPidDefinitelyDead,
+} from "../shared/pid-alive.js";
+export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";

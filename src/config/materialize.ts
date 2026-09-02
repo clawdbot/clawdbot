@@ -19,9 +19,6 @@ import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./type
 // Snapshot and load must materialize identically: prepared-runtime exact-config
 // resolution compares the startup-published (snapshot) config against the reply-path
 // (load) config, and any divergence permanently fails that resolve for affected configs.
-// The mode parameter documents the call site; a per-mode defaults profile existed
-// until its last divergent ("missing") caller was removed and only invited drift.
-type ConfigMaterializationMode = "load" | "snapshot";
 
 export function asResolvedSourceConfig(config: OpenClawConfig): ResolvedSourceConfig {
   return config as ResolvedSourceConfig;
@@ -33,7 +30,6 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
-  _mode: ConfigMaterializationMode,
   options: {
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
@@ -44,7 +40,7 @@ export function materializeRuntimeConfig(
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   next = applyCronDefaults(next);
-  next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
+  next = applyContextPruningDefaults(next, options);
   next = applyCompactionDefaults(next);
   next = applyModelDefaults(next, {
     manifestRegistry: options.manifestRegistry,

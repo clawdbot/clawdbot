@@ -1,13 +1,13 @@
 // TTS provider registry core stores provider factories and defaults.
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  buildCapabilityProviderMaps,
+  buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
 
-/** Resolver contract used by default and loaded-only speech provider registries. */
+/** Resolver contract for configured speech provider discovery and lookup. */
 export type SpeechProviderRegistryResolver = {
   getProvider: (providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | undefined;
   listProviders: (cfg?: OpenClawConfig) => SpeechProviderPlugin[];
@@ -20,13 +20,26 @@ export function normalizeSpeechProviderId(
   return normalizeCapabilityProviderId(providerId);
 }
 
+/** Order speech providers by priority and provider ID for deterministic equal-priority fallback. */
+export function compareSpeechProviderOrder(
+  left: SpeechProviderPlugin,
+  right: SpeechProviderPlugin,
+): number {
+  const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  return left.id.localeCompare(right.id);
+}
+
 /** Create a registry facade with canonical listing, alias lookup, and ID canonicalization. */
 export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryResolver) {
-  const buildResolvedProviderMaps = (cfg?: OpenClawConfig) =>
-    buildCapabilityProviderMaps(resolver.listProviders(cfg));
+  const buildAliasIndex = (cfg?: OpenClawConfig) =>
+    buildCapabilityProviderIndex(resolver.listProviders(cfg), "aliases");
 
   const listProviders = (cfg?: OpenClawConfig): SpeechProviderPlugin[] => [
-    ...buildResolvedProviderMaps(cfg).canonical.values(),
+    ...buildCapabilityProviderIndex(resolver.listProviders(cfg), "canonical").values(),
   ];
 
   const getProvider = (
@@ -37,10 +50,7 @@ export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryRes
     if (!normalized) {
       return undefined;
     }
-    return (
-      resolver.getProvider(normalized, cfg) ??
-      buildResolvedProviderMaps(cfg).aliases.get(normalized)
-    );
+    return resolver.getProvider(normalized, cfg) ?? buildAliasIndex(cfg).get(normalized);
   };
 
   const canonicalizeProviderId = (

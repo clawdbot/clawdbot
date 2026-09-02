@@ -4,6 +4,8 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDiscordComponentMessage } from "./components.builders.js";
+import type { DiscordComponentMessageSpec } from "./components.types.js";
 import {
   createDiscordOutboundHoisted,
   expectDiscordThreadBotSend,
@@ -279,9 +281,11 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("falls back to bot send when webhook send fails", async () => {
+  it("falls back to bot send when Discord rejects the webhook send", async () => {
     mockDiscordBoundThreadManager(hoisted);
-    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
+    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(
+      Object.assign(new Error("rate limited"), { status: 429 }),
+    );
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
@@ -764,7 +768,7 @@ describe("discordOutbound", () => {
     expect(mediaOptions.reply).toEqual(testCase.expectedReplies[1]);
   });
 
-  it("preserves the media delivery identity for captioned videos in regular channels", async () => {
+  it("preserves both delivery receipts and the media identity for captioned videos", async () => {
     const mediaReceipt = {
       primaryPlatformMessageId: "video-1",
       platformMessageIds: ["video-1"],
@@ -796,11 +800,18 @@ describe("discordOutbound", () => {
       accountId: "default",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       channel: "discord",
       messageId: "video-1",
       target: { kind: "channel", id: "channel-1" },
-      receipt: mediaReceipt,
+      receipt: {
+        primaryPlatformMessageId: "caption-1",
+        platformMessageIds: ["caption-1", "video-1"],
+        parts: [
+          { platformMessageId: "caption-1", kind: "text", index: 0 },
+          { platformMessageId: "video-1", kind: "media", index: 1 },
+        ],
+      },
     });
   });
 
@@ -1044,6 +1055,42 @@ describe("discordOutbound", () => {
     });
   });
 
+  it.each(["title", "text", "context"] as const)(
+    "delivers complete authored %s through native presentation components",
+    async (kind) => {
+      const text = `${"x".repeat(1996)} \n  TAIL_NOT_DELIVERED`;
+      const presentation = adaptMessagePresentationForChannel({
+        capabilities: discordOutbound.presentationCapabilities,
+        presentation:
+          kind === "title" ? { title: text, blocks: [] } : { blocks: [{ type: kind, text }] },
+      });
+      const payload = await discordOutbound.renderPresentation?.({
+        payload: { presentation },
+        presentation,
+        ctx: { cfg: {}, to: "channel:123456", text: "", payload: { presentation } },
+      });
+      if (!payload) {
+        throw new Error("expected native Discord presentation");
+      }
+      await discordOutbound.sendPayload?.({ cfg: {}, to: "channel:123456", text: "", payload });
+      const spec = mockObjectArg(
+        hoisted.sendDiscordComponentMessageMock,
+        "component send",
+        0,
+        1,
+      ) as DiscordComponentMessageSpec;
+      const components = buildDiscordComponentMessage({ spec }).components;
+      const wire = JSON.stringify(components.map((component) => component.serialize()));
+      expect(wire).toContain("TAIL_NOT_DELIVERED");
+      expect(
+        (spec.blocks ?? [])
+          .flatMap((block) => (block.type === "text" ? [block.text.replace(/^-# /u, "")] : []))
+          .join(""),
+      ).toBe(text);
+      expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves disabled presentation buttons through channel adaptation", async () => {
     const adaptedPresentation = adaptMessagePresentationForChannel({
       capabilities: discordOutbound.presentationCapabilities,
@@ -1092,6 +1139,45 @@ describe("discordOutbound", () => {
       url: "https://example.com/docs",
       disabled: true,
     });
+  });
+
+  it("encodes question buttons from Gateway option order", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const payload = await discordOutbound.renderPresentation?.({
+      payload: {
+        channelData: { askUser: { questionId, optionValues: ["Staging", "Production"] } },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Production",
+                action: { type: "question", questionId, optionValue: "Production" },
+              },
+              {
+                label: "Other…",
+                action: { type: "question", questionId, intent: "custom-input" },
+              },
+              {
+                label: "Staging",
+                action: { type: "question", questionId, optionValue: "Staging" },
+              },
+            ],
+          },
+        ],
+      },
+      ctx: { cfg: {}, to: "channel:123456" },
+    } as never);
+
+    const discordData = payload?.channelData?.discord as
+      | { presentationComponents?: { blocks?: Array<{ buttons?: unknown[] }> } }
+      | undefined;
+    expect(discordData?.presentationComponents?.blocks?.[0]?.buttons).toMatchObject([
+      { internalCustomId: `ocq:id=${questionId};i=1` },
+      { internalCustomId: `ocq:id=${questionId};i=0` },
+    ]);
   });
 
   it("falls back to chunked text when a table exceeds the Discord component envelope", async () => {
