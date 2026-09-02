@@ -1,13 +1,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { vi } from "vitest";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
+import * as schtasksExec from "./schtasks-exec.js";
 import { resolveTaskScriptPath } from "./schtasks-layout.js";
 import { launchFallbackTaskScript } from "./schtasks-runtime.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 const POLL_INTERVAL_MS = 200;
@@ -381,6 +384,30 @@ export async function proveNativeStartupFallbackLaunch(params: {
     existenceCheckIgnoredAcl: true,
     completedAfterLauncherExit: true,
   };
+}
+
+export async function readSpanishStoppedTaskRuntime(
+  taskName: string,
+  readRuntime: () => Promise<GatewayServiceRuntime>,
+): Promise<GatewayServiceRuntime> {
+  const localizedQuery = vi.spyOn(schtasksExec, "execSchtasks");
+  try {
+    localizedQuery
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: [
+          `Nombre de tarea: ${taskName}`,
+          "Estado: Listo",
+          "Última hora de ejecución: 1/8/2026 1:23:45 AM",
+          "Último resultado: 0",
+        ].join("\r\n"),
+        stderr: "",
+      });
+    return await readRuntime();
+  } finally {
+    localizedQuery.mockRestore();
+  }
 }
 
 async function readRunEvents(eventsPath: string): Promise<ProbeRunEvent[]> {

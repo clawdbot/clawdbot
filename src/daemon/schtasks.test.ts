@@ -14,6 +14,12 @@ const schtasksResponses = vi.hoisted(
   (): Array<{ code: number; stdout: string; stderr: string }> => [],
 );
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+const spawnSync = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawnSync };
+});
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async () => schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" },
@@ -34,6 +40,8 @@ beforeEach(() => {
   schtasksResponses.length = 0;
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
+  spawnSync.mockReset();
+  spawnSync.mockReturnValue({ status: 1, stdout: "-2147024891" });
 });
 
 describe("scheduled task runtime derivation", () => {
@@ -143,6 +151,21 @@ describe("scheduled task runtime derivation", () => {
       status: "stopped",
       detail: "Task Last Run Result=0x0; treating as not running.",
     });
+  });
+
+  it("uses native task state when Spanish field names hide runtime metadata", async () => {
+    spawnSync.mockReturnValueOnce({ status: 0, stdout: "3" });
+
+    await expect(
+      readRuntimeFromQueryOutput(
+        [
+          "Nombre de tarea: \\OpenClaw Gateway",
+          "Estado: Listo",
+          "Última hora de ejecución: 1/8/2026 1:23:45 AM",
+          "Último resultado: 0",
+        ].join("\r\n"),
+      ),
+    ).resolves.toMatchObject({ status: "stopped" });
   });
 
   it("treats localized status without result code as unknown", async () => {

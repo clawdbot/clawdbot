@@ -574,11 +574,15 @@ export async function readScheduledTaskRuntime(
       };
     }
   }
+  const status =
+    derived.status === "unknown" && isScheduledTaskDefinitelyNotRunning(taskName)
+      ? "stopped"
+      : derived.status;
   return {
-    status: derived.status,
+    status,
     state: parsed.status,
     lastRunTime: parsed.lastRunTime,
     lastRunResult: parsed.lastRunResult,
-    ...(derived.detail ? { detail: derived.detail } : {}),
+    ...(status === derived.status && derived.detail ? { detail: derived.detail } : {}),
   };
 }
