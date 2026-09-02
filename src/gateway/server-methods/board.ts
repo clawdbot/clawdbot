@@ -33,6 +33,8 @@ import {
   resolveBoardWidgetContentKindResourceUrls,
 } from "../../plugins/board-widget-content-kinds.js";
 import {
+  boardDataBindingCapability,
+  captureBoardCapabilityAuthority,
   captureBoardRequestAuthority,
   readBoardDataBinding,
   respondBoardError,
@@ -635,26 +637,16 @@ export function createBoardHandlers(
       "board.data.read",
       validateBoardDataReadParams,
       async (invocation) => {
-        const { params: boardParams, respond, context } = invocation;
+        const { params: boardParams, respond } = invocation;
         try {
-          const authority = captureBoardRequestAuthority(invocation);
           const bindingParams = boardParams.params ?? {};
           assertCapabilityParamsSize(bindingParams, "data binding");
-          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
-            gatewayContext: context,
-          });
-          if (
-            !boardWidgetHasGrantedTool(
-              document.declared,
-              document.grantState,
-              boardParams.bindingId,
-            )
-          ) {
-            throw new BoardValidationError(
-              "invalid_operation",
-              `board widget tool is not granted: ${boardParams.bindingId}`,
-            );
-          }
+          const authority = captureBoardCapabilityAuthority(
+            store,
+            boardParams.ticket,
+            invocation,
+            boardDataBindingCapability(boardParams.bindingId, bindingParams),
+          );
           const result = await readDataBinding(
             boardParams.bindingId,
             bindingParams,
@@ -672,20 +664,16 @@ export function createBoardHandlers(
       "board.action",
       validateBoardActionParams,
       async (invocation) => {
-        const { params: boardParams, respond, context } = invocation;
+        const { params: boardParams, respond } = invocation;
         try {
-          const authority = captureBoardRequestAuthority(invocation);
-          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
-            gatewayContext: context,
-          });
           const capability =
             "jobId" in boardParams ? `cron.trigger:${boardParams.jobId}` : boardParams.action;
-          if (!boardWidgetHasGrantedTool(document.declared, document.grantState, capability)) {
-            throw new BoardValidationError(
-              "invalid_operation",
-              `board widget tool is not granted: ${capability}`,
-            );
-          }
+          const authority = captureBoardCapabilityAuthority(
+            store,
+            boardParams.ticket,
+            invocation,
+            capability,
+          );
           if ("jobId" in boardParams) {
             const result = await triggerCronJob(boardParams.jobId, invocation, authority);
             authority.assertActive();
