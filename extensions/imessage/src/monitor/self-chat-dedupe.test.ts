@@ -164,6 +164,10 @@ describe("echo cache — backward compat for channels without messageId", () => 
 });
 
 describe("reply-parent echo matching — #135704", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it.each([
     {
       name: "drops matching text linked to the cached parent in a verified self-chat",
@@ -245,6 +249,97 @@ describe("reply-parent echo matching — #135704", () => {
     });
 
     expect(decision).toMatchObject(expected);
+  });
+
+  it("keeps a matching self-chat inline reply after the in-memory reflection window expires", async () => {
+    useFakeTimersAt();
+    const echoCache = createSentMessageCache();
+    echoCache.remember(SELF_CHAT_SCOPE, {
+      text: "Agent reply",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    vi.advanceTimersByTime(5_000);
+
+    const decision = await resolveDecision({
+      message: selfChatMessage({
+        id: 201,
+        guid: "p:0/GUID-late-reply",
+        reply_to_guid: "p:0/GUID-outbound",
+        text: "Agent reply",
+        is_from_me: false,
+      }),
+      echoCache,
+    });
+
+    expect(decision).toMatchObject({ kind: "dispatch" });
+  });
+
+  it("drops a matching self-chat reflection from the persisted cache within the reflection window", async () => {
+    useFakeTimersAt();
+    rememberPersistedIMessageEcho({
+      scope: SELF_CHAT_SCOPE,
+      text: "Agent reply",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    vi.advanceTimersByTime(2_000);
+
+    const decision = await resolveDecision({
+      message: selfChatMessage({
+        id: 202,
+        guid: "p:0/GUID-persisted-reflection",
+        reply_to_guid: "p:0/GUID-outbound",
+        text: "Agent reply",
+        is_from_me: false,
+      }),
+      echoCache: createSentMessageCache(),
+    });
+
+    expect(decision).toMatchObject({ kind: "drop", reason: "echo" });
+  });
+
+  it("keeps a matching self-chat inline reply after the persisted reflection window expires", async () => {
+    useFakeTimersAt();
+    rememberPersistedIMessageEcho({
+      scope: SELF_CHAT_SCOPE,
+      text: "Agent reply",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    vi.advanceTimersByTime(5_000);
+
+    const decision = await resolveDecision({
+      message: selfChatMessage({
+        id: 203,
+        guid: "p:0/GUID-late-persisted-reply",
+        reply_to_guid: "p:0/GUID-outbound",
+        text: "Agent reply",
+        is_from_me: false,
+      }),
+      echoCache: createSentMessageCache(),
+    });
+
+    expect(decision).toMatchObject({ kind: "dispatch" });
+  });
+
+  it("keeps long-lived persisted direct-GUID echo matching after the reply-parent window expires", () => {
+    useFakeTimersAt();
+    rememberPersistedIMessageEcho({
+      scope: SELF_CHAT_SCOPE,
+      text: "Agent reply",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    vi.advanceTimersByTime(5 * 60_000);
+
+    const echoCache = createSentMessageCache();
+    expect(
+      echoCache.has(SELF_CHAT_SCOPE, {
+        text: "Different body",
+        messageId: "p:0/GUID-outbound",
+      }),
+    ).toBe(true);
   });
 });
 

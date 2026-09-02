@@ -169,6 +169,7 @@ export function hasPersistedIMessageEcho(params: {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
   requireTextMatchForId?: boolean;
+  messageIdMaxAgeMs?: number;
 }): boolean {
   const text = normalizeText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
@@ -180,9 +181,13 @@ export function hasPersistedIMessageEcho(params: {
     if (entry.scope !== params.scope) {
       continue;
     }
+    const messageIdWithinMaxAge =
+      params.messageIdMaxAgeMs == null ||
+      Math.max(0, Date.now() - entry.timestamp) <= params.messageIdMaxAgeMs;
     if (
       messageId &&
       entry.messageId === messageId &&
+      messageIdWithinMaxAge &&
       (!params.requireTextMatchForId || (text != null && entry.text === text))
     ) {
       return true;

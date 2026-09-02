@@ -121,6 +121,9 @@ class DefaultSentMessageCache implements SentMessageCache {
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
         requireTextMatchForId: resolvedOptions.requireTextMatchForId,
+        messageIdMaxAgeMs: resolvedOptions.requireTextMatchForId
+          ? SENT_MESSAGE_TEXT_TTL_MS
+          : undefined,
       })
     ) {
       return true;
@@ -134,7 +137,10 @@ class DefaultSentMessageCache implements SentMessageCache {
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
       const idEntry = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idEntry && now - idEntry.timestamp <= SENT_MESSAGE_ID_TTL_MS) {
+      const messageIdTtlMs = resolvedOptions.requireTextMatchForId
+        ? SENT_MESSAGE_TEXT_TTL_MS
+        : SENT_MESSAGE_ID_TTL_MS;
+      if (idEntry && now - idEntry.timestamp <= messageIdTtlMs) {
         if (
           !resolvedOptions.requireTextMatchForId ||
           (textKey != null && idEntry.textKey === textKey)
