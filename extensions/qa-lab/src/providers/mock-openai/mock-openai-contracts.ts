@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
-import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
@@ -410,6 +409,8 @@ export function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
     maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
     timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
+    // The HTTP handler must deliver the rejection before closing the request.
+    destroyOnLimit: false,
   });
 }
 
@@ -422,15 +423,6 @@ export function parseJsonObjectBody(raw: string): Record<string, unknown> | null
   }
 }
 
-export function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
-  writeJson(res, 400, {
-    error: {
-      type: "invalid_request_error",
-      message: `Malformed JSON body for ${label} request.`,
-    },
-  });
-}
-
 export function transcriptionTextForAudioRequest(rawBody: string) {
   if (rawBody.includes(QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER)) {
     return QA_MATRIX_VOICE_TRANSCRIPTION_TEXT;
@@ -441,14 +433,34 @@ export function transcriptionTextForAudioRequest(rawBody: string) {
   return QA_AUDIO_TRANSCRIPTION_TEXT;
 }
 
-export function writeSse(res: ServerResponse, events: StreamEvent[]) {
-  const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+export async function writeSse(
+  res: ServerResponse,
+  events: Array<StreamEvent | AnthropicStreamEvent>,
+  protocol: "responses" | "anthropic",
+  pauseMs?: number,
+) {
+  const frames = events.map(
+    (event) =>
+      `${protocol === "anthropic" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
+  );
+  const completionIndex =
+    pauseMs === undefined
+      ? -1
+      : events.findIndex((event) => event.type === "response.output_text.done");
+  const body =
+    frames.slice(Math.max(0, completionIndex)).join("") +
+    (protocol === "responses" ? "data: [DONE]\n\n" : "");
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
     connection: "keep-alive",
-    "content-length": Buffer.byteLength(body),
+    ...(completionIndex < 0 ? { "content-length": Buffer.byteLength(body) } : {}),
   });
+  if (completionIndex >= 0) {
+    // Flush preview deltas before delaying the final text and completion frames.
+    res.write(frames.slice(0, completionIndex).join(""));
+    await sleep(pauseMs);
+  }
   res.end(body);
 }
 
@@ -480,47 +492,9 @@ export function buildRemoteCompactionV2Events(): [
   ];
 }
 
-export async function writeSseWithPreviewPause(
-  res: ServerResponse,
-  events: StreamEvent[],
-  pauseMs: number,
-) {
-  const completionIndex = events.findIndex((event) => event.type === "response.output_text.done");
-  if (completionIndex < 0) {
-    writeSse(res, events);
-    return;
-  }
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events.slice(0, completionIndex)) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  await sleep(pauseMs);
-  for (const event of events.slice(completionIndex)) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.end("data: [DONE]\n\n");
-}
-
 export type AnthropicStreamEvent = Record<string, unknown> & {
   type: string;
 };
-
-export function writeAnthropicSse(res: ServerResponse, events: AnthropicStreamEvent[]) {
-  const body = events
-    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    "content-length": Buffer.byteLength(body),
-  });
-  res.end(body);
-}
 
 export function countApproxTokens(text: string) {
   const trimmed = text.trim();
