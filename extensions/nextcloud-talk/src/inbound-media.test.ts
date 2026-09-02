@@ -6,6 +6,13 @@ import {
   saveNextcloudTalkInboundMedia,
 } from "./inbound-media.js";
 
+function credentialedShareUrl(): string {
+  const url = new URL("https://nextcloud.example/s/redacted-token");
+  url.username = "user";
+  url.password = "password";
+  return url.href;
+}
+
 describe("Nextcloud Talk inbound media policy", () => {
   it.each([
     { label: "omitted", mediaAllowFrom: undefined },
@@ -74,7 +81,7 @@ describe("Nextcloud Talk inbound media policy", () => {
     { label: "non-HTTP", shareUrl: "ftp://nextcloud.example/s/redacted-token" },
     {
       label: "credential-bearing",
-      shareUrl: "https://user:password@nextcloud.example/s/redacted-token",
+      shareUrl: credentialedShareUrl(),
     },
     {
       label: "query-bearing",
