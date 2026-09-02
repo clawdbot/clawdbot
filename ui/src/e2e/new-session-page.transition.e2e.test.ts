@@ -312,7 +312,7 @@ suite.define(() => {
       await captureProof(page, "01-chat-route-preparing.png");
 
       await page.evaluate(() => {
-        const frames = { invalid: 0, running: true };
+        const frames = { invalid: 0, routeAnimation: false, running: true };
         Reflect.set(globalThis, "__openclawSessionTransitionFrames", frames);
         const sample = () => {
           const outlet = document.querySelector("openclaw-router-outlet");
@@ -323,9 +323,22 @@ suite.define(() => {
           const chatVisible = Boolean(
             document.querySelector(".agent-chat__composer-combobox")?.getClientRects().length,
           );
-          if (handoffCover || (!newSessionVisible && !chatVisible)) {
+          if (
+            document.activeViewTransition ||
+            handoffCover ||
+            (!newSessionVisible && !chatVisible)
+          ) {
             frames.invalid += 1;
           }
+          // The 180ms animation can finish before an RPC-side assertion runs.
+          // Observe it with the rendered frames, then retain that observation.
+          frames.routeAnimation ||= document.getAnimations().some((animation) => {
+            const effect = animation.effect as KeyframeEffect | null;
+            return (
+              effect?.target === outlet &&
+              effect.getKeyframes().every((keyframe) => keyframe.opacity === undefined)
+            );
+          });
           if (frames.running) {
             requestAnimationFrame(sample);
           }
@@ -341,17 +354,9 @@ suite.define(() => {
           page.evaluate(() => ({
             activeViewTransition: Boolean(document.activeViewTransition),
             chatSurfaceReady: Boolean(document.querySelector(".agent-chat__composer-combobox")),
-            routeAnimation: document.getAnimations().some((animation) => {
-              const effect = animation.effect as KeyframeEffect | null;
-              return (
-                effect?.target instanceof HTMLElement &&
-                effect.target.tagName === "OPENCLAW-ROUTER-OUTLET" &&
-                effect.getKeyframes().every((keyframe) => keyframe.opacity === undefined)
-              );
-            }),
           })),
         )
-        .toEqual({ activeViewTransition: false, chatSurfaceReady: true, routeAnimation: true });
+        .toEqual({ activeViewTransition: false, chatSurfaceReady: true });
       await expect
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
         .toBe(1);
@@ -365,15 +370,16 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
       expect(await gateway.getRequests("sessions.list")).toHaveLength(listRequestsBeforeSubmit + 1);
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
-      const invalidFrames = await page.evaluate(() => {
+      const transitionFrames = await page.evaluate(() => {
         const frames = Reflect.get(globalThis, "__openclawSessionTransitionFrames") as {
           invalid: number;
+          routeAnimation: boolean;
           running: boolean;
         };
         frames.running = false;
-        return frames.invalid;
+        return { invalid: frames.invalid, routeAnimation: frames.routeAnimation };
       });
-      expect(invalidFrames).toBe(0);
+      expect(transitionFrames).toEqual({ invalid: 0, routeAnimation: true });
       await captureProof(page, "02-session-route-transition.png");
       await gateway.resolveDeferred("sessions.list", createdSessionList);
       await gateway.resolveDeferred("chat.startup");

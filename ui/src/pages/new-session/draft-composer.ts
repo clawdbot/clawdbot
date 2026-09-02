@@ -22,11 +22,16 @@ import {
 import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController, renderNewSessionComposer } from "./composer.ts";
+import {
+  NewSessionComposerTextareaController,
+  renderDraftError,
+  renderNewSessionComposer,
+} from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 export function renderNewSessionBody(options: {
+  error: string | null;
   pendingMessage: ReturnType<typeof buildLocalUserMessage>;
   submitting: boolean;
   renderDraft: () => TemplateResult;
@@ -34,6 +39,7 @@ export function renderNewSessionBody(options: {
 }) {
   const { pendingMessage } = options;
   const draftLocked = options.submitting && !pendingMessage;
+  // Late cleanup can fail while a replacement submission is still pending.
   return html`
     <div class="sr-only" role="status" aria-live="polite">
       ${pendingMessage ? t("newSession.starting") : nothing}
@@ -44,6 +50,7 @@ export function renderNewSessionBody(options: {
       aria-busy=${String(draftLocked)}
       @mousedown=${beginNativeWindowDragFromTopInset}
     >
+      ${options.error ? renderDraftError(options.error) : nothing}
       ${pendingMessage
         ? renderNewSessionSubmission(pendingMessage, options.onOpenImage)
         : options.renderDraft()}

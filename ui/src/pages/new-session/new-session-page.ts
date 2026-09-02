@@ -546,7 +546,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
         ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-        ${this.submission.error ? renderDraftError(this.submission.error) : nothing}
         ${this.submission.submissionOutcomeUnknown
           ? renderDraftError(
               t(
@@ -691,6 +690,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           this.submission.capabilities.canStartAsDraft(this.context),
         )}
         ${renderNewSessionBody({
+          error: this.submission.error,
           pendingMessage,
           submitting: this.submission.submitting,
           renderDraft: () => this.renderWelcome(),
