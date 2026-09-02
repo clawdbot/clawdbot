@@ -2991,7 +2991,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
     {
       expectedError:
-        'Codex restricted tool surface cannot override config layer legacyManagedConfigTomlFromMdm; replace the legacy managed-config MDM payload with Codex requirements policy before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
+        'Codex restricted tool surface cannot override config layer legacyManagedConfigTomlFromMdm; replace the legacy MDM payload with base64-encoded TOML requirements in the com.openai.codex managed preference requirements_toml_base64 before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
       name: "legacy managed MDM",
       layer: { name: { type: "legacyManagedConfigTomlFromMdm" } },
     },
