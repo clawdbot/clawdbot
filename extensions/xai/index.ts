@@ -43,6 +43,7 @@ import {
 } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
+import { fetchXaiUsage } from "./usage.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import {
   buildMissingXSearchApiKeyPayload,
@@ -281,6 +282,11 @@ export default defineSingleProviderPluginEntry({
     normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     refreshOAuth: refreshXaiOAuthCredential,
+    resolveUsageAuth: async (ctx) => {
+      const oauth = await ctx.resolveOAuthToken();
+      return oauth ? oauth : { handled: true };
+    },
+    fetchUsageSnapshot: async (ctx) => await fetchXaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),

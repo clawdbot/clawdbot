@@ -509,4 +509,59 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
       rmSync(fixtureDir, { force: true, recursive: true });
     }
   });
+  it("excludes manual, failed, and unfinished runs from recent main timings", () => {
+    const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-recent-"));
+    const fakeGhPath = path.join(fixtureDir, "gh");
+    const callsPath = path.join(fixtureDir, "calls.jsonl");
+    writeFileSync(
+      fakeGhPath,
+      `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+appendFileSync(process.env.FIXTURE_CALLS_PATH, JSON.stringify(args) + "\\n");
+if (args[0] === "run" && args[1] === "list") {
+  console.log(JSON.stringify([
+    { databaseId: 201, event: "workflow_dispatch", headSha: "manual", status: "completed", conclusion: "success" },
+    { databaseId: 202, event: "push", headSha: "failed", status: "completed", conclusion: "failure" },
+    { databaseId: 203, event: "push", headSha: "running", status: "in_progress", conclusion: "" },
+    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success" },
+    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success" }
+  ]));
+} else if (args[0] === "run" && args[1] === "view") {
+  console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/jobs?"))) {
+  console.log(JSON.stringify({ total_count: 1, jobs: [{ id: 1, name: "checks", status: "completed", conclusion: "success", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }] }));
+} else {
+  process.exit(2);
+}
+`,
+    );
+    chmodSync(fakeGhPath, 0o755);
+    try {
+      const result = spawnSync(process.execPath, ["scripts/ci-run-timings.mjs", "--recent", "2"], {
+        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GH_TOKEN: "fixture-token",
+          OPENCLAW_GH_BIN: fakeGhPath,
+          FIXTURE_CALLS_PATH: callsPath,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.match(/CI run \d+/gu)).toEqual(["CI run 204", "CI run 205"]);
+      const calls: string[][] = readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls[0]?.slice(calls[0].indexOf("--event"), calls[0].indexOf("--event") + 2)).toEqual(
+        ["--event", "push"],
+      );
+      expect(
+        calls.filter((args) => args[0] === "run" && args[1] === "view").map((args) => args[2]),
+      ).toEqual(["204", "205"]);
+    } finally {
+      rmSync(fixtureDir, { force: true, recursive: true });
+    }
+  });
 });

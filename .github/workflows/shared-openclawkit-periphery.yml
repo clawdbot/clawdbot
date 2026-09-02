@@ -199,6 +199,15 @@ jobs:
           fi
           swift --version
 
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
       - name: Install Periphery
         run: |
           periphery_dir="$RUNNER_TEMP/openclaw-periphery"

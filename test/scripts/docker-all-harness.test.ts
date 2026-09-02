@@ -37,7 +37,9 @@ function setupFixture(
   const selectedHarness =
     mode === "override" ? path.join(root, "operator's $& pnpm harness") : harness;
   copyDockerSchedulerHarness(harness);
-  if (selectedHarness !== harness) mkdirSync(selectedHarness, { recursive: true });
+  if (selectedHarness !== harness) {
+    mkdirSync(selectedHarness, { recursive: true });
+  }
   const marker = path.join(root, "calls.jsonl");
   const poison = path.join(root, "target-ran");
   const toolchainMarker = path.join(root, "toolchains.jsonl");
@@ -95,6 +97,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
           ? {}
           : {
               "test:docker:gateway-network": "node marker.cjs",
+              "test:docker:package-install": "node marker.cjs",
               "test:docker:e2e-build": "node marker.cjs package-image",
               "test:docker:cleanup": "node marker.cjs cleanup",
               "test:docker:all": `node ${quote(path.join(harness, "scripts/test-docker-all.mjs"))}`,
@@ -222,6 +225,22 @@ function runFixture(
 }
 
 describe("Docker scheduler trusted harness execution", () => {
+  posixIt("preserves prepared core dependencies for a package-only lane", () => {
+    const fixture = setupFixture("split", false, true);
+    const { result } = runFixture(fixture, "split", ["docker-package-install"], {
+      env: { OPENCLAW_CURRENT_PACKAGE_VERSION: "", OPENCLAW_CURRENT_PACKAGE_SHA256: "" },
+    });
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(fixture.marker, "utf8").trim())).toMatchObject({
+      lane: "docker-package-install",
+      package: fixture.tarball,
+      registry: fixture.registry,
+      registryVersion: "2026.8.1",
+      registrySha256: fixture.registrySha256,
+    });
+  });
+
   posixIt.each([
     { failure: "timeout", attempts: 1, passed: false },
     { failure: "deterministic failure", attempts: 1, passed: false },
@@ -297,7 +316,9 @@ if (${JSON.stringify(failure)} === "timeout") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(calls.map((call) => call.lane).sort()).toEqual([...laneNames].sort());
+      expect(calls.map((call) => call.lane).toSorted((a, b) => a.localeCompare(b))).toEqual(
+        laneNames.toSorted((a, b) => a.localeCompare(b)),
+      );
       for (const call of calls) {
         expect(call).toMatchObject({
           target: fixture.target,

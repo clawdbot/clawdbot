@@ -105,6 +105,8 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 - Messaging tool duplicates are removed from the final payload list.
 - If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
 
+Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
+
 ## Compaction and retries
 
 Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
@@ -127,6 +129,14 @@ Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on
 Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
 ## Timeouts
+
+When no result is available before an `agent.wait` deadline, the response contains
+only `runId` and `status: "timeout"`.
+It does not cancel the run or identify its execution phase; wait on the same
+`runId` again to observe completion. A wait interrupted by Gateway lifecycle
+shutdown includes `timeoutPhase: "gateway_draining"` without terminal metadata.
+Known queued chat turns report `status: "pending"`, `timeoutPhase: "queue"`, and
+`providerStarted: false`.
 
 | Timeout                                          | Default                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

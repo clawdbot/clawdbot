@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -151,6 +152,71 @@ describe("Doctor workspace persistence", () => {
             false,
           );
         });
+      });
+    },
+  );
+
+  it.each([
+    { kind: "shared", legacyId: "main" },
+    { kind: "implicit", legacyId: "main" },
+    { kind: "shared", legacyId: " Main " },
+    { kind: "implicit", legacyId: " Main " },
+  ])(
+    "preserves the markerless $legacyId agent's $kind workspace through Doctor persistence",
+    async ({ kind, legacyId }) => {
+      await withTempHome(async (home) => {
+        await withEnvOverride(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_WORKSPACE_DIR: undefined },
+          async () => {
+            const workspace = path.join(
+              home,
+              kind === "shared" ? "shared-workspace" : ".openclaw/workspace",
+            );
+            await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
+            const originals = {
+              "AGENTS.md": "# Existing agent\n\nKeep the original workspace.\n",
+              "SOUL.md": "# Existing character\n",
+              "IDENTITY.md": "# Original identity\n",
+              "USER.md": "# Original preferences\n",
+              "MEMORY.md": "# Original durable memory\n",
+              "memory/2026-07-01.md": "Historical memory remains in this workspace.\n",
+            };
+            for (const [name, content] of Object.entries(originals)) {
+              await fs.writeFile(path.join(workspace, name), content);
+            }
+            const configPath = await writeOpenClawConfig(home, {
+              agents: {
+                ...(kind === "shared" ? { defaults: { workspace } } : {}),
+                list: [{ id: legacyId }, { id: "other" }],
+              },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const before = await readConfigFileSnapshot();
+            expect(before.valid).toBe(false);
+            if (legacyId === "main") {
+              expect(resolveAgentWorkspaceDir(before.sourceConfig, "main")).toBe(workspace);
+            } else {
+              expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
+            }
+
+            const ctx = await prepareDoctorContext(configPath);
+            await runInitialConfigWriteHealth(ctx);
+            const saved = await readConfigFileSnapshot();
+            expect(saved.valid).toBe(true);
+            expect(saved.config.agents?.ownership).toBe("explicit");
+            expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
+            expect(saved.config.agents?.defaults?.systemAgent).toBeUndefined();
+            expect(saved.config.bindings).toBeUndefined();
+            expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
+            for (const [name, content] of Object.entries(originals)) {
+              expect(await fs.readFile(path.join(workspace, name), "utf8")).toBe(content);
+            }
+            expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
+              false,
+            );
+          },
+        );
       });
     },
   );

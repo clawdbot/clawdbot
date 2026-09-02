@@ -150,12 +150,13 @@ print_pending_deployments() {
   done < <(printf '%s' "${pending_json}" | jq -r '.[] | [.environment.id, .environment.name, .current_user_can_approve] | @tsv')
 }
 
-# Returns 0 after an approval, 1 when no gate is ready yet, and 2 for
+# Returns 0 after a matching approval, 1 when no gate is ready yet, and 2 for
 # identity or mutation failures that must not be retried as "pending".
 approve_pending_deployments() {
   local workflow="$1"
   local run_id="$2"
   local expected_sha="$3"
+  local only_environment="${4:-}"
   local pending_json approved
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -184,7 +185,9 @@ approve_pending_deployments() {
       return 2
     fi
     approved=1
-  done < <(printf '%s' "${pending_json}" | jq -r '.[] | select(.current_user_can_approve == true) | [.environment.id, .environment.name] | @tsv')
+  done < <(printf '%s' "${pending_json}" | jq -r --arg environment "${only_environment}" '
+    .[] | select(.current_user_can_approve == true and ($environment == "" or .environment.name == $environment)) |
+    [.environment.id, .environment.name] | @tsv')
 
   if [[ "${approved}" == "1" ]]; then
     if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -222,7 +225,10 @@ wait_for_run() {
   local workflow="$1"
   local run_id="$2"
   local expected_sha="$3"
-  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status
+  local started_job="${4:-}"
+  local approve_environments="${5:-true}"
+  local approved_environment="${6:-}"
+  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
     return 1
@@ -235,13 +241,27 @@ wait_for_run() {
     if [[ "$status" == "completed" ]]; then
       break
     fi
-    failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
-      --jq '[.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' || true)"
+    jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs' || true)"
+    failed_json="$(jq -c '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' <<< "${jobs_json}")" || return 1
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
       echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
       jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
       print_failed_run_summary "${run_id}"
       return 1
+    fi
+    if [[ -n "${started_job}" && -n "${jobs_json}" ]]; then
+      started_jobs="$(jq -c --arg name "${started_job}" '[.[] | select(.name == $name)]' <<< "${jobs_json}")" || return 1
+      if jq -e 'length > 1' <<< "${started_jobs}" >/dev/null; then
+        echo "${workflow} has ambiguous ${started_job} jobs." >&2
+        return 1
+      fi
+      # A running environment-backed job has passed its approval gate, even
+      # when a reviewer approved it before this watcher saw the deployment.
+      if jq -e 'length == 1 and (.[0].status == "in_progress" or (.[0].status == "completed" and .[0].conclusion == "success"))' <<< "${started_jobs}" >/dev/null; then
+        verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
+        echo "${workflow} ${started_job} started: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+        return 0
+      fi
     fi
     url="$(printf '%s' "$run_json" | jq -r '.url')"
     updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
@@ -254,11 +274,19 @@ wait_for_run() {
     # The deployment gate can appear after the run first reports
     # waiting without changing updatedAt. Retry every poll so that
     # propagation lag cannot strand an approved release.
-    approval_status=0
-    approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
-      approval_status=$?
-    if (( approval_status > 1 )); then
-      return 1
+    if [[ "${approve_environments}" == "true" ]]; then
+      approval_status=0
+      approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" "${approved_environment}" ||
+        approval_status=$?
+      if (( approval_status > 1 )); then
+        return 1
+      fi
+      # The matching approval and post-approval SHA check are sufficient;
+      # runner allocation must not serialize other publication work.
+      if [[ -n "${started_job}" && -n "${approved_environment}" && "${approval_status}" == "0" ]]; then
+        echo "${workflow} ${approved_environment} approved: ${url}"
+        return 0
+      fi
     fi
     sleep 30
   done
@@ -298,8 +326,9 @@ wait_for_run_background() {
   local run_id="$2"
   local expected_sha="$3"
   local result_file="$4"
+  local approve_environments="${5:-true}"
   (
-    if wait_for_run "${workflow}" "${run_id}" "${expected_sha}"; then
+    if wait_for_run "${workflow}" "${run_id}" "${expected_sha}" "" "${approve_environments}"; then
       printf 'success\n' > "${result_file}"
     else
       printf 'failure\n' > "${result_file}"
@@ -598,15 +627,19 @@ append_clawhub_dispatch_args() {
 }
 
 write_clawhub_runtime_state() {
-  local force_skip_clawhub="$1"
-  local output_path="$2"
+  local output_path="$1"
+  local force_skip_clawhub=false
+  # Verification and release notes project the same joined child outcomes.
+  if [[ "${clawhub_failed}" != "0" ]]; then
+    force_skip_clawhub=true
+  fi
   node --import tsx \
     "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts" \
     --repository "${GITHUB_REPOSITORY}" \
     --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
     --force-skip-clawhub "${force_skip_clawhub}" \
     --normal-run-id "${plugin_clawhub_run_id:-}" \
-    --normal-publication-staged true \
+    --normal-publication-staged "${clawhub_authorized}" \
     --bootstrap-run-id "${plugin_clawhub_bootstrap_run_id:-}" \
     --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
 }
@@ -1035,12 +1068,10 @@ upload_release_evidence_assets() {
 }
 
 verify_published_release() {
-  local release_version evidence_path skip_clawhub clawhub_runtime_state_path bootstrap_run_arg_present
+  local release_version evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
   local validation_file workflow_ref telegram_waiver
   local -a verify_args
-
-  skip_clawhub="${1:-false}"
 
   release_version="${RELEASE_TAG#v}"
   evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
@@ -1064,7 +1095,7 @@ verify_published_release() {
     verify_args+=(--openclaw-npm-run "${openclaw_npm_run_id}")
   fi
   clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-verify.json"
-  write_clawhub_runtime_state "${skip_clawhub}" "${clawhub_runtime_state_path}"
+  write_clawhub_runtime_state "${clawhub_runtime_state_path}"
   while IFS= read -r arg; do
     verify_args+=("${arg}")
   done < <(jq -r '.verifierArgs[]' "${clawhub_runtime_state_path}")
@@ -1173,7 +1204,7 @@ append_release_proof_to_github_release() {
     telegram_line="- npm Telegram beta E2E: not supplied"
   fi
   clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-proof.json"
-  write_clawhub_runtime_state false "${clawhub_runtime_state_path}"
+  write_clawhub_runtime_state "${clawhub_runtime_state_path}"
   clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
   clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
   windows_line=""

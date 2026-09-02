@@ -162,20 +162,32 @@ describe("native harness auth failover", () => {
     );
   });
 
-  it("does not rotate profiles for an unclassified harness failure", async () => {
-    const runEmbeddedAgent = prepareAuthFailoverRun();
-    const failure = new Error("native harness process exited");
-    mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
+  it.each(["unclassified", "preflight"])(
+    "does not rotate or mark profiles for a %s harness failure",
+    async (kind) => {
+      const runEmbeddedAgent = prepareAuthFailoverRun();
+      // The integration harness resets modules before loading the runtime.
+      const { AgentHarnessPreflightError } = await import("../harness/errors.js");
+      const failure =
+        kind === "preflight"
+          ? new AgentHarnessPreflightError("handoff refused; reconnect before continuing", {
+              cause: permanentAuthFailure(),
+            })
+          : new Error("native harness process exited");
+      mockedRunEmbeddedAttempt
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["unexpected retry"] }));
 
-    await expect(
-      runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        runId: "run-native-harness-non-auth-failure",
-      }),
-    ).rejects.toBe(failure);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
+      await expect(
+        runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          runId: "run-native-harness-non-auth-failure",
+        }),
+      ).rejects.toBe(failure);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
 });

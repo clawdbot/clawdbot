@@ -131,6 +131,8 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   /** Canonical root prepared by the trusted create path; never accepted from public patches. */
   preparedSessionRoot?: string;
+  /** Trusted catalog runtime must own selection checks before the new row is persisted. */
+  preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
@@ -185,6 +187,7 @@ export async function projectSessionsPatchEntry(params: {
       entry,
     });
     return (
+      params.preparedAgentRuntime ??
       acpMeta?.backend ??
       resolveEffectiveAgentRuntime({
         cfg,

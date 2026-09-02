@@ -1,44 +1,28 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
-  cpSync,
   existsSync,
-  linkSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
-  renameSync,
   statSync,
-  symlinkSync,
-  writeFileSync,
 } from "node:fs";
+import { chmod, cp, link, mkdir, rename, symlink } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { artifactFixture } from "./mac-elevation-artifact.test-support.js";
+import { describe, expect } from "vitest";
+import { artifactFixture, write } from "./mac-elevation-artifact.test-support.js";
 import {
   compiledMacNativeFixtures,
   macFatContainerFixture,
   macObjectFixture,
   runMacFixtureTool,
 } from "./mac-native-fixtures.test-support.js";
-import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
-
-const temps = useAutoCleanupTempDirTracker(afterEach);
+import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
 const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const materializer = "scripts/materialize-mac-node-worker.py";
 const inventory = "scripts/lib/mac-native-inventory.py";
-
-function write(file: string, contents: string | Buffer, mode = 0o644) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, contents);
-  chmodSync(file, mode);
-}
 
 function snapshot(root: string) {
   const records: { path: string; mode: number; kind: string; content?: string }[] = [];
@@ -65,18 +49,18 @@ function snapshot(root: string) {
   return records;
 }
 
-function materializationFixture(complete = false) {
-  const root = realpathSync(temps.make("openclaw-worker-native-copy-"));
+async function materializationFixture(mac: MacScriptFixture, complete = false) {
+  const root = realpathSync(mac.createTempDir("openclaw-worker-native-copy-"));
   const source = path.join(root, "canonical");
   const parent = path.join(root, "stage");
   const destination = path.join(parent, "derived");
-  mkdirSync(source);
-  mkdirSync(parent);
-  const binaries = compiledMacNativeFixtures(root);
+  await mkdir(source);
+  await mkdir(parent);
+  const binaries = await compiledMacNativeFixtures(root, mac);
   for (const [name, bytes] of Object.entries(
     complete ? binaries : { arm64: binaries.arm64, elf: binaries.elf },
   )) {
-    write(path.join(source, `images/${name}`), bytes);
+    await write(path.join(source, `images/${name}`), bytes);
   }
   for (const filename of [
     "nested/win32/README.md",
@@ -85,29 +69,36 @@ function materializationFixture(complete = false) {
     "opposite-linux/name.node",
     "space [*]?\nresource.js",
   ]) {
-    write(path.join(source, filename), "// nonbinary resource remains byte-identical\n", 0o640);
+    await write(
+      path.join(source, filename),
+      "// nonbinary resource remains byte-identical\n",
+      0o640,
+    );
   }
-  write(path.join(source, "engine.wasm"), Buffer.from("0061736d01000000", "hex"));
+  await write(path.join(source, "engine.wasm"), Buffer.from("0061736d01000000", "hex"));
   // Java and fat Mach-O share CAFEBABE. Classifier-owned non-native resources survive.
-  write(
+  await write(
     path.join(source, "Example.class"),
     Buffer.from("cafebabe0000003400010001000000000000000000000000", "hex"),
   );
   for (let i = 0; i < (complete ? 70 : 2); i++) {
-    write(path.join(source, `scripts/${i} [*]\n.js`), `// resource ${i}\n`);
+    await write(path.join(source, `scripts/${i} [*]\n.js`), `// resource ${i}\n`);
   }
-  mkdirSync(path.join(source, "empty"));
-  chmodSync(path.join(source, "empty"), 0o550);
-  symlinkSync("../nested/win32/build.mjs", path.join(source, "scripts/npm-style"));
-  symlinkSync("nested/win32", path.join(source, "directory-alias"));
+  await mkdir(path.join(source, "empty"));
+  await chmod(path.join(source, "empty"), 0o550);
+  await symlink("../nested/win32/build.mjs", path.join(source, "scripts/npm-style"));
+  await symlink("nested/win32", path.join(source, "directory-alias"));
   return {
     root,
     source,
     parent,
     destination,
     binaries,
-    run(arch = "arm64", options: { source?: string; destination?: string; prelude?: string } = {}) {
-      return spawnSync(
+    async run(
+      arch = "arm64",
+      options: { source?: string; destination?: string; prelude?: string } = {},
+    ) {
+      return await mac.run(
         "/usr/bin/python3",
         [
           "-B",
@@ -132,25 +123,25 @@ function materializationFixture(complete = false) {
   };
 }
 
-function stagingFixture() {
-  const root = realpathSync(temps.make("openclaw-worker-materialization-"));
-  const binaries = compiledMacNativeFixtures(root);
+async function stagingFixture(mac: MacScriptFixture) {
+  const root = realpathSync(mac.createTempDir("openclaw-worker-materialization-"));
+  const binaries = await compiledMacNativeFixtures(root, mac);
   const scripts = path.join(root, "scripts");
   const destination = path.join(root, "published");
   const calls = path.join(root, "verification-calls");
   const tmp = path.join(root, "tmp");
-  mkdirSync(scripts);
-  mkdirSync(tmp);
-  cpSync("scripts/stage-mac-node-worker.sh", path.join(scripts, "stage-mac-node-worker.sh"));
-  cpSync(materializer, path.join(scripts, path.basename(materializer)));
-  write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
-  write(path.join(root, "canonical.tgz"), "inert package mock");
-  write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');
-  write(
+  await mkdir(scripts);
+  await mkdir(tmp);
+  await cp("scripts/stage-mac-node-worker.sh", path.join(scripts, "stage-mac-node-worker.sh"));
+  await cp(materializer, path.join(scripts, path.basename(materializer)));
+  await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
+  await write(path.join(root, "canonical.tgz"), "inert package mock");
+  await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');
+  await write(
     path.join(scripts, "package-openclaw-for-docker.mjs"),
     `import assert from 'node:assert/strict';\nassert(process.argv.includes('--pnpm-pack'), 'worker package must use the repository-pinned packer');\nconsole.log(${JSON.stringify(path.join(root, "canonical.tgz"))});\n`,
   );
-  write(
+  await write(
     path.join(scripts, "verify-mac-node-worker.mjs"),
     `
 import assert from 'node:assert/strict';
@@ -162,12 +153,16 @@ if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.
   );
   for (const arch of ["arm64", "x86_64"] as const) {
     const canonical = path.join(root, "canonical", arch);
-    write(path.join(canonical, "matching.node"), binaries[arch]);
-    write(path.join(canonical, "foreign.node"), binaries.elf);
-    write(path.join(canonical, "nested/win32/build.mjs"), "// preserve Windows source\n", 0o755);
-    cpSync(path.join(root, "dist/build-info.json"), path.join(canonical, "build-info.json"));
+    await write(path.join(canonical, "matching.node"), binaries[arch]);
+    await write(path.join(canonical, "foreign.node"), binaries.elf);
+    await write(
+      path.join(canonical, "nested/win32/build.mjs"),
+      "// preserve Windows source\n",
+      0o755,
+    );
+    await cp(path.join(root, "dist/build-info.json"), path.join(canonical, "build-info.json"));
     // The fixture Node is an explicit execution mock; no native payload is launched.
-    write(
+    await write(
       path.join(canonical, "bin/node"),
       `#!/bin/bash
 set -euo pipefail
@@ -179,7 +174,7 @@ exec ${quote(process.execPath)} "$@"
       0o755,
     );
   }
-  write(
+  await write(
     path.join(scripts, "install-cli.sh"),
     `
 node_dir() { printf '%s' "$PREFIX/node"; }
@@ -198,8 +193,8 @@ install_openclaw() { :; }
     destination,
     calls,
     tmp,
-    run(variant: string, tempRoot = tmp) {
-      return spawnSync(
+    async run(variant: string, tempRoot = tmp) {
+      return await mac.run(
         "/bin/bash",
         [path.join(scripts, "stage-mac-node-worker.sh"), destination, "arm64", "x86_64"],
         {
@@ -219,222 +214,242 @@ install_openclaw() { :; }
 export function registerMacWorkerMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("elevation worker materialization", () => {
     const it = createMacScriptTest();
-    it("provisions beside the destination when system temp is unavailable", () => {
-      for (const variant of ["standard", "elevation-host"]) {
-        const fixture = stagingFixture();
-        const before = snapshot(path.join(fixture.root, "canonical"));
-        const result = fixture.run(variant, path.join(fixture.tmp, "unavailable"));
-        expect(result.status, result.stderr).toBe(0);
-        expect(snapshot(path.join(fixture.root, "canonical"))).toEqual(before);
-        const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
-        expect(calls).toHaveLength(2);
-        for (const [index, call] of calls.entries()) {
-          const arch = index === 0 ? "arm64" : "x86_64";
-          const [node, runtime, expected] = call.split("|");
-          expect(node).toBe(`${runtime}/bin/node`);
-          expect(runtime).toContain(`/${arch}/${variant === "standard" ? "runtime" : "elevation"}`);
-          expect(expected).toBe(path.join(fixture.root, "dist/build-info.json"));
-          const scratch = path.resolve(runtime!, "../..");
-          expect(path.dirname(scratch)).toBe(path.dirname(fixture.destination));
-          expect(existsSync(scratch)).toBe(false);
-          expect(snapshot(path.join(fixture.destination, arch))).toEqual(
-            snapshot(path.join(fixture.root, "canonical", arch)).filter(
-              (entry) => variant === "standard" || entry.path !== "foreign.node",
-            ),
-          );
+    it("provisions beside the destination when system temp is unavailable", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        for (const variant of ["standard", "elevation-host"]) {
+          const fixture = await stagingFixture(mac);
+          const before = snapshot(path.join(fixture.root, "canonical"));
+          const result = await fixture.run(variant, path.join(fixture.tmp, "unavailable"));
+          expect(result.status, result.stderr).toBe(0);
+          expect(snapshot(path.join(fixture.root, "canonical"))).toEqual(before);
+          const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
+          expect(calls).toHaveLength(2);
+          for (const [index, call] of calls.entries()) {
+            const arch = index === 0 ? "arm64" : "x86_64";
+            const [node, runtime, expected] = call.split("|");
+            expect(node).toBe(`${runtime}/bin/node`);
+            expect(runtime).toContain(
+              `/${arch}/${variant === "standard" ? "runtime" : "elevation"}`,
+            );
+            expect(expected).toBe(path.join(fixture.root, "dist/build-info.json"));
+            const scratch = path.resolve(runtime!, "../..");
+            expect(path.dirname(scratch)).toBe(path.dirname(fixture.destination));
+            expect(existsSync(scratch)).toBe(false);
+            expect(snapshot(path.join(fixture.destination, arch))).toEqual(
+              snapshot(path.join(fixture.root, "canonical", arch)).filter(
+                (entry) => variant === "standard" || entry.path !== "foreign.node",
+              ),
+            );
+          }
+          expect(readdirSync(fixture.tmp)).toEqual([]);
         }
-        expect(readdirSync(fixture.tmp)).toEqual([]);
-      }
-    });
+      }));
 
-    it.each(
+    it.for(
       ["standard", "elevation-host"].flatMap((variant) =>
         ["verification", "occupied", "occupied-link"].map((failure) => ({ variant, failure })),
       ),
     )(
       "publishes neither architecture on second $variant $failure failure",
-      ({ variant, failure }) => {
-        const fixture = stagingFixture();
-        if (failure === "verification") {
-          write(path.join(fixture.root, "reject-verification"), "");
-        } else if (failure === "occupied") {
-          write(path.join(fixture.destination, "x86_64/sentinel"), "owner");
-        } else {
-          mkdirSync(fixture.destination);
-          symlinkSync("missing", path.join(fixture.destination, "x86_64"));
-        }
-        const before = existsSync(fixture.destination) ? snapshot(fixture.destination) : [];
-        const result = fixture.run(variant);
-        expect(result.status, result.stderr).toBe(failure === "verification" ? 42 : 1);
-        const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
-        expect(calls).toHaveLength(2);
-        for (const call of calls) {
-          expect(existsSync(path.resolve(call.split("|")[1]!, "../.."))).toBe(false);
-        }
-        expect(existsSync(path.join(fixture.destination, "arm64"))).toBe(false);
-        expect(existsSync(fixture.destination) ? snapshot(fixture.destination) : []).toEqual(
-          before,
-        );
-        expect(readdirSync(fixture.tmp)).toEqual([]);
-      },
-    );
-
-    it.each(["arm64", "x86_64"])(
-      "retains every resource and eligible native image for %s without changing canonical input",
-      (arch) => {
-        const fixture = materializationFixture(true);
-        for (const fat64 of [false, true]) {
-          const bytes = macFatContainerFixture(
-            fixture.root,
-            [macObjectFixture(fixture.root, "arm64"), macObjectFixture(fixture.root, "x86_64")],
-            fat64,
-          );
-          expect(
-            runMacFixtureTool(
-              "/usr/bin/lipo",
-              ["-archs", path.join(fixture.root, "fat-container")],
-              fixture.root,
-            )
-              .split(" ")
-              .toSorted(),
-          ).toEqual(["arm64", "x86_64"]);
-          expect(bytes.readUInt32BE(0)).toBe(fat64 ? 0xcafebabf : 0xcafebabe);
-          expect(bytes.readUInt32BE(4)).toBe(2);
-          // Synthetic classification controls, never memory dumps or executed.
-          // lipo -create ignores MH_CORE inputs; change only the completed slices' types.
-          for (let index = 0; index < 2; index++) {
-            const record = 8 + index * (fat64 ? 32 : 20);
-            const offset = fat64
-              ? Number(bytes.readBigUInt64BE(record + 8))
-              : bytes.readUInt32BE(record + 8);
-            expect(bytes.readUInt32LE(offset)).toBe(0xfeedfacf);
-            expect(bytes.readUInt32LE(offset + 12)).toBe(1);
-            bytes.writeUInt32LE(4, offset + 12);
+      ({ variant, failure }, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await stagingFixture(mac);
+          if (failure === "verification") {
+            await write(path.join(fixture.root, "reject-verification"), "");
+          } else if (failure === "occupied") {
+            await write(path.join(fixture.destination, "x86_64/sentinel"), "owner");
+          } else {
+            await mkdir(fixture.destination);
+            await symlink("missing", path.join(fixture.destination, "x86_64"));
           }
-          write(path.join(fixture.source, `synthetic-core-fat${fat64 ? 64 : 32}`), bytes);
-        }
-        const oddNative = "images/odd [*]?\narm64";
-        renameSync(path.join(fixture.source, "images/arm64"), path.join(fixture.source, oddNative));
-        for (const [name, contents, mode] of [
-          ["database.js", "db.connect();\n", 0o644],
-          ["unicode.js", "db.label = 'café';\n", 0o644],
-          ["query.txt", "(Query expression)\n", 0o644],
-          ["setuid.txt", "small inert resource\n", 0o4755],
-        ] as const) {
-          const resource = path.join(fixture.source, "scripts", name);
-          write(resource, contents, mode);
-          expect(statSync(resource).mode & 0o7777).toBe(mode);
-        }
-        // Establish the source filesystem's actual name equivalence; never guess
-        // which Unicode spelling readdir returns or fold component text in the test.
-        for (const [name, literal, alias] of [
-          ["Library/addon.node", "library/ADDON.NODE", "0-case-alias"],
-          ["Café.txt", "Cafe\u0301.txt", "0-unicode-alias"],
-        ] as const) {
-          write(path.join(fixture.source, name), "retained lookup resource\n", 0o640);
-          expect(statSync(path.join(fixture.source, literal)).ino).toBe(
-            statSync(path.join(fixture.source, name)).ino,
+          const before = existsSync(fixture.destination) ? snapshot(fixture.destination) : [];
+          const result = await fixture.run(variant);
+          expect(result.status, result.stderr).toBe(failure === "verification" ? 42 : 1);
+          const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
+          expect(calls).toHaveLength(2);
+          for (const call of calls) {
+            expect(existsSync(path.resolve(call.split("|")[1]!, "../.."))).toBe(false);
+          }
+          expect(existsSync(path.join(fixture.destination, "arm64"))).toBe(false);
+          expect(existsSync(fixture.destination) ? snapshot(fixture.destination) : []).toEqual(
+            before,
           );
-          symlinkSync(literal, path.join(fixture.source, alias));
-        }
-        linkSync(
-          path.join(fixture.source, "Library/addon.node"),
-          path.join(fixture.source, "Library/second.node"),
-        );
-        symlinkSync("library/SECOND.NODE", path.join(fixture.source, "0-hardlink-alias"));
-        symlinkSync("library/", path.join(fixture.source, "0-directory"));
-        symlinkSync("0-DIRECTORY/../engine.wasm", path.join(fixture.source, "0-parent-alias"));
-        chmodSync(fixture.source, 0o750);
-        const before = snapshot(fixture.source);
-        const result = fixture.run(arch);
-        expect(result.status, result.stderr).toBe(0);
-        const omitted = new Set(
-          [
-            "coff",
-            "pe",
-            "elf",
-            ...(arch === "arm64"
-              ? ["x86_64", "intelLibrary", "intelArchive"]
-              : ["arm64", "armLibrary", "armArchive"]),
-          ].map((name) => (name === "arm64" ? oddNative : `images/${name}`)),
-        );
-        expect(snapshot(fixture.destination)).toEqual(
-          before.filter((entry) => !omitted.has(entry.path)),
-        );
-        expect(snapshot(fixture.source)).toEqual(before);
-        for (const alias of [
-          "0-case-alias",
-          "0-unicode-alias",
-          "0-hardlink-alias",
-          "0-parent-alias",
-        ]) {
-          expect(readFileSync(path.join(fixture.destination, alias))).toEqual(
-            readFileSync(path.join(fixture.source, alias)),
-          );
-          expect(readlinkSync(path.join(fixture.destination, alias))).toBe(
-            readlinkSync(path.join(fixture.source, alias)),
-          );
-        }
-        const outputSecond = statSync(path.join(fixture.destination, "Library/second.node"));
-        expect(outputSecond.ino).not.toBe(
-          statSync(path.join(fixture.destination, "Library/addon.node")).ino,
-        );
-        expect(statSync(path.join(fixture.destination, "0-hardlink-alias")).ino).toBe(
-          outputSecond.ino,
-        );
-        expect(result.stderr).toContain("omitted 6 native images");
-        for (const name of omitted) {
-          expect(result.stderr).toContain(JSON.stringify(name));
-        }
-        expect(
-          runMacFixtureTool(
-            "/usr/bin/lipo",
-            ["-archs", path.join(fixture.destination, "images/fat64")],
-            fixture.root,
-          ),
-        ).toContain(arch);
-      },
+          expect(readdirSync(fixture.tmp)).toEqual([]);
+        }),
     );
 
-    it.each([
+    it.for(["arm64", "x86_64"])(
+      "retains every resource and eligible native image for %s without changing canonical input",
+      (arch, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac, true);
+          for (const fat64 of [false, true]) {
+            const bytes = await macFatContainerFixture(
+              fixture.root,
+              [
+                await macObjectFixture(fixture.root, "arm64", mac),
+                await macObjectFixture(fixture.root, "x86_64", mac),
+              ],
+              fat64,
+              mac,
+            );
+            expect(
+              (
+                await runMacFixtureTool(
+                  "/usr/bin/lipo",
+                  ["-archs", path.join(fixture.root, "fat-container")],
+                  fixture.root,
+                  mac,
+                )
+              )
+                .split(" ")
+                .toSorted(),
+            ).toEqual(["arm64", "x86_64"]);
+            expect(bytes.readUInt32BE(0)).toBe(fat64 ? 0xcafebabf : 0xcafebabe);
+            expect(bytes.readUInt32BE(4)).toBe(2);
+            // Synthetic classification controls, never memory dumps or executed.
+            // lipo -create ignores MH_CORE inputs; change only the completed slices' types.
+            for (let index = 0; index < 2; index++) {
+              const record = 8 + index * (fat64 ? 32 : 20);
+              const offset = fat64
+                ? Number(bytes.readBigUInt64BE(record + 8))
+                : bytes.readUInt32BE(record + 8);
+              expect(bytes.readUInt32LE(offset)).toBe(0xfeedfacf);
+              expect(bytes.readUInt32LE(offset + 12)).toBe(1);
+              bytes.writeUInt32LE(4, offset + 12);
+            }
+            await write(path.join(fixture.source, `synthetic-core-fat${fat64 ? 64 : 32}`), bytes);
+          }
+          const oddNative = "images/odd [*]?\narm64";
+          await rename(
+            path.join(fixture.source, "images/arm64"),
+            path.join(fixture.source, oddNative),
+          );
+          for (const [name, contents, mode] of [
+            ["database.js", "db.connect();\n", 0o644],
+            ["unicode.js", "db.label = 'café';\n", 0o644],
+            ["query.txt", "(Query expression)\n", 0o644],
+            ["setuid.txt", "small inert resource\n", 0o4755],
+          ] as const) {
+            const resource = path.join(fixture.source, "scripts", name);
+            await write(resource, contents, mode);
+            expect(statSync(resource).mode & 0o7777).toBe(mode);
+          }
+          // Establish the source filesystem's actual name equivalence; never guess
+          // which Unicode spelling readdir returns or fold component text in the test.
+          for (const [name, literal, alias] of [
+            ["Library/addon.node", "library/ADDON.NODE", "0-case-alias"],
+            ["Café.txt", "Cafe\u0301.txt", "0-unicode-alias"],
+          ] as const) {
+            await write(path.join(fixture.source, name), "retained lookup resource\n", 0o640);
+            expect(statSync(path.join(fixture.source, literal)).ino).toBe(
+              statSync(path.join(fixture.source, name)).ino,
+            );
+            await symlink(literal, path.join(fixture.source, alias));
+          }
+          await link(
+            path.join(fixture.source, "Library/addon.node"),
+            path.join(fixture.source, "Library/second.node"),
+          );
+          await symlink("library/SECOND.NODE", path.join(fixture.source, "0-hardlink-alias"));
+          await symlink("library/", path.join(fixture.source, "0-directory"));
+          await symlink("0-DIRECTORY/../engine.wasm", path.join(fixture.source, "0-parent-alias"));
+          await chmod(fixture.source, 0o750);
+          const before = snapshot(fixture.source);
+          const result = await fixture.run(arch);
+          expect(result.status, result.stderr).toBe(0);
+          const omitted = new Set(
+            [
+              "coff",
+              "pe",
+              "elf",
+              ...(arch === "arm64"
+                ? ["x86_64", "intelLibrary", "intelArchive"]
+                : ["arm64", "armLibrary", "armArchive"]),
+            ].map((name) => (name === "arm64" ? oddNative : `images/${name}`)),
+          );
+          expect(snapshot(fixture.destination)).toEqual(
+            before.filter((entry) => !omitted.has(entry.path)),
+          );
+          expect(snapshot(fixture.source)).toEqual(before);
+          for (const alias of [
+            "0-case-alias",
+            "0-unicode-alias",
+            "0-hardlink-alias",
+            "0-parent-alias",
+          ]) {
+            expect(readFileSync(path.join(fixture.destination, alias))).toEqual(
+              readFileSync(path.join(fixture.source, alias)),
+            );
+            expect(readlinkSync(path.join(fixture.destination, alias))).toBe(
+              readlinkSync(path.join(fixture.source, alias)),
+            );
+          }
+          const outputSecond = statSync(path.join(fixture.destination, "Library/second.node"));
+          expect(outputSecond.ino).not.toBe(
+            statSync(path.join(fixture.destination, "Library/addon.node")).ino,
+          );
+          expect(statSync(path.join(fixture.destination, "0-hardlink-alias")).ino).toBe(
+            outputSecond.ino,
+          );
+          expect(result.stderr).toContain("omitted 6 native images");
+          for (const name of omitted) {
+            expect(result.stderr).toContain(JSON.stringify(name));
+          }
+          expect(
+            await runMacFixtureTool(
+              "/usr/bin/lipo",
+              ["-archs", path.join(fixture.destination, "images/fat64")],
+              fixture.root,
+              mac,
+            ),
+          ).toContain(arch);
+        }),
+    );
+
+    it.for([
       "occupied",
       "occupied-link",
       "inside-source",
       "outside-parent",
       "source-link",
       "parent-alias",
-    ])("rejects unsafe construction roots (%s) without touching input or occupants", (kind) => {
-      const fixture = materializationFixture();
-      let source = fixture.source;
-      let destination = fixture.destination;
-      if (kind === "occupied") {
-        write(path.join(destination, "sentinel"), "owner");
-      }
-      if (kind === "occupied-link") {
-        symlinkSync(source, destination);
-      }
-      if (kind === "inside-source") {
-        destination = path.join(source, "new-output");
-      }
-      if (kind === "outside-parent") {
-        destination = path.join(fixture.root, "new-output");
-      }
-      if (kind === "source-link") {
-        source = path.join(fixture.root, "source-alias");
-        symlinkSync(fixture.source, source);
-      }
-      if (kind === "parent-alias") {
-        symlinkSync(fixture.source, path.join(fixture.parent, "alias"));
-        destination = path.join(fixture.parent, "alias", "new-output");
-      }
-      const before = snapshot(fixture.root);
-      const result = fixture.run("arm64", { source, destination });
-      expect(result.status, result.stderr).not.toBe(0);
-      expect(result.stderr).toMatch(/File exists|disjoint|Not a directory/);
-      expect(snapshot(fixture.root)).toEqual(before);
-    });
+    ])(
+      "rejects unsafe construction roots (%s) without touching input or occupants",
+      (kind, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac);
+          let source = fixture.source;
+          let destination = fixture.destination;
+          if (kind === "occupied") {
+            await write(path.join(destination, "sentinel"), "owner");
+          }
+          if (kind === "occupied-link") {
+            await symlink(source, destination);
+          }
+          if (kind === "inside-source") {
+            destination = path.join(source, "new-output");
+          }
+          if (kind === "outside-parent") {
+            destination = path.join(fixture.root, "new-output");
+          }
+          if (kind === "source-link") {
+            source = path.join(fixture.root, "source-alias");
+            await symlink(fixture.source, source);
+          }
+          if (kind === "parent-alias") {
+            await symlink(fixture.source, path.join(fixture.parent, "alias"));
+            destination = path.join(fixture.parent, "alias", "new-output");
+          }
+          const before = snapshot(fixture.root);
+          const result = await fixture.run("arm64", { source, destination });
+          expect(result.status, result.stderr).not.toBe(0);
+          expect(result.stderr).toMatch(/File exists|disjoint|Not a directory/);
+          expect(snapshot(fixture.root)).toEqual(before);
+        }),
+    );
 
-    it.each([
+    it.for([
       "absolute",
       "escape",
       "dangling",
@@ -445,36 +460,38 @@ export function registerMacWorkerMaterializationTests() {
       "link-cycle",
       "directory-cycle",
       "indirect-cycle",
-    ])("rejects unprovable source links (%s) and leaves no partial output", (kind) => {
-      const fixture = materializationFixture();
-      const targets: Record<string, string> = {
-        absolute: path.join(fixture.source, "engine.wasm"),
-        escape: "../inert.c",
-        omitted: "images/elf",
-        "case-omitted": "IMAGES/ELF",
-        "case-cycle": "LINK",
-        "case-file-slash": "IMAGES/ARM64/",
-        "directory-cycle": ".",
-        "link-cycle": "link",
-      };
-      const target = targets[kind] ?? "missing";
-      if (kind === "indirect-cycle") {
-        mkdirSync(path.join(fixture.source, "a"));
-        mkdirSync(path.join(fixture.source, "b"));
-        symlinkSync("../b", path.join(fixture.source, "a/to-b"));
-        symlinkSync("../a", path.join(fixture.source, "b/to-a"));
-      } else {
-        symlinkSync(target, path.join(fixture.source, "link"));
-      }
-      const before = snapshot(fixture.source);
-      const result = fixture.run();
-      expect(result.status, result.stderr).not.toBe(0);
-      expect(result.stderr).toMatch(/symlink|Cyclic|ELOOP|ENOENT|No such file/);
-      expect(snapshot(fixture.source)).toEqual(before);
-      expect(existsSync(fixture.destination)).toBe(false);
-    });
+    ])("rejects unprovable source links (%s) and leaves no partial output", (kind, { mac }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await materializationFixture(mac);
+        const targets: Record<string, string> = {
+          absolute: path.join(fixture.source, "engine.wasm"),
+          escape: "../inert.c",
+          omitted: "images/elf",
+          "case-omitted": "IMAGES/ELF",
+          "case-cycle": "LINK",
+          "case-file-slash": "IMAGES/ARM64/",
+          "directory-cycle": ".",
+          "link-cycle": "link",
+        };
+        const target = targets[kind] ?? "missing";
+        if (kind === "indirect-cycle") {
+          await mkdir(path.join(fixture.source, "a"));
+          await mkdir(path.join(fixture.source, "b"));
+          await symlink("../b", path.join(fixture.source, "a/to-b"));
+          await symlink("../a", path.join(fixture.source, "b/to-a"));
+        } else {
+          await symlink(target, path.join(fixture.source, "link"));
+        }
+        const before = snapshot(fixture.source);
+        const result = await fixture.run();
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stderr).toMatch(/symlink|Cyclic|ELOOP|ENOENT|No such file/);
+        expect(snapshot(fixture.source)).toEqual(before);
+        expect(existsSync(fixture.destination)).toBe(false);
+      }),
+    );
 
-    it.each([
+    it.for([
       ["feedface", 18, false],
       ["cefaedfe", 7, false],
       ["feedfacf", 0x1000012, false],
@@ -483,89 +500,98 @@ export function registerMacWorkerMaterializationTests() {
       ["cafebabf", 0, true],
       ["bebafeca", 0, false],
       ["bfbafeca", 0, false],
-    ] as const)("classifies Mach magic %s with real Darwin tools", (magic, cpu, retained) => {
-      const fixture = materializationFixture();
-      let bytes: Buffer;
-      if (cpu) {
-        const wide = magic === "feedfacf" || magic === "cffaedfe";
-        bytes = Buffer.alloc(wide ? 32 : 28);
-        Buffer.from(magic, "hex").copy(bytes);
-        const little = magic === "cefaedfe" || magic === "cffaedfe";
-        const fields = [cpu, cpu === 7 ? 3 : 0, 1, 0, 0, 0];
-        fields.forEach((value, index) =>
-          little
-            ? bytes.writeUInt32LE(value, 4 + index * 4)
-            : bytes.writeUInt32BE(value, 4 + index * 4),
-        );
-      } else {
-        bytes = Buffer.from(
-          magic === "cafebabf" || magic === "bfbafeca"
-            ? fixture.binaries.fat64
-            : fixture.binaries.universal,
-        );
-        if (magic === "bebafeca" || magic === "bfbafeca") {
-          // Apple's fat.h requires big-endian on disk; swapped containers fail closed.
-          const stride = magic === "bfbafeca" ? 32 : 20;
-          bytes.subarray(0, 8).swap32();
-          for (let index = 0; index < 2; index++) {
-            const start = 8 + index * stride;
-            bytes.subarray(start, start + (stride === 20 ? 20 : 8)).swap32();
-            if (stride === 32) {
-              bytes.subarray(start + 8, start + 24).swap64();
-              bytes.subarray(start + 24, start + 32).swap32();
+    ] as const)(
+      "classifies Mach magic %s with real Darwin tools",
+      ([magic, cpu, retained], { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac);
+          let bytes: Buffer;
+          if (cpu) {
+            const wide = magic === "feedfacf" || magic === "cffaedfe";
+            bytes = Buffer.alloc(wide ? 32 : 28);
+            Buffer.from(magic, "hex").copy(bytes);
+            const little = magic === "cefaedfe" || magic === "cffaedfe";
+            const fields = [cpu, cpu === 7 ? 3 : 0, 1, 0, 0, 0];
+            fields.forEach((value, index) =>
+              little
+                ? bytes.writeUInt32LE(value, 4 + index * 4)
+                : bytes.writeUInt32BE(value, 4 + index * 4),
+            );
+          } else {
+            bytes = Buffer.from(
+              magic === "cafebabf" || magic === "bfbafeca"
+                ? fixture.binaries.fat64
+                : fixture.binaries.universal,
+            );
+            if (magic === "bebafeca" || magic === "bfbafeca") {
+              // Apple's fat.h requires big-endian on disk; swapped containers fail closed.
+              const stride = magic === "bfbafeca" ? 32 : 20;
+              bytes.subarray(0, 8).swap32();
+              for (let index = 0; index < 2; index++) {
+                const start = 8 + index * stride;
+                bytes.subarray(start, start + (stride === 20 ? 20 : 8)).swap32();
+                if (stride === 32) {
+                  bytes.subarray(start + 8, start + 24).swap64();
+                  bytes.subarray(start + 24, start + 32).swap32();
+                }
+              }
             }
           }
-        }
-      }
-      write(path.join(fixture.source, "magic"), bytes);
-      const before = snapshot(fixture.source);
-      const authority = spawnSync("/usr/bin/lipo", ["-archs", path.join(fixture.source, "magic")], {
-        encoding: "utf8",
-        env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
-      });
-      const result = fixture.run();
-      // Newer Apple lipo also rejects big-endian thin headers. Its failure must
-      // stop construction, never turn an unclassified native image into a resource.
-      const unsupported = authority.status !== 0;
-      if (unsupported) {
-        expect(result.status, result.stderr).not.toBe(0);
-        expect(existsSync(fixture.destination)).toBe(false);
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(existsSync(path.join(fixture.destination, "magic"))).toBe(retained);
-        if (retained) {
-          expect(readFileSync(path.join(fixture.destination, "magic"))).toEqual(bytes);
-        }
-      }
-      expect(snapshot(fixture.source)).toEqual(before);
-    });
-
-    it.each(["mach", "fat64", "elf", "pe", "coff", "archive"])(
-      "fails closed on malformed %s native candidates",
-      (kind) => {
-        const fixture = materializationFixture();
-        const bytes =
-          kind === "mach"
-            ? Buffer.from("cffaedfe", "hex")
-            : kind === "fat64"
-              ? Buffer.from("cafebabf", "hex")
-              : kind === "elf"
-                ? fixture.binaries.elf.subarray(0, 7)
-                : kind === "coff"
-                  ? fixture.binaries.coff.subarray(0, 3)
-                  : kind === "pe"
-                    ? fixture.binaries.pe.subarray(0, 16)
-                    : Buffer.from("!<arch>\nmalformed");
-        write(path.join(fixture.source, "broken"), bytes);
-        const before = snapshot(fixture.source);
-        const result = fixture.run();
-        expect(result.status, result.stderr).not.toBe(0);
-        expect(existsSync(fixture.destination)).toBe(false);
-        expect(snapshot(fixture.source)).toEqual(before);
-      },
+          await write(path.join(fixture.source, "magic"), bytes);
+          const before = snapshot(fixture.source);
+          const authority = await mac.run(
+            "/usr/bin/lipo",
+            ["-archs", path.join(fixture.source, "magic")],
+            {
+              encoding: "utf8",
+              env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
+            },
+          );
+          const result = await fixture.run();
+          // Newer Apple lipo also rejects big-endian thin headers. Its failure must
+          // stop construction, never turn an unclassified native image into a resource.
+          const unsupported = authority.status !== 0;
+          if (unsupported) {
+            expect(result.status, result.stderr).not.toBe(0);
+            expect(existsSync(fixture.destination)).toBe(false);
+          } else {
+            expect(result.status, result.stderr).toBe(0);
+            expect(existsSync(path.join(fixture.destination, "magic"))).toBe(retained);
+            if (retained) {
+              expect(readFileSync(path.join(fixture.destination, "magic"))).toEqual(bytes);
+            }
+          }
+          expect(snapshot(fixture.source)).toEqual(before);
+        }),
     );
 
-    it.each([
+    it.for(["mach", "fat64", "elf", "pe", "coff", "archive"])(
+      "fails closed on malformed %s native candidates",
+      (kind, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac);
+          const bytes =
+            kind === "mach"
+              ? Buffer.from("cffaedfe", "hex")
+              : kind === "fat64"
+                ? Buffer.from("cafebabf", "hex")
+                : kind === "elf"
+                  ? fixture.binaries.elf.subarray(0, 7)
+                  : kind === "coff"
+                    ? fixture.binaries.coff.subarray(0, 3)
+                    : kind === "pe"
+                      ? fixture.binaries.pe.subarray(0, 16)
+                      : Buffer.from("!<arch>\nmalformed");
+          await write(path.join(fixture.source, "broken"), bytes);
+          const before = snapshot(fixture.source);
+          const result = await fixture.run();
+          expect(result.status, result.stderr).not.toBe(0);
+          expect(existsSync(fixture.destination)).toBe(false);
+          expect(snapshot(fixture.source)).toEqual(before);
+        }),
+    );
+
+    it.for([
       "file-exit",
       "file-framing",
       "file-empty",
@@ -585,11 +611,12 @@ export function registerMacWorkerMaterializationTests() {
       "copy",
       "close",
       "output-link",
-    ])("fails closed on %s errors without publishing partial output", (failure) => {
-      const fixture = materializationFixture();
-      const before = snapshot(fixture.source);
-      const result = fixture.run("arm64", {
-        prelude: `
+    ])("fails closed on %s errors without publishing partial output", (failure, { mac }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await materializationFixture(mac);
+        const before = snapshot(fixture.source);
+        const result = await fixture.run("arm64", {
+          prelude: `
 import os, shutil, subprocess
 failure = ${JSON.stringify(failure)}
 original_run, original_scan, original_copy, original_fdopen = subprocess.run, os.scandir, shutil.copyfileobj, os.fdopen
@@ -646,35 +673,37 @@ import atexit
 def verify_closed():
     assert all(stream.closed for stream in opened), "leaked source stream"
 `,
-      });
-      expect(result.status, result.stderr).not.toBe(0);
-      expect(result.stderr).toMatch(
-        /injected|Incomplete worker|Invalid worker|Uncertain worker|Unclassified worker|equivalent output target/,
-      );
-      expect(result.stderr).not.toContain("leaked source stream");
-      expect(existsSync(fixture.destination)).toBe(false);
-      expect(snapshot(fixture.source)).toEqual(before);
-    });
+        });
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stderr).toMatch(
+          /injected|Incomplete worker|Invalid worker|Uncertain worker|Unclassified worker|equivalent output target/,
+        );
+        expect(result.stderr).not.toContain("leaked source stream");
+        expect(existsSync(fixture.destination)).toBe(false);
+        expect(snapshot(fixture.source)).toEqual(before);
+      }),
+    );
 
-    it.each(["before-open", "before-scan", "after-classification", "symlink-aba"])(
+    it.for(["before-open", "before-scan", "after-classification", "symlink-aba"])(
       "rejects source substitution %s without reading outside bytes or publishing",
-      (schedule) => {
-        const fixture = materializationFixture();
-        const inside = path.join(fixture.source, "images");
-        const outside = path.join(fixture.root, "outside");
-        const outsideBytes = Buffer.concat([
-          fixture.binaries.arm64,
-          Buffer.from("outside sentinel"),
-        ]);
-        write(path.join(outside, "arm64"), outsideBytes);
-        if (schedule === "symlink-aba") {
-          write(path.join(fixture.source, "a.txt"), "original resource");
-          write(path.join(fixture.source, "b.txt"), "substituted resource");
-          symlinkSync("a.txt", path.join(fixture.source, "alias"));
-        }
-        const before = snapshot(fixture.source);
-        const result = fixture.run("arm64", {
-          prelude: `
+      (schedule, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac);
+          const inside = path.join(fixture.source, "images");
+          const outside = path.join(fixture.root, "outside");
+          const outsideBytes = Buffer.concat([
+            fixture.binaries.arm64,
+            Buffer.from("outside sentinel"),
+          ]);
+          await write(path.join(outside, "arm64"), outsideBytes);
+          if (schedule === "symlink-aba") {
+            await write(path.join(fixture.source, "a.txt"), "original resource");
+            await write(path.join(fixture.source, "b.txt"), "substituted resource");
+            await symlink("a.txt", path.join(fixture.source, "alias"));
+          }
+          const before = snapshot(fixture.source);
+          const result = await fixture.run("arm64", {
+            prelude: `
 import os, shutil, subprocess, json
 inside, outside = ${JSON.stringify(inside)}, ${JSON.stringify(outside)}
 schedule = ${JSON.stringify(schedule)}
@@ -733,41 +762,44 @@ def evidence():
     with open(${JSON.stringify(path.join(fixture.root, "race.json"))}, "w") as output:
         json.dump({"changed": changed, "copied": copied, "outsideOpened": outside_opened, "initialFds": initial_fds, "finalFds": len(os.listdir("/dev/fd")) - 1}, output)
 `,
-        });
-        const evidence = JSON.parse(readFileSync(path.join(fixture.root, "race.json"), "utf8")) as {
-          changed: boolean;
-          copied: string[];
-          outsideOpened: boolean[];
-          initialFds: number;
-          finalFds: number;
-        };
-        expect(evidence.changed).toBe(true);
-        expect(evidence.finalFds).toBe(evidence.initialFds);
-        expect(evidence.outsideOpened).toEqual([]);
-        expect(result.status, result.stderr).not.toBe(0);
-        expect(result.stderr).toMatch(/Inventory|directory|symbolic link/i);
-        expect(existsSync(fixture.destination)).toBe(false);
-        expect(evidence.copied).toEqual(
-          schedule === "before-open" || schedule === "symlink-aba"
-            ? []
-            : [fixture.binaries.arm64.toString("hex")],
-        );
-        expect(readFileSync(path.join(outside, "arm64"))).toEqual(outsideBytes);
-        if (schedule === "symlink-aba") {
-          expect(snapshot(fixture.source)).toEqual(before);
-          expect(readlinkSync(path.join(fixture.source, "alias"))).toBe("a.txt");
-        }
-      },
+          });
+          const evidence = JSON.parse(
+            readFileSync(path.join(fixture.root, "race.json"), "utf8"),
+          ) as {
+            changed: boolean;
+            copied: string[];
+            outsideOpened: boolean[];
+            initialFds: number;
+            finalFds: number;
+          };
+          expect(evidence.changed).toBe(true);
+          expect(evidence.finalFds).toBe(evidence.initialFds);
+          expect(evidence.outsideOpened).toEqual([]);
+          expect(result.status, result.stderr).not.toBe(0);
+          expect(result.stderr).toMatch(/Inventory|directory|symbolic link/i);
+          expect(existsSync(fixture.destination)).toBe(false);
+          expect(evidence.copied).toEqual(
+            schedule === "before-open" || schedule === "symlink-aba"
+              ? []
+              : [fixture.binaries.arm64.toString("hex")],
+          );
+          expect(readFileSync(path.join(outside, "arm64"))).toEqual(outsideBytes);
+          if (schedule === "symlink-aba") {
+            expect(snapshot(fixture.source)).toEqual(before);
+            expect(readlinkSync(path.join(fixture.source, "alias"))).toBe("a.txt");
+          }
+        }),
     );
 
-    it("rejects in-place source mutation restored after lipo before native omission", () => {
-      const fixture = materializationFixture();
-      const target = path.join(fixture.source, "images/arm64");
-      const replacement = path.join(fixture.root, "replacement");
-      write(replacement, fixture.binaries.x86_64);
-      const before = snapshot(fixture.source);
-      const result = fixture.run("arm64", {
-        prelude: `
+    it("rejects in-place source mutation restored after lipo before native omission", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await materializationFixture(mac);
+        const target = path.join(fixture.source, "images/arm64");
+        const replacement = path.join(fixture.root, "replacement");
+        await write(replacement, fixture.binaries.x86_64);
+        const before = snapshot(fixture.source);
+        const result = await fixture.run("arm64", {
+          prelude: `
 import atexit, json, os, subprocess
 target = ${JSON.stringify(target)}
 with open(target, "rb") as stream: original = stream.read()
@@ -799,40 +831,43 @@ def evidence():
                    "sameMtime": current.st_mtime_ns == original_info.st_mtime_ns,
                    "initialFds": initial_fds, "finalFds": len(os.listdir("/dev/fd")) - 1}, output)
 `,
-      });
-      const evidence = JSON.parse(
-        readFileSync(path.join(fixture.root, "omission.json"), "utf8"),
-      ) as {
-        schedule: string[];
-        sameInode: boolean;
-        changedCtime: boolean;
-        sameMtime: boolean;
-        initialFds: number;
-        finalFds: number;
-      };
-      expect(evidence.schedule).toEqual([
-        "replaced after file classification",
-        "lipo observed x86_64",
-        "restored before omission",
-      ]);
-      expect(evidence.sameInode).toBe(true);
-      expect(evidence.changedCtime).toBe(true);
-      expect(evidence.sameMtime).toBe(true);
-      expect(evidence.finalFds).toBe(evidence.initialFds);
-      expect(snapshot(fixture.source)).toEqual(before);
-      expect(result.status, result.stderr).not.toBe(0);
-      expect(existsSync(fixture.destination)).toBe(false);
-    });
+        });
+        const evidence = JSON.parse(
+          readFileSync(path.join(fixture.root, "omission.json"), "utf8"),
+        ) as {
+          schedule: string[];
+          sameInode: boolean;
+          changedCtime: boolean;
+          sameMtime: boolean;
+          initialFds: number;
+          finalFds: number;
+        };
+        expect(evidence.schedule).toEqual([
+          "replaced after file classification",
+          "lipo observed x86_64",
+          "restored before omission",
+        ]);
+        expect(evidence.sameInode).toBe(true);
+        expect(evidence.changedCtime).toBe(true);
+        expect(evidence.sameMtime).toBe(true);
+        expect(evidence.finalFds).toBe(evidence.initialFds);
+        expect(snapshot(fixture.source)).toEqual(before);
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(existsSync(fixture.destination)).toBe(false);
+      }));
 
-    it("bounds native batches and rewinds retained handles after real classifier reads", () => {
-      const fixture = materializationFixture();
-      for (let index = 0; index < 130; index++) {
-        write(path.join(fixture.source, `native-${index}`), fixture.binaries.arm64);
-        write(path.join(fixture.source, `resource-${index}.js`), "// ordinary resource\n");
-      }
-      const before = snapshot(fixture.source);
-      const result = fixture.run("arm64", {
-        prelude: `
+    it("bounds native batches and rewinds retained handles after real classifier reads", ({
+      mac,
+    }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await materializationFixture(mac);
+        for (let index = 0; index < 130; index++) {
+          await write(path.join(fixture.source, `native-${index}`), fixture.binaries.arm64);
+          await write(path.join(fixture.source, `resource-${index}.js`), "// ordinary resource\n");
+        }
+        const before = snapshot(fixture.source);
+        const result = await fixture.run("arm64", {
+          prelude: `
 import os, subprocess, json, atexit
 original_run = subprocess.run
 batches = []
@@ -849,45 +884,54 @@ def evidence():
     with open(${JSON.stringify(path.join(fixture.root, "batches.json"))}, "w") as output:
         json.dump({"batches": batches, "initial": initial_fds, "final": len(os.listdir("/dev/fd")) - 1}, output)
 `,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(snapshot(fixture.destination)).toEqual(
-        before.filter((entry) => entry.path !== "images/elf"),
-      );
-      expect(snapshot(fixture.source)).toEqual(before);
-      const evidence = JSON.parse(
-        readFileSync(path.join(fixture.root, "batches.json"), "utf8"),
-      ) as { batches: number[]; initial: number; final: number };
-      expect(evidence.batches.length).toBeLessThanOrEqual(3);
-      expect(Math.max(...evidence.batches)).toBeLessThanOrEqual(64);
-      expect(evidence.batches.reduce((sum, size) => sum + size, 0)).toBe(133);
-      expect(evidence.final).toBe(evidence.initial);
-    });
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(snapshot(fixture.destination)).toEqual(
+          before.filter((entry) => entry.path !== "images/elf"),
+        );
+        expect(snapshot(fixture.source)).toEqual(before);
+        const evidence = JSON.parse(
+          readFileSync(path.join(fixture.root, "batches.json"), "utf8"),
+        ) as { batches: number[]; initial: number; final: number };
+        expect(evidence.batches.length).toBeLessThanOrEqual(3);
+        expect(Math.max(...evidence.batches)).toBeLessThanOrEqual(64);
+        expect(evidence.batches.reduce((sum, size) => sum + size, 0)).toBe(133);
+        expect(evidence.final).toBe(evidence.initial);
+      }));
 
-    it("rejects special input files without blocking or publishing", () => {
-      const fixture = materializationFixture();
-      runMacFixtureTool("/usr/bin/mkfifo", [path.join(fixture.source, "fifo")], fixture.root);
-      const result = fixture.run();
-      expect(result.status, result.stderr).not.toBe(0);
-      expect(result.stderr).toContain("Unsupported worker filesystem entry");
-      expect(existsSync(fixture.destination)).toBe(false);
-    });
+    it("rejects special input files without blocking or publishing", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await materializationFixture(mac);
+        await runMacFixtureTool(
+          "/usr/bin/mkfifo",
+          [path.join(fixture.source, "fifo")],
+          fixture.root,
+          mac,
+        );
+        const result = await fixture.run();
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(result.stderr).toContain("Unsupported worker filesystem entry");
+        expect(existsSync(fixture.destination)).toBe(false);
+      }));
 
     it("feeds freshly derived worker pairs to the real portable consumer", async ({ mac }) =>
       mac.lifetime.run(async () => {
-        const harness = artifactFixture(mac);
+        const harness = await artifactFixture(mac);
         for (const arch of ["arm64", "x86_64"] as const) {
           const worker = harness.at(`Contents/Resources/node-worker/${arch}`);
           const canonical = path.join(harness.home, `canonical-${arch}`);
-          renameSync(worker, canonical);
-          write(path.join(canonical, "nested/win32/README.md"), "Windows source is retained\n");
-          write(path.join(canonical, "nested/win32/foreign.node"), harness.binaries.pe);
-          write(
+          await rename(worker, canonical);
+          await write(
+            path.join(canonical, "nested/win32/README.md"),
+            "Windows source is retained\n",
+          );
+          await write(path.join(canonical, "nested/win32/foreign.node"), harness.binaries.pe);
+          await write(
             path.join(canonical, "opposite-mac.node"),
             harness.binaries[arch === "arm64" ? "x86_64" : "arm64"],
           );
           const before = snapshot(canonical);
-          const result = spawnSync(
+          const result = await mac.run(
             "/usr/bin/python3",
             ["-B", materializer, canonical, worker, path.dirname(worker), arch],
             {

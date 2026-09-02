@@ -1,5 +1,7 @@
 // Coverage for assistant failover decisions and auth-profile rotation.
 import { describe, expect, it, vi } from "vitest";
+import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
+import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
 import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
@@ -518,6 +520,49 @@ describe("handleAssistantFailover", () => {
   });
 
   describe("surface_error branch (openclaw#70124)", () => {
+    it.each([
+      Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
+      Object.assign(new Error("The operation timed out"), { name: "TimeoutError" }),
+      new Error("provider connection failed"),
+    ])(
+      "keeps provider $name failures visible to realtime voice with an active caller",
+      async (error) => {
+        const signal = new AbortController().signal;
+        const projected = projectProviderError(error, signal);
+        expect(projected.stopReason).toBe("error");
+        const outcome = await handleAssistantFailover(
+          makeParams({
+            initialDecision: { action: "surface_error", reason: null },
+            failoverReason: null,
+            billingFailure: false,
+            lastAssistant: {
+              role: "assistant",
+              api: "openai-completions",
+              provider: "openai",
+              model: "test-model",
+              content: [],
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              timestamp: 0,
+              ...projected,
+            },
+          }),
+        );
+        const failure = expectThrownFailoverError(outcome);
+        expect(failure.rawError).toBe(error.message);
+        expect(buildRealtimeVoiceAgentErrorProviderResult(failure)).toEqual({
+          error: failure.message,
+        });
+        expect(signal.aborted).toBe(false);
+      },
+    );
+
     it("logs the incremented count after a successful transient retry", async () => {
       let transientRetryCount = 0;
       const logAssistantFailoverDecision = vi.fn();

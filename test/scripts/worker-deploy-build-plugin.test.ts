@@ -64,26 +64,6 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain('requireUndici("undici")');
   });
 
-  it("shares the package native fs-safe assets with the runtime build", () => {
-    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
-    const source = fs.readFileSync(nativePath, "utf8");
-    const plugin = createWorkerDeployBuildPlugin();
-
-    const transformed = plugin.transform.call({ error: fail }, source, nativePath);
-
-    expect(transformed).toContain('new URL("../../dist/native/", import.meta.url)');
-    expect(transformed).not.toContain('new URL("../dist/native/", import.meta.url)');
-  });
-
-  it("fails closed when the fs-safe native lookup shape changes", () => {
-    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
-    const plugin = createWorkerDeployBuildPlugin();
-
-    expect(() =>
-      plugin.transform.call({ error: fail }, "changed upstream source", nativePath),
-    ).toThrow("fs-safe native asset lookup changed");
-  });
-
   it("fails closed when the undici dispatcher bootstrap shape changes", () => {
     const dispatcherPath = path.resolve("src/infra/net/undici-dispatcher-options.ts");
     const source = fs.readFileSync(dispatcherPath, "utf8");
@@ -124,14 +104,6 @@ describe("worker deploy build plugin", () => {
     const linkedRoot = path.join(tempRoot, "node_modules", "playwright-core");
     fs.mkdirSync(path.dirname(linkedRoot), { recursive: true });
     fs.symlinkSync(sourceRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
-    const fsSafeSourceRoot = path.resolve("node_modules/@openclaw/fs-safe");
-    const linkedFsSafeRoot = path.join(tempRoot, "node_modules", "@openclaw", "fs-safe");
-    fs.mkdirSync(path.dirname(linkedFsSafeRoot), { recursive: true });
-    fs.symlinkSync(
-      fsSafeSourceRoot,
-      linkedFsSafeRoot,
-      process.platform === "win32" ? "junction" : "dir",
-    );
     const plugin = createWorkerDeployBuildPlugin(tempRoot);
     const resolvedId = fs.realpathSync(path.join(linkedRoot, "lib/coreBundle.js"));
 

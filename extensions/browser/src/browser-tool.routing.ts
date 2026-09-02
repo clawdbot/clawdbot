@@ -2,6 +2,7 @@
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import {
   getRuntimeConfig,
+  hasGatewayToolRoutingContext,
   listNodes,
   resolveBrowserConfig,
   resolveProfile,
@@ -43,7 +44,19 @@ export async function resolveBrowserToolNodeTarget(params: {
   if (params.target && !explicitTarget) {
     return null;
   }
-  if (policy?.mode === "manual" && !explicitTarget && !requestedNode && !policy.node?.trim()) {
+  // Browser control can create Gateway auth itself. Credentials do not imply
+  // node routing; standalone runs use the host unless a Gateway route is selected.
+  if (
+    !explicitTarget &&
+    !requestedNode &&
+    !policy?.node?.trim() &&
+    (policy?.mode === "manual" ||
+      (policy?.mode !== "auto" &&
+        !hasGatewayToolRoutingContext() &&
+        cfg.gateway?.mode !== "remote" &&
+        !cfg.gateway?.remote?.url?.trim() &&
+        !process.env.OPENCLAW_GATEWAY_URL?.trim()))
+  ) {
     return null;
   }
   const node = resolveBrowserNodeTarget({

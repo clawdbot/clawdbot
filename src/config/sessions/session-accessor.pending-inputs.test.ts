@@ -477,39 +477,49 @@ describe("accepted input custody", () => {
     },
   );
 
-  it("rejects retained custody on an inactive branch without changing ordinary historical replay", async () => {
-    const receipt = await stage("terminal-off-path");
-    let replacementId: string;
-    await receipt.run(async () => {
-      await appendTranscriptMessage(scope(), { message: receipt.message });
-      const replacement = await appendTranscriptMessage(scope(), {
-        message: message("replacement"),
-        parentId: null,
+  it.each([false, true])(
+    "rejects retained custody on an inactive branch with context exclusion %s",
+    async (excludeFromContext) => {
+      const receipt = await stage("terminal-off-path", {
+        message: {
+          ...message("terminal-off-path"),
+          ...(excludeFromContext ? { excludeFromContext: true } : {}),
+        },
       });
-      replacementId = replacement.messageId;
-      expect(replacement.effectiveParentId).toBeNull();
+      let replacementId: string;
+      await receipt.run(async () => {
+        await appendTranscriptMessage(scope(), { message: receipt.message });
+        const replacement = await appendTranscriptMessage(scope(), {
+          message: message("replacement"),
+          parentId: null,
+        });
+        replacementId = replacement.messageId;
+        expect(replacement.effectiveParentId).toBeNull();
+        expect(
+          readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
+        ).toBeUndefined();
+        expect(
+          readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId }),
+        ).toBeUndefined();
+        receipt.finish("cancelled");
+        await expect(
+          appendTranscriptMessage(scope(), { message: receipt.message }),
+        ).rejects.toThrow("no longer active");
+      });
+      await waitForSessionTranscriptProjection(scope());
       expect(
         readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
       ).toBeUndefined();
       expect(
-        readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId }),
-      ).toBeUndefined();
-      receipt.finish("cancelled");
-      await expect(appendTranscriptMessage(scope(), { message: receipt.message })).rejects.toThrow(
-        "no longer active",
-      );
-    });
-    await waitForSessionTranscriptProjection(scope());
-    expect(
-      readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
-    ).toBeUndefined();
-    expect(readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId! })).toMatchObject({
-      entryId: replacementId!,
-    });
-    expect(await appendTranscriptMessage(scope(), { message: receipt.message })).toMatchObject({
-      appended: false,
-    });
-  });
+        readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId! }),
+      ).toMatchObject({
+        entryId: replacementId!,
+      });
+      expect(await appendTranscriptMessage(scope(), { message: receipt.message })).toMatchObject({
+        appended: false,
+      });
+    },
+  );
 
   it("retains repaired pending input as interrupted and never transfers live custody", async () => {
     const receipt = await stage("repair");

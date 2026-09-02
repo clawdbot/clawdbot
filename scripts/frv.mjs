@@ -290,6 +290,20 @@ export async function preflightContinuation(
     throw new Error("source full release parent identity changed");
   }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
+  if (
+    parentJobs.some(
+      (job) =>
+        Number(job.run_attempt) === source.sourceRunAttempt &&
+        job.conclusion !== "skipped" &&
+        /^(?:Prepare release npm artifacts|Prepare release Docker artifacts) \/ /u.test(
+          job.name ?? "",
+        ),
+    )
+  ) {
+    throw new Error(
+      "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+  }
   const resolveJobs = parentJobs.filter(
     (job) =>
       job.name === "Resolve target ref" &&

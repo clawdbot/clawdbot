@@ -2744,7 +2744,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed (exit 1)");
+    expect(payloads[0]?.text).toBe("⚠️ Exec failed (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {
@@ -3079,7 +3079,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec blocked");
+    expect(payloads[0]?.text).toBe("⚠️ Exec blocked");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {

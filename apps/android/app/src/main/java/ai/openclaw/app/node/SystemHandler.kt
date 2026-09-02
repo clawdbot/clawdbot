@@ -58,16 +58,21 @@ private class AndroidSystemNotificationPoster(
     // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
-        "passive" ->
+        "passive" -> {
           Triple("passive", NotificationManager.IMPORTANCE_LOW, nativeString("OpenClaw Passive"))
-        "timesensitive" ->
+        }
+
+        "timesensitive" -> {
           Triple(
             "timesensitive",
             NotificationManager.IMPORTANCE_HIGH,
             nativeString("OpenClaw Time Sensitive"),
           )
-        else ->
+        }
+
+        else -> {
           Triple("active", NotificationManager.IMPORTANCE_DEFAULT, nativeString("OpenClaw Active"))
+        }
       }
     val channelId = "$NOTIFICATION_CHANNEL_BASE_ID.$suffix"
     val manager = appContext.getSystemService(NotificationManager::class.java)

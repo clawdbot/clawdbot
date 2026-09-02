@@ -613,12 +613,16 @@ class DeviceHandler private constructor(
     val thermal = powerManager?.currentThermalStatus ?: return "nominal"
     return when (thermal) {
       PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"
+
       PowerManager.THERMAL_STATUS_MODERATE -> "fair"
+
       PowerManager.THERMAL_STATUS_SEVERE -> "serious"
+
       PowerManager.THERMAL_STATUS_CRITICAL,
       PowerManager.THERMAL_STATUS_EMERGENCY,
       PowerManager.THERMAL_STATUS_SHUTDOWN,
       -> "critical"
+
       else -> "nominal"
     }
   }
@@ -627,8 +631,10 @@ class DeviceHandler private constructor(
     if (caps == null) return "unsatisfied"
     return when {
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
+
       // Internet without validation mirrors iOS "requiresConnection" for captive or unproven networks.
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
+
       else -> "unsatisfied"
     }
   }

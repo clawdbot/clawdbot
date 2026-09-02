@@ -20,6 +20,7 @@ import {
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
+  assignTransportErrorDetails,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -33,7 +34,6 @@ import type {
   Usage,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -343,9 +343,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     stream.push({ type: "done", reason: output.stopReason, message: output });
     stream.end();
   } catch (error) {
+    const terminal = assignTransportErrorDetails(output, error, options?.signal);
     cleanStreamingScratchBuffers(output);
-    const terminal = projectProviderError(error, options?.signal);
-    Object.assign(output, terminal);
     stream.push({ type: "error", reason: terminal.stopReason, error: output });
     stream.end();
   } finally {

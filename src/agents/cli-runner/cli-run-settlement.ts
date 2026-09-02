@@ -663,6 +663,9 @@ export function buildCliRunResult(params: {
     ...(output.messagingToolSourceReplyPayloads?.length
       ? { messagingToolSourceReplyPayloads: output.messagingToolSourceReplyPayloads }
       : {}),
+    ...(output.acceptedSessionSpawns?.length
+      ? { acceptedSessionSpawns: output.acceptedSessionSpawns }
+      : {}),
   };
 }
 

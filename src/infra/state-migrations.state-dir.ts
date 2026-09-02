@@ -4,8 +4,8 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isWithinDir } from "./path-safety.js";
+import { logStateMigrationResult } from "./state-migrations.messages.js";
 import {
   migrateLegacyInstalledPluginIndex,
   preflightLegacyInstalledPluginIndexMigration,
@@ -412,17 +412,7 @@ export async function autoMigrateLegacyTaskStateSidecars(params: {
 
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
   const result = await migrateLegacyTaskStateSidecars({ stateDir });
-  const logger = params.log ?? createSubsystemLogger("state-migrations");
-  if (result.changes.length > 0) {
-    logger.info(
-      `Auto-migrated legacy state:\n${result.changes.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  }
-  if (result.warnings.length > 0) {
-    logger.warn(
-      `Legacy state migration warnings:\n${result.warnings.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  }
+  logStateMigrationResult(result, params.log);
   return {
     migrated: result.changes.length > 0,
     skipped: false,

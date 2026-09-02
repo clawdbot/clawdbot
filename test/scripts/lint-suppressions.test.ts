@@ -218,6 +218,8 @@ describe("production lint suppressions", () => {
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
         "src/commands/backup-restore.ts|preserve-caught-error|1",
+        // Intl.Collator.compare is a getter returning a bound function.
+        "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",

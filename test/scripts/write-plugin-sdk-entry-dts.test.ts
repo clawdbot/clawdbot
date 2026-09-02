@@ -2,13 +2,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   createFixture,
+  declarationCacheRecords,
   declarationInputs,
   expectOutputs,
   expectStagingClean,
@@ -126,10 +126,10 @@ describe("write-plugin-sdk-entry-dts", () => {
     const before = treeHashes(path.join(root, "dist"));
     expectOutputs(root, production, Object.keys(before));
     expectStagingClean(root);
-    const record = readArtifactRecord(
-      path.join(root, ".artifacts/build-all-cache/tsdown-plugin-sdk/stamp.json"),
-    );
-    expect(record?.inputs).toEqual(
+    const records = declarationCacheRecords(root);
+    expect(records).toHaveLength(2);
+    const inputs = records.flatMap((record) => record.inputs ?? []);
+    expect(inputs).toEqual(
       expect.arrayContaining([
         ...declarationInputs.map(({ file }) => file),
         "src/shared.ts",
@@ -137,9 +137,9 @@ describe("write-plugin-sdk-entry-dts", () => {
         "contracts/before.ts",
       ]),
     );
-    expect(record?.inputs?.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
-    expect(record?.inputs).not.toContain("test/unrelated.test.ts");
-    expect(record?.inputs).not.toContain("ui/unrelated.ts");
+    expect(inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
+    expect(inputs).not.toContain("test/unrelated.test.ts");
+    expect(inputs).not.toContain("ui/unrelated.ts");
     for (const entry of qa.filter((candidate) => !production.includes(candidate))) {
       expect(fs.existsSync(path.join(root, `dist/${entry}.d.ts`)), entry).toBe(false);
     }

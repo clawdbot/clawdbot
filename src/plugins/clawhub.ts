@@ -852,20 +852,12 @@ async function verifyClawHubArchiveFiles(params: {
     });
     const actualFiles = new Map<string, string>();
     const validatedGeneratedPaths = new Set<string>();
-    let entryCount = 0;
     let extractedBytes = 0;
     const addArchiveBytes = (bytes: number): boolean => {
       extractedBytes += bytes;
       return extractedBytes <= DEFAULT_MAX_EXTRACTED_BYTES;
     };
     for (const entry of Object.values(zip.files as Record<string, JSZip.JSZipObject>)) {
-      entryCount += 1;
-      if (entryCount > DEFAULT_MAX_ENTRIES) {
-        return buildClawHubInstallFailure(
-          "ClawHub archive fallback verification exceeded the archive entry limit.",
-          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        );
-      }
       if (entry.dir) {
         continue;
       }
@@ -1232,6 +1224,7 @@ export async function installPluginFromClawHub(
     env?: RuntimeVersionEnv;
     confirmInstall?: () => boolean | Promise<boolean>;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<
   | ({
@@ -1468,6 +1461,7 @@ export async function installPluginFromClawHub(
         timeoutMs: params.timeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: runtimeIdResolution.expectedPluginId,
+        beforePersistentApply: params.beforePersistentApply,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit
           ? (artifact) =>
               params.onBeforePluginArtifactCommit!({

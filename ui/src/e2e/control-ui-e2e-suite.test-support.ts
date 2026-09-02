@@ -2,6 +2,7 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -193,7 +194,15 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       const context = await newBrowserContext(contextOptions);
       try {
         const page = await context.newPage();
-        return await run({ context, page });
+        try {
+          return await run({ context, page });
+        } catch (error) {
+          await captureControlUiE2eFailureDiagnostics(page, {
+            error: error instanceof Error ? error : new Error(String(error)),
+            label: options.name,
+          });
+          throw error;
+        }
       } finally {
         await closeBrowserContext(context);
       }

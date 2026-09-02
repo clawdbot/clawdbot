@@ -10,10 +10,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
-import {
-  createFakeCodexAppServerClient,
-  threadStartResult,
-} from "./codex-app-server.test-fixtures.js";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexPluginsPolicy } from "./config.js";
 import {
   appInfo,
@@ -33,6 +30,7 @@ import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-suppo
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
 import {
   createAppServerOptions,
+  createLeasedCodexLifecycleHarness,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -73,7 +71,7 @@ describe("Codex app inventory across physical process restart", () => {
   };
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tempDir = "";
-  const processes: Array<ReturnType<typeof createFakeCodexAppServerClient>> = [];
+  const processes: Array<{ close: () => void }> = [];
 
   beforeEach(() => {
     tempDir = tempDirs.make("openclaw-cold-app-inventory-");
@@ -128,9 +126,10 @@ describe("Codex app inventory across physical process restart", () => {
       },
     };
 
-    function createProcess() {
+    async function createProcess(persistedThreadId?: string) {
       const processId = `process-${++processSequence}`;
       const loadedThreads = new Map<string, JsonObject>();
+      const subscribedThreads = new Set<string>();
       const threadToolRevocations = new Set<string>();
       const disabledThreadApps = new Set<string>();
       const abort = new AbortController();
@@ -143,127 +142,150 @@ describe("Codex app inventory across physical process restart", () => {
           throw closeError;
         }
       };
-      const fake = createFakeCodexAppServerClient(async (method, raw) => {
-        assertOpen();
-        const requestParams = isJsonObject(raw) ? raw : {};
-        const threadId =
-          typeof requestParams.threadId === "string" ? requestParams.threadId : undefined;
-        calls.push({
-          processId,
-          method,
-          params: requestParams,
-          loaded: Boolean(threadId && loadedThreads.has(threadId)),
-        });
-        if (
-          ["app/installed", "app/read", "mcpServerStatus/list"].includes(method) &&
-          threadId &&
-          !loadedThreads.has(threadId)
-        ) {
-          throw new CodexAppServerRpcError(
-            { code: -32600, message: `thread not found: ${threadId}` },
-            method,
-          );
-        }
-        if (method === "skills/list") {
-          return { data: [], errors: [] };
-        }
-        if (method === "config/read") {
-          return { config: currentConfig, layers: [] };
-        }
-        if (method === "plugin/installed") {
-          return pluginInstalled([pluginSummary(pluginName, { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail(pluginName, [appSummary(appId)]);
-        }
-        if (method === "app/installed" || method === "app/read") {
-          if (threadId) {
-            await faults.beforeInventory?.();
-          }
-          assertOpen();
-          const effective = threadId ? loadedThreads.get(threadId) : currentConfig;
-          const apps = isJsonObject(effective?.apps) ? effective.apps : {};
-          const app = isJsonObject(apps[appId]) ? apps[appId] : {};
-          const row = {
-            ...appInfo(appId, !accountRevoked),
-            isEnabled: app.enabled === true && !(threadId && disabledThreadApps.has(threadId)),
-          };
-          if (method === "app/installed") {
-            return codexAppInventoryResponse(
-              method,
-              [row],
-              {
-                forceRefresh: requestParams.forceRefresh === true,
-              },
-              { callableByAppId: { [appId]: !accountRevoked && row.isEnabled } },
-            );
-          }
-          return codexAppInventoryResponse(method, [row], {
-            appIds: Array.isArray(requestParams.appIds)
-              ? requestParams.appIds.filter((value): value is string => typeof value === "string")
-              : [],
-            includeTools: requestParams.includeTools === true,
+      const fake = await createLeasedCodexLifecycleHarness({
+        agentDir,
+        persistedThreads: persistedThreadId ? [persistedThreadId] : [],
+        unsubscribe: (threadId) => {
+          calls.push({
+            processId,
+            method: "thread/unsubscribe",
+            params: { threadId },
+            loaded: loadedThreads.has(threadId),
           });
-        }
-        if (method === "mcpServerStatus/list") {
+          if (faults.unsubscribe) {
+            throw faults.unsubscribe;
+          }
+          const wasSubscribed = subscribedThreads.delete(threadId);
           return {
-            data: [
-              {
-                name: "codex_apps",
-                tools:
-                  accountRevoked || (threadId && threadToolRevocations.has(threadId))
-                    ? {}
-                    : { list: { _meta: { connector_id: appId } } },
-              },
-            ],
-            nextCursor: null,
+            status: !loadedThreads.has(threadId)
+              ? "notLoaded"
+              : wasSubscribed
+                ? "unsubscribed"
+                : "notSubscribed",
           };
-        }
-        if (method === "thread/start") {
-          const id = `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
-          const config = isJsonObject(requestParams.config) ? requestParams.config : {};
-          durableThreads.set(id, config);
-          loadedThreads.set(id, config);
-          return { ...threadStartResult(id, workspaceDir), model: params.modelId };
-        }
-        if (method === "thread/resume" && threadId) {
-          if (!durableThreads.has(threadId)) {
+        },
+        respond: async (method, raw) => {
+          assertOpen();
+          const requestParams = isJsonObject(raw) ? raw : {};
+          const threadId =
+            typeof requestParams.threadId === "string" ? requestParams.threadId : undefined;
+          calls.push({
+            processId,
+            method,
+            params: requestParams,
+            loaded: Boolean(threadId && loadedThreads.has(threadId)),
+          });
+          if (
+            ["app/installed", "app/read", "mcpServerStatus/list"].includes(method) &&
+            threadId &&
+            !loadedThreads.has(threadId)
+          ) {
             throw new CodexAppServerRpcError(
               { code: -32600, message: `thread not found: ${threadId}` },
               method,
             );
           }
-          // Loaded threads ignore config overrides; cold resume rebuilds effective config.
-          if (!loadedThreads.has(threadId)) {
-            const config = isJsonObject(requestParams.config)
-              ? requestParams.config
-              : durableThreads.get(threadId)!;
-            loadedThreads.set(threadId, config);
-            durableThreads.set(threadId, config);
+          if (method === "skills/list") {
+            return { data: [], errors: [] };
           }
-          return { ...threadStartResult(threadId, workspaceDir), model: params.modelId };
-        }
-        if (method === "thread/unsubscribe" && threadId) {
-          if (faults.unsubscribe) {
-            throw faults.unsubscribe;
+          if (method === "config/read") {
+            return { config: currentConfig, layers: [] };
           }
-          loadedThreads.delete(threadId);
-          return { status: "unsubscribed" };
-        }
-        if (method === "thread/delete" && threadId) {
-          loadedThreads.delete(threadId);
-          durableThreads.delete(threadId);
-          return {};
-        }
-        throw new Error(`unexpected fixture RPC: ${method}`);
+          if (method === "plugin/installed") {
+            return pluginInstalled([pluginSummary(pluginName, { installed: true, enabled: true })]);
+          }
+          if (method === "plugin/read") {
+            return pluginDetail(pluginName, [appSummary(appId)]);
+          }
+          if (method === "app/installed" || method === "app/read") {
+            if (threadId) {
+              await faults.beforeInventory?.();
+            }
+            assertOpen();
+            const effective = threadId ? loadedThreads.get(threadId) : currentConfig;
+            const apps = isJsonObject(effective?.apps) ? effective.apps : {};
+            const app = isJsonObject(apps[appId]) ? apps[appId] : {};
+            const row = {
+              ...appInfo(appId, !accountRevoked),
+              isEnabled: app.enabled === true && !(threadId && disabledThreadApps.has(threadId)),
+            };
+            if (method === "app/installed") {
+              return codexAppInventoryResponse(
+                method,
+                [row],
+                {
+                  forceRefresh: requestParams.forceRefresh === true,
+                },
+                { callableByAppId: { [appId]: !accountRevoked && row.isEnabled } },
+              );
+            }
+            return codexAppInventoryResponse(method, [row], {
+              appIds: Array.isArray(requestParams.appIds)
+                ? requestParams.appIds.filter((value): value is string => typeof value === "string")
+                : [],
+              includeTools: requestParams.includeTools === true,
+            });
+          }
+          if (method === "mcpServerStatus/list") {
+            return {
+              data: [
+                {
+                  name: "codex_apps",
+                  tools:
+                    accountRevoked || (threadId && threadToolRevocations.has(threadId))
+                      ? {}
+                      : { list: { _meta: { connector_id: appId } } },
+                },
+              ],
+              nextCursor: null,
+            };
+          }
+          if (method === "thread/start") {
+            const id = `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
+            const config = isJsonObject(requestParams.config) ? requestParams.config : {};
+            durableThreads.set(id, config);
+            loadedThreads.set(id, config);
+            subscribedThreads.add(id);
+            return { ...threadStartResult(id, workspaceDir), model: params.modelId };
+          }
+          if (method === "thread/resume" && threadId) {
+            if (!durableThreads.has(threadId)) {
+              throw new CodexAppServerRpcError(
+                { code: -32600, message: `thread not found: ${threadId}` },
+                method,
+              );
+            }
+            // Loaded threads ignore config overrides; cold resume rebuilds effective config.
+            if (!loadedThreads.has(threadId)) {
+              const config = isJsonObject(requestParams.config)
+                ? requestParams.config
+                : durableThreads.get(threadId)!;
+              loadedThreads.set(threadId, config);
+              durableThreads.set(threadId, config);
+            }
+            subscribedThreads.add(threadId);
+            return { ...threadStartResult(threadId, workspaceDir), model: params.modelId };
+          }
+          if (method === "thread/delete" && threadId) {
+            loadedThreads.delete(threadId);
+            durableThreads.delete(threadId);
+            return {};
+          }
+          throw new Error(`unexpected fixture RPC: ${method}`);
+        },
       });
-      vi.spyOn(fake.client, "getInstanceId").mockReturnValue(processId);
+      const close = (error?: Error) => {
+        closeError = error;
+        loadedThreads.clear();
+        subscribedThreads.clear();
+        fake.client.close();
+      };
       fake.client.addCloseHandler((client) => {
         closeError = client.getCloseError() ?? new Error("codex app-server client is closed");
       });
       ensureCodexAppServerClientRuntime(fake.client, { agentDir });
-      processes.push(fake);
-      const abandonClient = vi.fn(async () => fake.close());
+      processes.push({ close });
+      const abandonClient = vi.fn(async () => close());
       const appCacheKey = "same-account-home-version";
       const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
         buildCodexPluginThreadConfigInputFingerprint({ pluginConfig, appCacheKey }),
@@ -286,7 +308,9 @@ describe("Codex app inventory across physical process restart", () => {
         });
       return {
         ...fake,
+        close,
         loadedThreads,
+        subscribedThreads,
         threadToolRevocations,
         disabledThreadApps,
         abort,
@@ -337,7 +361,7 @@ describe("Codex app inventory across physical process restart", () => {
 
   async function continuation(scheduled: boolean, lifecycle: string) {
     const f = await fixture(scheduled);
-    const firstProcess = f.createProcess();
+    const firstProcess = await f.createProcess();
     const first = await firstProcess.run();
     expect(first.pluginAppPolicyContext?.apps[appId]).toBeDefined();
     expect(firstProcess.loadedThreads.has(first.threadId)).toBe(true);
@@ -354,13 +378,20 @@ describe("Codex app inventory across physical process restart", () => {
         expect(await releaseCodexAppServerLiveThread(firstProcess.client, first.threadId)).toBe(
           true,
         );
-        expect(firstProcess.loadedThreads.has(first.threadId)).toBe(false);
+        expect(firstProcess.subscribedThreads.has(first.threadId)).toBe(false);
+        expect(firstProcess.loadedThreads.has(first.threadId)).toBe(true);
+        // Native idle eviction is a separate event, not an unsubscribe receipt.
+        firstProcess.loadedThreads.delete(first.threadId);
+        firstProcess.notify({
+          method: "thread/closed",
+          params: { threadId: first.threadId },
+        });
       }
     } else {
       firstProcess.close();
       f.restartStore();
     }
-    const process = lifecycle === "cold" ? f.createProcess() : firstProcess;
+    const process = lifecycle === "cold" ? await f.createProcess(first.threadId) : firstProcess;
     return { ...f, first, process };
   }
 
@@ -377,7 +408,16 @@ describe("Codex app inventory across physical process restart", () => {
       const f = await continuation(scheduled, lifecycle);
       const { first, process } = f;
       const boundary = f.calls.length;
+      const requestBoundary = process.request.mock.calls.length;
       const second = await process.run();
+      expect(
+        process.request.mock.calls
+          .slice(requestBoundary)
+          .map(([method]) => method)
+          .filter((method) => method.startsWith("thread/")),
+      ).toEqual(
+        lifecycle === "warm" ? [] : ["thread/read", "thread/resume", "thread/inject_items"],
+      );
       expect(second.threadId).toBe(first.threadId);
       if (lifecycle === "warm") {
         expect(f.calls.slice(boundary).some((call) => call.method === "thread/resume")).toBe(false);
@@ -489,7 +529,7 @@ describe("Codex app inventory across physical process restart", () => {
     expect(await f.readBinding()).toEqual(
       fault === "abort" ? previousBinding : { ...previousBinding, threadId: replacementId },
     );
-    expect(f.process.loadedThreads.has(f.first.threadId)).toBe(false);
+    expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
     expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
   });
 
@@ -502,7 +542,7 @@ describe("Codex app inventory across physical process restart", () => {
       const boundary = f.calls.length;
       await expect(f.process.run()).rejects.toThrow("did not expose admitted apps");
       expect(await f.readBinding()).toEqual(previousBinding);
-      expect(f.process.loadedThreads.has(f.first.threadId)).toBe(false);
+      expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
       expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
     },
   );
@@ -533,9 +573,17 @@ describe("Codex app inventory across physical process restart", () => {
       f.process.threadToolRevocations.add(f.first.threadId);
       f.process.faults.unsubscribe = new Error("unsubscribe unavailable");
       const boundary = f.calls.length;
-      await expect(f.process.run()).rejects.toMatchObject({
-        name: "CodexAppServerUnsafeSubscriptionError",
-      });
+      await expect(f.process.run()).rejects.toMatchObject(
+        lifecycle === "cold"
+          ? {
+              name: "CodexThreadPolicyHandoffError",
+              outcome: "not-written",
+              cause: expect.objectContaining({
+                message: expect.stringContaining("Scheduled Codex apps are unavailable"),
+              }),
+            }
+          : { name: "CodexAppServerUnsafeSubscriptionError" },
+      );
       expect(f.process.abandonClient).toHaveBeenCalledOnce();
       expect(await f.readBinding()).toEqual(previousBinding);
       expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
