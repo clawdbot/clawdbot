@@ -6634,8 +6634,23 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
   it("proves gateway suspension across a same-container process restart", () => {
     const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
+      'source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"',
       "plugins enable admin-http-rpc",
       "/tmp/gateway-network-configured",
+      'CAPABILITIES_DIR="$(mktemp -d',
+      "GW_CAPABILITIES_PATH=$CAPABILITIES_CONTAINER_PATH",
+      'CAPABILITIES_HOST_USER="$(id -u)"',
+      'CAPABILITIES_HOST_GROUP="$(id -g)"',
+      'if [[ ! -O "$CAPABILITIES_DIR" ]]',
+      '--user "$CAPABILITIES_HOST_USER:$CAPABILITIES_HOST_GROUP"',
+      "trap cleanup EXIT",
+      '[[ -z "$CAPABILITIES_PATH" ]] || rm -f "$CAPABILITIES_PATH"',
+      '[[ -z "$CAPABILITIES_DIR" ]] || rmdir "$CAPABILITIES_DIR"',
+      'if [[ ! -O "$CAPABILITIES_PATH" ]]',
+      'rm "$CAPABILITIES_PATH"',
+      'rmdir "$CAPABILITIES_DIR"',
+      'if [[ "$SUSPENSION_CAPABILITY" == "unsupported" ]]',
+      "openclaw_frozen_target_omissions_authorized",
       "run_suspension_phase() {",
       "GW_MODE=suspension-$stage-restart",
       "run_suspension_phase pre",
@@ -6650,6 +6665,27 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'run_logged_print "gateway-network-suspension-$stage"',
       '"phase":"container-restart","durationMs":%d',
     ]);
+    expect(runner).not.toContain('source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"');
+    expect(runner).not.toContain("openclaw_live_chown_bind_dirs_for_container_user");
+    expect(runner).not.toContain("gateway-network-capabilities-dir");
+    expect(runner).not.toContain("IMAGE_USER=");
+    expect(runner).not.toContain("--user 0:0");
+    expect(runner).not.toContain("chown");
+    expect(runner).not.toContain("chmod");
+    expect(runner).not.toContain('rm -rf "$CAPABILITIES_DIR"');
+
+    const parseIndex = runner.indexOf('SUSPENSION_CAPABILITY="$(');
+    const ownershipIndex = runner.indexOf('if [[ ! -O "$CAPABILITIES_PATH" ]]');
+    const unlinkIndex = runner.indexOf('rm "$CAPABILITIES_PATH"', ownershipIndex);
+    const rmdirIndex = runner.indexOf('rmdir "$CAPABILITIES_DIR"', ownershipIndex);
+    const capabilityBranchIndex = runner.indexOf(
+      'if [[ "$SUSPENSION_CAPABILITY" == "unsupported" ]]',
+    );
+    expect(parseIndex).toBeGreaterThanOrEqual(0);
+    expect(ownershipIndex).toBeGreaterThan(parseIndex);
+    expect(unlinkIndex).toBeGreaterThan(ownershipIndex);
+    expect(rmdirIndex).toBeGreaterThan(unlinkIndex);
+    expect(capabilityBranchIndex).toBeGreaterThan(rmdirIndex);
   });
 
   it.each([

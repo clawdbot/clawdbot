@@ -5104,6 +5104,10 @@ server.listen(0, "127.0.0.1", () => {
       releaseChecks.jobs.validate_repo_e2e_gateway,
       releaseChecks.jobs.validate_repo_e2e_runtime,
     ];
+    expect(releaseChecks.jobs.validate_live_docker_provider_suites.env).toMatchObject({
+      OPENCLAW_SELECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+      OPENCLAW_TOOLING_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+    });
     const repoE2eRows = pipelines.flatMap((pipeline) => JSON.parse(pipeline.with.suites)) as Array<{
       name: string;
       command: string;
