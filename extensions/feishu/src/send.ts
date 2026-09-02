@@ -7,6 +7,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
+import { parseMergeForwardContent } from "./bot-content.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
@@ -305,6 +306,23 @@ export async function getMessageFeishu(params: {
 
     if (response.code !== 0) {
       return null;
+    }
+
+    // A merged-forward message get returns the container plus every forwarded
+    // child in data.items. The container alone renders as a placeholder, so
+    // expand the same ordered children the direct receive path produces.
+    const items = response.data?.items;
+    const firstItem = items?.[0];
+    if (items && items.length > 1 && firstItem) {
+      // SAFETY: the item shape is widened only to read the two container markers.
+      const first = firstItem as { msg_type?: string; upper_message_id?: string };
+      if (first.msg_type === "merge_forward" && !first.upper_message_id) {
+        const info = parseFeishuMessageItem(firstItem, messageId);
+        return {
+          ...info,
+          content: parseMergeForwardContent({ content: JSON.stringify(items) }),
+        };
+      }
     }
 
     // Support both list shape (data.items[0]) and single-object shape (data as message)
