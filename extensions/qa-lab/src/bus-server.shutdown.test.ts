@@ -6,7 +6,7 @@ import { expect, it } from "vitest";
 const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fixturePath = fileURLToPath(
-  new URL("./bus-server-shutdown.test-support.ts", import.meta.url),
+  new URL("./test-support/bus-server-shutdown.ts", import.meta.url),
 );
 
 // Vitest's own handles would keep an unreferenced shutdown timer alive.

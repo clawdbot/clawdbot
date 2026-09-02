@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { startQaBusServer } from "./bus-server.js";
-import { createQaBusState } from "./bus-state.js";
-import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
+import { startQaBusServer } from "../bus-server.js";
+import { createQaBusState } from "../bus-state.js";
+import { startQaMockOpenAiServer } from "../providers/mock-openai/server.js";
 
 const provider = process.argv[2] === "provider";
 const server = provider
