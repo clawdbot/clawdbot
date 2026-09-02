@@ -18,6 +18,7 @@ import {
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
+  MemoryIndexRevisionConflictError,
   resetMemoryDatabase,
 } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
@@ -436,14 +437,14 @@ describe("memory manager database publication", () => {
       concurrentDb.close();
       concurrentDb = undefined;
 
-      await expect(
-        publishMemoryDatabaseTables({
-          targetDb,
-          sourcePath,
-          metaKey: "memory_index_meta",
-          expectedRevision,
-        }),
-      ).rejects.toThrow(/changed while full reindex was building/);
+      const publication = publishMemoryDatabaseTables({
+        targetDb,
+        sourcePath,
+        metaKey: "memory_index_meta",
+        expectedRevision,
+      });
+      await expect(publication).rejects.toBeInstanceOf(MemoryIndexRevisionConflictError);
+      await expect(publication).rejects.toThrow(/changed while full reindex was building/);
       expect(
         targetDb
           .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?")

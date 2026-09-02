@@ -122,8 +122,8 @@ async function waitForLocalListener(
   timeoutMs: number,
   signal: AbortSignal,
 ): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  const startedAt = performance.now(); // Clock adjustments must not change the polling budget.
+  while (performance.now() - startedAt < timeoutMs) {
     if (await canConnectLocal(port, signal)) {
       return;
     }

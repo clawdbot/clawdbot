@@ -559,7 +559,7 @@ describe("maybeRepairPluginRegistryState", () => {
         expect(fs.existsSync(path.join(managed.packageDir, "openclaw.plugin.json"))).toBe(true);
         expect(repaired.changes).toHaveLength(missingEntry && pass === 0 ? 1 : 0);
         expect(repaired.warnings).toEqual([]);
-        expect(repaired.capabilityConsentRequired).toBeUndefined();
+        expect(repaired.outcomes).toBeUndefined();
         if (missingEntry && pass === 0) {
           expect(repaired.records[pluginId]).toMatchObject(expectedRecord);
           expectedRecord = expectDefined(repaired.records[pluginId], "repaired install record");

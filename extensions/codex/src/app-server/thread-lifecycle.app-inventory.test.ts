@@ -87,7 +87,11 @@ describe("Codex app inventory across physical process restart", () => {
   async function fixture(scheduled: boolean) {
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir, {});
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      workspaceDir,
+      scheduled ? { tools: { web: { search: { enabled: false } } } } : {},
+    );
     params.agentDir = agentDir;
     params.disableTools = false;
     params.provider = "openai";
@@ -98,6 +102,7 @@ describe("Codex app inventory across physical process restart", () => {
     };
     params.modelId = params.model.id;
     params.scheduledRuntimeAuthority = scheduled ? authority : undefined;
+    params.pluginHarnessToolPolicyRestricted = scheduled;
     const appServer = {
       ...createAppServerOptions(),
       connectionClass: "local-loopback" as const,
@@ -120,6 +125,7 @@ describe("Codex app inventory across physical process restart", () => {
     const calls: Array<{ processId: string; method: string; params: JsonObject; loaded: boolean }> =
       [];
     const currentConfig: JsonObject = {
+      mcp_servers: { inherited: { command: "synthetic-mcp" } },
       apps: {
         _default: { enabled: false },
         [appId]: { enabled: true, tools: { list: { approval_mode: "auto" } } },
@@ -133,7 +139,12 @@ describe("Codex app inventory across physical process restart", () => {
       const threadToolRevocations = new Set<string>();
       const disabledThreadApps = new Set<string>();
       const abort = new AbortController();
-      const faults: { beforeInventory?: () => Promise<void>; unsubscribe?: Error } = {};
+      const faults: {
+        beforeInventory?: () => Promise<void>;
+        beforeMcpAttestation?: () => Promise<void>;
+        activeInheritedMcp?: boolean;
+        unsubscribe?: Error;
+      } = {};
       let closeError: Error | undefined;
       const appCache = new CodexAppInventoryCache();
       const metadataCache = new CodexPluginMetadataCache();
@@ -191,6 +202,9 @@ describe("Codex app inventory across physical process restart", () => {
           if (method === "config/read") {
             return { config: currentConfig, layers: [] };
           }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
           if (method === "plugin/installed") {
             return pluginInstalled([pluginSummary(pluginName, { installed: true, enabled: true })]);
           }
@@ -227,14 +241,30 @@ describe("Codex app inventory across physical process restart", () => {
             });
           }
           if (method === "mcpServerStatus/list") {
+            if (threadId && requestParams.limit === undefined) {
+              await faults.beforeMcpAttestation?.();
+            }
             return {
               data: [
                 {
                   name: "codex_apps",
+                  serverInfo: { name: "codex_apps", version: "1" },
                   tools:
                     accountRevoked || (threadId && threadToolRevocations.has(threadId))
                       ? {}
-                      : { list: { _meta: { connector_id: appId } } },
+                      : {
+                          list: {
+                            _meta: { connector_id: appId },
+                            annotations: { destructiveHint: false, openWorldHint: false },
+                          },
+                        },
+                },
+                {
+                  name: "inherited",
+                  serverInfo: faults.activeInheritedMcp
+                    ? { name: "inherited", version: "1" }
+                    : null,
+                  tools: {},
                 },
               ],
               nextCursor: null,
@@ -327,7 +357,8 @@ describe("Codex app inventory across physical process restart", () => {
             appServer,
             bindingStore,
             userMcpServersEnabled: false,
-            nativeCodeModeEnabled: true,
+            nativeCodeModeEnabled: !scheduled,
+            ...(scheduled ? { webSearchAllowed: false, persistentWebSearchAllowed: false } : {}),
             hostSystemAgentActive: false,
             pluginThreadConfig: provider(),
           }),
@@ -424,7 +455,7 @@ describe("Codex app inventory across physical process restart", () => {
       }
       if (scheduled) {
         expect(process.loadedThreads.get(second.threadId)).toMatchObject({
-          apps: { [appId]: { tools: { list: { approval_mode: "prompt" } } } },
+          apps: { [appId]: { tools: { list: { enabled: true, approval_mode: "prompt" } } } },
         });
       }
       expect((await f.readBinding())?.pluginAppPolicyContext?.apps[appId]).toMatchObject({
@@ -494,6 +525,33 @@ describe("Codex app inventory across physical process restart", () => {
     expect(
       calls.filter((call) => call.method === "thread/start" || call.method === "thread/resume"),
     ).toEqual([]);
+  });
+
+  it.each(["cold", "warm"])(
+    "rejects active inherited MCP servers on a scheduled %s continuation",
+    async (lifecycle) => {
+      const f = await continuation(true, lifecycle);
+      const previousBinding = await f.readBinding();
+      f.process.faults.activeInheritedMcp = true;
+      const boundary = f.calls.length;
+      await expect(f.process.run()).rejects.toThrow(
+        "restricted-tool-surface MCP attestation found active server inherited",
+      );
+      expect(await f.readBinding()).toEqual(previousBinding);
+      expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
+      expect(f.process.loadedThreads.has(f.first.threadId)).toBe(true);
+      expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
+    },
+  );
+
+  it("fences warm ownership revoked during restricted MCP attestation", async () => {
+    const f = await continuation(true, "warm");
+    const previousBinding = await f.readBinding();
+    f.process.faults.beforeMcpAttestation = async () => {
+      f.process.notify({ method: "thread/closed", params: { threadId: f.first.threadId } });
+    };
+    await expect(f.process.run()).rejects.toThrow("Codex warm thread ownership changed");
+    expect(await f.readBinding()).toEqual(previousBinding);
   });
 
   it.each([

@@ -73,15 +73,17 @@ function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
 }
 
-function canonicalImageMessageKey(message: unknown, sessionKey: string | undefined) {
+function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
-  return identity?.role === "user" &&
-    identity.id &&
-    !identity.isImported &&
-    !isPendingSendMessage(message) &&
-    !identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? JSON.stringify([sessionKey, identity.id, identity.sequence])
-    : undefined;
+  if (identity?.role !== "user" || identity.isImported) {
+    return { localSubmission: false };
+  }
+  if (!identity.id || isPendingSendMessage(message)) {
+    return { localSubmission: Boolean(identity.sendId) };
+  }
+  return identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
+    ? {}
+    : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
 }
 
 function renderInlineToolCards(
@@ -262,7 +264,7 @@ export function renderGroupedMessage(
   const images = extractImages(message);
   const hasImages = images.length > 0;
   const imageRenderOptions = {
-    canonicalMessageKey: hasImages ? canonicalImageMessageKey(message, opts.sessionKey) : undefined,
+    ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
     connectionEpoch: opts.connectionEpoch,
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,

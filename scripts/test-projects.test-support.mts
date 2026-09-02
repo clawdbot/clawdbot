@@ -1656,10 +1656,12 @@ function readImportGraphEdges(
 function listImportGraphGrepMatches(
   cwd: string,
   terms: string[],
-  options: ImportGraphOptions = {},
+  options: ImportGraphOptions & { testFilesOnly?: boolean } = {},
 ) {
   const tooling = options.tooling === true;
-  const cacheKey = (term: string) => `${cwd}\0${tooling}\0${term}`;
+  const testFilesOnly = options.testFilesOnly === true;
+  // Narrow reference matches must not satisfy a later full import-frontier query.
+  const cacheKey = (term: string) => `${cwd}\0${tooling}\0${testFilesOnly}\0${term}`;
   const matches = new Map(
     terms.map((term) => [term, cachedImportGraphGrepMatches.get(cacheKey(term)) ?? null]),
   );
@@ -1671,6 +1673,13 @@ function listImportGraphGrepMatches(
   }
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  // Literal-reference routing only consumes tests; keep import frontiers on the full scope.
+  const suffixes = testFilesOnly
+    ? extensions.flatMap((ext) => [`.test${ext}`, `.spec${ext}`])
+    : extensions;
+  const grepPaths = roots.flatMap((root) =>
+    suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`),
+  );
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
@@ -1686,7 +1695,7 @@ function listImportGraphGrepMatches(
       "--fixed-strings",
       "--hidden",
       "--no-ignore",
-      ...extensions.flatMap((ext) => ["--glob", `*${ext}`]),
+      ...suffixes.flatMap((suffix) => ["--glob", `*${suffix}`]),
       "--glob",
       "!**/node_modules/**",
       "--glob",
@@ -1703,15 +1712,7 @@ function listImportGraphGrepMatches(
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     result = spawnSync(
       "git",
-      [
-        "grep",
-        "-l",
-        "--fixed-strings",
-        "-f",
-        "-",
-        "--",
-        ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
-      ],
+      ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
       spawnOptions,
     );
   }
@@ -3103,7 +3104,11 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
   const normalized = normalizePathPattern(changedPath);
-  return (listImportGraphGrepMatches(cwd, [normalized], { tooling: true }).get(normalized) ?? [])
+  return (
+    listImportGraphGrepMatches(cwd, [normalized], { tooling: true, testFilesOnly: true }).get(
+      normalized,
+    ) ?? []
+  )
     .filter(
       ({ file, references }) =>
         file !== "test/scripts/test-projects.test.ts" &&

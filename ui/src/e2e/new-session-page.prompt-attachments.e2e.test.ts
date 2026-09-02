@@ -38,18 +38,19 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
   }
 }
 
-async function expectDecodedThumbnail(image: Locator) {
+async function expectDecodedThumbnail(image: Locator, expectedNaturalWidth?: number) {
   await image.waitFor({ state: "visible" });
   await image.scrollIntoViewIfNeeded();
   await expect
     .poll(() =>
-      image.evaluate(async (element) => {
+      image.evaluate(async (element, expectedWidth) => {
         if (!(element instanceof HTMLImageElement)) {
           return false;
         }
         await element.decode();
         const bounds = element.getBoundingClientRect();
         return (
+          (expectedWidth === undefined || element.naturalWidth === expectedWidth) &&
           Math.min(element.naturalWidth, element.naturalHeight, bounds.width, bounds.height) >=
             32 &&
           bounds.top >= 0 &&
@@ -57,7 +58,7 @@ async function expectDecodedThumbnail(image: Locator) {
           bounds.bottom <= window.innerHeight &&
           bounds.right <= window.innerWidth
         );
-      }),
+      }, expectedNaturalWidth),
     )
     .toBe(true);
 }
@@ -471,20 +472,41 @@ suite.define(() => {
       const sessionKey = "agent:main:single-image-prompt";
       const runId = "initial-image-send";
       const message = "testing if dual prompts show";
+      const source = "media://inbound/initial-prompt.png";
+      const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
+      let releaseMedia!: () => void;
+      const mediaGate = new Promise<void>((resolve) => {
+        releaseMedia = resolve;
+      });
+      let metadataRequested = false;
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const url = new URL(route.request().url());
+        expect(url.searchParams.get("source")).toBe(source);
+        const metadata = url.searchParams.get("meta") === "1";
+        metadataRequested ||= metadata;
+        await mediaGate;
+        await route.fulfill(
+          metadata
+            ? {
+                json: {
+                  available: true,
+                  mediaTicket: "initial-prompt-ticket",
+                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+                },
+              }
+            : { contentType: "image/png", body: imageBytes },
+        );
+      });
       const authoritative = {
         role: "user",
-        content: [
-          {
-            type: "image",
-            source: { type: "url", url: "/persisted-image.png" },
-          },
-          { type: "text", text: message },
-        ],
+        content: [{ type: "text", text: message }],
         timestamp: Date.now(),
         __openclaw: {
           id: "persisted-image-prompt",
           idempotencyKey: `${runId}:user`,
           seq: 1,
+          media: [{ path: source, contentType: "image/png", fileName: "pixel.png" }],
+          mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
       };
       const gateway = await installMockGateway(page, {
@@ -509,62 +531,86 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill(message);
-      await pastePng(composer);
-      await page.getByRole("button", { name: "Start session" }).click();
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
-        timeout: 30_000,
-      });
-      await gateway.waitForRequest("chat.startup");
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        const composer = page.locator(".new-session-page__message");
+        await composer.fill(message);
+        await page.locator(".agent-chat__file-input").setInputFiles({
+          name: "pixel.png",
+          mimeType: "image/png",
+          buffer: imageBytes,
+        });
+        await page.getByRole("button", { name: "Start session" }).click();
+        await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
+          timeout: 30_000,
+        });
+        await gateway.waitForRequest("chat.startup");
 
-      const userRow = page.locator(".chat-group.user");
-      const userImage = userRow.locator("img.chat-message-image");
-      await expect.poll(() => userRow.count()).toBe(1);
-      await expect.poll(() => userImage.count()).toBe(1);
-      await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
-      const initialImageSrc = await userImage.getAttribute("src");
-      await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
-      await pollLocatorText(userRow).toContain(message);
-      await pollLocatorText(userRow).not.toContain("Attached image");
+        const userRow = page.locator(".chat-group.user");
+        const userImage = userRow.locator("img.chat-message-image");
+        await expect.poll(() => userRow.count()).toBe(1);
+        await expect.poll(() => userImage.count()).toBe(1);
+        await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+        await expectDecodedThumbnail(userImage, 180);
+        const initialImageSrc = await userImage.getAttribute("src");
+        const initialPixels = await userImage.screenshot({ animations: "disabled" });
+        await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
+        await pollLocatorText(userRow).toContain(message);
+        await pollLocatorText(userRow).not.toContain("Attached image");
 
-      const promptBubbles = page.locator(".chat-bubble").filter({ hasText: message });
-      const durableBubble = page.locator('.chat-bubble[data-entry-id="persisted-image-prompt"]');
-      await expect.poll(() => promptBubbles.count()).toBe(1);
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [runId],
-        clientRunId: runId,
-        hasActiveRun: true,
-        message: authoritative,
-        messageId: "persisted-image-prompt",
-        messageSeq: 1,
-        session: {
+        const promptBubbles = page.locator(".chat-bubble").filter({ hasText: message });
+        const durableBubble = page.locator('.chat-bubble[data-entry-id="persisted-image-prompt"]');
+        await expect.poll(() => promptBubbles.count()).toBe(1);
+        await gateway.emitGatewayEvent("session.message", {
           activeRunIds: [runId],
+          clientRunId: runId,
           hasActiveRun: true,
-          key: sessionKey,
-          kind: "direct",
-          status: "running",
-          updatedAt: Date.now(),
-        },
-        sessionKey,
-      });
-      await durableBubble.waitFor({ timeout: 10_000 });
-      await expect.poll(() => durableBubble.count()).toBe(1);
-      await expect.poll(() => promptBubbles.count()).toBe(1);
-      await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
-      await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
+          message: authoritative,
+          messageId: "persisted-image-prompt",
+          messageSeq: 1,
+          session: {
+            activeRunIds: [runId],
+            hasActiveRun: true,
+            key: sessionKey,
+            kind: "direct",
+            status: "running",
+            updatedAt: Date.now(),
+          },
+          sessionKey,
+        });
+        await durableBubble.waitFor({ timeout: 10_000 });
+        await expect.poll(() => durableBubble.count()).toBe(1);
+        await expect.poll(() => promptBubbles.count()).toBe(1);
+        await expect.poll(() => metadataRequested).toBe(true);
+        await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
+        await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
+        expect((await userImage.screenshot({ animations: "disabled" })).equals(initialPixels)).toBe(
+          true,
+        );
+        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        await captureUiProof(suite, page, "initial-image-metadata-loading.png");
 
-      await gateway.resolveDeferred("chat.startup");
+        await gateway.resolveDeferred("chat.startup");
 
-      await expect.poll(() => userRow.count()).toBe(1);
-      await expect.poll(() => userImage.count()).toBe(1);
-      await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
-      await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
-      await expect.poll(() => promptBubbles.count()).toBe(1);
-      await expect.poll(() => durableBubble.count()).toBe(1);
-      await pollLocatorText(userRow).toContain(message);
-      await pollLocatorText(userRow).not.toContain("Attached image");
+        await expect.poll(() => userRow.count()).toBe(1);
+        await expect.poll(() => userImage.count()).toBe(1);
+        await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
+        await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
+        await expect.poll(() => promptBubbles.count()).toBe(1);
+        await expect.poll(() => durableBubble.count()).toBe(1);
+        await pollLocatorText(userRow).toContain(message);
+        await pollLocatorText(userRow).not.toContain("Attached image");
+        releaseMedia();
+        await expect.poll(() => userImage.getAttribute("src")).toContain("initial-prompt-ticket");
+        await expectDecodedThumbnail(userImage, 180);
+        expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
+        expect((await userImage.screenshot({ animations: "disabled" })).equals(initialPixels)).toBe(
+          true,
+        );
+        await captureUiProof(suite, page, "initial-image-canonical-ready.png");
+      } finally {
+        releaseMedia();
+      }
     });
   });
 

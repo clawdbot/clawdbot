@@ -16,9 +16,9 @@ import {
 } from "node:fs";
 import { isBuiltin } from "node:module";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
@@ -129,6 +129,7 @@ function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
     repository: string;
@@ -170,6 +171,7 @@ function evaluateWorkflowExpression(
     github: {
       event_name: context.eventName,
       repository: context.repository,
+      ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
       workflow_sha: context.workflowSha,
       event:
@@ -210,7 +212,7 @@ function evaluateWorkflowExpression(
   });
 }
 
-function runCiGateFixture(requiredResults: string, selectedResults: string) {
+function runCiGateFixture(jobResults: string) {
   const gateStep = readCiWorkflow().jobs["ci-gate"].steps.find(
     (step: WorkflowStep) => step.name === "Verify selected CI lanes",
   );
@@ -218,9 +220,44 @@ function runCiGateFixture(requiredResults: string, selectedResults: string) {
     encoding: "utf8",
     env: {
       ...process.env,
-      REQUIRED_RESULTS: requiredResults,
-      SELECTED_RESULTS: selectedResults,
+      JOB_RESULTS: jobResults,
     },
+  });
+}
+
+function renderCiGateEnvironment(
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+  results: Record<string, string> = {},
+) {
+  const workflow = readCiWorkflow();
+  const step = workflow.jobs["ci-gate"].steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+  );
+  const preflightOutputs = {
+    ...Object.fromEntries(
+      Object.keys(workflow.jobs.preflight.outputs)
+        .filter((key) => key.startsWith("run_"))
+        .map((key) => [key, "true"]),
+    ),
+    compatibility_target: "false",
+    release_scope: "full",
+    ...context.preflightOutputs,
+  };
+  const jobResults: string = step.env.JOB_RESULTS;
+  return jobResults.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) => {
+    const result = expression.match(/^\$\{\{\s*needs\.([\w-]+)\.result\s*\}\}$/u);
+    if (result) {
+      return results[expectDefined(result[1], expression)] ?? "success";
+    }
+    return String(
+      evaluateWorkflowExpression(expression, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        ...context,
+        preflightOutputs,
+      }) ?? "",
+    );
   });
 }
 
@@ -2077,9 +2114,11 @@ NODE
     const gateStep = workflow.jobs["ci-gate"].steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(gateStep.env.SELECTED_RESULTS).toContain("macos-swift=${{ needs.macos-swift.result }}");
+    expect(gateStep.env.JOB_RESULTS).toContain("macos-swift=${{ needs.macos-swift.result }}");
     for (const conclusion of ["failure", "cancelled"]) {
-      expect(runCiGateFixture("preflight=success", `macos-swift=${conclusion}`).status).toBe(1);
+      expect(
+        runCiGateFixture(`preflight=success|true\nmacos-swift=${conclusion}|true`).status,
+      ).toBe(1);
     }
   });
 
@@ -4257,29 +4296,122 @@ NODE
     }
   });
 
+  it("fetches the complete pull request scan range before checkout removes credentials", () => {
+    const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
+    const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
+    const checkout = expectDefined(securitySteps[checkoutIndex], "security checkout");
+    const prepare = securitySteps
+      .slice(0, checkoutIndex)
+      .find((step) => step.env?.PR_COMMIT_COUNT !== undefined);
+    const root = tempDirs.make("openclaw-security-checkout-");
+    let depth = checkout.with?.["fetch-depth"];
+    if (prepare?.run) {
+      const output = path.join(root, "depth-output");
+      const result = spawnSync("bash", ["-e", "-c", prepare.run], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { ...process.env, PR_COMMIT_COUNT: "3", GITHUB_OUTPUT: output },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      depth = evaluateWorkflowExpression(depth, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: { [expectDefined(prepare.id, "depth output step")]: { outputs } },
+      });
+    }
+    expect(Number.isInteger(Number(depth)) && Number(depth) > 0).toBe(true);
+    expect(checkout.with?.["persist-credentials"]).toBe(false);
+
+    const source = path.join(root, "source");
+    const selected = path.join(root, "selected");
+    mkdirSync(source);
+    mkdirSync(selected);
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-C",
+          cwd,
+          "-c",
+          "user.name=CI Fixture",
+          "-c",
+          "user.email=ci@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            ...process.env,
+            GIT_ALLOW_PROTOCOL: "file",
+            GIT_CONFIG_GLOBAL: devNull,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        },
+      ).trim();
+    git(source, "init", "--initial-branch=main");
+    writeFileSync(path.join(source, "base.txt"), "base\n");
+    git(source, "add", ".");
+    git(source, "commit", "-m", "base");
+    git(source, "checkout", "-b", "pull-request");
+    const commits = [];
+    for (let index = 0; index < 3; index++) {
+      writeFileSync(path.join(source, "change.txt"), `change ${index}\n`);
+      git(source, "add", ".");
+      git(source, "commit", "-m", `change ${index}`);
+      commits.push(git(source, "rev-parse", "HEAD"));
+    }
+    git(source, "checkout", "main");
+    writeFileSync(path.join(source, "base.txt"), "advanced base\n");
+    git(source, "commit", "-am", "advance main");
+    const base = git(source, "rev-parse", "HEAD");
+    git(source, "merge", "--no-ff", "pull-request", "-m", "synthetic merge");
+    const merge = git(source, "rev-parse", "HEAD");
+    git(selected, "init");
+    git(
+      selected,
+      "fetch",
+      "--no-tags",
+      `--depth=${String(depth)}`,
+      pathToFileURL(source).href,
+      merge,
+    );
+    git(selected, "checkout", "--detach", "FETCH_HEAD");
+
+    // The scanner clones locally after auth cleanup: no later fetch may supply missing commits.
+    expect(git(selected, "rev-list", `${base}..HEAD`).split("\n").toSorted()).toEqual(
+      [merge, ...commits].toSorted(),
+    );
+  });
+
   it("scans only the pull request commit range for leaked credentials", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
-    const fetchScanHistoryIndex = securitySteps.findIndex(
-      (step) => step.name === "Fetch pull request scan history",
-    );
+    const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
+    const depthIndex = securitySteps.findIndex((step) => step.id === "checkout_depth");
     const scanIndex = securitySteps.findIndex(
       (step) => step.name === "Scan pull request for leaked credentials",
     );
-    const fetchScanHistoryStep = expectDefined(
-      securitySteps[fetchScanHistoryIndex],
-      "TruffleHog history fetch step",
-    );
+    const depthStep = expectDefined(securitySteps[depthIndex], "security checkout depth");
     const scanStep = expectDefined(securitySteps[scanIndex], "TruffleHog pull request scan step");
 
-    expect(scanIndex).toBeGreaterThan(fetchScanHistoryIndex);
-    expect(fetchScanHistoryStep.if).toBe("github.event_name == 'pull_request'");
-    expect(fetchScanHistoryStep.env).toEqual({
+    expect(checkoutIndex).toBeGreaterThan(depthIndex);
+    expect(scanIndex).toBeGreaterThan(checkoutIndex);
+    expect(depthStep.if).toBe("github.event_name == 'pull_request'");
+    expect(depthStep.env).toEqual({
       PR_COMMIT_COUNT: "${{ github.event.pull_request.commits }}",
-      PR_MERGE_SHA: "${{ github.sha }}",
     });
-    expect(fetchScanHistoryStep.run).toContain("fetch_depth=$((PR_COMMIT_COUNT + 2))");
-    expect(fetchScanHistoryStep.run).toContain(
-      'fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"',
+    expect(securitySteps.some((step) => step.name === "Fetch pull request scan history")).toBe(
+      false,
     );
     expect(scanStep.if).toBe("github.event_name == 'pull_request'");
     expect(scanStep.uses).toBe(TRUFFLEHOG_V3_95_9);
@@ -4289,6 +4421,24 @@ NODE
       version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33",
       extra_args: "--results=verified,unknown --fail-on-scan-errors",
     });
+  });
+
+  it.each(["", "-1", "1.5"])("rejects invalid security checkout depth input %j", (count) => {
+    const step = expectDefined(
+      readCiWorkflow().jobs["security-fast"].steps.find(
+        (entry: WorkflowStep) => entry.id === "checkout_depth",
+      ),
+      "security checkout depth",
+    );
+    const output = path.join(tempDirs.make("openclaw-security-depth-"), "output");
+    const result = spawnSync("bash", ["-e", "-c", step.run], {
+      encoding: "utf8",
+      timeout: 5_000,
+      env: { ...process.env, PR_COMMIT_COUNT: count, GITHUB_OUTPUT: output },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("Invalid pull request commit count");
+    expect(existsSync(output)).toBe(false);
   });
 
   it("keeps setup cache access explicit and isolates every cache write", () => {
@@ -5104,6 +5254,10 @@ server.listen(0, "127.0.0.1", () => {
       releaseChecks.jobs.validate_repo_e2e_gateway,
       releaseChecks.jobs.validate_repo_e2e_runtime,
     ];
+    expect(releaseChecks.jobs.validate_live_docker_provider_suites.env).toMatchObject({
+      OPENCLAW_SELECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+      OPENCLAW_TOOLING_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+    });
     const repoE2eRows = pipelines.flatMap((pipeline) => JSON.parse(pipeline.with.suites)) as Array<{
       name: string;
       command: string;
@@ -7206,7 +7360,17 @@ server.listen(0, "127.0.0.1", () => {
     expect(checkoutStep.if).toBe(
       "github.event_name != 'workflow_dispatch' || inputs.target_ref == ''",
     );
-    expect(checkoutStep.with).toEqual({ "fetch-depth": 2, "persist-credentials": false });
+    expect(checkoutStep.with["persist-credentials"]).toBe(false);
+    for (const eventName of ["push", "workflow_dispatch"] as const) {
+      expect(
+        evaluateWorkflowExpression(checkoutStep.with["fetch-depth"], {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          steps: { checkout_depth: { outputs: {} } },
+        }),
+      ).toBe(2);
+    }
     expect(manualCheckoutStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.target_ref != ''",
     );
@@ -11814,19 +11978,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const verifyStep = gate.steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(Object.keys(verifyStep.env).toSorted()).toEqual([
-      "REQUIRED_RESULTS",
-      "SELECTED_RESULTS",
-    ]);
-    for (const job of requiredJobs) {
-      expect(verifyStep.env.REQUIRED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
-    }
+    expect(Object.keys(verifyStep.env)).toEqual(["JOB_RESULTS"]);
+    const resultRows: string[] = verifyStep.env.JOB_RESULTS.trim().split("\n");
+    expect(resultRows.slice(0, requiredJobs.length)).toEqual(
+      requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),
+    );
     for (const job of selectedJobs) {
-      expect(verifyStep.env.SELECTED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
+      expect(verifyStep.env.JOB_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}|`);
     }
-    expect(verifyStep.run).toContain("Required CI job did not succeed");
-    expect(verifyStep.run).toContain("success | skipped");
-    expect(verifyStep.run).toContain("Selected CI job did not succeed");
+    expect(resultRows).toHaveLength(gate.needs.length);
   });
 
   it("does not admit the final gate for cancelled workflows or draft pull requests", () => {
@@ -11849,6 +12009,214 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("ci-gate selection projections match their owning job predicates", () => {
+    const workflow = readCiWorkflow();
+    const step = workflow.jobs["ci-gate"].steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+    );
+    const rows: string[] = step.env.JOB_RESULTS.trim().split("\n").slice(2);
+    for (const row of rows) {
+      const match = expectDefined(
+        row.match(/^([\w-]+)=\$\{\{ needs\.([\w-]+)\.result \}\}\|\$\{\{ (.+) \}\}$/u),
+        row,
+      );
+      const job = expectDefined(match[1], row);
+      const selection = expectDefined(match[3], row);
+      expect(match[2], row).toBe(job);
+      // Gate inputs duplicate eligibility, never dependency status or cancellation.
+      // Bind that projection to its owner so a routing change cannot leave stale selection.
+      const eligible = workflow.jobs[job].if
+        .replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
+        .replace(/!cancelled\(\)\s*&&\s*always\(\)\s*&&\s*/gu, "")
+        .replace(/\s+/gu, " ")
+        .trim();
+      const projected = /^needs\.preflight\.outputs\.\w+$/u.test(selection)
+        ? `${selection} == 'true'`
+        : selection;
+      expect(projected, job).toBe(eligible);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each<{
+    label: string;
+    context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
+    expected: Record<string, boolean>;
+  }>([
+    {
+      label: "same-repo Blacksmith PR",
+      context: { eventName: "pull_request" },
+      expected: {
+        "pnpm-store-warmup": false,
+        "checks-node-compat": false,
+        "ios-screenshot-shard": true,
+      },
+    },
+    {
+      label: "fork PR",
+      context: { eventName: "pull_request", headRepository: "contributor/fork" },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "same-repo docs-only PR",
+      context: { eventName: "pull_request", preflightOutputs: { run_node: "false" } },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "no Node or docs scope",
+      context: { preflightOutputs: { run_node: "false", run_check_docs: "false" } },
+      expected: { "pnpm-store-warmup": false },
+    },
+    {
+      label: "canonical Blacksmith push",
+      context: { eventName: "push" },
+      expected: {
+        "pnpm-store-warmup": false,
+        "checks-node-compat": false,
+        "ios-screenshot-shard": false,
+      },
+    },
+    {
+      label: "non-main push",
+      context: { eventName: "push", ref: "refs/heads/topic" },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "fork repository push",
+      context: { eventName: "push", repository: "contributor/fork" },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "GitHub push",
+      context: { eventName: "push", runnerProfile: "github" },
+      expected: {
+        "pnpm-store-warmup": true,
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": true,
+      },
+    },
+    {
+      label: "hybrid PR",
+      context: { eventName: "pull_request", runnerProfile: "hybrid" },
+      expected: { "pnpm-store-warmup": true, "check-lint-hosted-core-shard": true },
+    },
+    {
+      label: "Blacksmith has no hosted stripes",
+      context: { frozenTarget: true },
+      expected: {
+        "check-lint-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
+      label: "frozen target without hosted capability",
+      context: { frozenTarget: true, hostedRunnerProfileContract: false, runnerProfile: "github" },
+      expected: {
+        "check-lint-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
+      label: "frozen target with hosted capability",
+      context: { frozenTarget: true, runnerProfile: "hybrid" },
+      expected: {
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": true,
+      },
+    },
+    {
+      label: "current target needs no capability fallback",
+      context: { hostedRunnerProfileContract: false, runnerProfile: "github" },
+      expected: { "check-lint-hosted-core-shard": true },
+    },
+    {
+      label: "hosted checks out of scope",
+      context: { runnerProfile: "github", preflightOutputs: { run_check: "false" } },
+      expected: {
+        "check-shard": false,
+        "check-lint-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
+      label: "compatibility target",
+      context: { preflightOutputs: { compatibility_target: "true" } },
+      expected: {
+        "checks-ui": true,
+        "checks-ui-e2e": false,
+        "checks-ui-e2e-real-gateway": false,
+        "ios-screenshot-shard": false,
+      },
+    },
+    {
+      label: "current target",
+      context: {},
+      expected: {
+        "checks-ui-e2e": true,
+        "checks-ui-e2e-real-gateway": true,
+        "ios-screenshot-shard": true,
+        "checks-node-compat": true,
+      },
+    },
+    {
+      label: "manual Node 22 without artifacts",
+      context: { preflightOutputs: { run_build_artifacts: "false" } },
+      expected: { "checks-node-compat": false },
+    },
+    {
+      label: "ordinary manual screenshot override",
+      context: { preflightOutputs: { run_ios_screenshots: "false" } },
+      expected: { "ios-screenshot-shard": true },
+    },
+    {
+      label: "release gate respects screenshot scope",
+      context: { releaseGate: true, preflightOutputs: { run_ios_screenshots: "false" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "release gate selects screenshots",
+      context: { releaseGate: true },
+      expected: { "ios-screenshot-shard": true },
+    },
+    {
+      label: "npm-beta excludes manual screenshots",
+      context: { preflightOutputs: { release_scope: "npm-beta" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "npm-beta excludes PR screenshots",
+      context: { eventName: "pull_request", preflightOutputs: { release_scope: "npm-beta" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "PR screenshot scope off",
+      context: { eventName: "pull_request", preflightOutputs: { run_ios_screenshots: "false" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+  ])("ci-gate preserves eligibility: $label", ({ context, expected }) => {
+    const jobResults = renderCiGateEnvironment(context);
+    const selections = Object.fromEntries(
+      jobResults
+        .trim()
+        .split("\n")
+        .map((row) => {
+          const [job, , selected] = row.split(/[=|]/u);
+          return [expectDefined(job, row), expectDefined(selected, row)];
+        }),
+    );
+    for (const [job, selected] of Object.entries(expected)) {
+      expect(selections[job], job).toBe(String(selected));
+    }
+    expect(selections["ios-screenshot-evidence"]).toBe(selections["ios-screenshot-shard"]);
+    const results = Object.fromEntries(
+      Object.entries(selections).map(([job, selected]) => [
+        job,
+        selected === "true" ? "success" : "skipped",
+      ]),
+    );
+    const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
+    expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+  });
+
   it("runs Node 22 compatibility only from manual CI dispatches", () => {
     const workflow = readCiWorkflow();
     const compatibilityJob = workflow.jobs["checks-node-compat"];
@@ -11866,36 +12234,102 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
   });
 
+  it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {
+    const result = runCiGateFixture(renderCiGateEnvironment({}, { "checks-ui": "skipped" }));
+    expect(result.stdout).toContain("checks-ui: skipped");
+    expect(result.status, result.stdout).toBe(1);
+  });
+
+  it.skipIf(process.platform === "win32").each([
+    [true, "success", 0],
+    [true, "skipped", 1],
+    [true, "failure", 1],
+    [true, "cancelled", 1],
+    [true, "", 1],
+    [true, "unknown", 1],
+    [false, "success", 0],
+    [false, "skipped", 0],
+    [false, "failure", 1],
+    [false, "cancelled", 1],
+    [false, "", 1],
+    [false, "unknown", 1],
+  ] as const)(
+    "ci-gate checks all downstream lanes (selected=%s, result=%s)",
+    (selected, result, exit) => {
+      const workflow = readCiWorkflow();
+      const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(2);
+      const jobResults = renderCiGateEnvironment(
+        {
+          eventName: selected ? "workflow_dispatch" : "pull_request",
+          runnerProfile: "github",
+          preflightOutputs: Object.fromEntries(
+            Object.keys(workflow.jobs.preflight.outputs)
+              .filter((key) => key.startsWith("run_"))
+              .map((key) => [key, String(selected)]),
+          ),
+        },
+        Object.fromEntries(jobs.map((job) => [job, result])),
+      );
+      const outcome = runCiGateFixture(jobResults);
+      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(exit);
+      for (const job of jobs) {
+        expect(jobResults).toContain(`${job}=${result}|${selected}\n`);
+        expect(outcome.stdout).toContain(`${job}: ${result} (selected=${selected})`);
+        if (exit !== 0) {
+          expect(outcome.stdout).toContain(`${job} finished with ${result} (selected=${selected})`);
+        }
+      }
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["failure", "cancelled", "skipped", "", "unknown", "success="])(
+    "ci-gate rejects required result %s independently of downstream success",
+    (result) => {
+      const outcome = runCiGateFixture(
+        renderCiGateEnvironment({}, { preflight: result, "security-fast": result }),
+      );
+      expect(outcome.status, outcome.stdout).toBe(1);
+      for (const job of ["preflight", "security-fast"]) {
+        expect(outcome.stdout).toContain(`${job} finished with ${result} (selected=true)`);
+      }
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["", "unknown", "TRUE", "true|false", "true|", "false="])(
+    "ci-gate rejects missing or malformed selection %s even after success",
+    (selection) => {
+      const outcome = runCiGateFixture(
+        renderCiGateEnvironment({ preflightOutputs: { run_ui_tests: selection } }),
+      );
+      expect(outcome.status, outcome.stdout).toBe(1);
+      expect(outcome.stdout).toContain(
+        `checks-ui finished with success (selected=${selection || "missing"})`,
+      );
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
-    "accepts only successful required jobs and successful or skipped selected jobs",
+    "ci-gate reports failed upstream and selected dependent skips",
     () => {
-      const passing = runCiGateFixture(
-        "preflight=success\nsecurity-fast=success",
-        "checks-ui=success\nmacos-swift=skipped",
+      const jobResults = renderCiGateEnvironment(
+        {},
+        {
+          "ios-screenshot-shard": "failure",
+          "ios-screenshot-evidence": "skipped",
+        },
       );
-      expect(passing.status, `${passing.stdout}\n${passing.stderr}`).toBe(0);
-
-      const skippedRequired = runCiGateFixture(
-        "preflight=skipped\nsecurity-fast=success",
-        "checks-ui=skipped",
+      const outcome = runCiGateFixture(jobResults);
+      expect(outcome.status, outcome.stdout).toBe(1);
+      expect(outcome.stdout).toContain(
+        "ios-screenshot-shard finished with failure (selected=true)",
       );
-      expect(skippedRequired.status).not.toBe(0);
-      expect(skippedRequired.stdout).toContain("preflight finished with skipped");
-
-      const failedSelected = runCiGateFixture(
-        "preflight=success\nsecurity-fast=success",
-        "checks-ui=failure\nmacos-swift=cancelled",
+      expect(outcome.stdout).toContain(
+        "ios-screenshot-evidence finished with skipped (selected=true)",
       );
-      expect(failedSelected.status).not.toBe(0);
-      expect(failedSelected.stdout).toContain("checks-ui finished with failure");
-      expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
-
-      const failedUiE2e = runCiGateFixture(
-        "preflight=success\nsecurity-fast=success",
-        "checks-ui=success\nchecks-ui-e2e=failure",
-      );
-      expect(failedUiE2e.status).not.toBe(0);
-      expect(failedUiE2e.stdout).toContain("checks-ui-e2e finished with failure");
     },
   );
 
