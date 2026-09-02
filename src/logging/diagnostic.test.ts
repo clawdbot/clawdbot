@@ -1836,6 +1836,7 @@ describe("stuck session diagnostics threshold", () => {
         logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
         vi.advanceTimersByTime(1_000);
         await Promise.resolve();
+        await Promise.resolve();
       } finally {
         unsubscribe();
       }
@@ -2804,6 +2805,114 @@ describe("stuck session recovery activity reconciliation", () => {
     resetDiagnosticRunActivityForTest();
     startDiagnosticRunActivityTracking();
     resetDiagnosticSessionRecoveryCoordinatorForTest();
+  });
+
+  it("preserves fresh activity queued during each recovery drain", async () => {
+    const dispatchedToolCalls: string[] = [];
+    const sessionStates: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.state" && event.sessionId === sessionId) {
+        sessionStates.push(event.state);
+      }
+      if (event.type === "tool.execution.started" && event.sessionId === sessionId) {
+        dispatchedToolCalls.push(event.toolCallId ?? event.toolName);
+      }
+      if (
+        event.type === "tool.execution.completed" &&
+        event.sessionId === sessionId &&
+        event.toolCallId === "fresh-tool-1"
+      ) {
+        emitDiagnosticEvent({
+          type: "tool.execution.started",
+          sessionId,
+          sessionKey,
+          runId: sessionId,
+          toolName: "Read",
+          toolCallId: "fresh-tool-2",
+        });
+      }
+    });
+
+    try {
+      logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+      const state = getDiagnosticSessionState({ sessionId, sessionKey });
+      requestStuckSessionRecovery({
+        recover: () => {
+          emitDiagnosticEvent({
+            type: "tool.execution.started",
+            sessionId,
+            sessionKey,
+            runId: sessionId,
+            toolName: "Bash",
+            toolCallId: "fresh-tool-1",
+          });
+          emitDiagnosticEvent({
+            type: "tool.execution.completed",
+            sessionId,
+            sessionKey,
+            runId: sessionId,
+            toolName: "Bash",
+            toolCallId: "fresh-tool-1",
+            durationMs: 1,
+          });
+          return Promise.resolve(abortedOutcome());
+        },
+        classification: stalledClassification,
+        request: {
+          sessionId,
+          sessionKey,
+          ageMs: 139_014,
+          queueDepth: 1,
+          allowActiveAbort: true,
+          expectedState: "processing",
+          stateGeneration: state.generation,
+        },
+      });
+      await flushDiagnosticEvents();
+      await flushDiagnosticEvents();
+      await flushDiagnosticEvents();
+
+      expect(dispatchedToolCalls).toEqual(["fresh-tool-1", "fresh-tool-2"]);
+      expect(sessionStates).not.toContain("idle");
+      expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+        "tool_call",
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps pre-existing activity when recovery fails", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticToolStartedForTest({
+      sessionId,
+      sessionKey,
+      toolName: "Bash",
+      toolCallId: "still-running-tool",
+    });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.reject(new Error("recovery failed")),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 1,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flushDiagnosticEvents();
+    await flushDiagnosticEvents();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      "tool_call",
+    );
   });
 
   afterEach(() => {
