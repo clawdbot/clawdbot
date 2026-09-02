@@ -2056,9 +2056,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "reuses one live ephemeral thread across two incognito turns (restricted: %s)",
-    async (restricted) => {
+  it.each([
+    { restricted: false, mcpDrift: false },
+    { restricted: true, mcpDrift: false },
+    { restricted: true, mcpDrift: true },
+  ])(
+    "reattests live incognito reuse (restricted: $restricted, MCP drift: $mcpDrift)",
+    async ({ restricted, mcpDrift }) => {
       const sessionFile = path.join(tempDir, "incognito-session.jsonl");
       const workspaceDir = path.join(tempDir, "incognito-workspace");
       const params = createParams(sessionFile, workspaceDir);
@@ -2066,6 +2070,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       if (restricted) {
         params.toolsAllow = ["openclaw"];
       }
+      let secondTurn = false;
       const request = vi.fn(async (method: string, _params?: unknown) => {
         if (method === "config/read") {
           return { layers: [], config: { mcp_servers: {} } };
@@ -2074,10 +2079,25 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return { requirements: null };
         }
         if (method === "mcpServerStatus/list") {
-          return { data: [], nextCursor: null };
+          return {
+            data:
+              secondTurn && mcpDrift
+                ? [
+                    {
+                      ...disabledMcpServerStatus("unexpected-server"),
+                      serverInfo: { name: "unexpected-server", version: "1.0" },
+                      tools: { unexpected_tool: { name: "unexpected_tool", inputSchema: {} } },
+                    },
+                  ]
+                : [],
+            nextCursor: null,
+          };
         }
         if (method === "thread/start") {
           return threadStartResult("thread-incognito");
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "unsubscribed" };
         }
         throw new Error(`unexpected method: ${method}`);
       });
@@ -2100,17 +2120,30 @@ describe("Codex app-server thread lifecycle bindings", () => {
       };
 
       const first = await startOrResumeThread(common);
-      if (restricted) {
-        expect(first).not.toHaveProperty("liveThreadEphemeralPolicy");
-      } else {
-        await retainCodexAppServerLiveThread(
-          client,
-          first.threadId,
-          undefined,
-          first.liveThreadConfigFingerprint,
-          null,
-          first.liveThreadEphemeralPolicy,
+      await retainCodexAppServerLiveThread(
+        client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+      const before = await readCodexAppServerBinding(sessionFile);
+      secondTurn = true;
+      if (mcpDrift) {
+        await expect(startOrResumeThread(common)).rejects.toThrow(
+          "Codex restricted-tool-surface MCP attestation found unexpected server unexpected-server",
         );
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+        expect(
+          request.mock.calls
+            .filter(([method]) => method.startsWith("thread/"))
+            .map(([method, requestParams]) => [method, requestParams]),
+        ).toEqual([
+          ["thread/start", expect.objectContaining({ ephemeral: true })],
+          ["thread/unsubscribe", { threadId: first.threadId }],
+        ]);
+        return;
       }
       const second = await startOrResumeThread(common);
 
@@ -2528,70 +2561,111 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-ring-zero-2");
   });
 
-  it("retires a warm OpenClaw binding when resume MCP attestation fails", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["openclaw"];
-    let attestationCount = 0;
-    const respond = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start" || method === "thread/resume") {
-        return threadStartResult("thread-ring-zero");
-      }
-      if (method === "mcpServerStatus/list") {
-        attestationCount += 1;
-        return attestationCount === 1
-          ? { data: [], nextCursor: null }
-          : { data: [{ name: "late-server" }], nextCursor: null };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond,
-    });
-    const { client, request } = fixture;
-    const abandonClient = vi.fn(async () => {});
-    const common = {
-      client,
-      abandonClient,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [createNamedDynamicTool("openclaw")],
-      appServer: createThreadLifecycleAppServerOptions(),
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
-      hostSystemAgentActive: true,
-    };
+  it.each([
+    { cleanup: "confirmed", cleanupFails: false, revokeHost: false },
+    { cleanup: "unconfirmed", cleanupFails: true, revokeHost: false },
+    { cleanup: "host revoked", cleanupFails: false, revokeHost: true },
+  ])(
+    "cleans the resumed subscription after MCP attestation failure, cleanup=$cleanup",
+    async ({ cleanupFails, revokeHost }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.toolsAllow = ["openclaw"];
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const cleanupEntered = createDeferred<void>();
+      const cleanupProceed = createDeferred<void>();
+      let attestationCount = 0;
+      let rejectUnsubscribe = false;
+      let pauseCleanup = false;
+      const respond = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start" || method === "thread/resume") {
+          return threadStartResult("thread-ring-zero");
+        }
+        if (method === "mcpServerStatus/list") {
+          attestationCount += 1;
+          return attestationCount === 1
+            ? { data: [], nextCursor: null }
+            : { data: [{ name: "late-server" }], nextCursor: null };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond,
+        unsubscribe: async () => {
+          if (pauseCleanup) {
+            cleanupEntered.resolve();
+            await cleanupProceed.promise;
+          }
+          if (rejectUnsubscribe) {
+            throw new Error("unsubscribe unavailable");
+          }
+          return { status: "unsubscribed" };
+        },
+      });
+      const { client, request } = fixture;
+      const abandonClient = vi.fn(async () => {});
+      const common = {
+        client,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      };
 
-    await startOrResumeThread(common);
-    await fixture.endTurn("thread-ring-zero");
-    await expect(startOrResumeThread(common)).rejects.toThrow(
-      "Codex restricted-tool-surface MCP attestation failed",
-    );
+      await startOrResumeThread(common);
+      await fixture.endTurn("thread-ring-zero");
+      const before = await readCodexAppServerBinding(sessionFile);
+      rejectUnsubscribe = cleanupFails;
+      pauseCleanup = revokeHost;
+      const pending = startOrResumeThread(common).catch((cause: unknown) => cause);
+      if (revokeHost) {
+        await cleanupEntered.promise;
+        closeHost();
+        cleanupProceed.resolve();
+      }
+      const error = await pending;
+      expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+      expect(error).toMatchObject({
+        name: "CodexThreadPolicyHandoffError",
+        outcome: "not-written",
+        cause: expect.objectContaining({
+          message: "Codex mcpServerStatus/list returned an invalid restricted-tool-surface server",
+        }),
+      });
 
-    expect(abandonClient).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "mcpServerStatus/list",
-      "thread/unsubscribe",
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "mcpServerStatus/list",
-    ]);
-    expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
-    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
-  });
+      expect(abandonClient).toHaveBeenCalledTimes(cleanupFails || revokeHost ? 1 : 0);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/start",
+        "mcpServerStatus/list",
+        "thread/unsubscribe",
+        "config/read",
+        "configRequirements/read",
+        "thread/read",
+        "thread/resume",
+        "mcpServerStatus/list",
+        "thread/unsubscribe",
+      ]);
+      expect(
+        request.mock.calls.some(
+          ([method]) => method === "turn/start" || method === "thread/delete",
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("fails closed before starting OpenClaw when inherited MCP enumeration fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -2701,6 +2775,61 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ]);
     },
   );
+
+  it("admits configured managed hooks for an interactive plugin-policy turn", async () => {
+    const sessionFile = path.join(tempDir, "plugin-policy-session.jsonl");
+    const workspaceDir = path.join(tempDir, "plugin-policy-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.pluginHarnessToolPolicyRestricted = true;
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return {
+          requirements: {
+            hooks: {
+              PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }],
+            },
+            featureRequirements: { hooks: true },
+          },
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-plugin-policy-managed-hooks");
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: fixture.client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: false,
+      }),
+    ).resolves.toMatchObject({
+      threadId: "thread-plugin-policy-managed-hooks",
+      lifecycle: { action: "started" },
+    });
+    expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+    ]);
+  });
 
   it("fails closed when requirements pin a restricted Codex feature on", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -2823,101 +2952,152 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ).rejects.toThrow(`cannot override required feature ${feature}`);
   });
 
-  it.each([
-    { name: "a newly raced server", attestation: { data: [{ name: "raced" }] } },
-    { name: "a malformed inventory", attestation: { data: "invalid" } },
-    { name: "an inventory RPC failure", attestation: new Error("inventory failed") },
-  ])("retires the cold OpenClaw thread when attestation finds $name", async ({ attestation }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-normal",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["openclaw"];
-    const abandonClient = vi.fn(async () => {});
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-ring-zero");
-      }
-      if (method === "mcpServerStatus/list") {
-        if (attestation instanceof Error) {
-          throw attestation;
-        }
-        return attestation;
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        abandonClient,
-        params,
+  it.each(
+    [
+      {
+        name: "a newly raced server",
+        attestation: { data: [{ name: "raced" }] },
+        failure: "returned an invalid restricted-tool-surface server",
+      },
+      {
+        name: "a malformed inventory",
+        attestation: { data: "invalid" },
+        failure: "returned an invalid restricted-tool-surface attestation",
+      },
+      {
+        name: "an inventory RPC failure",
+        attestation: new Error("inventory failed"),
+        failure: "inventory failed",
+      },
+    ].flatMap((scenario) => [
+      { ...scenario, ephemeral: false },
+      { ...scenario, ephemeral: true },
+    ]),
+  )(
+    "discards the fresh thread after MCP attestation finds $name, ephemeral=$ephemeral",
+    async ({ attestation, failure, ephemeral }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-normal",
         cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("openclaw")],
-        appServer: createThreadLifecycleAppServerOptions(),
-        nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
-        hostSystemAgentActive: true,
-      }),
-    ).rejects.toThrow();
-    expect(abandonClient).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "mcpServerStatus/list",
-    ]);
-    expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
-    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
-  });
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "[]",
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.toolsAllow = ["openclaw"];
+      if (ephemeral) {
+        params.sessionKey = "agent:main:internal-session-effects:incognito-mcp-attestation";
+      }
+      const abandonClient = vi.fn(async () => {});
+      const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-ring-zero");
+        }
+        if (method === "thread/delete") {
+          return {};
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "unsubscribed" };
+        }
+        if (method === "mcpServerStatus/list") {
+          if (attestation instanceof Error) {
+            throw attestation;
+          }
+          return attestation;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
 
-  it("does not write a binding when thread start resolves after abort", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
-    const abortController = new AbortController();
-    let resolveStart: ((value: ReturnType<typeof threadStartResult>) => void) | undefined;
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/start") {
-        return await new Promise<ReturnType<typeof threadStartResult>>((resolve) => {
-          resolveStart = resolve;
+      await expect(
+        startOrResumeThread({
+          client: { request } as never,
+          abandonClient,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [createNamedDynamicTool("openclaw")],
+          appServer: createThreadLifecycleAppServerOptions(),
+          nativeCodeModeEnabled: false,
+          userMcpServersEnabled: false,
+          hostSystemAgentActive: true,
+        }),
+      ).rejects.toThrow(failure);
+      expect(abandonClient).not.toHaveBeenCalled();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/start",
+        "mcpServerStatus/list",
+        ephemeral ? "thread/unsubscribe" : "thread/delete",
+      ]);
+      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+      expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    },
+  );
+
+  it.each(["thread-start", "binding-commit"])(
+    "discards a fresh thread when abort arrives during %s",
+    async (phase) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      const appServer = createThreadLifecycleAppServerOptions();
+      const abortController = new AbortController();
+      if (phase === "binding-commit") {
+        const mutate = testCodexAppServerBindingStore.mutate.bind(testCodexAppServerBindingStore);
+        vi.spyOn(testCodexAppServerBindingStore, "mutate").mockImplementation(async (...args) => {
+          if (args[1].kind === "set") {
+            abortController.abort("test_abort");
+          }
+          return await mutate(...args);
         });
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
+      let resolveStart: ((value: ReturnType<typeof threadStartResult>) => void) | undefined;
+      const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+        if (method === "thread/start") {
+          return await new Promise<ReturnType<typeof threadStartResult>>((resolve) => {
+            resolveStart = resolve;
+          });
+        }
+        if (method === "thread/delete") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
 
-    const run = startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-      signal: abortController.signal,
-    });
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), {
+      const run = startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer,
         signal: abortController.signal,
-      }),
-    );
-    abortController.abort("test_abort");
-    resolveStart?.(threadStartResult("thread-after-abort"));
+      });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), {
+          signal: abortController.signal,
+        }),
+      );
+      if (phase === "thread-start") {
+        abortController.abort("test_abort");
+      }
+      resolveStart?.(threadStartResult("thread-after-abort"));
 
-    await expect(run).rejects.toThrow("test_abort");
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-  });
+      await expect(run).rejects.toThrow("test_abort");
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/delete",
+      ]);
+    },
+  );
 
   it("starts a fresh Codex thread when dynamic tool descriptions change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

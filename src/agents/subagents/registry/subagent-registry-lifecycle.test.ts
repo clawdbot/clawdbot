@@ -576,10 +576,6 @@ describe("subagent registry lifecycle hardening", () => {
       terminalReply: { disposition: "silent" } as const,
       resultText: "NO_REPLY",
     },
-    {
-      terminalReply: { disposition: "empty" } as const,
-      resultText: null,
-    },
   ])(
     "persists $terminalReply.disposition producer evidence without transcript inference",
     async ({ terminalReply, resultText }) => {
@@ -604,6 +600,81 @@ describe("subagent registry lifecycle hardening", () => {
       );
     },
   );
+
+  it("records explicit empty success as intentional non-delivery at the lifecycle owner", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply,
+      runSubagentAnnounceFlow,
+      maybeWakeRequesterAfterAllChildrenSettled,
+    });
+
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "empty" },
+    });
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+    expect(entry.execution.outcome).toMatchObject({ status: "ok" });
+    expect(entry.completion).toMatchObject({
+      terminalReply: { disposition: "empty" },
+      resultText: null,
+    });
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(entry.delivery).toMatchObject({
+      status: "not_required",
+      disposition: "intentional_non_delivery",
+    });
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      suppressDelivery: true,
+      terminalOutcome: "succeeded",
+    });
+  });
+
+  it("keeps message-tool-required missing output on the requester delivery path", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error: "completion agent did not use the message tool",
+        });
+        return "retryable" as const;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, {
+      endedAt: Date.now(),
+      triggerCleanup: true,
+      terminalReply: { disposition: "empty", code: "message-tool-not-called" },
+    });
+    await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalReply: { disposition: "empty", code: "message-tool-not-called" },
+      }),
+    );
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expect(entry.delivery).toMatchObject({
+      disposition: "retryable",
+      lastError: expect.stringContaining("message tool"),
+    });
+    expect(entry.delivery?.status).not.toBe("not_required");
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+  });
 
   it.each([
     { label: "bound", hasOwner: true },
@@ -3241,7 +3312,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     await completeRun(controller, entry, {
       triggerCleanup: true,
-      terminalReply: { disposition: "empty" },
+      terminalReply: { disposition: "visible", text: "final completion reply" },
     });
     await waitForLifecycleState(() =>
       expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith({

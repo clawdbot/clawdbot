@@ -13,6 +13,7 @@ export type TelegramUserbotUpdate = {
   entities: TelegramTextEntity[];
   botApiMessageId?: number;
   chatId: number;
+  contentType?: string;
   kind: "edit" | "message";
   messageId: number;
   replyToMessageId?: number;
@@ -86,6 +87,7 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
     timestamp,
     text: value.text,
     entities: parseTextEntities(value.entities, value.text),
+    ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
     ...(typeof value.botApiMessageId === "number"
       ? { botApiMessageId: value.botApiMessageId }
       : {}),

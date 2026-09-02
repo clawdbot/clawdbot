@@ -15,7 +15,7 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -43,6 +43,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
@@ -79,6 +80,18 @@ function registerChatAttachmentPayload(
   const attachment = registerStoredChatAttachmentPayload(params);
   registeredAttachmentPayloads.set(attachment.id, attachment);
   return attachment;
+}
+
+function visibleContentForMessages(messages: unknown[]): MessageGroup["visibleContent"] {
+  const groups = groupMessages(
+    messages.map((message, index) => ({ kind: "message", key: `message:${index}`, message })),
+  );
+  if (groups.some((group) => group.kind === "group" && group.visibleContent === "non-text")) {
+    return "non-text";
+  }
+  return groups.some((group) => group.kind === "group" && group.visibleContent === "text")
+    ? "text"
+    : "none";
 }
 
 const buildChatItemsMock = vi.fn(
@@ -144,6 +157,7 @@ const buildChatItemsMock = vi.fn(
               key: `group:${key}`,
               role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
               messages: [{ key: `message:${key}`, message }],
+              visibleContent: visibleContentForMessages([message]),
               timestamp: index + 1,
               isStreaming: false,
             };
@@ -159,6 +173,7 @@ const buildChatItemsMock = vi.fn(
             key: `message:${index}`,
             message,
           })),
+          visibleContent: visibleContentForMessages(props.messages),
           timestamp: 1,
           isStreaming: false,
         });
@@ -1769,6 +1784,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:assistant:reply-callback-cache",
         role: "assistant",
+        visibleContent: "text",
         messages: [{ key: "message:reply-callback-cache", message }],
         timestamp: 1,
         isStreaming: false,
@@ -1975,6 +1991,7 @@ describe("chat transcript rendering", () => {
         kind: "group" as const,
         key: "group:user:attachment-run",
         role: "user" as const,
+        visibleContent: "text" as const,
         messages: [
           {
             key: "user:attachment-run",
@@ -1995,6 +2012,7 @@ describe("chat transcript rendering", () => {
         kind: "group" as const,
         key: "group:assistant:attachment-run",
         role: "assistant" as const,
+        visibleContent: "non-text" as const,
         messages: [
           {
             key: "assistant:attachment-run",
@@ -2072,6 +2090,7 @@ describe("chat transcript rendering", () => {
       kind: "group",
       key: "group:user:announcement",
       role: "user",
+      visibleContent: "text",
       messages: [
         {
           key: "message:user:announcement",
@@ -2122,6 +2141,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:assistant:persisted-announcement",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "assistant:persisted-announcement",
@@ -2156,6 +2176,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:tool:announcement",
         role: "tool",
+        visibleContent: "text",
         messages: [
           {
             key: "tool:announcement",
@@ -2174,6 +2195,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:assistant:announcement",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "assistant:announcement",
@@ -2724,6 +2746,7 @@ describe("chat transcript rendering cache", () => {
         kind: "group",
         key: "group:user:test",
         role: "user",
+        visibleContent: "text",
         messages: [{ key: "message:user:test", message: messages[0] }],
         timestamp: 1,
         isStreaming: false,
@@ -2828,6 +2851,7 @@ describe("chat transcript rendering cache", () => {
       kind: "group" as const,
       key: "group:assistant:media",
       role: "assistant",
+      visibleContent: "text" as const,
       messages: [
         {
           key: "message:assistant:media",
@@ -3068,6 +3092,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:assistant:test",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "message:assistant:test",
@@ -3081,6 +3106,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:tool:test",
         role: "tool",
+        visibleContent: "text",
         messages: [
           {
             key: "message:tool:test",
@@ -3112,6 +3138,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:assistant:reply",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:reply",
@@ -3126,6 +3153,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:tool:later",
       role: "tool",
+      visibleContent: "text",
       messages: [
         {
           key: "message:tool:later",
@@ -3178,6 +3206,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:assistant:reply",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:reply",
@@ -3224,6 +3253,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:user:run-composed",
       role: "user",
+      visibleContent: "text",
       messages: [
         {
           key: "message:user:run-composed",
@@ -3242,6 +3272,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:assistant:run-start",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:run-start",
@@ -3256,6 +3287,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:tool:run-work",
       role: "tool",
+      visibleContent: "text",
       messages: [
         {
           key: "message:tool:run-work",
@@ -3305,6 +3337,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:user:run-composed",
         role: "user",
+        visibleContent: "text",
         messages: [
           {
             key: "message:user:run-composed",
@@ -3323,6 +3356,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:assistant:run-start",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "message:assistant:run-start",
@@ -3337,6 +3371,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:tool:run-work",
         role: "tool",
+        visibleContent: "text",
         messages: [
           {
             key: "message:tool:run-work",
@@ -3351,6 +3386,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:assistant:run-finish",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "message:assistant:run-finish",
@@ -3390,6 +3426,7 @@ describe("chat loading skeleton", () => {
       key: "group:assistant:first",
       runId: "run-composed",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:first",

@@ -4,7 +4,10 @@ import {
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
 } from "@openclaw/net-policy/redact-sensitive-url";
-import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNonArrayRecord,
+  isRecord as isObjectRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
@@ -34,10 +37,6 @@ function isEnvVarPlaceholder(value: string): boolean {
 function isWholeObjectSensitivePath(path: string): boolean {
   const lowered = normalizeLowercaseStringOrEmpty(path);
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
-}
-
-function isSensitiveUrlPath(path: string): boolean {
-  return isSensitiveUrlConfigPath(path);
 }
 
 function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
@@ -123,7 +122,6 @@ function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
       if (part.endsWith("[]")) {
         result.add(`${joinedPath}.${part.slice(0, -2)}`);
       }
-      // hey, greptile, notice how this is *NOT* in an else block?
       joinedPath = `${joinedPath}.${part}`;
       result.add(joinedPath);
     }
@@ -137,32 +135,23 @@ function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
 type RedactionContext = {
   hints: ConfigUiHints | undefined;
   lookup: ReadonlySet<string> | undefined;
+  warnOnMissingOriginal: boolean;
 };
 
 function createRedactionContext(hints?: ConfigUiHints): RedactionContext {
   const lookup = hints ? buildRedactionLookup(hints) : undefined;
-  return { hints, lookup: lookup?.has("") ? lookup : undefined };
+  return { hints, lookup: lookup?.has("") ? lookup : undefined, warnOnMissingOriginal: true };
 }
 
 // Schema lookup coverage is prefix-scoped. After a path misses, heuristic detection must own the
 // whole subtree so dynamic plugin, channel, and env keys cannot escape redaction or restoration.
 function withoutRedactionLookup(context: RedactionContext): RedactionContext {
-  return context.lookup ? { hints: context.hints, lookup: undefined } : context;
+  return context.lookup ? { ...context, lookup: undefined } : context;
 }
 
 /** Deep-walk an object and replace values at sensitive paths with the redaction sentinel. */
-function redactObject<T>(obj: T, hints?: ConfigUiHints): T {
-  return redactValue(obj, "", [], createRedactionContext(hints)) as T;
-}
-
-/**
- * Collect all sensitive string values from a config object.
- * Used for text-based redaction of the raw JSON5 source.
- */
-function collectSensitiveValues(obj: unknown, hints?: ConfigUiHints): string[] {
-  const result: string[] = [];
-  redactValue(obj, "", result, createRedactionContext(hints));
-  return result;
+function redactObject<T>(obj: T, context: RedactionContext, values: string[] = []): T {
+  return redactValue(obj, "", values, context) as T;
 }
 
 function redactValue(
@@ -213,7 +202,7 @@ function redactValue(
         values.push(value);
       } else if (typeof value === "object" && value !== null) {
         if (context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
-          const objectValue = toObjectRecord(value);
+          const objectValue = asNonArrayRecord(value);
           if (isSecretRefShape(objectValue)) {
             result[key] = redactSecretRefId({
               value: objectValue,
@@ -261,7 +250,7 @@ function redactValue(
       result[key] = REDACTED_SENTINEL;
     } else if (
       typeof value === "string" &&
-      (hasSensitiveUrlHintPath(context.hints, hintPaths) || isSensitiveUrlPath(path))
+      (hasSensitiveUrlHintPath(context.hints, hintPaths) || isSensitiveUrlConfigPath(path))
     ) {
       const scrubbed = redactSensitiveUrlLikeString(value);
       if (scrubbed !== value) {
@@ -280,37 +269,12 @@ function redactValue(
 }
 
 /**
- * Replace known sensitive values in a raw JSON5 string with the sentinel.
- * Values are replaced longest-first to avoid partial matches.
- */
-function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): string {
-  const sensitiveValues = collectSensitiveValues(config, hints);
-  return replaceSensitiveValuesInRaw({
-    raw,
-    sensitiveValues,
-    redactedSentinel: REDACTED_SENTINEL,
-  });
-}
-
-let suppressRestoreWarnings = false;
-
-function withRestoreWarningsSuppressed<T>(fn: () => T): T {
-  const prev = suppressRestoreWarnings;
-  suppressRestoreWarnings = true;
-  try {
-    return fn();
-  } finally {
-    suppressRestoreWarnings = prev;
-  }
-}
-
-/**
  * Redact sensitive fields from a plain config object (not a full snapshot).
  * Used by write endpoints (config.set, config.patch, config.apply) to avoid
  * leaking credentials in their responses.
  */
 export function redactConfigObject<T>(value: T, uiHints?: ConfigUiHints): T {
-  return redactObject(value, uiHints);
+  return redactObject(value, createRedactionContext(uiHints));
 }
 
 /**
@@ -346,24 +310,36 @@ export function redactConfigSnapshot(
       resolved: redactedResolved,
     };
   }
-  const redactedConfig = redactObject(snapshot.config, uiHints);
-  const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
-  let redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
+  const context = createRedactionContext(uiHints);
+  // Raw replacement uses only runtime-config secrets. Other projections can hold
+  // different values, so their redaction must not contribute to this collection.
+  const sensitiveValues: string[] = [];
+  const redactedConfig = redactObject(snapshot.config, context, sensitiveValues);
+  const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, context) : snapshot.parsed;
+  let redactedRaw = snapshot.raw
+    ? replaceSensitiveValuesInRaw({
+        raw: snapshot.raw,
+        sensitiveValues,
+        redactedSentinel: REDACTED_SENTINEL,
+      })
+    : null;
   if (
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
       originalConfig: snapshot.parsed ?? snapshot.config,
+      // Missing originals only reject this raw-text view; actual writes still warn.
       restoreParsed: (parsed) =>
-        withRestoreWarningsSuppressed(() =>
-          restoreRedactedValues(parsed, snapshot.config, uiHints),
-        ),
+        restoreRedactedValuesWithContext(parsed, snapshot.config, {
+          ...context,
+          warnOnMissingOriginal: false,
+        }),
     })
   ) {
     redactedRaw = null;
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
-  const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
+  const redactedResolved = redactObject(snapshot.resolved, context);
   return {
     ...publicSnapshot,
     sourceConfig: redactedResolved,
@@ -394,6 +370,14 @@ export function restoreRedactedValues(
   original: unknown,
   hints?: ConfigUiHints,
 ): RedactionResult {
+  return restoreRedactedValuesWithContext(incoming, original, createRedactionContext(hints));
+}
+
+function restoreRedactedValuesWithContext(
+  incoming: unknown,
+  original: unknown,
+  context: RedactionContext,
+): RedactionResult {
   if (incoming === null || incoming === undefined) {
     return { ok: false, error: "no input" };
   }
@@ -401,7 +385,7 @@ export function restoreRedactedValues(
     return { ok: false, error: "input not an object" };
   }
   try {
-    const restored = restoreRedactedValue(incoming, original, "", createRedactionContext(hints));
+    const restored = restoreRedactedValue(incoming, original, "", context);
     assertNoRedactedSentinel(restored, "");
     return { ok: true, result: restored };
   } catch (err) {
@@ -429,18 +413,19 @@ class RedactionError extends Error {
   }
 }
 
-function restoreOriginalValueOrThrow(params: {
-  key: string;
-  path: string;
-  original: Record<string, unknown>;
-}): unknown {
-  if (Object.hasOwn(params.original, params.key)) {
-    return params.original[params.key];
+function restoreOriginalValueOrThrow(
+  original: Record<string, unknown>,
+  key: string,
+  path: string,
+  context: RedactionContext,
+): unknown {
+  if (Object.hasOwn(original, key)) {
+    return original[key];
   }
-  if (!suppressRestoreWarnings) {
-    log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  if (context.warnOnMissingOriginal) {
+    log.warn(`Cannot un-redact config key ${path} as it doesn't have any value`);
   }
-  throw new RedactionError(params.path);
+  throw new RedactionError(path);
 }
 
 function assertNoRedactedSentinel(value: unknown, path: string): void {
@@ -470,12 +455,12 @@ function maybeRestoreSecretRefId(params: {
   original: unknown;
   path: string;
 }): { handled: false } | { handled: true; value: unknown } {
-  const incomingObj = toObjectRecord(params.incoming);
+  const incomingObj = asNonArrayRecord(params.incoming);
   if (!isSecretRefShape(incomingObj) || incomingObj.id !== REDACTED_SENTINEL) {
     return { handled: false };
   }
 
-  const originalObj = toObjectRecord(params.original);
+  const originalObj = asNonArrayRecord(params.original);
   if (!isSecretRefWithProvider(originalObj)) {
     // Automatic restore needs provider as part of the identity; source+id alone can match the
     // wrong secret provider after config edits.
@@ -592,10 +577,6 @@ function mapRedactedArray(params: {
   });
 }
 
-function toObjectRecord(value: unknown): Record<string, unknown> {
-  return isObjectRecord(value) ? value : {};
-}
-
 function restoreRedactedValue(
   incoming: unknown,
   original: unknown,
@@ -623,10 +604,10 @@ function restoreRedactedValue(
     });
   }
 
-  const orig = toObjectRecord(original);
+  const orig = asNonArrayRecord(original);
   const result: Record<string, unknown> = {};
   const fallbackContext = withoutRedactionLookup(context);
-  for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
+  for (const [key, value] of Object.entries(asNonArrayRecord(incoming))) {
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
@@ -637,9 +618,9 @@ function restoreRedactedValue(
         value === REDACTED_SENTINEL &&
         (context.hints?.[candidate]?.sensitive === true ||
           hasSensitiveUrlHintPath(context.hints, [candidate, path, wildcardPath]) ||
-          isSensitiveUrlPath(path))
+          isSensitiveUrlConfigPath(path))
       ) {
-        result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+        result[key] = restoreOriginalValueOrThrow(orig, key, candidate, context);
       } else if (typeof value === "object" && value !== null) {
         const restoredSecretRef = maybeRestoreSecretRefId({
           incoming: value,
@@ -660,9 +641,9 @@ function restoreRedactedValue(
       !isExplicitlyNonSensitivePath(context.hints, hintPaths) &&
       (isSensitivePath(path) ||
         hasSensitiveUrlHintPath(context.hints, hintPaths) ||
-        isSensitiveUrlPath(path));
+        isSensitiveUrlConfigPath(path));
     if (value === REDACTED_SENTINEL && canRestore) {
-      result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
+      result[key] = restoreOriginalValueOrThrow(orig, key, path, context);
     } else if (typeof value === "object" && value !== null) {
       const restoredSecretRef = canRestore
         ? maybeRestoreSecretRefId({ incoming: value, original: orig[key], path })

@@ -1,13 +1,15 @@
 // ClawHub Fixture Server tests cover the local package fixture HTTP contract.
 import { execFileSync, spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writePluginInspectFixture } from "./plugin-inspect.test-support.js";
 
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
 const PACKAGE_NAME = "@openclaw/kitchen-sink";
@@ -240,6 +242,160 @@ describe("ClawHub fixture server", () => {
       isolatedCwd,
     );
     expect(runNoRequestsAssertion(baseUrl, isolatedCwd).status).toBe(0);
+    const stateDir = path.join(isolatedCwd, "state");
+    const installPath = path.join(
+      stateDir,
+      "npm/projects/whatsapp/node_modules/@openclaw/whatsapp",
+    );
+    cpSync(packageDir, installPath, { recursive: true });
+    const registryDir = path.join(isolatedCwd, "registry");
+    mkdirSync(registryDir);
+    cpSync(tarballPath, path.join(registryDir, tarball));
+    const registryManifest = JSON.stringify({
+      schema: "openclaw.prepublish-plugin-registry/v1",
+      schemaVersion: 1,
+      sourceSha: "a".repeat(40),
+      candidateVersion: version,
+      packages: [{ name: "@openclaw/whatsapp", version, tarball, sha256 }],
+    });
+    writeFileSync(path.join(registryDir, "prepublish-plugin-registry.json"), registryManifest);
+    const npmRecord: PluginInstallRecord = {
+      source: "npm",
+      spec: `@openclaw/whatsapp@${version}`,
+      resolvedName: "@openclaw/whatsapp",
+      resolvedVersion: version,
+      integrity: npmIntegrity,
+      installPath,
+    };
+    const bin = path.join(isolatedCwd, "bin");
+    const runner = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const boundary = runner.indexOf("phase storage-preflight");
+    expect(boundary).toBeGreaterThan(0);
+    // Execute the automatic source checks on both sides of the real consent phase.
+    // The existing server owns the empty ledger; package files and consent remain real inputs.
+    const automaticPhases = `${runner.slice(0, boundary)}
+trap - EXIT ERR HUP INT TERM
+candidate_version="$FIXTURE_VERSION"
+baseline_version=2026.7.1-2
+update_repair_required="$FIXTURE_PENDING"
+phase() {
+  local name="$1"
+  shift
+  case "$name" in
+    assert-prepublish-requests|assert-prepublish-recovery-requests)
+      "$@"
+      printf '%s passed\n' "$name"
+      [ "$FIXTURE_PENDING" != 1 ] || exit 0
+      ;;
+    fixture-plugin-consent) "$@"; exit "$?" ;;
+    *) : ;;
+  esac
+}
+${runner.slice(boundary)}
+`;
+    const runAutomaticChecks = (
+      record: PluginInstallRecord | null = npmRecord,
+      deniedPluginId?: string,
+    ) => {
+      mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
+      writeFileSync(
+        path.join(stateDir, "plugins", "installs.json"),
+        JSON.stringify({ installRecords: record ? { whatsapp: record } : {} }),
+      );
+      const fixtureEnv = writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
+      const artifacts = path.join(isolatedCwd, "artifacts");
+      mkdirSync(artifacts, { recursive: true });
+      writeFileSync(
+        path.join(artifacts, "update.json"),
+        JSON.stringify({
+          status: "error",
+          mode: "npm",
+          reason: "post-update-plugins",
+          before: { version: "2026.7.1-2" },
+          after: { version },
+          steps: [
+            { name: "global update", exitCode: 0 },
+            { name: "global install swap", exitCode: 0 },
+          ],
+          postUpdate: {
+            plugins: {
+              status: "error",
+              warnings: [],
+              sync: { errors: [] },
+              integrityDrifts: [],
+              npm: {
+                outcomes: [
+                  {
+                    pluginId: deniedPluginId,
+                    status: "error",
+                    code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      );
+      return spawnSync(
+        process.platform === "darwin" ? "/bin/bash" : "bash",
+        ["-c", automaticPhases],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ...fixtureEnv,
+            HOME: isolatedCwd,
+            FIXTURE_VERSION: version,
+            FIXTURE_PENDING: deniedPluginId ? "1" : "0",
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CLAWHUB_URL: baseUrl,
+            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
+            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: createHash("sha256")
+              .update(registryManifest)
+              .digest("hex"),
+            OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
+            OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+            OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
+            OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(isolatedCwd, "runtime"),
+            OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(
+              isolatedCwd,
+              "artifacts/summary.json",
+            ),
+          },
+        },
+      );
+    };
+    const automatic = runAutomaticChecks();
+    expect(automatic.status, automatic.stdout + automatic.stderr).toBe(0);
+    expect(automatic.stdout).toContain("assert-prepublish-requests passed");
+    expect(automatic.stdout).toContain("assert-prepublish-recovery-requests passed");
+    expect(automatic.stdout).toContain(
+      'Plugin "whatsapp" has verified official capability-consent exemption.',
+    );
+    for (const [record, failure] of [
+      [null, "plugin install record missing"],
+      [{ ...npmRecord, source: "path" }, "must be installed from npm"],
+      [{ ...npmRecord, installPath: `${installPath}-missing` }, "installPath missing on disk"],
+      [{ ...npmRecord, resolvedVersion: "2026.8.0" }, "plugin version changed"],
+      [{ ...npmRecord, integrity: undefined }, "plugin integrity missing"],
+      [{ ...npmRecord, integrity: "sha512-wrong" }, "registry artifact integrity"],
+      [
+        { ...npmRecord, sourcePath: tarballPath, artifactKind: "npm-pack" },
+        "plugin accepted surface missing",
+      ],
+      [{ ...npmRecord, resolvedName: "@vendor/whatsapp" }, "plugin accepted surface missing"],
+    ] as const) {
+      const rejected = runAutomaticChecks(record);
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain(failure);
+    }
+    const pending = runAutomaticChecks(null, "whatsapp");
+    expect(pending.status, pending.stderr).toBe(0);
+    expect(pending.stdout).toContain('Plugin "whatsapp" is awaiting fixture capability consent.');
+    const unrelatedPending = runAutomaticChecks(null, "discord");
+    expect(unrelatedPending.status).toBe(1);
+    expect(unrelatedPending.stderr).toContain("whatsapp plugin install record missing");
     expect(
       runPrepublishAssertion(
         baseUrl,
@@ -351,6 +507,9 @@ describe("ClawHub fixture server", () => {
     const unexpectedStartupRequest = runNoRequestsAssertion(baseUrl, isolatedCwd);
     expect(unexpectedStartupRequest.status).toBe(1);
     expect(unexpectedStartupRequest.stderr).toContain("unexpected ClawHub fixture requests");
+    const unexpectedAutomaticRequest = runAutomaticChecks();
+    expect(unexpectedAutomaticRequest.status).toBe(1);
+    expect(unexpectedAutomaticRequest.stderr).toContain("unexpected ClawHub fixture requests");
     const completeRequestPaths = [
       whatsappPath,
       `${whatsappPath}/versions/${version}/artifact`,

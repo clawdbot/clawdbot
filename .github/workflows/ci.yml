@@ -1653,11 +1653,27 @@ jobs:
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
+      - name: Resolve security checkout depth
+        if: github.event_name == 'pull_request'
+        id: checkout_depth
+        env:
+          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid pull request commit count: $PR_COMMIT_COUNT"
+            exit 2
+          fi
+          # Fetch the merge, every PR commit, and one ancestor while checkout
+          # still owns authentication; scanners run after credential cleanup.
+          fetch_depth=$((PR_COMMIT_COUNT + 2))
+          echo "depth=$fetch_depth" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: ${{ steps.checkout_depth.outputs.depth || 2 }}
           persist-credentials: false
 
       # Manual target validation has a distinct fallback contract: a missing branch/tag
@@ -1720,24 +1736,6 @@ jobs:
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Fetch pull request scan history
-        if: github.event_name == 'pull_request'
-        env:
-          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
-          PR_MERGE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "::error::Invalid pull request commit count: $PR_COMMIT_COUNT"
-            exit 2
-          fi
-          # Include the synthetic merge, every pull request commit, and one
-          # ancestor so TruffleHog can clone and resolve the bounded range.
-          fetch_depth=$((PR_COMMIT_COUNT + 2))
-          python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 \
-            -c protocol.version=2 \
-            fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"
 
       - name: Scan pull request for leaked credentials
         if: github.event_name == 'pull_request'

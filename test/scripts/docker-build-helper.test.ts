@@ -2736,19 +2736,9 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase update-candidate update_candidate"),
     );
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
-      publishedRunner.indexOf("phase assert-prepublish-requests node"),
+      publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
     );
-    expectTextToIncludeAll(publishedRunner, [
-      'package-compat.mjs --clawhub-release-security-mode "$candidate_version"',
-      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode"',
-    ]);
     expect(publishedRunner).not.toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
-    expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
-    expect(publishedRunner).toContain("if configured_plugin_installs_enabled; then");
-    expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
-    expect(publishedRunner).toContain(
-      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
-    );
     expect(publishedRunner).toContain(
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
     );
@@ -2757,10 +2747,9 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain(
       'registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")',
     );
-    expect(publishedRunner).toContain('"$clawhub_security_mode"');
-    expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
-      publishedRunner.indexOf("phase doctor run_doctor"),
-    );
+    expect(
+      publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
+    ).toBeLessThan(publishedRunner.indexOf("phase doctor run_doctor"));
     const discordInstallIndex = runner.indexOf(
       'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
@@ -2821,7 +2810,6 @@ docker_e2e_docker_run_cmd run demo
         "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
         'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
         'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
-        "assert-prepublish-requests",
       ]);
       expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
       expect(script).not.toContain("/__fixture__/requests");

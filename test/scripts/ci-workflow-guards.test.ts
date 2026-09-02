@@ -16,9 +16,9 @@ import {
 } from "node:fs";
 import { isBuiltin } from "node:module";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
@@ -4296,29 +4296,122 @@ NODE
     }
   });
 
+  it("fetches the complete pull request scan range before checkout removes credentials", () => {
+    const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
+    const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
+    const checkout = expectDefined(securitySteps[checkoutIndex], "security checkout");
+    const prepare = securitySteps
+      .slice(0, checkoutIndex)
+      .find((step) => step.env?.PR_COMMIT_COUNT !== undefined);
+    const root = tempDirs.make("openclaw-security-checkout-");
+    let depth = checkout.with?.["fetch-depth"];
+    if (prepare?.run) {
+      const output = path.join(root, "depth-output");
+      const result = spawnSync("bash", ["-e", "-c", prepare.run], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { ...process.env, PR_COMMIT_COUNT: "3", GITHUB_OUTPUT: output },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      depth = evaluateWorkflowExpression(depth, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: { [expectDefined(prepare.id, "depth output step")]: { outputs } },
+      });
+    }
+    expect(Number.isInteger(Number(depth)) && Number(depth) > 0).toBe(true);
+    expect(checkout.with?.["persist-credentials"]).toBe(false);
+
+    const source = path.join(root, "source");
+    const selected = path.join(root, "selected");
+    mkdirSync(source);
+    mkdirSync(selected);
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-C",
+          cwd,
+          "-c",
+          "user.name=CI Fixture",
+          "-c",
+          "user.email=ci@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            ...process.env,
+            GIT_ALLOW_PROTOCOL: "file",
+            GIT_CONFIG_GLOBAL: devNull,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        },
+      ).trim();
+    git(source, "init", "--initial-branch=main");
+    writeFileSync(path.join(source, "base.txt"), "base\n");
+    git(source, "add", ".");
+    git(source, "commit", "-m", "base");
+    git(source, "checkout", "-b", "pull-request");
+    const commits = [];
+    for (let index = 0; index < 3; index++) {
+      writeFileSync(path.join(source, "change.txt"), `change ${index}\n`);
+      git(source, "add", ".");
+      git(source, "commit", "-m", `change ${index}`);
+      commits.push(git(source, "rev-parse", "HEAD"));
+    }
+    git(source, "checkout", "main");
+    writeFileSync(path.join(source, "base.txt"), "advanced base\n");
+    git(source, "commit", "-am", "advance main");
+    const base = git(source, "rev-parse", "HEAD");
+    git(source, "merge", "--no-ff", "pull-request", "-m", "synthetic merge");
+    const merge = git(source, "rev-parse", "HEAD");
+    git(selected, "init");
+    git(
+      selected,
+      "fetch",
+      "--no-tags",
+      `--depth=${String(depth)}`,
+      pathToFileURL(source).href,
+      merge,
+    );
+    git(selected, "checkout", "--detach", "FETCH_HEAD");
+
+    // The scanner clones locally after auth cleanup: no later fetch may supply missing commits.
+    expect(git(selected, "rev-list", `${base}..HEAD`).split("\n").toSorted()).toEqual(
+      [merge, ...commits].toSorted(),
+    );
+  });
+
   it("scans only the pull request commit range for leaked credentials", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
-    const fetchScanHistoryIndex = securitySteps.findIndex(
-      (step) => step.name === "Fetch pull request scan history",
-    );
+    const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
+    const depthIndex = securitySteps.findIndex((step) => step.id === "checkout_depth");
     const scanIndex = securitySteps.findIndex(
       (step) => step.name === "Scan pull request for leaked credentials",
     );
-    const fetchScanHistoryStep = expectDefined(
-      securitySteps[fetchScanHistoryIndex],
-      "TruffleHog history fetch step",
-    );
+    const depthStep = expectDefined(securitySteps[depthIndex], "security checkout depth");
     const scanStep = expectDefined(securitySteps[scanIndex], "TruffleHog pull request scan step");
 
-    expect(scanIndex).toBeGreaterThan(fetchScanHistoryIndex);
-    expect(fetchScanHistoryStep.if).toBe("github.event_name == 'pull_request'");
-    expect(fetchScanHistoryStep.env).toEqual({
+    expect(checkoutIndex).toBeGreaterThan(depthIndex);
+    expect(scanIndex).toBeGreaterThan(checkoutIndex);
+    expect(depthStep.if).toBe("github.event_name == 'pull_request'");
+    expect(depthStep.env).toEqual({
       PR_COMMIT_COUNT: "${{ github.event.pull_request.commits }}",
-      PR_MERGE_SHA: "${{ github.sha }}",
     });
-    expect(fetchScanHistoryStep.run).toContain("fetch_depth=$((PR_COMMIT_COUNT + 2))");
-    expect(fetchScanHistoryStep.run).toContain(
-      'fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"',
+    expect(securitySteps.some((step) => step.name === "Fetch pull request scan history")).toBe(
+      false,
     );
     expect(scanStep.if).toBe("github.event_name == 'pull_request'");
     expect(scanStep.uses).toBe(TRUFFLEHOG_V3_95_9);
@@ -4328,6 +4421,24 @@ NODE
       version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33",
       extra_args: "--results=verified,unknown --fail-on-scan-errors",
     });
+  });
+
+  it.each(["", "-1", "1.5"])("rejects invalid security checkout depth input %j", (count) => {
+    const step = expectDefined(
+      readCiWorkflow().jobs["security-fast"].steps.find(
+        (entry: WorkflowStep) => entry.id === "checkout_depth",
+      ),
+      "security checkout depth",
+    );
+    const output = path.join(tempDirs.make("openclaw-security-depth-"), "output");
+    const result = spawnSync("bash", ["-e", "-c", step.run], {
+      encoding: "utf8",
+      timeout: 5_000,
+      env: { ...process.env, PR_COMMIT_COUNT: count, GITHUB_OUTPUT: output },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("Invalid pull request commit count");
+    expect(existsSync(output)).toBe(false);
   });
 
   it("keeps setup cache access explicit and isolates every cache write", () => {
@@ -7249,7 +7360,17 @@ server.listen(0, "127.0.0.1", () => {
     expect(checkoutStep.if).toBe(
       "github.event_name != 'workflow_dispatch' || inputs.target_ref == ''",
     );
-    expect(checkoutStep.with).toEqual({ "fetch-depth": 2, "persist-credentials": false });
+    expect(checkoutStep.with["persist-credentials"]).toBe(false);
+    for (const eventName of ["push", "workflow_dispatch"] as const) {
+      expect(
+        evaluateWorkflowExpression(checkoutStep.with["fetch-depth"], {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          steps: { checkout_depth: { outputs: {} } },
+        }),
+      ).toBe(2);
+    }
     expect(manualCheckoutStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.target_ref != ''",
     );

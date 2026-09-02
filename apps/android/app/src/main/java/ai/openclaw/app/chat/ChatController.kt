@@ -759,6 +759,7 @@ class ChatController internal constructor(
   private val outboxBranchReconcileRequested = AtomicBoolean(false)
   private val outboxBranchReconcileRetryScheduled = AtomicBoolean(false)
   private val outboxRecoveryMutex = Mutex()
+  private var outboxPublicationRevision = 0L
   private var outboxRecoveryComplete = false
   private val _outboxPresentationRestored = MutableStateFlow(commandOutbox == null)
   val outboxPresentationRestored: StateFlow<Boolean> = _outboxPresentationRestored.asStateFlow()
@@ -948,6 +949,7 @@ class ChatController internal constructor(
       clearChatMetadata()
       lastHealthPollAtMs = null
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
+      outboxPublicationRevision += 1
       _outboxItems.value = emptyList()
       _outboxPresentationRestored.value = commandOutbox == null
       reconciledOutboxBranchScopes.clear()
@@ -5408,23 +5410,18 @@ class ChatController internal constructor(
 
   private suspend fun publishOutbox() {
     val outbox = commandOutbox ?: return
-    val outboxScope = currentCacheScope()
-    if (outboxScope == null) {
-      _outboxItems.value = emptyList()
-      _outboxPresentationRestored.value = false
-      return
-    }
+    // Supersede older reads without making a claimed send wait on another refresh's I/O.
+    val (outboxScope, revision) =
+      synchronized(gatewayScopeApplyLock) {
+        currentCacheScope() to ++outboxPublicationRevision
+      }
+    // A cancelled UI caller can still owe its durable claim to the controller-owned dispatcher.
     val items =
-      runCatching { outbox.load(outboxScope.gatewayId) }
-        .getOrElse {
-          _outboxPresentationRestored.value = false
-          return
-        }
-    // Publish under the scope lock so rows loaded for an old gateway cannot land after a switch.
+      if (outboxScope == null) emptyList() else runCatching { outbox.load(outboxScope.gatewayId) }.getOrNull()
     synchronized(gatewayScopeApplyLock) {
-      if (outboxScope == currentCacheScope()) {
-        _outboxItems.value = items
-        _outboxPresentationRestored.value = true
+      if (revision == outboxPublicationRevision && outboxScope == currentCacheScope()) {
+        if (items != null) _outboxItems.value = items
+        _outboxPresentationRestored.value = outboxScope != null && items != null
       }
     }
   }

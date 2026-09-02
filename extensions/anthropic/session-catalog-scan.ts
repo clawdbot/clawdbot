@@ -1,10 +1,15 @@
-import type { Dirent, Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  createDirtyDirectoryWatch,
+  type DirtyDirectoryWatch,
+} from "./session-catalog-tree-watch.js";
 
+export const CLAUDE_PARTIAL_SCAN_TTL_MS = 15_000;
+export const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
 const CLAUDE_METADATA_WINDOW_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
@@ -73,17 +78,31 @@ export async function readClaudeCatalogMetadata(
 type CatalogJsonCacheEntry = {
   mtimeMs: number;
   size: number;
+  ino?: number;
   value: unknown;
 };
 
-type SafeSessionFile = { filePath: string; stat: Stats } | undefined;
+type FileSignature = { mtimeMs: number; size: number; ino: number };
+type SafeSessionFile = ({ filePath: string } & FileSignature) | undefined;
 
 type ClaudeProjectDirectorySnapshot = {
+  name: string;
   directory: string;
+  resolvedDirectory: string;
   childNames: string[];
+  files: ReadonlyMap<string, FileSignature>;
+  stamp: string;
 };
 
-type ClaudeChildFileSignature = readonly [name: string, mtimeMs: number, size: number, ino: number];
+const projectTreeSlots = new Map<
+  string,
+  {
+    snapshot?: ClaudeProjectsTreeSnapshot;
+    pending?: Promise<ClaudeProjectsTreeSnapshot>;
+    watch: DirtyDirectoryWatch;
+    hardExpiresAt: number;
+  }
+>();
 
 export type ClaudeProjectsTreeSnapshot = {
   root: string;
@@ -93,6 +112,7 @@ export type ClaudeProjectsTreeSnapshot = {
 };
 
 export type ClaudeSessionScanContext = ClaudeProjectsTreeSnapshot & {
+  directoriesByPath: Map<string, ClaudeProjectDirectorySnapshot>;
   complete: boolean;
   safeFiles: Map<string, Promise<SafeSessionFile>>;
 };
@@ -106,15 +126,17 @@ export function setBoundedCache<K, V>(
   key: K,
   value: V,
   maxEntries: number,
+  onEvict?: (value: V) => void,
 ): void {
   cache.delete(key);
   cache.set(key, value);
   while (cache.size > maxEntries) {
-    const oldest = cache.keys().next();
+    const oldest = cache.entries().next();
     if (oldest.done) {
       break;
     }
-    cache.delete(oldest.value);
+    onEvict?.(oldest.value[1]);
+    cache.delete(oldest.value[0]);
   }
 }
 
@@ -133,7 +155,9 @@ async function safeSessionFile(
       return undefined;
     }
     const stat = await fs.stat(resolvedCandidate);
-    return stat.isFile() ? { filePath: resolvedCandidate, stat } : undefined;
+    return stat.isFile()
+      ? { filePath: resolvedCandidate, mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino }
+      : undefined;
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
     if (code === "ENOENT" || code === "ENOTDIR") {
@@ -151,7 +175,17 @@ export function safeSessionFileForScan(
   if (!context.resolvedRoot) {
     return Promise.resolve(undefined);
   }
-  const key = `${sessionId}\0${path.resolve(candidate)}`;
+  const resolved = path.resolve(candidate);
+  const name = path.basename(resolved);
+  const directory = context.directoriesByPath.get(path.dirname(resolved));
+  const signature = directory?.files.get(name);
+  if (directory && signature && name === `${sessionId}.jsonl`) {
+    return Promise.resolve({
+      filePath: path.join(directory.resolvedDirectory, name),
+      ...signature,
+    });
+  }
+  const key = `${sessionId}\0${resolved}`;
   let pending = context.safeFiles.get(key);
   if (!pending) {
     // Canonical path + stat are valid only for this assembled scan. Sharing the promise prevents
@@ -171,18 +205,31 @@ export function safeSessionFileForScan(
 
 export async function readJsonFile(
   filePath: string,
-  options: { onIoFailure?: () => void } = {},
+  options: {
+    onIoFailure?: () => void;
+    signature?: { mtimeMs: number; size: number; ino?: number };
+  } = {},
 ): Promise<unknown> {
-  const stat = await fs.stat(filePath).catch(() => {
-    options.onIoFailure?.();
-    return undefined;
-  });
-  if (!stat?.isFile()) {
+  const stat =
+    options.signature ??
+    (await fs.stat(filePath).then(
+      (value) => (value.isFile() ? value : undefined),
+      () => {
+        options.onIoFailure?.();
+        return undefined;
+      },
+    ));
+  if (!stat) {
     catalogJsonCache.delete(filePath);
     return undefined;
   }
   const cached = catalogJsonCache.get(filePath);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  if (
+    cached &&
+    cached.mtimeMs === stat.mtimeMs &&
+    cached.size === stat.size &&
+    cached.ino === stat.ino
+  ) {
     setBoundedCache(catalogJsonCache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
     return cached.value;
   }
@@ -198,7 +245,7 @@ export async function readJsonFile(
     setBoundedCache(
       catalogJsonCache,
       filePath,
-      { mtimeMs: stat.mtimeMs, size: stat.size, value },
+      { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, value },
       MAX_CATALOG_JSON_CACHE_ENTRIES,
     );
     return value;
@@ -221,84 +268,139 @@ export function projectsDir(homeDir: string, configDir?: string): string {
   return path.join(configDir ?? path.join(homeDir, ".claude"), "projects");
 }
 
-export async function readProjectsTreeSnapshot(root: string): Promise<ClaudeProjectsTreeSnapshot> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return { root, projectDirectories: [], treeStamp: "unavailable" };
+export async function readProjectsTreeSnapshot(
+  root: string,
+  options: { forceRefresh?: boolean } = {},
+): Promise<ClaudeProjectsTreeSnapshot> {
+  let slot = projectTreeSlots.get(root);
+  if (slot?.pending) {
+    // An in-flight read is as fresh as any poll that arrives during it; only a forced refresh
+    // (just-created session lookups) must observe writes that landed after that read began.
+    if (!options.forceRefresh) {
+      return slot.pending;
+    }
+    await slot.pending;
+    return readProjectsTreeSnapshot(root, options);
   }
-  const directoryEntries = entries.filter((entry) => entry.isDirectory());
-  const [resolvedRoot, { results: directories }] = await Promise.all([
-    fs.realpath(root).catch(() => undefined),
-    runTasksWithConcurrency({
-      tasks: directoryEntries.map((entry) => async () => {
-        const directory = path.join(root, entry.name);
-        const [stat, children] = await Promise.all([
-          fs.stat(directory).catch(() => undefined),
-          fs.readdir(directory, { withFileTypes: true }).catch(() => undefined),
-        ]);
-        return { entry, directory, stat, children };
+  if (!slot) {
+    // Reserve the watcher owner before yielding so concurrent cold polls share the full read.
+    slot = { watch: createDirtyDirectoryWatch(root), hardExpiresAt: 0 };
+  }
+  const current = slot;
+  const previous = current.snapshot;
+  const dirty = current.watch.takeDirty();
+  const full =
+    !previous?.resolvedRoot ||
+    options.forceRefresh ||
+    current.hardExpiresAt <= Date.now() ||
+    dirty === "all";
+  setBoundedCache(projectTreeSlots, root, current, 8, (evicted) => evicted.watch.close());
+  if (!full && dirty.size === 0 && previous) {
+    return previous;
+  }
+  // Attach before reading: concurrent writes remain dirty for the next snapshot.
+  current.pending = (async () => {
+    let complete = true;
+    const onReadFailure = () => {
+      complete = false;
+      return undefined;
+    };
+    const entries = full
+      ? await fs.readdir(root, { withFileTypes: true }).catch(() => undefined)
+      : undefined;
+    const resolvedRoot = full
+      ? await fs.realpath(root).catch(() => undefined)
+      : previous?.resolvedRoot;
+    if (!resolvedRoot || (full && !entries)) {
+      current.watch.close();
+      if (projectTreeSlots.get(root) === current) {
+        projectTreeSlots.delete(root);
+      }
+      return { root, projectDirectories: [], treeStamp: "unavailable" };
+    }
+    const directories = new Map(
+      full ? [] : previous?.projectDirectories.map((dir) => [dir.name, dir]),
+    );
+    const names = entries
+      ? entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+      : dirty === "all"
+        ? []
+        : [...dirty];
+    current.watch.observeChildDirectories(new Set([...directories.keys(), ...names]));
+    const { results } = await runTasksWithConcurrency({
+      tasks: names.map((name) => async () => {
+        const directory = path.join(root, name);
+        const stat = await fs.lstat(directory).catch(onReadFailure);
+        if (!stat?.isDirectory()) {
+          directories.delete(name);
+          return undefined;
+        }
+        const childNames = (await fs.readdir(directory).catch(onReadFailure)) ?? [];
+        return {
+          name,
+          directory,
+          resolvedDirectory: path.join(resolvedRoot, name),
+          childNames,
+          mtimeMs: stat.mtimeMs,
+          files: new Map<string, FileSignature>(),
+        };
       }),
       limit: CLAUDE_CATALOG_IO_CONCURRENCY,
       throwOnError: true,
-    }),
-  ]);
-  const childTargets = directories.flatMap(({ directory, children }, directoryIndex) =>
-    (children ?? []).map((child) => ({ directoryIndex, directory, child })),
-  );
-  const { results: childSignatures } = await runTasksWithConcurrency({
-    tasks: childTargets.map(({ directoryIndex, directory, child }) => async () => {
-      const childStat = await fs.stat(path.join(directory, child.name)).catch(() => undefined);
-      const signature = childStat?.isFile()
-        ? ([child.name, childStat.mtimeMs, childStat.size, childStat.ino] as const)
-        : undefined;
-      return { directoryIndex, signature };
-    }),
-    limit: CLAUDE_CATALOG_IO_CONCURRENCY,
-    throwOnError: true,
-  });
-  const signaturesByDirectory = Array.from(
-    { length: directories.length },
-    (): ClaudeChildFileSignature[] => [],
-  );
-  for (const { directoryIndex, signature } of childSignatures) {
-    if (signature) {
-      signaturesByDirectory[directoryIndex]?.push(signature);
+    });
+    await runTasksWithConcurrency({
+      tasks: results.flatMap((dir) =>
+        dir
+          ? dir.childNames.map((name) => async () => {
+              const stat = await fs.lstat(path.join(dir.directory, name)).catch(onReadFailure);
+              if (stat?.isFile()) {
+                dir.files.set(name, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino });
+              }
+            })
+          : [],
+      ),
+      limit: CLAUDE_CATALOG_IO_CONCURRENCY,
+      throwOnError: true,
+    });
+    for (const dir of results) {
+      if (dir) {
+        // Include inode so atomic replacements invalidate even with identical size and mtime.
+        const files = dir.childNames.map((name) => [name, dir.files.get(name)]);
+        directories.set(dir.name, {
+          ...dir,
+          stamp: JSON.stringify([dir.name, dir.mtimeMs, files]),
+        });
+      }
     }
-  }
-  const directorySnapshots = directories.map(({ entry, directory, stat, children }, index) => {
-    const fileSignatures = signaturesByDirectory[index] ?? [];
-    const maxChildMtime = fileSignatures.reduce<number | null>(
-      (maximum, [, mtime]) => Math.max(maximum ?? mtime, mtime),
-      null,
+    const projectDirectories = [...directories.values()].toSorted((a, b) =>
+      a.name.localeCompare(b.name),
     );
+    current.watch.observeChildDirectories(directories.keys());
+    if (full) {
+      current.hardExpiresAt = Date.now() + CLAUDE_SESSION_SCAN_HARD_TTL_MS;
+    }
+    if (!complete) {
+      // Another dirty directory must not postpone recovery of an earlier failed read.
+      current.hardExpiresAt = Math.min(
+        current.hardExpiresAt,
+        Date.now() + CLAUDE_PARTIAL_SCAN_TTL_MS,
+      );
+    }
     return {
-      directory,
-      childNames: children?.map((child) => child.name) ?? [],
-      stamp: [
-        entry.name,
-        stat?.isDirectory() === true ? stat.mtimeMs : null,
-        children?.map((child) => child.name) ?? null,
-        maxChildMtime ?? null,
-        fileSignatures,
-      ] as const,
+      root,
+      resolvedRoot,
+      projectDirectories,
+      treeStamp: JSON.stringify([resolvedRoot, projectDirectories.map((dir) => dir.stamp)]),
     };
-  });
-  return {
-    root,
-    ...(resolvedRoot ? { resolvedRoot } : {}),
-    projectDirectories: directorySnapshots.map(({ directory, childNames }) => ({
-      directory,
-      childNames,
-    })),
-    treeStamp: JSON.stringify([resolvedRoot ?? null, directorySnapshots.map(({ stamp }) => stamp)]),
-  };
-}
-
-export async function desktopSessionStoreAvailable(homeDir: string): Promise<boolean> {
-  const stat = await fs.stat(desktopSessionsDir(homeDir)).catch(() => undefined);
-  return stat?.isDirectory() === true;
+  })()
+    .then((snapshot) => {
+      current.snapshot = snapshot;
+      return snapshot;
+    })
+    .finally(() => {
+      current.pending = undefined;
+    });
+  return current.pending;
 }
 
 export function desktopSessionsDir(homeDir: string): string {
