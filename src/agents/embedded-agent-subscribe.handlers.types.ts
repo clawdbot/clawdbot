@@ -155,8 +155,11 @@ export type EmbeddedAgentSubscribeState = {
   hasFlushedPartialText: boolean;
   blockState: StreamBlockState & { inlineCode: InlineCodeState };
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
-  lastStreamedAssistant?: string;
-  lastStreamedAssistantCleaned?: string;
+  assistantStream?: {
+    raw: string;
+    text: string;
+    sanitized?: { phase: AssistantPhase | undefined; text: string };
+  };
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;

@@ -350,22 +350,14 @@ export function resolveAssistantTextChunk(params: {
   return "";
 }
 
-export function resolveTextAppendDelta(previousText: string, nextText: string): string {
-  if (nextText.startsWith(previousText)) {
-    return nextText.slice(previousText.length);
-  }
-  return previousText.startsWith(nextText) ? "" : nextText;
-}
-
 export function resolveStreamingReply(params: {
   evtType: "text_delta" | "text_start" | "text_end";
   next: string;
-  previousRawText: string;
+  previousText: string;
   previousCleaned: string;
   visibleDelta: string;
-  rawTextIsAppend: boolean;
+  textIsAppend: boolean;
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
-  shouldUsePhaseAwareBlockReply: boolean;
 }): { text: string; delta: string; replace: boolean; hasText: boolean } {
   if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
     const text = params.previousCleaned;
@@ -383,26 +375,20 @@ export function resolveStreamingReply(params: {
     !/(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
     params.parsedStreamDirectives.text === params.visibleDelta
   ) {
-    if (
-      !params.shouldUsePhaseAwareBlockReply &&
-      params.rawTextIsAppend &&
-      params.previousRawText === params.previousCleaned
-    ) {
+    if (params.textIsAppend && params.previousText === params.previousCleaned) {
       // Reuse the normalized prefix and small delta. Trimming the cumulative
       // snapshot can flatten it; slicing can retain it in queued updates.
       delta = params.previousCleaned ? params.visibleDelta.trimEnd() : params.visibleDelta.trim();
       text = delta === params.visibleDelta ? params.next : `${params.previousCleaned}${delta}`;
       isAppend = true;
-    } else if (
-      !params.shouldUsePhaseAwareBlockReply &&
-      params.previousCleaned === params.previousRawText.trim()
-    ) {
+    } else if (params.textIsAppend && params.previousCleaned === params.previousText.trim()) {
       text = params.next.trim();
-      isAppend = params.rawTextIsAppend;
+      isAppend = true;
     } else {
       const candidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
-      if (candidate === params.next.trim()) {
-        text = candidate;
+      const normalizedNext = params.next.trim();
+      if (candidate === normalizedNext) {
+        text = normalizedNext;
         // Appending cannot alter the prior prefix unless trimming removed its whitespace.
         isAppend =
           candidate.length >= params.previousCleaned.length &&
