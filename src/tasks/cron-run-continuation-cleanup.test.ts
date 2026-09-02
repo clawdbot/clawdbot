@@ -7,11 +7,6 @@ const mocks = vi.hoisted(() => ({
   hasPendingMedia: vi.fn(() => false),
   loadPendingSessionDeliveries: vi.fn(async () => []),
   loadEntry: vi.fn<() => SessionEntry | undefined>(),
-  sleep: vi.fn(async () => {}),
-}));
-
-vi.mock("node:timers/promises", () => ({
-  setTimeout: mocks.sleep,
 }));
 
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
@@ -62,11 +57,10 @@ describe("removeCronRunContinuationSessionIfIdle", () => {
   const sessionKey = "agent:main:cron:one-shot:run:run-123";
 
   beforeEach(() => {
-    mocks.deleteEntry.mockReset().mockResolvedValue({ deleted: true, archivedTranscripts: [] });
+    mocks.deleteEntry.mockClear();
     mocks.hasPendingMedia.mockReset();
     mocks.loadPendingSessionDeliveries.mockReset().mockResolvedValue([]);
     mocks.loadEntry.mockReset();
-    mocks.sleep.mockReset().mockResolvedValue(undefined);
   });
 
   it.each(cases)("handles %s", async (_name, continuation, pending, deleted) => {
@@ -125,47 +119,5 @@ describe("removeCronRunContinuationSessionIfIdle", () => {
     await removeCronRunContinuationSessionIfIdle(sessionKey, "settled-media");
 
     expect(mocks.deleteEntry).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries deletion when it races with a still-releasing work admission", async () => {
-    mocks.loadEntry.mockReturnValue({
-      sessionId: "run-123",
-      updatedAt: 123,
-      lifecycleRevision: "revision-1",
-      cronRunContinuation: marker(),
-    });
-    mocks.deleteEntry
-      .mockRejectedValueOnce(
-        new Error(
-          "Cannot delete session while competing work is in flight for agent:main:cron:one-shot:run:run-123; retry after the run completes",
-        ),
-      )
-      .mockResolvedValueOnce({ deleted: true, archivedTranscripts: [] });
-
-    await removeCronRunContinuationSessionIfIdle(sessionKey);
-
-    expect(mocks.deleteEntry).toHaveBeenCalledTimes(2);
-    expect(mocks.sleep).toHaveBeenCalledTimes(1);
-  });
-
-  it("gives up after the bounded retry budget is exhausted", async () => {
-    mocks.loadEntry.mockReturnValue({
-      sessionId: "run-123",
-      updatedAt: 123,
-      lifecycleRevision: "revision-1",
-      cronRunContinuation: marker(),
-    });
-    mocks.deleteEntry.mockRejectedValue(
-      new Error(
-        "Cannot delete session while competing work is in flight for agent:main:cron:one-shot:run:run-123; retry after the run completes",
-      ),
-    );
-
-    await expect(removeCronRunContinuationSessionIfIdle(sessionKey)).rejects.toThrow(
-      "competing work is in flight",
-    );
-
-    expect(mocks.deleteEntry).toHaveBeenCalledTimes(5);
-    expect(mocks.sleep).toHaveBeenCalledTimes(4);
   });
 });

@@ -1,5 +1,4 @@
 /** Removes an idle exact-run continuation through the session lifecycle owner. */
-import { setTimeout as sleep } from "node:timers/promises";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -67,61 +66,16 @@ export async function removeCronRunContinuationSessionIfIdle(
   if (!entry || !canRemoveCronRunContinuation(marker)) {
     return;
   }
-  await deleteSessionEntryLifecycleWithRetry({
+  await deleteSessionEntryLifecycle({
     agentId,
-    entry,
-    sessionKey,
+    // Exact rows alias the stable cron transcript; the stable row owns archival.
+    archiveTranscript: false,
+    expectedEntry: entry,
+    expectedLifecycleRevision: entry.lifecycleRevision,
+    expectedSessionId: entry.sessionId,
+    expectedUpdatedAt: entry.updatedAt,
+    requireWriteSuccess: true,
     storePath,
+    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
   });
-}
-
-/**
- * Deletes the exact-run continuation row, retrying a bounded number of times
- * when the deletion races with the still-releasing session work admission.
- *
- * The cron owner releases its `sessionWorkAdmission` immediately before this
- * cleanup runs, but the release can still be observed as "competing work in
- * flight" by the deletion's admission check (see #134373). The admission is
- * released synchronously, so a short retry resolves the race without changing
- * the admission lifecycle.
- */
-async function deleteSessionEntryLifecycleWithRetry(params: {
-  agentId: string;
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  const { agentId, entry, sessionKey, storePath } = params;
-  const maxAttempts = 5;
-  const baseDelayMs = 50;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await deleteSessionEntryLifecycle({
-        agentId,
-        // Exact rows alias the stable cron transcript; the stable row owns archival.
-        archiveTranscript: false,
-        expectedEntry: entry,
-        expectedLifecycleRevision: entry.lifecycleRevision,
-        expectedSessionId: entry.sessionId,
-        expectedUpdatedAt: entry.updatedAt,
-        requireWriteSuccess: true,
-        storePath,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      });
-      return;
-    } catch (error) {
-      const isCompetingWork = isCompetingWorkInFlightError(error);
-      if (!isCompetingWork || attempt === maxAttempts) {
-        throw error;
-      }
-      await sleep(baseDelayMs * 2 ** (attempt - 1));
-    }
-  }
-}
-
-function isCompetingWorkInFlightError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes("Cannot delete session while competing work is in flight")
-  );
 }
