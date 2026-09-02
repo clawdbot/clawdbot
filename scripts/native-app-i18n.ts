@@ -719,6 +719,21 @@ function structuralTokenSignature(source: string): string {
   return JSON.stringify({ swift, kotlin, nativeFormat, buildSettings, lineBreaks });
 }
 
+function formatNativeTranslationStructureError(locale: string, id: string): string {
+  return `native translation changed placeholders or line breaks for ${locale}:${id}`;
+}
+
+function validateNativeTranslationStructure(
+  source: string,
+  translated: string,
+  id: string,
+  locale: string,
+): void {
+  if (structuralTokenSignature(source) !== structuralTokenSignature(translated)) {
+    throw new Error(formatNativeTranslationStructureError(locale, id));
+  }
+}
+
 function addCandidate(
   entries: Candidate[],
   surface: NativeI18nSurface,
@@ -1493,7 +1508,7 @@ export function validateNativeLocaleArtifact(
     } else if (!translated.trim()) {
       errors.push(`translation must be nonempty for ${entry.id}`);
     } else if (structuralTokenSignature(entry.source) !== structuralTokenSignature(translated)) {
-      errors.push(`translation changed structural tokens or line breaks for ${entry.id}`);
+      errors.push(formatNativeTranslationStructureError(locale, entry.id));
     }
   }
   if (errors.length > 0) {
@@ -1604,7 +1619,12 @@ export async function syncNativeLocale(
     }));
   const translated =
     pending.length && !migratingV1
-      ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
+      ? await (options.translate ?? translateNativeEntries)(
+          pending,
+          locale,
+          glossary,
+          validateNativeTranslationStructure,
+        )
       : new Map<string, string>();
   const translations = Object.fromEntries(
     entries
@@ -1623,21 +1643,7 @@ export async function syncNativeLocale(
     glossaryHash: currentGlossaryHash,
     translations,
   };
-  try {
-    validateNativeLocaleArtifact(locale, entries, artifact, glossary);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const structural = message.match(
-      /translation changed structural tokens or line breaks for ([^\s]+)/u,
-    );
-    if (structural?.[1]) {
-      throw new Error(
-        `native translation changed placeholders or line breaks for ${locale}:${structural[1]}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+  validateNativeLocaleArtifact(locale, entries, artifact, glossary);
   const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
   const changed = previousRaw !== rendered;
   if (changed) {

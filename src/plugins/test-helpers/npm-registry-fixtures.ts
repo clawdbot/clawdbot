@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Deferred } from "../../shared/deferred.js";
 
 type PackedVersion = {
@@ -30,7 +30,6 @@ type PackPluginParams = {
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   pluginId?: string;
-  rootDir: string;
   version?: string;
 };
 
@@ -40,107 +39,123 @@ export type RegistryPackage = {
   versions: PackedVersion[];
 };
 
-export async function packPlugin(params: PackPluginParams): Promise<PackedVersion> {
-  const version = params.version ?? "1.0.0";
-  const packageDir = path.join(params.rootDir, `package-${params.packageName}-${version}`);
-  const peerDependenciesMeta = params.peerDependencies
-    ? (params.peerDependenciesMeta ??
-      Object.fromEntries(
-        Object.keys(params.peerDependencies).map((name) => [name, { optional: true }]),
-      ))
-    : undefined;
-  await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-  await fs.writeFile(
-    path.join(packageDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: params.packageName,
-        version,
-        type: "module",
-        openclaw:
-          params.openclaw ??
-          (params.hookName
-            ? { hooks: [`./hooks/${params.hookName}`] }
-            : { extensions: ["./dist/index.js"] }),
-        ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-        ...(params.optionalDependencies
-          ? { optionalDependencies: params.optionalDependencies }
-          : {}),
-        ...(params.peerDependencies
-          ? {
-              peerDependencies: params.peerDependencies,
-              ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
-            }
-          : {}),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  if (params.hookName) {
-    const hookDir = path.join(packageDir, "hooks", params.hookName);
-    await fs.mkdir(hookDir, { recursive: true });
+export async function packPlugins(
+  rootDir: string,
+  packages: [PackPluginParams, ...PackPluginParams[]],
+): Promise<PackedVersion[]> {
+  const prepared = [];
+  for (const params of packages) {
+    const version = params.version ?? "1.0.0";
+    const packageDir = path.join(rootDir, `package-${params.packageName}-${version}`);
+    const peerDependenciesMeta = params.peerDependencies
+      ? (params.peerDependenciesMeta ??
+        Object.fromEntries(
+          Object.keys(params.peerDependencies).map((name) => [name, { optional: true }]),
+        ))
+      : undefined;
+    await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(hookDir, "HOOK.md"),
-      `---\nname: ${params.hookName}\ndescription: Install cancellation fixture\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n`,
-    );
-    await fs.writeFile(path.join(hookDir, "handler.js"), "export default async () => {};\n");
-  } else {
-    await fs.writeFile(
-      path.join(packageDir, "openclaw.plugin.json"),
+      path.join(packageDir, "package.json"),
       `${JSON.stringify(
         {
-          id: params.pluginId ?? params.packageName,
-          name: params.pluginId ?? params.packageName,
-          configSchema: { type: "object" },
+          name: params.packageName,
+          version,
+          type: "module",
+          openclaw:
+            params.openclaw ??
+            (params.hookName
+              ? { hooks: [`./hooks/${params.hookName}`] }
+              : { extensions: ["./dist/index.js"] }),
+          ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+          ...(params.optionalDependencies
+            ? { optionalDependencies: params.optionalDependencies }
+            : {}),
+          ...(params.peerDependencies
+            ? {
+                peerDependencies: params.peerDependencies,
+                ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
+              }
+            : {}),
         },
         null,
         2,
       )}\n`,
       "utf8",
     );
+    if (params.hookName) {
+      const hookDir = path.join(packageDir, "hooks", params.hookName);
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        `---\nname: ${params.hookName}\ndescription: Install cancellation fixture\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n`,
+      );
+      await fs.writeFile(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+    } else {
+      await fs.writeFile(
+        path.join(packageDir, "openclaw.plugin.json"),
+        `${JSON.stringify(
+          {
+            id: params.pluginId ?? params.packageName,
+            name: params.pluginId ?? params.packageName,
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
+    await fs.writeFile(
+      path.join(packageDir, "dist", "index.js"),
+      params.indexJs ?? "export {};\n",
+      "utf8",
+    );
+    prepared.push({ params, packageDir, peerDependenciesMeta, version });
   }
-  await fs.writeFile(
-    path.join(packageDir, "dist", "index.js"),
-    params.indexJs ?? "export {};\n",
-    "utf8",
-  );
 
-  const packOutput = execFileSync(
+  execFileSync(
     "npm",
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", params.rootDir],
-    { cwd: packageDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    [
+      "pack",
+      "--ignore-scripts",
+      "--pack-destination",
+      rootDir,
+      ...prepared.map(({ packageDir }) => packageDir),
+    ],
+    { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
-  const parsed = resolveNpmJsonEntries(JSON.parse(packOutput)) as Array<{ filename: string }>;
-  const tarballName = parsed[0]?.filename;
-  if (!tarballName) {
-    throw new Error(`npm pack did not return a tarball for ${params.packageName}`);
+  const versions: PackedVersion[] = [];
+  for (const { params, peerDependenciesMeta, version } of prepared) {
+    // npm 12 keys JSON output by name, which collapses two versions of one package.
+    // Read each manifest-named archive instead; a missing artifact remains a fixture failure.
+    const tarballName = `${params.packageName.replace(/^@/, "").replaceAll("/", "-")}-${version}.tgz`;
+    const archive = await fs.readFile(path.join(rootDir, tarballName));
+    versions.push({
+      archive,
+      ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+      integrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+      ...(params.openclaw ? { openclaw: params.openclaw } : {}),
+      ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
+      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+      ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
+      shasum: crypto.createHash("sha1").update(archive).digest("hex"),
+      tarballName,
+      version,
+    });
   }
-  const archive = await fs.readFile(path.join(params.rootDir, tarballName));
-  return {
-    archive,
-    ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-    integrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
-    ...(params.openclaw ? { openclaw: params.openclaw } : {}),
-    ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
-    ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
-    ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
-    shasum: crypto.createHash("sha1").update(archive).digest("hex"),
-    tarballName,
-    version,
-  };
+  return versions;
 }
 
-export async function registryPackage(
-  params: PackPluginParams & { latest?: string },
-): Promise<RegistryPackage> {
-  const version = params.version ?? "1.0.0";
-  return {
+export async function registryPackages(
+  rootDir: string,
+  packages: [PackPluginParams & { latest?: string }, ...(PackPluginParams & { latest?: string })[]],
+): Promise<RegistryPackage[]> {
+  const versions = await packPlugins(rootDir, packages);
+  return packages.map((params, index) => ({
     packageName: params.packageName,
-    latest: params.latest ?? version,
-    versions: [await packPlugin({ ...params, version })],
-  };
+    latest: params.latest ?? params.version ?? "1.0.0",
+    versions: [expectDefined(versions[index], "packed fixture version")],
+  }));
 }
 
 export async function startStaticRegistry(

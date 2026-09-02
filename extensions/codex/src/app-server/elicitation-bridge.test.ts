@@ -391,6 +391,94 @@ describe("Codex app-server elicitation bridge", () => {
     },
   );
 
+  it.each([
+    {
+      name: "raw tool identity",
+      display: [{ name: "repo", value: "openclaw/openclaw" }],
+      grant: true,
+    },
+    { name: "absent display metadata", display: undefined, grant: true },
+    { name: "numeric string form", display: [{ name: "limit", value: "3" }], grant: true },
+    {
+      name: "mismatched display value",
+      display: [{ name: "repo", value: "another/repo" }],
+      grant: false,
+    },
+    { name: "unknown display key", display: [{ name: "other", value: "x" }], grant: false },
+    { name: "malformed display metadata", display: "repo", grant: false },
+    {
+      name: "ambiguous or missing active item",
+      display: undefined,
+      missingItem: true,
+      grant: false,
+    },
+    { name: "unconfigured server", display: undefined, unconfigured: true, grant: false },
+    { name: "explicit prompt", display: undefined, prompt: true, grant: false },
+    { name: "session-only hint", display: undefined, sessionOnly: true, grant: false },
+    { name: "missing active turn", display: undefined, missingTurn: true, grant: false },
+    { name: "computer use", display: undefined, computerUse: true, grant: false },
+    { name: "Codex apps", display: undefined, apps: true, grant: false },
+  ])("binds durable MCP intent only for $name", async (testCase) => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:durable", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:durable", decision: "allow-always" });
+    const server = testCase.apps ? "codex_apps" : "raw-server";
+    const item = {
+      id: "raw-call",
+      server,
+      tool: "_create.issue-v2",
+      arguments: { repo: "openclaw/openclaw", limit: 3 },
+    };
+    let activeItem: typeof item | undefined = testCase.missingItem ? undefined : item;
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        serverName: server,
+        ...(testCase.missingTurn ? { turnId: null } : {}),
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: testCase.sessionOnly ? "session" : ["session", "always"],
+          tool_title: "This is not the tool identity",
+          ...(testCase.display === undefined ? {} : { tool_params_display: testCase.display }),
+        },
+      },
+      paramsForRun: {
+        ...createParams(),
+        config: {
+          mcp: {
+            servers: testCase.unconfigured
+              ? {}
+              : {
+                  [server]: {
+                    url: "https://mcp.example.test",
+                    ...(testCase.prompt ? { codex: { defaultToolsApprovalMode: "prompt" } } : {}),
+                  },
+                },
+          },
+        },
+      },
+      getActiveMcpToolCall: () => activeItem,
+      ...(testCase.computerUse ? { computerUseMcpServerName: server } : {}),
+      ...codexTestTurnIds(),
+    });
+    const request = gatewayToolArg(0, 2) as {
+      mcpTool?: unknown;
+      toolCallId?: string;
+      isMcpToolApprovalActive?: () => boolean;
+    };
+    expect(request.mcpTool).toEqual(testCase.grant ? { server, tool: item.tool } : undefined);
+    if (testCase.grant) {
+      expect(request.toolCallId).toBe(item.id);
+      expect(request.isMcpToolApprovalActive?.()).toBe(true);
+      activeItem = undefined;
+      expect(request.isMcpToolApprovalActive?.()).toBe(false);
+    }
+    expect(result?.action).toBe("accept");
+    if (!testCase.prompt) {
+      expect(result?._meta).toEqual({ persist: testCase.sessionOnly ? "session" : "always" });
+    }
+  });
+
   it("does not trust request-time decisions for two-phase MCP approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({

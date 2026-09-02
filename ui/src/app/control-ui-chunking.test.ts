@@ -50,12 +50,12 @@ describe("Control UI build chunking", () => {
     });
   });
 
-  it("consolidates the measured boot module set with recursive dependencies", () => {
+  it("consolidates shared boot without pulling in the chat route or optional panels", () => {
     // Recursive inclusion is a correctness requirement for this group: merging
     // the lazy boot graph without it emitted chunks whose execution order broke
     // at application start.
     expect(controlUiCodeSplitting.groups[2]).toMatchObject({
-      name: "control-ui-boot",
+      name: "control-ui-boot-shared",
       includeDependenciesRecursively: true,
     });
     const bootGroup = controlUiCodeSplitting.groups[2] as {
@@ -65,6 +65,8 @@ describe("Control UI build chunking", () => {
     // Representative always-loaded boot surface and a lazy island that must
     // keep its own chunk (terminal runtime is not part of the default boot).
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });
 

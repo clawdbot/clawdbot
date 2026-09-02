@@ -314,7 +314,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const groups = plan
           .flatMap((job) => job.groups)
           .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
-        expect(groups).toHaveLength(3);
+        // Hosted preparation alone exceeds the serial budget, so its consumer
+        // stays alone; hybrid retains its existing balanced three-way split.
+        expect(groups).toHaveLength(runnerBackend === "github" ? 4 : 3);
+        if (runnerBackend === "github") {
+          expect(groups.find((group) => group.pretestBuildMode)?.includePatterns).toEqual([
+            consumer,
+          ]);
+          expect(
+            plan
+              .filter((job) => job.predictedSeconds! > 150)
+              .every(
+                (job) => job.groups.length === 1 && job.groups[0]!.includePatterns?.length === 1,
+              ),
+          ).toBe(true);
+        }
         expect(
           groups
             .filter((group) => group.pretestBuildMode === "runtime")
