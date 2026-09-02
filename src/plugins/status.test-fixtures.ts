@@ -7,6 +7,35 @@ import type { PluginHookName } from "./types.js";
 
 export { createPluginRecord };
 
+export function createCompatChainFixture() {
+  const config = { plugins: { allow: ["telegram"] } };
+  const pluginIds = ["anthropic", "openai"];
+  const enabledConfig = {
+    plugins: {
+      allow: ["telegram"],
+      entries: {
+        anthropic: { enabled: true },
+        openai: { enabled: true },
+      },
+    },
+  };
+  return { config, pluginIds, enabledConfig };
+}
+
+export function createAutoEnabledStatusConfig(
+  entries: Record<string, unknown>,
+  rawConfigOverrides?: Record<string, unknown>,
+) {
+  const rawConfig = { plugins: {}, ...rawConfigOverrides };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries,
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
+
 export function createInstalledPluginIndexSnapshot(
   plugins: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
