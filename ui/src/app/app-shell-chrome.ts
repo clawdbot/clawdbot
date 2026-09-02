@@ -29,14 +29,12 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import type { ShellRouteState } from "./app-host-route-state.ts";
-import { ShellPanelOwner } from "./app-shell-panels.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
+import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
   KEYBOARD_SHORTCUTS_ELEMENT,
-  type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import {
@@ -78,22 +76,14 @@ function isSettingsTakeover(routeId: RouteId | undefined): boolean {
   return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
-export interface ShellChromeHost extends HTMLElement {
-  readonly context: ApplicationContext<RouteId> | undefined;
+export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
   readonly activeSessionKey: string;
   readonly onboardingMode: boolean;
-  readonly custodianMinimizeRequestId: number;
   readonly updateComplete: Promise<boolean>;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly commandPaletteElement: OptionalCustomElement;
-  readonly terminalPanelElement: OptionalCustomElement;
-  readonly browserPanelElement: OptionalCustomElement;
-  readonly desktopPanelElement: OptionalCustomElement;
-  readonly assistantPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
   readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
-  routeState: ShellRouteState;
   navDrawerOpen: boolean;
   desktopNavigationExpanded: boolean;
   navDrawerTrigger: HTMLElement | null;

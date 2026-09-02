@@ -248,7 +248,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   get terminalPanelOpen(): boolean {
-    return this.dockLayout.open;
+    return this.embedded ? this.available : this.dockLayout.open && this.isDockLayoutAvailable();
   }
 
   hideTerminalPanelForUnavailableSurface(): void {
@@ -376,11 +376,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override render() {
-    if (
-      !this.available ||
-      (!this.embedded && !this.dockLayout.open) ||
-      (this.sessionBottomOnly && this.dockLayout.dock !== "bottom")
-    ) {
+    if (!this.terminalPanelOpen) {
       return nothing;
     }
     const mode = this.embedded ? "embedded" : this.fullscreen ? "fullscreen" : this.dockLayout.dock;

@@ -1,4 +1,4 @@
-import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
+import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import { desktopPanelLayout } from "../components/desktop/desktop-panel-layout.ts";
 import {
   assistantPanelLayout,
@@ -15,8 +15,13 @@ import {
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import type { ShellChromeHost } from "./app-shell-chrome.ts";
-import { isOptionalElementDefined, type OptionalCustomElement } from "./lazy-custom-element.ts";
+import type { ShellRouteState } from "./app-host-route-state.ts";
+import type { ApplicationContext } from "./context.ts";
+import {
+  isOptionalElementDefined,
+  type LazyCustomElementRequestController,
+  type OptionalCustomElement,
+} from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 import {
   isBrowserPanelAvailable,
@@ -24,11 +29,22 @@ import {
   isHomePanelAvailable,
 } from "./panel-availability.ts";
 
+export interface ShellPanelHost {
+  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly custodianMinimizeRequestId: number;
+  readonly lazyCustomElements: LazyCustomElementRequestController;
+  readonly terminalPanelElement: OptionalCustomElement;
+  readonly browserPanelElement: OptionalCustomElement;
+  readonly desktopPanelElement: OptionalCustomElement;
+  readonly assistantPanelElement: OptionalCustomElement;
+  routeState: ShellRouteState;
+}
+
 export class ShellPanelOwner {
   private readonly restoredPanels = new Set<OptionalCustomElement>();
 
   constructor(
-    private readonly host: ShellChromeHost,
+    private readonly host: ShellPanelHost,
     private readonly requestLazyElement: (
       element: OptionalCustomElement,
       event: LazyShellEvent,

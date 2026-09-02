@@ -275,6 +275,7 @@ suite.define(() => {
         : {}),
     };
     await suite.withPage(pageOptions, async ({ page }) => {
+      await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
         deferredMethods: ["chat.send"],
@@ -467,7 +468,11 @@ suite.define(() => {
           (voiceBeforeHold?.x ?? 0) - ((pickerBeforeHold?.x ?? 0) + (pickerBeforeHold?.width ?? 0)),
         ),
       ).toBeLessThanOrEqual(0.5);
+      // Measure the arming layout without letting slow browser round trips
+      // cross the 500 ms hold threshold and open the unavailable-device picker.
+      await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
       await page.mouse.down();
+      await page.clock.runFor(150);
       await expect
         .poll(() =>
           voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
@@ -482,6 +487,7 @@ suite.define(() => {
       );
       await page.mouse.up();
       await page.mouse.move(0, 0);
+      await page.clock.resume();
       await expect.poll(pickerWidth).toBe(0);
       await voice.hover();
       await voice.press("Tab");
