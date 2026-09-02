@@ -1007,25 +1007,24 @@ catalog, API-key auth, and dynamic model resolution.
       </Tab>
       <Tab title="Media understanding">
         Audio providers with their own credential and endpoint contracts can
-        implement `prepareAudioTranscription(context)`. The context carries the
-        agent directory, selected profile, resolved transport settings, and
-        explicitly requested model/prompt. Return an async transcription callback
-        that closes over the prepared credentials; do not upload audio during
-        preparation. The host calls it once per selected attachment and does not
-        reinterpret its credentials as an API key or rotate them.
+        implement `transcribeAudioWithContext(request)`. The host calls it after
+        loading each audio file. The request includes the audio bytes, filename,
+        model, prompt, language, timeout, transport settings, configuration,
+        agent directory, and selected profile. Resolve credentials for that call;
+        do not retain credentials across attachment downloads.
 
-        Automatic selection prepares each candidate once and retains the callback
-        for execution. Missing credentials leave a candidate unavailable. Other
-        preparation errors are recorded in the attempt results; selection continues
-        to another provider or local transcription backend without uploading to
-        the rejected candidate. Explicit entries report the original preparation
-        error through the same attempt results.
+        Return `{ ok: true, value: { text, model } }` after transcription. Return
+        `{ ok: false, error }` only for authentication or configuration rejected
+        **before uploading audio**. The host records that error and automatic
+        selection may try the next provider or local backend. Canonical missing
+        provider auth leaves the automatic candidate unavailable without a failed
+        attempt. Upload and HTTP failures must throw: automatic selection then
+        stops without sending the recording to another provider. Explicit model
+        lists retain their authored fallback order.
 
-        Prepared callbacks receive the audio bytes, filename, language, timeout,
-        and fetch transport. Return the actual model only when known; the host
-        does not substitute a configured model when the provider omits it.
-        `transcribeAudio` remains available for providers using host-owned
-        API-key resolution and rotation.
+        Return the model when known; otherwise the host retains the requested
+        model in its result. `transcribeAudio` remains available for providers
+        using host-owned API-key resolution and rotation.
 
         ```typescript
         api.registerMediaUnderstandingProvider({

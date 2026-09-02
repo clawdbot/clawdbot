@@ -4,7 +4,7 @@ import type { MediaUnderstandingCapability } from "./types.js";
 export const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
 
 // Shipped transcribeAudio descriptors receive host-resolved API-key auth.
-// Provider-prepared audio owns its credential contract and does not use this path.
+// Context-owning audio providers own their credential contract and do not use this path.
 export function resolveOpenAiAudioAuthModelApi(params: {
   capability: MediaUnderstandingCapability;
   providerId: string;

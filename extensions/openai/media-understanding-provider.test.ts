@@ -1,4 +1,6 @@
 // Openai tests cover media understanding provider plugin behavior.
+import { inspect } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import {
   createAuthCaptureJsonFetch,
@@ -8,18 +10,16 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-const authMocks = vi.hoisted(() => ({ resolve: vi.fn(), metadata: vi.fn() }));
+const authMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   resolveApiKeyForProvider: authMocks.resolve,
-  resolveProviderAuthProfileMetadata: authMocks.metadata,
 }));
 
 installPinnedHostnameTestHooks();
 
 beforeEach(() => {
   authMocks.resolve.mockReset();
-  authMocks.metadata.mockReset().mockReturnValue({});
 });
 
 describe("openaiMediaUnderstandingProvider", () => {
@@ -34,12 +34,8 @@ describe("openaiMediaUnderstandingProvider", () => {
   });
 });
 
-describe("provider-prepared audio transcription", () => {
-  const token = `fixture.${Buffer.from(
-    JSON.stringify({
-      "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" },
-    }),
-  ).toString("base64url")}.signature`;
+describe("provider-owned audio transcription", () => {
+  const token = "fixture-oauth-token";
 
   function useOAuth() {
     authMocks.resolve.mockResolvedValue({
@@ -49,32 +45,41 @@ describe("provider-prepared audio transcription", () => {
     });
   }
 
-  it.each([undefined, "https://api.openai.com", "https://chatgpt.com/backend-api/codex"])(
-    "routes subscription audio from official base %s to the fixed ChatGPT endpoint",
-    async (baseUrl) => {
+  it.each([
+    [undefined, undefined],
+    [undefined, "gpt-4o-mini-transcribe"],
+    ["https://api.openai.com", "gpt-4o-mini-transcribe"],
+    ["https://chatgpt.com/backend-api/codex", "gpt-4o-mini-transcribe"],
+  ])(
+    "routes subscription audio from official base %s with model %s to the standard transcription endpoint",
+    async (baseUrl, model) => {
       useOAuth();
       const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "Hallo" });
-      const transcribe = await openaiMediaUnderstandingProvider.prepareAudioTranscription!({
+      const result = await openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
         cfg: {},
         agentDir: "/fixture/agents/audio",
         profile: "openai:audio",
         baseUrl,
-      });
-      const result = await transcribe({
         buffer: Buffer.from("audio"),
         fileName: "voice.wav",
         language: "de",
+        model,
+        prompt: "Names: Ada",
         timeoutMs: 1000,
         fetchFn,
       });
       const { url, init } = getRequest();
-      expect(url).toBe("https://chatgpt.com/backend-api/transcribe");
+      expect(url).toBe("https://api.openai.com/v1/audio/transcriptions");
       expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
-      expect(new Headers(init?.headers).get("ChatGPT-Account-ID")).toBe("fixture-account");
-      expect((init?.body as FormData).get("language")).toBe("de");
-      expect((init?.body as FormData).has("model")).toBe(false);
-      expect(result).toEqual({ text: "Hallo" });
-      expect(authMocks.metadata).not.toHaveBeenCalled();
+      expect(new Headers(init?.headers).has("ChatGPT-Account-ID")).toBe(false);
+      const body = expectDefined(init?.body, "transcription request body") as FormData;
+      expect(body.get("language")).toBe("de");
+      expect(body.get("model")).toBe(model ?? "gpt-4o-transcribe");
+      expect(body.get("prompt")).toBe("Names: Ada");
+      expect(result).toEqual({
+        ok: true,
+        value: { text: "Hallo", model: model ?? "gpt-4o-transcribe" },
+      });
       expect(authMocks.resolve).toHaveBeenCalledWith(
         expect.objectContaining({
           agentDir: "/fixture/agents/audio",
@@ -82,42 +87,6 @@ describe("provider-prepared audio transcription", () => {
           lockedProfile: true,
         }),
       );
-    },
-  );
-
-  it.each(["first", "second"])(
-    "uses only the selected %s account metadata for an opaque OAuth token",
-    async (selected) => {
-      const profileId = `openai:${selected}`;
-      authMocks.resolve.mockResolvedValue({
-        apiKey: "opaque-fixture-access",
-        mode: "oauth",
-        profileId,
-        source: `profile:${profileId}`,
-      });
-      authMocks.metadata.mockImplementation((params: { profileId?: string }) => ({
-        accountId: params.profileId === "openai:second" ? "second-account" : "first-account",
-      }));
-      const transcribe = await openaiMediaUnderstandingProvider.prepareAudioTranscription!({
-        cfg: {},
-        agentDir: "/fixture/agents/worker",
-      });
-      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "account transcript" });
-      await transcribe({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.wav",
-        timeoutMs: 1000,
-        fetchFn,
-      });
-      expect(new Headers(getRequest().init?.headers).get("ChatGPT-Account-ID")).toBe(
-        `${selected}-account`,
-      );
-      expect(authMocks.metadata).toHaveBeenCalledExactlyOnceWith({
-        provider: "openai",
-        cfg: {},
-        agentDir: "/fixture/agents/worker",
-        profileId,
-      });
     },
   );
 
@@ -168,18 +137,22 @@ describe("provider-prepared audio transcription", () => {
             const provider = registry.registry.mediaUnderstandingProviders.find(
               (entry) => entry.provider.id === "openai",
             )?.provider;
-            if (!provider?.prepareAudioTranscription) {
-              throw new Error("OpenAI audio preparation registration missing");
+            if (!provider?.transcribeAudioWithContext) {
+              throw new Error("OpenAI audio transcription registration missing");
             }
-            const transcribe = await provider.prepareAudioTranscription({ cfg });
             const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "subscription" });
-            await transcribe({
+            const result = await provider.transcribeAudioWithContext({
+              cfg,
               buffer: Buffer.from("audio"),
               fileName: "voice.wav",
               timeoutMs: 1000,
               fetchFn,
             });
-            expect(getRequest().url).toBe("https://chatgpt.com/backend-api/transcribe");
+            expect(result.ok).toBe(true);
+            expect(getRequest().url).toBe("https://api.openai.com/v1/audio/transcriptions");
+            expect(new Headers(getRequest().init?.headers).get("authorization")).toBe(
+              `Bearer ${token}`,
+            );
             expect(authMocks.resolve).toHaveBeenCalledTimes(2);
           });
         } finally {
@@ -213,12 +186,10 @@ describe("provider-prepared audio transcription", () => {
         },
       };
       const original = structuredClone(cfg);
-      const transcribe = await openaiMediaUnderstandingProvider.prepareAudioTranscription!({
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+      await openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
         cfg,
         baseUrl,
-      });
-      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
-      await transcribe({
         buffer: Buffer.from("audio"),
         fileName: "voice.wav",
         model: "gpt-4o-mini-transcribe",
@@ -238,8 +209,9 @@ describe("provider-prepared audio transcription", () => {
       );
       const { url, init } = getRequest();
       expect(url).toBe(expectedUrl);
-      expect((init?.body as FormData).get("model")).toBe("gpt-4o-mini-transcribe");
-      expect((init?.body as FormData).get("prompt")).toBe("Names: Ada");
+      const body = expectDefined(init?.body, "transcription request body") as FormData;
+      expect(body.get("model")).toBe("gpt-4o-mini-transcribe");
+      expect(body.get("prompt")).toBe("Names: Ada");
     },
   );
 
@@ -248,27 +220,74 @@ describe("provider-prepared audio transcription", () => {
     { baseUrl: "https://api.openai.com:8443/v1" },
     { baseUrl: "https://api.openai.com/v1?alternate=true" },
     { headers: { authorization: "Bearer other" } },
-    { prompt: "Translate to French" },
-    { requestedModel: "gpt-4o-mini-transcribe" },
   ])("rejects unsupported subscription request settings before upload: %j", async (settings) => {
     useOAuth();
     await expect(
-      openaiMediaUnderstandingProvider.prepareAudioTranscription!({
+      openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
         cfg: {},
+        buffer: Buffer.from("audio"),
+        fileName: "voice.wav",
+        timeoutMs: 1000,
         profile: "openai:audio",
         ...settings,
       }),
-    ).rejects.toThrow(/API-key profile/);
+    ).resolves.toEqual({
+      ok: false,
+      error: expect.objectContaining({ message: expect.stringMatching(/API-key profile/) }),
+    });
   });
 
   it("does not switch billing routes after an authored credential failure", async () => {
     const failure = new Error("selected profile could not refresh");
     authMocks.resolve.mockRejectedValue(failure);
     await expect(
-      openaiMediaUnderstandingProvider.prepareAudioTranscription!({ cfg: {} }),
-    ).rejects.toBe(failure);
+      openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
+        cfg: {},
+        buffer: Buffer.from("audio"),
+        fileName: "voice.wav",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({ ok: false, error: failure });
     expect(authMocks.resolve).toHaveBeenCalledTimes(1);
   });
+
+  it.each([400, 200])(
+    "redacts reflected request credentials from HTTP %s diagnostics",
+    async (status) => {
+      const credential = "synthetic-only";
+      authMocks.resolve.mockResolvedValue({
+        apiKey: credential,
+        mode: "oauth",
+        profileId: "openai:fixture",
+        source: "profile:openai:fixture",
+      });
+      const fetchFn = vi.fn<typeof fetch>().mockImplementationOnce(async (_url, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${credential}`);
+        return new Response(
+          status === 400
+            ? JSON.stringify({ error: { message: `Rejected ${credential}`, code: credential } })
+            : credential,
+          { status, headers: { "x-request-id": credential } },
+        );
+      });
+      const error = await openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
+        cfg: {},
+        buffer: Buffer.from("audio"),
+        fileName: "voice.wav",
+        timeoutMs: 1000,
+        fetchFn,
+      }).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message:
+          status === 400
+            ? "Audio transcription failed (HTTP 400): Rejected *** [code=***] [request_id=***]"
+            : "Audio transcription failed: malformed JSON response",
+      });
+      expect(inspect(error)).not.toContain(credential);
+      expect(authMocks.resolve).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("transcribeOpenAiAudio", () => {

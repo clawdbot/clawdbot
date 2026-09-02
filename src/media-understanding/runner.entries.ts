@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -613,36 +614,6 @@ function resolveProviderRequestContext(params: {
   return { baseUrl, headers, request };
 }
 
-/** Prepares auth and routing before an automatic audio candidate becomes the winner. */
-export async function prepareProviderAudioTranscription(params: {
-  prepare: NonNullable<MediaUnderstandingProvider["prepareAudioTranscription"]>;
-  providerId: string;
-  entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
-  config?: MediaUnderstandingConfig;
-  requestedModel?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}) {
-  assertRuntimeMediaRequestSecretOwnerAvailable({ capability: "audio", entry: params.entry });
-  const { prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
-    ...params,
-    capability: "audio",
-  });
-  return params.prepare({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    profile: params.entry.profile,
-    preferredProfile: params.entry.preferredProfile,
-    requestedModel: params.requestedModel,
-    prompt:
-      resolveMediaRequestOverrides(params.config).prompt ??
-      (hasConfiguredPrompt ? prompt : undefined),
-    ...resolveProviderRequestContext(params),
-  });
-}
-
 /** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
   const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
@@ -779,12 +750,8 @@ export async function runProviderEntry(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
-  requestedModel?: string;
   secretOwnerId?: string;
-  preparedAudioTranscription?: Awaited<
-    ReturnType<NonNullable<MediaUnderstandingProvider["prepareAudioTranscription"]>>
-  >;
-}): Promise<MediaUnderstandingOutput | null> {
+}): Promise<Result<MediaUnderstandingOutput | null, unknown>> {
   const { entry, capability, cfg } = params;
   const providerIdRaw = entry.provider?.trim();
   if (!providerIdRaw) {
@@ -841,13 +808,13 @@ export async function runProviderEntry(params: {
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
     const result = await describeImage(imageInput);
-    return {
+    return ok({
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
       text: trimOutput(result.text, maxChars),
       provider: requestProviderId,
       model: result.model ?? modelId,
-    };
+    });
   }
 
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
@@ -862,7 +829,7 @@ export async function runProviderEntry(params: {
   const fetchFn = resolveProxyFetchFromEnv();
 
   if (capability === "audio") {
-    if (!provider.transcribeAudio && !provider.prepareAudioTranscription) {
+    if (!provider.transcribeAudio && !provider.transcribeAudioWithContext) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const requestOverrides = resolveMediaRequestOverrides(params.config);
@@ -913,15 +880,19 @@ export async function runProviderEntry(params: {
       fetchFn,
     };
     let result: AudioTranscriptionResult;
-    if (provider.prepareAudioTranscription) {
-      const transcribe =
-        params.preparedAudioTranscription ??
-        (await prepareProviderAudioTranscription({
-          ...params,
-          providerId,
-          prepare: provider.prepareAudioTranscription,
-        }));
-      result = await transcribe(input);
+    if (provider.transcribeAudioWithContext) {
+      const attempt = await provider.transcribeAudioWithContext({
+        ...input,
+        cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        profile: entry.profile,
+        preferredProfile: entry.preferredProfile,
+      });
+      if (!attempt.ok) {
+        return attempt;
+      }
+      result = attempt.value;
     } else {
       const transcribeAudio = expectDefined(
         provider.transcribeAudio,
@@ -956,13 +927,13 @@ export async function runProviderEntry(params: {
             })
           : await transcribeAudio(buildRequest({ kind: "none" }));
     }
-    return {
+    return ok({
       kind: "audio.transcription",
       attachmentIndex: params.attachmentIndex,
       text: trimOutput(result.text, maxChars),
       provider: providerId,
-      model: provider.prepareAudioTranscription ? result.model : (result.model ?? model),
-    };
+      model: result.model ?? model,
+    });
   }
 
   if (!provider.describeVideo) {
@@ -1034,13 +1005,13 @@ export async function runProviderEntry(params: {
           execute: (apiKey) => describeVideo(buildRequest({ kind: "api-key", apiKey })),
         })
       : await describeVideo(buildRequest({ kind: "none" }));
-  return {
+  return ok({
     kind: "video.description",
     attachmentIndex: params.attachmentIndex,
     text: trimOutput(result.text, maxChars),
     provider: providerId,
     model: result.model ?? model,
-  };
+  });
 }
 
 /** Executes one CLI-backed media-understanding entry for one attachment. */

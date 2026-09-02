@@ -163,26 +163,26 @@ function createVideoCfg(params: { provider: string; model: string }): OpenClawCo
 }
 
 describe("runCapability local no-auth audio providers", () => {
-  it("runs provider-prepared audio without resolving an unrelated API key", async () => {
+  it("runs provider-owned audio without resolving an unrelated API key", async () => {
     modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withAudioFixture("openclaw-prepared-audio", async ({ ctx, media, cache }) => {
         const provider = {
           id: "prepared-audio",
           capabilities: ["audio" as const],
-          prepareAudioTranscription: async (context: {
+          transcribeAudioWithContext: async (context: {
             agentDir?: string;
             profile?: string;
-            requestedModel?: string;
+            model?: string;
+            buffer: Buffer;
+            language?: string;
           }) => {
             expect(context.agentDir).toBe(agentDir);
             expect(context.profile).toBe("prepared-audio:account");
-            expect(context.requestedModel).toBe("prepared-model");
-            return async (request: { buffer: Buffer; language?: string }) => {
-              expect(request.buffer.byteLength).toBeGreaterThan(1024);
-              expect(request.language).toBe("de");
-              return { text: "prepared transcript" };
-            };
+            expect(context.model).toBe("prepared-model");
+            expect(context.buffer.byteLength).toBeGreaterThan(1024);
+            expect(context.language).toBe("de");
+            return { ok: true as const, value: { text: "prepared transcript" } };
           },
         };
         const result = await runCapability({
@@ -201,8 +201,8 @@ describe("runCapability local no-auth audio providers", () => {
 
         expect(result.decision.outcome).toBe("success");
         expect(result.outputs[0]?.text).toBe("prepared transcript");
-        expect(result.outputs[0]?.model).toBeUndefined();
-        expect(result.decision.attachments[0]?.chosen?.model).toBeUndefined();
+        expect(result.outputs[0]?.model).toBe("prepared-model");
+        expect(result.decision.attachments[0]?.chosen?.model).toBe("prepared-model");
       });
     });
   });

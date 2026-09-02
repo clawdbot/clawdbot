@@ -112,15 +112,46 @@ function requireCapabilityOutput(result: CapabilityResult, index: number) {
 }
 
 describe("runCapability auto audio entries", () => {
-  it("auto-selects provider-prepared audio with subscription auth without pinning a model", async () => {
+  it("resolves audio credentials after loading each attachment", async () => {
+    await withAudioFixture("openclaw-audio-late-auth", async ({ ctx, media, cache }) => {
+      let currentCredential = "before-download";
+      const getBuffer = cache.getBuffer.bind(cache);
+      vi.spyOn(cache, "getBuffer").mockImplementation(async (params) => {
+        const audio = await getBuffer(params);
+        currentCredential = "after-download";
+        return audio;
+      });
+      const result = await runCapability({
+        capability: "audio",
+        cfg: createOpenAiAudioCfg(),
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry: createProviderRegistry({
+          openai: {
+            id: "openai",
+            capabilities: ["audio"],
+            transcribeAudioWithContext: async () => ({
+              ok: true,
+              value: { text: currentCredential },
+            }),
+          },
+        }),
+      });
+      expect(result.decision.outcome).toBe("success");
+      expect(result.outputs[0]?.text).toBe("after-download");
+    });
+  });
+
+  it("auto-selects provider-owned audio with subscription auth and its audio default", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const hasAuth = vi.mocked(modelAuth.hasAvailableAuthForProvider);
     hasAuth.mockImplementation(
       async (params) => params.provider === "openai" && params.modelApi === undefined,
     );
-    const prepareAudioTranscription = vi.fn(async (context: { requestedModel?: string }) => {
-      expect(context.requestedModel).toBeUndefined();
-      return async () => ({ text: "subscription transcript" });
+    const transcribeAudioWithContext = vi.fn(async (context: { model?: string }) => {
+      expect(context.model).toBe("transcription-default");
+      return { ok: true as const, value: { text: "subscription transcript" } };
     });
     try {
       await withAudioFixture("openclaw-auto-prepared-audio", async ({ ctx, media, cache }) => {
@@ -136,14 +167,14 @@ describe("runCapability auto audio entries", () => {
               id: "openai",
               capabilities: ["audio"],
               defaultModels: { audio: "transcription-default" },
-              prepareAudioTranscription,
+              transcribeAudioWithContext,
             },
           }),
         });
         expect(result.decision.outcome).toBe("success");
         expect(result.outputs[0]?.text).toBe("subscription transcript");
-        expect(result.outputs[0]?.model).toBeUndefined();
-        expect(prepareAudioTranscription).toHaveBeenCalledTimes(1);
+        expect(result.outputs[0]?.model).toBe("transcription-default");
+        expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
       });
     } finally {
       hasAuth.mockReset().mockResolvedValue(true);
@@ -163,6 +194,67 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it.each([false, true])(
+    "retries a failed upload on another provider only for an explicit fallback list: %s",
+    async (explicit) => {
+      const modelAuth = await import("../agents/model-auth.js");
+      const hasAuth = vi.mocked(modelAuth.hasAvailableAuthForProvider);
+      hasAuth.mockClear();
+      const rejected = new Error("Audio transcription failed (HTTP 403)");
+      const transcribeAudio = vi.fn(async () => ({ text: "authored fallback transcript" }));
+      await withAudioFixture("openclaw-audio-upload-fallback", async ({ ctx, media, cache }) => {
+        const result = await runCapability({
+          capability: "audio",
+          cfg: {
+            models: {
+              providers: {
+                openai: { baseUrl: "https://api.openai.com/v1", models: [] },
+                mistral: { baseUrl: "https://api.mistral.ai/v1", models: [] },
+              },
+            },
+            ...(explicit
+              ? {
+                  tools: {
+                    media: {
+                      models: [
+                        { provider: "openai", capabilities: ["audio" as const] },
+                        { provider: "mistral", capabilities: ["audio" as const] },
+                      ],
+                    },
+                  },
+                }
+              : {}),
+          },
+          ctx,
+          attachments: cache,
+          media,
+          activeModel: { provider: "openai", model: "chat-model" },
+          providerRegistry: createProviderRegistry({
+            openai: {
+              id: "openai",
+              capabilities: ["audio"],
+              transcribeAudioWithContext: async () => {
+                throw rejected;
+              },
+            },
+            mistral: { id: "mistral", capabilities: ["audio"], transcribeAudio },
+          }),
+        });
+        expect(result.decision.outcome).toBe(explicit ? "success" : "failed");
+        expect(result.decision.attachments[0]?.attempts[0]).toMatchObject({
+          provider: "openai",
+          outcome: "failed",
+          reason: String(rejected),
+        });
+        expect(transcribeAudio).toHaveBeenCalledTimes(explicit ? 1 : 0);
+        if (!explicit) {
+          expect(result.outputs).toEqual([]);
+          expect(hasAuth).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
   it.each(["provider", "local"] as const)(
     "continues to the next %s when automatic subscription preparation rejects the request",
     async (fallback) => {
@@ -170,11 +262,11 @@ describe("runCapability auto audio entries", () => {
       const rejected = new Error(
         "This subscription route cannot use the configured endpoint or prompt.",
       );
-      const prepareAudioTranscription = vi.fn(
+      const transcribeAudioWithContext = vi.fn(
         async (context: { baseUrl?: string; prompt?: string }) => {
           expect(context.baseUrl).toBe("https://custom.example/v1");
           expect(context.prompt).toBe("Preserve names.");
-          throw rejected;
+          return { ok: false as const, error: rejected };
         },
       );
       const transcribeAudio = vi.fn(async () => ({ text: "second-provider transcript" }));
@@ -191,7 +283,9 @@ describe("runCapability auto audio entries", () => {
                   models: {
                     providers: {
                       openai: { baseUrl: "https://custom.example/v1", models: [] },
-                      ...(fallback === "provider" ? { mistral: { models: [] } } : {}),
+                      ...(fallback === "provider"
+                        ? { mistral: { baseUrl: "https://api.mistral.ai/v1", models: [] } }
+                        : {}),
                     },
                   },
                   tools: { media: { audio: { prompt: "Preserve names." } } },
@@ -201,7 +295,7 @@ describe("runCapability auto audio entries", () => {
                 media,
                 activeModel: { provider: "openai", model: "chat-model" },
                 providerRegistry: createProviderRegistry({
-                  openai: { id: "openai", capabilities: ["audio"], prepareAudioTranscription },
+                  openai: { id: "openai", capabilities: ["audio"], transcribeAudioWithContext },
                   ...(fallback === "provider"
                     ? {
                         mistral: {
@@ -224,7 +318,7 @@ describe("runCapability auto audio entries", () => {
                   reason: String(rejected),
                 }),
               );
-              expect(prepareAudioTranscription).toHaveBeenCalledTimes(1);
+              expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
             },
           );
         });
@@ -235,11 +329,12 @@ describe("runCapability auto audio entries", () => {
     },
   );
 
-  it("keeps missing prepared-provider credentials unavailable without recording a failed attempt", async () => {
+  it("keeps missing provider credentials unavailable without recording a failed attempt", async () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-prepare-no-auth-"));
-    const prepareAudioTranscription = vi.fn(async () => {
-      throw new ProviderAuthError("missing-provider-auth", "openai", "No configured credentials");
-    });
+    const transcribeAudioWithContext = vi.fn(async () => ({
+      ok: false as const,
+      error: new ProviderAuthError("missing-provider-auth", "openai", "No configured credentials"),
+    }));
     try {
       clearMediaUnderstandingBinaryCacheForTests();
       await withEnvAsync(
@@ -257,13 +352,13 @@ describe("runCapability auto audio entries", () => {
                   id: "openai",
                   capabilities: ["audio"],
                   autoPriority: { audio: 20 },
-                  prepareAudioTranscription,
+                  transcribeAudioWithContext,
                 },
               }),
             });
             expect(result.decision.outcome).toBe("skipped");
             expect(result.decision.attachments[0]?.attempts).toEqual([]);
-            expect(prepareAudioTranscription).toHaveBeenCalledTimes(1);
+            expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
           });
         },
       );

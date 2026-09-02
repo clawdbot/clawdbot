@@ -4,7 +4,7 @@ import {
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
-import { prepareOpenAiAudioTranscription, transcribeOpenAiAudio } from "./audio-transcription.js";
+import { transcribeOpenAiAudioWithContext, transcribeOpenAiAudio } from "./audio-transcription.js";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
 export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
@@ -15,5 +15,5 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   transcribeAudio: transcribeOpenAiAudio,
-  prepareAudioTranscription: prepareOpenAiAudioTranscription,
+  transcribeAudioWithContext: transcribeOpenAiAudioWithContext,
 };

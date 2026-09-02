@@ -1,5 +1,6 @@
 // Shared media-understanding types for attachments, provider hooks, request
 // auth, decisions, and structured extraction inputs.
+import type { Result } from "@openclaw/normalization-core/result";
 import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -120,21 +121,12 @@ export type AudioTranscriptionResult = {
   model?: string;
 };
 
-export type AudioTranscriptionInput = Omit<AudioTranscriptionRequest, "apiKey" | "auth">;
-
-export type AudioTranscriptionContext = Pick<
-  AudioTranscriptionRequest,
-  "baseUrl" | "headers" | "request"
-> & {
+type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> & {
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   profile?: string;
   preferredProfile?: string;
-  /** Explicit model selection; automatic provider defaults leave this absent. */
-  requestedModel?: string;
-  /** An operator-authored prompt, excluding the host's default transcription prompt. */
-  prompt?: string;
 };
 
 export type VideoDescriptionRequest = {
@@ -291,10 +283,11 @@ export type MediaUnderstandingProvider = {
     ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderSyntheticAuthResult | null | undefined;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
-  /** Resolves provider-owned routing/auth once, without uploading audio during preparation. */
-  prepareAudioTranscription?: (
-    ctx: AudioTranscriptionContext,
-  ) => Promise<(req: AudioTranscriptionInput) => Promise<AudioTranscriptionResult>>;
+  /** Called after file loading. Result.error is only a rejection before audio upload;
+   * upload/HTTP failures must throw and stop automatic provider selection. */
+  transcribeAudioWithContext?: (
+    req: AudioTranscriptionContext,
+  ) => Promise<Result<AudioTranscriptionResult, unknown>>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;

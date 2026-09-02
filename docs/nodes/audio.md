@@ -57,22 +57,27 @@ The provider inventory reports the local fallback winner separately from global 
 
 ## OpenAI transcription alongside ChatGPT/Codex OAuth
 
-An OpenAI API key and a ChatGPT/Codex OAuth login are separate credentials even
-though both use the `openai` provider. With OAuth only, automatic OpenAI audio
-selection uses the ChatGPT dictation endpoint. Account access is required. This
-route accepts audio files and a language hint; explicit transcription models,
-custom prompts, endpoints, and request overrides require a Platform API key.
-OpenClaw reports a provider error if the account cannot use dictation and does
-not switch that failed request to Platform billing.
+OpenAI audio uses the standard `/v1/audio/transcriptions` endpoint with the
+selected API-key or ChatGPT/Codex OAuth profile. An OAuth login can transcribe
+when the account permits it; access, quota, and billing remain account-specific.
+The default model is `gpt-4o-transcribe`; configured models, prompts, and language
+hints are sent through the same multipart request for either credential class.
+Custom endpoints and request overrides require an API-key profile.
 
-During automatic selection, an OpenAI route that cannot prepare the configured
-request does not block another available provider or local transcription backend.
-The rejected preparation remains visible in the transcription attempt results.
-Missing credentials simply leave that candidate unavailable.
+Automatic selection can try another provider or local backend when the OpenAI
+plugin rejects authentication or configuration before uploading audio. The
+rejection remains visible in the attempt results; missing credentials simply
+leave that candidate unavailable. Once a provider attempts transcription,
+upload or HTTP failures are reported without automatically sending the recording
+to another provider or switching credential classes. Explicit model lists retain
+their configured fallback order.
 
-To select a particular transcription model while keeping OAuth first for normal
-text and reasoning requests, create a dedicated
-API-key profile and select it only on the audio model entry.
+Unless a profile or OAuth auth mode is explicitly selected, an authored OpenAI
+provider key takes precedence over ambient OAuth for audio.
+To keep audio billing explicitly separate while keeping OAuth first for normal
+text and reasoning, create a dedicated API-key profile and select it only on the
+audio model entry. This is optional; an API key is not required merely to choose
+a transcription model.
 
 Repeat these steps for every agent that can receive audio. For a single-agent
 installation, run them once for that agent.
