@@ -2509,6 +2509,41 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+    expect(normalizeTestText(text)).toContain("previous runtime: OpenClaw Default");
+  });
+
+  it("labels a divergent locked harness as an active session pin in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-locked-agent",
+        updatedAt: 0,
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Runtime: OpenAI Codex (session pin: OpenClaw Default)",
+    );
   });
 });
 

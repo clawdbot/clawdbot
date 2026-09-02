@@ -79,7 +79,11 @@ describe("resolveAgentRuntimeLabel", () => {
   it("names the persisted harness pin when it disagrees with the resolved harness", () => {
     expect(
       resolveAgentRuntimeLabel({
-        sessionEntry: { agentHarnessId: "codex", modelProvider: "anthropic" },
+        sessionEntry: {
+          agentHarnessId: "codex",
+          modelProvider: "anthropic",
+          modelSelectionLocked: true,
+        },
         resolvedHarness: "claude-bridge",
         fallbackProvider: "anthropic",
         classifyCliProvider: () => false,
@@ -109,7 +113,7 @@ describe("resolveAgentRuntimeLabel", () => {
         sessionEntry: { agentHarnessId: "codex", modelProvider: "claude-cli" },
         classifyCliProvider,
       },
-      expected: "Claude CLI (session pin: OpenAI Codex)",
+      expected: "Claude CLI (previous runtime: OpenAI Codex)",
     },
     {
       name: "a pin diverging from the built-in runtime fallback is reported",
@@ -118,12 +122,12 @@ describe("resolveAgentRuntimeLabel", () => {
         fallbackProvider: "anthropic",
         classifyCliProvider: () => false,
       },
-      expected: "OpenClaw Default (session pin: OpenAI Codex)",
+      expected: "OpenClaw Default (previous runtime: OpenAI Codex)",
     },
     {
       name: "an unmapped pin is reported by its sanitized id",
       args: { sessionEntry: { agentHarnessId: "custom-harness" }, resolvedHarness: "codex" },
-      expected: "OpenAI Codex (session pin: custom-harness)",
+      expected: "OpenAI Codex (previous runtime: custom-harness)",
     },
   ])("$name", ({ args, expected }) => {
     expect(resolveAgentRuntimeLabel(args)).toBe(expected);

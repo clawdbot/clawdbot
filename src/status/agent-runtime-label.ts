@@ -28,7 +28,12 @@ type AgentRuntimeLabelArgs = {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
     SessionEntry,
-    "acp" | "agentRuntimeOverride" | "agentHarnessId" | "modelProvider" | "providerOverride"
+    | "acp"
+    | "agentRuntimeOverride"
+    | "agentHarnessId"
+    | "modelProvider"
+    | "modelSelectionLocked"
+    | "providerOverride"
   >;
   resolvedHarness?: string;
   fallbackProvider?: string;
@@ -80,20 +85,21 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   }
 
   const described = resolveDescribedAgentRuntime(args);
-  const pinned = normalizeOptionalAgentRuntimeId(args.sessionEntry?.agentHarnessId);
-  // The persisted `agentHarnessId` owns the transcript, and dispatch paths disagree
-  // about it: turn selection filters it by provider compatibility while compaction
-  // and memory-flush runs forward it unfiltered, where harness selection promotes it
-  // to the requested runtime. Naming only the freshly resolved runtime would claim a
-  // runtime the next turn may not use, which is how a wedged session reads green.
+  const recordedRuntime = normalizeOptionalAgentRuntimeId(args.sessionEntry?.agentHarnessId);
+  // `agentHarnessId` always identifies the runtime that produced the transcript,
+  // but only a model-selection-locked session treats it as an active routing pin.
+  // Keep those meanings visibly distinct so ordinary history cannot be mistaken
+  // for the runtime that owns the next turn.
   if (
-    !pinned ||
-    isDefaultAgentRuntimeId(pinned) ||
-    pinned === normalizeOptionalAgentRuntimeId(described.runtime)
+    !recordedRuntime ||
+    isDefaultAgentRuntimeId(recordedRuntime) ||
+    recordedRuntime === normalizeOptionalAgentRuntimeId(described.runtime)
   ) {
     return described.label;
   }
-  return `${described.label} (session pin: ${
-    AGENT_RUNTIME_LABELS[pinned] ?? sanitizeTerminalText(pinned)
+  const relationship =
+    args.sessionEntry?.modelSelectionLocked === true ? "session pin" : "previous runtime";
+  return `${described.label} (${relationship}: ${
+    AGENT_RUNTIME_LABELS[recordedRuntime] ?? sanitizeTerminalText(recordedRuntime)
   })`;
 }
