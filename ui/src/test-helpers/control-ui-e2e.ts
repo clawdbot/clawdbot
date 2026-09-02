@@ -1546,7 +1546,7 @@ function installControlUiMockGateway(
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
       if (
         typeof params.expectedSessionId === "string" &&
-        sessions.read(params.key).sessionId !== params.expectedSessionId
+        sessions.currentListSessionId(params.key) !== params.expectedSessionId
       ) {
         return {
           __mockError: {

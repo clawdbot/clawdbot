@@ -369,6 +369,20 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
     }),
   ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   expect((await request("sessions.list")).payload.sessions).toEqual(beforeStalePatch);
+  const replacementSessionId = "replacement-generation";
+  controls.setMethodResponse("sessions.list", {
+    sessions: [{ ...notes, sessionId: replacementSessionId }],
+  });
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: replacementSessionId,
+      label: "Replacement label",
+    }),
+  ).toMatchObject({ ok: true });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ sessionId: replacementSessionId, label: "Replacement label" }),
+  ]);
 });
 
 it("replays later commits onto an injected list without adopting its stale generation", async ({
