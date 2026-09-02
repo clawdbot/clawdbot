@@ -157,6 +157,18 @@ openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 
 Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings.
 
+### Python environments (`uv`)
+
+In a [uv-managed project](https://docs.astral.sh/uv/guides/projects/), a bare `python` or `python3` uses the interpreter selected by the exec host's `PATH`. If the project environment is not on that path, imports of dependencies installed there can fail with `ModuleNotFoundError`.
+
+Set `workdir` to the project directory and run `uv run python3 script.py` to use its environment. A bare interpreter also works when the project environment is already on `PATH`.
+
+For repeated agent work, record the project convention in the workspace's `AGENTS.md`, for example:
+
+```md
+- Run Python scripts from this project with `uv run python3 script.py` so they use its dependencies.
+```
+
 ## Session overrides (`/exec`)
 
 Send `/exec host=... node=...` on its own to set **per-session** placement defaults. `security` and `ask` apply to the **current message only**; include them with the task you want to run. Send `/exec` with no arguments to show the resolved defaults.
