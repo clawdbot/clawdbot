@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -1562,14 +1563,8 @@ describe("Tool Search", () => {
 
   it("does not publish terminal state after an aborted cancellation-ignoring source", async () => {
     const sourceResult = jsonResult({ ok: true });
-    let resolveSource!: (result: typeof sourceResult) => void;
-    let notifySourceStarted!: () => void;
-    const sourceStarted = new Promise<void>((resolve) => {
-      notifySourceStarted = resolve;
-    });
-    const source = new Promise<typeof sourceResult>((resolve) => {
-      resolveSource = resolve;
-    });
+    const sourceStarted = createDeferred();
+    const source = createDeferred<typeof sourceResult>();
     let toolCallId: string | undefined;
     let sourceCompletion: Promise<unknown> | undefined;
     const fixture = observedRuntimeFixture({
@@ -1577,8 +1572,8 @@ describe("Tool Search", () => {
       ordinal: 13,
       execute: async (id) => {
         toolCallId = id;
-        notifySourceStarted();
-        return await source;
+        sourceStarted.resolve();
+        return await source.promise;
       },
       executeTool: async (params) => {
         const execution = params.tool.execute(
@@ -1601,12 +1596,12 @@ describe("Tool Search", () => {
       {},
       { signal: controller.signal },
     );
-    await sourceStarted;
+    await sourceStarted.promise;
     controller.abort();
 
     await expect(call).rejects.toMatchObject({ name: "AbortError" });
     expect(fixture.outcomes).toHaveLength(0);
-    resolveSource(sourceResult);
+    source.resolve(sourceResult);
     await expectDefined(sourceCompletion, "late source completion");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);

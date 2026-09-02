@@ -988,7 +988,7 @@ export const en: TranslationMap & {
     ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",
-    assignToMe: "Assign to me",
+    assignToMe: "Me",
     assignTo: "Assign to…",
     filterControls: "Session filters",
     filters: "Filters",

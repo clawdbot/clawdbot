@@ -12,7 +12,10 @@ import {
   prepareE2eVitestRuntime,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
-import { isVitestWorkerMetadataRequest } from "./lib/vitest-cli-mode.mts";
+import {
+  hasNonRunVitestSubcommand,
+  isVitestWorkerMetadataRequest,
+} from "./lib/vitest-cli-mode.mts";
 import type { exitVitestBySignal } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import {
@@ -20,7 +23,11 @@ import {
   resolveLocalFullSuiteProfile,
   resolveLocalVitestEnv,
 } from "./lib/vitest-local-scheduling.mts";
-import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
+import {
+  createVitestReportOwner,
+  nativeHelpRequested,
+  type VitestReportOwner,
+} from "./lib/vitest-report-owner.mts";
 import {
   createShardTimingSample,
   readShardTimings,
@@ -44,6 +51,7 @@ import {
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
   formatNoChangedTestTargetLines,
+  isTestFileTarget,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
@@ -295,7 +303,7 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
     return;
   }
   const baseEnv = resolveLocalVitestEnv(process.env);
-  const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+  const { targetArgs, forwardedArgs } = parseTestProjectsArgs(args, process.cwd());
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
@@ -351,6 +359,40 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
     printNoChangedTestTargets(args, process.cwd(), baseEnv);
     printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
+  }
+
+  if (
+    targetArgs.length &&
+    !runSpecs.some((spec) => spec.watchMode) &&
+    !hasNonRunVitestSubcommand(forwardedArgs)
+  ) {
+    // Native parsing stays in the execution owner. Original filters distinguish
+    // explicit files from broad selections that also lower to literal include files.
+    const { parseCLI } = await import("vitest/node");
+    try {
+      if (!nativeHelpRequested(forwardedArgs, parseCLI)) {
+        const { filter, options } = parseCLI(["vitest", "run", ...forwardedArgs]);
+        if (
+          filter.length > 0 &&
+          filter.every(
+            (file) =>
+              isTestFileTarget(file) && /[/\\]/u.test(file) && !/[*?[\]{}]|[@+!]\(/u.test(file),
+          ) &&
+          !options.watch &&
+          options.run !== false &&
+          !options.listTags &&
+          !options.clearCache &&
+          !options.mergeReports &&
+          !Object.hasOwn(options, "passWithNoTests")
+        ) {
+          for (const spec of runSpecs) {
+            spec.pnpmArgs.push("--passWithNoTests=false");
+          }
+        }
+      }
+    } catch {
+      // Invalid native input belongs to the real child; do not add another scalar.
+    }
   }
 
   runSpecs.forEach((spec, index) => {

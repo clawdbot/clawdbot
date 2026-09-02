@@ -70,6 +70,18 @@ suite.define(() => {
           await openSessionMenuSubmenu(page, "Icon & color");
         }
         const picker = page.locator(".session-menu__appearance:visible");
+        await expect
+          .poll(() =>
+            picker.evaluate((element) => {
+              const iconPicker = element.querySelector(".session-menu__icon-picker");
+              const iconsLabel = element.querySelectorAll(".session-menu__icon-section-label")[2];
+              return [
+                iconPicker ? getComputedStyle(iconPicker).marginTop : null,
+                iconsLabel ? getComputedStyle(iconsLabel).marginTop : null,
+              ];
+            }),
+          )
+          .toEqual(["4px", "4px"]);
         const focused = () =>
           page.evaluate(
             () =>
@@ -95,6 +107,13 @@ suite.define(() => {
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "🚀");
         await page.keyboard.press("Tab");
         const reset = picker.getByRole("button", { name: "Reset to default", exact: true });
+        await expect
+          .poll(() =>
+            reset.evaluate(
+              (element) => element.previousElementSibling?.getAttribute("role") ?? null,
+            ),
+          )
+          .toBe("separator");
         await expect
           .poll(() =>
             reset.evaluateAll((elements) =>

@@ -25,16 +25,6 @@ export function compactSessionMenuViewForValue(value: string): CompactSessionMen
   return COMPACT_SESSION_MENU_VIEW_BY_VALUE[value] ?? null;
 }
 
-export function compactSessionOwnerOptions(
-  ownerOptions: readonly SessionOwnerOption[],
-  selfOwner: SessionOwnerOption | null,
-): readonly SessionOwnerOption[] {
-  if (!selfOwner || ownerOptions.some((owner) => owner.id === selfOwner.id)) {
-    return ownerOptions;
-  }
-  return [selfOwner, ...ownerOptions];
-}
-
 export function renderCompactSessionMenuNavigationItem(params: {
   view: Exclude<CompactSessionMenuView, "root">;
   label: string;
@@ -72,6 +62,7 @@ export function renderCompactSessionMenuFrame(body: TemplateResult | readonly Te
 export function renderCompactSessionMenuView(params: {
   view: CompactSessionMenuView;
   ownerOptions: readonly SessionOwnerOption[];
+  selfOwner: SessionOwnerOption | null;
   currentOwnerId: string | null;
   assignOwnerDisabled: boolean;
   assignOwnerDisabledReason?: string;
@@ -92,6 +83,7 @@ export function renderCompactSessionMenuView(params: {
           ? renderSessionOwnerAssignmentOptions(
               {
                 ownerOptions: params.ownerOptions,
+                selfOwner: params.selfOwner,
                 currentOwnerId: params.currentOwnerId,
                 disabled: params.assignOwnerDisabled,
                 disabledReason: params.assignOwnerDisabledReason,
