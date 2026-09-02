@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { recordInboundSession } from "../../channels/session.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -10,7 +11,6 @@ import {
   cleanupSessionLifecycleArtifactsCore,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  recordInboundSessionMeta,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -158,7 +158,7 @@ it("releases the store writer before maintenance archive sizing completes", asyn
   expect(writerCompletedBeforeMaterialization).toBe(true);
 });
 
-it("does not hold channel entry writes behind automatic session maintenance", async () => {
+it("does not hold channel recording behind automatic session maintenance", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const staleSessionKey = "agent:main:maintenance-ingress-stale";
@@ -180,7 +180,7 @@ it("does not hold channel entry writes behind automatic session maintenance", as
     await materializationReleased;
   };
 
-  const entryWrite = recordInboundSessionMeta({
+  const entryWrite = recordInboundSession({
     storePath,
     sessionKey: "agent:main:discord:direct:maintenance-ingress",
     ctx: {
@@ -191,36 +191,58 @@ it("does not hold channel entry writes behind automatic session maintenance", as
       SenderId: "maintenance-ingress",
       To: "discord:bot",
     },
+    updateLastRoute: {
+      accountId: "default",
+      channel: "discord",
+      sessionKey: "agent:main:discord:direct:maintenance-ingress",
+      to: "user:maintenance-ingress",
+    },
+    onRecordError(error) {
+      throw error;
+    },
   });
   const firstCompleted = await Promise.race([
     entryWrite.then(() => "entry-write" as const),
     materializationStarted.then(() => "maintenance" as const),
   ]);
-  await materializationStarted;
   const laterStaleSessionKey = "agent:main:maintenance-ingress-later-stale";
-  replaceSessionEntrySync(
-    { sessionKey: laterStaleSessionKey, storePath },
-    { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
-  );
-  await recordInboundSessionMeta({
-    storePath,
-    sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
-    ctx: {
-      Body: "later maintenance ingress proof",
-      ChatType: "direct",
-      From: "discord:maintenance-ingress-later",
-      Provider: "discord",
-      SenderId: "maintenance-ingress-later",
-      To: "discord:bot",
-    },
-  });
+  if (firstCompleted === "entry-write") {
+    await materializationStarted;
+    replaceSessionEntrySync(
+      { sessionKey: laterStaleSessionKey, storePath },
+      { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
+    );
+    await recordInboundSession({
+      storePath,
+      sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
+      ctx: {
+        Body: "later maintenance ingress proof",
+        ChatType: "direct",
+        From: "discord:maintenance-ingress-later",
+        Provider: "discord",
+        SenderId: "maintenance-ingress-later",
+        To: "discord:bot",
+      },
+      updateLastRoute: {
+        accountId: "default",
+        channel: "discord",
+        sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
+        to: "user:maintenance-ingress-later",
+      },
+      onRecordError(error) {
+        throw error;
+      },
+    });
+  }
   releaseMaterialization();
   await entryWrite;
 
   expect(firstCompleted).toBe("entry-write");
   await vi.waitFor(() => {
     expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
+    if (firstCompleted === "entry-write") {
+      expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
+    }
   });
 });
 
