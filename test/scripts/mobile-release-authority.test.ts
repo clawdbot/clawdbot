@@ -361,6 +361,7 @@ function createFixture(options: FixtureOptions = {}): Fixture {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    GH_TOKEN: "",
     GH_LOG: ghLog,
     GH_MAIN_REFS: `${baseSha},${baseSha},${baseSha},${baseSha}`,
     GH_ORIGINAL_WORKFLOW_SHA: baseSha,
@@ -432,6 +433,15 @@ function readOutputs(file: string): Record<string, string> {
         return [line.slice(0, separator), line.slice(separator + 1)];
       }),
   );
+}
+
+function readGhTrace(file: string): Array<{ args: string[]; token: string }> {
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { args: string[]; token: string });
 }
 
 function resetState(fixture: Fixture): void {
@@ -579,6 +589,31 @@ describe("mobile release authority", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("original canonical main workflow dispatch");
+  });
+
+  it("rejects a read-only dispatcher before release or sink authority is reachable", () => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "authorize", { GH_PERMISSION: "read" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("lacks write, maintain, or admin permission");
+    expect(readGhTrace(fixture.ghLog)).toEqual([
+      {
+        args: ["api", `repos/${REPOSITORY}/actions/runs/123/attempts/1`],
+        token: "",
+      },
+      {
+        args: [
+          "api",
+          `repos/${REPOSITORY}/collaborators/release-owner/permission`,
+          "--jq",
+          ".permission",
+        ],
+        token: "",
+      },
+    ]);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
   });
 
   it.each([
@@ -819,23 +854,28 @@ describe("mobile release authority", () => {
 
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
-      [".github/workflows/ios-beta-release.yml", "iOS Beta Release", "ios-beta-release"],
+      [".github/workflows/ios-beta-release.yml", "iOS Beta Release", "ios-beta-release", "ios"],
       [
         ".github/workflows/android-beta-release.yml",
         "Android Beta Release",
         "android-beta-release",
+        "android",
       ],
     ] as const;
 
-    for (const [file, name, environment] of workflows) {
+    for (const [file, name, environment, platform] of workflows) {
       const source = fs.readFileSync(file, "utf8");
       const workflow = parse(source) as {
         jobs: Record<
           string,
           {
             environment?: string;
+            if?: unknown;
+            needs?: string;
             steps: Array<{
+              "continue-on-error"?: unknown;
               env?: Record<string, string>;
+              if?: unknown;
               name: string;
               run?: string;
               uses?: string;
@@ -863,6 +903,13 @@ describe("mobile release authority", () => {
       if (!release) {
         throw new Error(`${file}: missing release job`);
       }
+      expect(release.needs).toBe("authorize");
+      expect(release.if).toBe(
+        "inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'",
+      );
+      const revalidateIndex = release.steps.findIndex(
+        (step) => step.name === "Revalidate release authority immediately before upload",
+      );
       const uploadIndex = release.steps.findIndex((step) => step.name.startsWith("Upload "));
       const intentIndex = release.steps.findIndex((step) => step.name.startsWith("Upload exact "));
       const recorderIndex = release.steps.findIndex(
@@ -871,10 +918,25 @@ describe("mobile release authority", () => {
       const recordIndex = release.steps.findIndex((step) =>
         step.name.startsWith("Validate and record immutable"),
       );
-      expect(uploadIndex).toBeGreaterThan(-1);
+      expect(revalidateIndex).toBeGreaterThan(-1);
+      expect(uploadIndex).toBe(revalidateIndex + 1);
       expect(intentIndex).toBeGreaterThan(uploadIndex);
       expect(recorderIndex).toBeGreaterThan(intentIndex);
       expect(recordIndex).toBeGreaterThan(recorderIndex);
+      expect(release.steps[revalidateIndex]?.if).toBeUndefined();
+      expect(release.steps[revalidateIndex]?.["continue-on-error"]).toBeUndefined();
+      expect(release.steps[uploadIndex]?.if).toBeUndefined();
+      expect(release.steps[uploadIndex]?.["continue-on-error"]).toBeUndefined();
+      const intentPath = `\${{ runner.temp }}/mobile-release-intent-${platform}/intent.json`;
+      const runnerIntentPath = intentPath.replace("${{ runner.temp }}", "$RUNNER_TEMP");
+      const uploadCommands =
+        release.steps[uploadIndex]?.run?.split("\n").map((line) => line.trim()) ?? [];
+      expect(release.steps[uploadIndex]?.env?.OPENCLAW_MOBILE_RELEASE_INTENT_PATH).toBe(intentPath);
+      expect(uploadCommands).toContain(`test "$(wc -c < "${runnerIntentPath}")" -le 4096`);
+      expect(release.steps[intentIndex]?.with).toMatchObject({
+        path: intentPath,
+        "retention-days": 30,
+      });
       expect(release.steps[uploadIndex]?.env).not.toHaveProperty("GH_APP_PRIVATE_KEY");
       expect(release.steps[uploadIndex]?.env).not.toHaveProperty("MOBILE_RELEASE_REF_TOKEN");
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
