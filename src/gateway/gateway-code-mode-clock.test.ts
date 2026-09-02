@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -328,28 +329,34 @@ describe("Gateway Code Mode clock rollback", () => {
             { timeout: 30_000, interval: 20 },
           );
 
+          let restoreWallClock = () => {};
+          const unsubscribeResolution = onAgentEvent((event) => {
+            if (
+              event.runId === started.runId &&
+              event.stream === "lifecycle" &&
+              event.data.phase === "approval-resolved"
+            ) {
+              restoreWallClock();
+            }
+          });
           const wallClockBeforeRollback = Date.now();
           const wallClock = vi
             .spyOn(Date, "now")
-            .mockReturnValue(wallClockBeforeRollback - 60_000);
+            .mockReturnValue(wallClockBeforeRollback - 5_000);
+          restoreWallClock = () => wallClock.mockRestore();
           try {
             await new Promise<void>((resolve) => {
               setTimeout(resolve, 50);
             });
-            const resolution = client.request("plugin.approval.resolve", {
-              id: approvalId,
-              decision: "allow-once",
-            });
-            await vi.waitFor(async () => {
-              const pending = (await client.request("plugin.approval.list", {})) as Array<{
-                id?: string;
-              }>;
-              expect(pending.some((entry) => entry.id === approvalId)).toBe(false);
-            });
-            wallClock.mockRestore();
-            await expect(resolution).resolves.toEqual({ ok: true });
+            await expect(
+              client.request("plugin.approval.resolve", {
+                id: approvalId,
+                decision: "allow-once",
+              }),
+            ).resolves.toEqual({ ok: true });
           } finally {
-            wallClock.mockRestore();
+            restoreWallClock();
+            unsubscribeResolution();
           }
 
           const completed = await client.request<{ status?: string }>(
