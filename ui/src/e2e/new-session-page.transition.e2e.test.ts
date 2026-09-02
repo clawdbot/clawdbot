@@ -562,6 +562,8 @@ suite.define(() => {
           await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
           await placeSummary.click();
           expect(await placeSelect.getAttribute("open")).not.toBeNull();
+          const scroll = page.locator(".new-session-page__scroll");
+          const initialScrollPadding = await scroll.evaluate((el) => getComputedStyle(el).padding);
           await page.getByRole("button", { name: "Start session" }).dblclick();
 
           const create = await gateway.waitForRequest("sessions.create");
@@ -624,6 +626,10 @@ suite.define(() => {
           expect(new URL(page.url()).pathname).toBe("/new");
           expect(await message.isVisible()).toBe(false);
           expect(await placeSelect.isVisible()).toBe(false);
+          // Pending chat classes must preserve New Session's native titlebar drag inset.
+          expect(await scroll.evaluate((el) => getComputedStyle(el).padding)).toBe(
+            initialScrollPadding,
+          );
           await captureUiProof(suite, page, `${proofName}-submitted.png`);
           const presentation = await expectPendingNewSessionPresentation(page);
           if (captureProofEnabled) {
