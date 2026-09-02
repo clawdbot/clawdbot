@@ -157,30 +157,16 @@ class ChatControllerOutboxTest {
       }
     }
 
-    override suspend fun claimForSending(
-      id: String,
-      retryCount: Int,
-      lastError: String?,
-    ): Int = claimForSending(id, retryCount, lastError, expectedAttemptVersion = null)
-
     override suspend fun claimForSendingIfAttempt(
       id: String,
       expectedAttemptVersion: Int,
       retryCount: Int,
       lastError: String?,
-    ): Int = claimForSending(id, retryCount, lastError, expectedAttemptVersion)
-
-    private suspend fun claimForSending(
-      id: String,
-      retryCount: Int,
-      lastError: String?,
-      expectedAttemptVersion: Int?,
     ): Int {
       claimGate?.await()
       sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
-      if (expectedAttemptVersion != null && current.attemptVersion != expectedAttemptVersion) return 0
-      if (current.status != ChatOutboxStatus.Queued) return 0
+      if (current.attemptVersion != expectedAttemptVersion || current.status != ChatOutboxStatus.Queued) return 0
       rows[id] = current.copy(status = ChatOutboxStatus.Sending, retryCount = retryCount, lastError = lastError)
       onStatusUpdated?.invoke(ChatOutboxStatus.Sending)
       return 1
@@ -195,9 +181,10 @@ class ChatControllerOutboxTest {
       rows[id] = current.copy(sessionKey = sessionKey)
     }
 
-    override suspend fun confirmDelivered(ids: Set<String>): Int {
+    override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int {
       var removed = 0
-      for (id in ids) {
+      for ((id, attemptVersion) in ids) {
+        if (rows[id]?.attemptVersion != attemptVersion) continue
         if (rows.remove(id) != null) {
           attachmentBytes.remove(id)
           gatewayIds.remove(id)
@@ -207,19 +194,6 @@ class ChatControllerOutboxTest {
       return removed
     }
 
-    override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int =
-      confirmDelivered(
-        ids.filter { (id, attemptVersion) -> rows[id]?.attemptVersion == attemptVersion }.keys,
-      )
-
-    override suspend fun updateStatus(
-      id: String,
-      status: ChatOutboxStatus,
-      retryCount: Int,
-      lastError: String?,
-    ): Int = writeStatus(id, status, retryCount, lastError, deliveryAttemptVersion = null)
-
-    // Room rejects stale attempts and status snapshots; the interface default ignores both.
     override suspend fun updateStatusIfAttempt(
       id: String,
       expectedAttemptVersion: Int,
@@ -230,16 +204,6 @@ class ChatControllerOutboxTest {
     ): Int {
       val current = rows[id] ?: return 0
       if (current.attemptVersion != expectedAttemptVersion || (expectedStatus != null && current.status != expectedStatus)) return 0
-      return writeStatus(id, status, retryCount, lastError, deliveryAttemptVersion = expectedAttemptVersion)
-    }
-
-    private fun writeStatus(
-      id: String,
-      status: ChatOutboxStatus,
-      retryCount: Int,
-      lastError: String?,
-      deliveryAttemptVersion: Int?,
-    ): Int {
       if (status == ChatOutboxStatus.Failed && deleteOnFailedStatus) {
         rows.remove(id)
         gatewayIds.remove(id)
@@ -249,14 +213,13 @@ class ChatControllerOutboxTest {
       if (status == ChatOutboxStatus.Accepted) acceptedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Queued) queuedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
-      val current = rows[id] ?: return 0
       rows[id] =
         current.copy(
           status = status,
           retryCount = retryCount,
           lastError = lastError,
-          attemptVersion = deliveryAttemptVersion?.let { it + if (status == ChatOutboxStatus.Queued) 1 else 0 } ?: current.attemptVersion,
-          hadUnacknowledgedSend = deliveryAttemptVersion != null || current.hadUnacknowledgedSend,
+          attemptVersion = expectedAttemptVersion + if (status == ChatOutboxStatus.Queued) 1 else 0,
+          hadUnacknowledgedSend = true,
         )
       onStatusUpdated?.invoke(status)
       return 1
@@ -275,24 +238,12 @@ class ChatControllerOutboxTest {
     ): Int {
       val current = rows[id] ?: return 0
       if (
-        current.attemptVersion != expectedAttemptVersion ||
-        current.retryCount != expectedRetryCount ||
+        gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed ||
+        current.attemptVersion != expectedAttemptVersion || current.retryCount != expectedRetryCount ||
         current.lastError != expectedLastError
       ) {
         return 0
       }
-      return requeueForRetry(gatewayId, id, nowMs, gatedEpoch, ownerAgentId)
-    }
-
-    override suspend fun requeueForRetry(
-      gatewayId: String,
-      id: String,
-      nowMs: Long,
-      gatedEpoch: Long?,
-      ownerAgentId: String?,
-    ): Int {
-      val current = rows[id] ?: return 0
-      if (gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed) return 0
       var createdAt = maxOf(nowMs, nextCreatedAt)
       rows[id] =
         current.copy(
@@ -302,7 +253,7 @@ class ChatControllerOutboxTest {
           createdAtMs = createdAt,
           gatedEpoch = gatedEpoch,
           ownerAgentId = current.ownerAgentId ?: ownerAgentId,
-          attemptVersion = current.attemptVersion + 1,
+          attemptVersion = expectedAttemptVersion + 1,
           parkedWasAccepted = false,
           hadUnacknowledgedSend = false,
         )
@@ -374,7 +325,7 @@ class ChatControllerOutboxTest {
       recoveryFailure?.let { throw it }
       for ((id, item) in rows) {
         if (item.status == ChatOutboxStatus.Sending) {
-          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR, hadUnacknowledgedSend = true)
         }
       }
     }
