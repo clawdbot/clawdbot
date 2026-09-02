@@ -10,7 +10,7 @@ sidebarTitle: "Sub-agents"
 
 Sub-agents are background agent runs spawned from an existing agent run.
 Each one runs in its own session (`agent:<agentId>:subagent:<uuid>`) and,
-when finished, **announces** its result back to the requester chat channel.
+by default, **announces** its result back to the requester for review.
 Every sub-agent run is tracked as a [background task](/automation/tasks).
 
 Goals:
@@ -66,9 +66,16 @@ These commands work on channels with persistent thread bindings. See
 
 ### Spawn behavior
 
-Agents start background sub-agents with the `sessions_spawn` tool.
-Completions return as internal parent-session events; the parent/requester
-agent decides whether a user-facing update is needed.
+Agents start background sub-agents with the `sessions_spawn` tool. Follow the
+completion path described in the accepted receipt:
+
+- Ordinary announcing runs return an internal completion event to the requester,
+  which reviews the result and decides whether a user-facing update is needed.
+- [Swarm collectors](/tools/swarm) return results through explicit collection,
+  not completion notifications.
+- Thread-bound session runs with a deliverable bound route reply directly to that
+  thread, without a separate parent announcement.
+- Caller-managed quiet runs send no completion notification.
 
 When [execution identity auditing](/gateway/audit#run-identity-inspection) is
 enabled, each native or ACP child receives a new immutable identity context.
@@ -82,9 +89,9 @@ explicitly unsupported even though the ACP spawn and child are observable.
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
     - `sessions_spawn` returns a run id after startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment.
-    - On completion, the sub-agent reports back to the parent/requester session.
-    - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets the completion event arrive as the next model-visible message.
-    - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
+    - Announcing sub-agents report back to the parent/requester session on completion.
+    - Agent turns that need those announced results should call `sessions_yield` when available. That ends the current turn and lets the completion event arrive as the next model-visible message. Collectors instead require explicit result collection.
+    - Announced completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
     - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
@@ -141,9 +148,9 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
-Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
-then runs an announce step and posts the announce reply to the requester
-chat channel.
+Starts a sub-agent run on the global `subagent` lane. Ordinary one-shot runs
+use `deliver: false` and return through an announce step; collectors, quiet
+runs, and direct thread replies use the completion paths above.
 
 Availability depends on the caller's effective tool policy. The built-in
 `coding` and `messaging` profiles include `sessions_spawn`,
@@ -302,12 +309,13 @@ because they already have control meanings.
 
 ## Tool: `sessions_yield`
 
-Ends the current model turn and waits for runtime events, primarily
-sub-agent completion events, to arrive as the next message. Use it after
-spawning required child work when the requester cannot produce a final
-answer until those completions arrive.
+Ends the current model turn and waits for announced child completion events
+to arrive as the next message. Use it when the requester needs results from
+announcing children before answering. It does not collect Swarm results:
+collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
+Code Mode, and do not send completion notifications.
 
-`sessions_yield` is the waiting primitive. Do not replace it with polling
+`sessions_yield` is the waiting primitive for announced completions. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 

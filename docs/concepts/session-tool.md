@@ -141,7 +141,7 @@ State-change events omit repeated session/agent IDs and expose only model-useful
 
 See [Session state awareness](/concepts/session-state) for the full model: event kinds, watcher registration, the anti-spam notice protocol, reconciliation flow, and current limits.
 
-`sessions_yield` intentionally ends the current turn so the next message can be the follow-up event you are waiting for. Use it after spawning sub-agents when you want completion results to arrive as the next message instead of building poll loops.
+`sessions_yield` intentionally ends the current turn so the next message can be an announced child completion event. Use it for announcing sub-agents, not [Swarm collectors](/tools/swarm): collectors require explicit result collection through `agents_wait` or an awaited `agents.run()` in OpenClaw Code Mode, and send no completion notification.
 
 `subagents` is the session-tree view over native sub-agent runs and the shared background-task ledger. `action: "list"` reports active/recent sub-agents plus scoped ACP, CLI/media, and cron tasks. `action: "cancel"` accepts a returned `taskId` and can stop only work inside the caller's controlled session tree; leaf sub-agents cannot cancel another session's task.
 
@@ -161,7 +161,7 @@ Key options:
 
 Default leaf sub-agents do not get session tools. When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Leaf runs still do not get recursive orchestration tools.
 
-After completion, an announce step posts the result to the requester's channel. Completion delivery preserves bound thread/topic routing when available, and if the completion origin only identifies a channel, OpenClaw can still reuse the requester session's stored route (`lastChannel` / `lastTo`) for direct delivery.
+Ordinary announcing runs return a completion event to the requester. Follow the accepted receipt for other completion modes: collectors require explicit collection, directly routed thread sessions reply in the bound thread, and quiet runs send no completion notification. Announce delivery preserves bound thread/topic routing when available, and if the completion origin only identifies a channel, OpenClaw can still reuse the requester session's stored route (`lastChannel` / `lastTo`) for direct delivery.
 
 For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 

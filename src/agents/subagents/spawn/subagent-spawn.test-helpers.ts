@@ -221,7 +221,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
     dispatchGatewayMethodInProcess: (...args: unknown[]) =>
       params.dispatchGatewayMethodInProcessMock?.(...args),
     hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
-    buildSubagentSystemPrompt: () => "system-prompt",
     forkSessionEntryFromParent:
       params.forkSessionEntryFromParentMock ??
       (async () => {

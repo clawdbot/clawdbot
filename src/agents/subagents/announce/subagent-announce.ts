@@ -97,7 +97,6 @@ function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimeLoader.load();
 }
 
-export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
