@@ -27,17 +27,13 @@ afterEach(() => {
 
 async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
   try {
-    const result = await execFileAsync(
-      process.execPath,
-      ["--import", "tsx", "src/entry.ts", "hooks", ...args],
-      {
-        cwd: process.cwd(),
-        env,
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024,
-        timeout: 90_000,
-      },
-    );
+    const result = await execFileAsync(process.execPath, ["openclaw.mjs", "hooks", ...args], {
+      cwd: process.cwd(),
+      env,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: 90_000,
+    });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
     const failed = error as Error & { stdout?: string; stderr?: string };

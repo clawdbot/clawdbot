@@ -244,11 +244,11 @@ Terminal B (USB tunnel):
 adb reverse tcp:18789 tcp:18789
 ```
 
-Then in app **Settings → Gateway → Manual Gateway**:
+Then open **Settings → Gateway → Manual Gateway** (or **Set up manually** during first-run setup):
 
 - Host: `127.0.0.1`
 - Port: `18789`
-- TLS: off
+- Connection security: **Unencrypted**
 
 ## Hot Reload / Fast Iteration
 

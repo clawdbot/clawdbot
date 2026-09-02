@@ -13,6 +13,8 @@ Enrollment is environment-owned and replay-safe. The Gateway persists one setup 
 
 When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
+Each cloud session retains a session-owned [managed-worktree mirror](/concepts/managed-worktrees) on the Gateway for reconciliation, recovery, and publication. The Gateway creates this checkout before cloud dispatch. The default count of 100 is a cleanup target, not an admission cap: count alone does not block creating or restoring the mirror, but the Gateway's disk-space checks still apply.
+
 A missing setup environment value, a current Crabbox CLI/backend refusal, or changed provider metadata does not prove that an earlier attempt allocated nothing. These failures remain retryable with the original operation identity. Cleanup resolves that operation's handle and retries teardown until the provider confirms release or absence; it never reruns provisioning, setup, or enrollment to discover the lease. Malformed immutable profiles still fail permanently; policy and setup rejections become permanent only after confirmed cleanup.
 
 <Note>

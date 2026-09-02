@@ -23,6 +23,7 @@ import {
   hydrateReusedPlan,
   readChild,
   releaseGhRetryDelayMs,
+  releasePlanGateFailures,
   releaseStateChildEvidence,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
@@ -677,6 +678,41 @@ describe("full release execution plan", () => {
       state: "blocked_complete",
     });
   });
+
+  it.each([
+    { targetVersion: "2026.8.1", evidenceReuse: false, rerunGroup: "all", required: false },
+    { targetVersion: "2026.8.1-1", evidenceReuse: false, rerunGroup: "all", required: false },
+    { targetVersion: "2026.8.1-beta.1", evidenceReuse: false, rerunGroup: "all", required: false },
+    { targetVersion: "2026.8.33", evidenceReuse: false, rerunGroup: "all", required: false },
+    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: false, rerunGroup: "all", required: true },
+    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: true, rerunGroup: "all", required: false },
+    {
+      targetVersion: "2026.8.1-alpha.1",
+      evidenceReuse: false,
+      rerunGroup: "package",
+      required: false,
+    },
+  ])(
+    "enforces standalone Docker assets for $targetVersion (reuse=$evidenceReuse, group=$rerunGroup)",
+    ({ required, ...input }) => {
+      for (const dockerPreflightResult of ["success", "failure", "skipped", "cancelled"]) {
+        const { gates } = plan({ ...input, dockerPreflightResult });
+        expect(gates.find((gate) => gate.name === "Verify Docker runtime image assets")).toEqual({
+          name: "Verify Docker runtime image assets",
+          required,
+          result: dockerPreflightResult,
+        });
+        expect(
+          classifyReleaseSnapshot({
+            children: [],
+            localFailures: releasePlanGateFailures(gates),
+            releaseProfile: "stable",
+            workflowRef: "main",
+          }).state,
+        ).toBe(required && dockerPreflightResult !== "success" ? "blocked_complete" : "passed");
+      }
+    },
+  );
 
   it.each(["install-smoke", "qa-parity", "qa-live"])(
     "does not require candidate preparation for focused %s",
@@ -3172,74 +3208,90 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     );
   });
 
-  it("restores the phased attempt-one plan unchanged on an attempt-two collector retry", () => {
-    const root = mkdtempSync(join(tmpdir(), "frv-plan-restore-"));
-    const output = join(root, "full-release-execution-plan.json");
-    const githubOutput = join(root, "github-output");
-    const candidate = candidateBinding();
-    const phasedChildren = {
-      normalCi: { result: "success", runAttempt: 1, runId: "101" },
-      pluginPrereleaseIndependent: { result: "success", runAttempt: 1, runId: "202" },
-      pluginPrereleaseCandidate: { result: "success", runAttempt: 1, runId: "203" },
-      releaseChecksIndependent: { result: "success", runAttempt: 1, runId: "303" },
-      releaseChecksCandidate: { result: "success", runAttempt: 1, runId: "304" },
-      npmTelegram: { result: "success", runAttempt: 1, runId: "404" },
-      productPerformance: { result: "success", runAttempt: 1, runId: "505" },
-    };
-    const sealed = executionPlan(
-      {
-        candidateAcquisitionResult: "success",
-        candidateRequired: true,
-        childPhaseVersion: 3,
-        children: phasedChildren,
-      },
-      {
+  it.each(["success", "failure"])(
+    "restores the phased plan and legacy %s Docker gate on a collector retry",
+    (dockerPreflightResult) => {
+      const root = mkdtempSync(join(tmpdir(), "frv-plan-restore-"));
+      const output = join(root, "full-release-execution-plan.json");
+      const githubOutput = join(root, "github-output");
+      const candidate = candidateBinding();
+      const phasedChildren = {
+        normalCi: { result: "success", runAttempt: 1, runId: "101" },
+        pluginPrereleaseIndependent: { result: "success", runAttempt: 1, runId: "202" },
+        pluginPrereleaseCandidate: { result: "success", runAttempt: 1, runId: "203" },
+        releaseChecksIndependent: { result: "success", runAttempt: 1, runId: "303" },
+        releaseChecksCandidate: { result: "success", runAttempt: 1, runId: "304" },
+        npmTelegram: { result: "success", runAttempt: 1, runId: "404" },
+        productPerformance: { result: "success", runAttempt: 1, runId: "505" },
+      };
+      const sealed = executionPlan(
+        {
+          candidateAcquisitionResult: "success",
+          candidateRequired: true,
+          childPhaseVersion: 3,
+          children: phasedChildren,
+        },
+        {
+          attemptEvidenceVersion: 3,
+          candidate,
+          candidateRequest: candidate.request,
+        },
+      );
+      // Earlier producers required this gate for regular releases too. A collector
+      // retry must preserve that recorded policy, including a failed gate.
+      const legacyDockerGate = sealed.gates.find(
+        (gate) => gate.name === "Verify Docker runtime image assets",
+      );
+      assert(legacyDockerGate);
+      legacyDockerGate.required = true;
+      legacyDockerGate.result = dockerPreflightResult;
+      sealed.sha256 = releaseExecutionPlanSha256(sealed);
+      writeFileSync(output, JSON.stringify(sealed));
+      const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
+        env: {
+          ...process.env,
+          ...candidateRequestEnvironment(),
+          FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+          FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read-during-restore",
+          FULL_RELEASE_RESTORE_PLAN: "true",
+          GITHUB_OUTPUT: githubOutput,
+          GITHUB_REF_NAME: "release-ci/tooling",
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ATTEMPT: "2",
+          GITHUB_RUN_ID: "77",
+          GITHUB_SHA: SHA,
+          RELEASE_PROFILE: "stable",
+          RERUN_GROUP: "all",
+          TARGET_SHA,
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const restored = JSON.parse(readFileSync(output, "utf8")) as typeof sealed;
+      expect(restored).toMatchObject({
         attemptEvidenceVersion: 3,
-        candidate,
-        candidateRequest: candidate.request,
-      },
-    );
-    writeFileSync(output, JSON.stringify(sealed));
-    const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
-      env: {
-        ...process.env,
-        ...candidateRequestEnvironment(),
-        FULL_RELEASE_EXECUTION_PLAN_PATH: output,
-        FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read-during-restore",
-        FULL_RELEASE_RESTORE_PLAN: "true",
-        GITHUB_OUTPUT: githubOutput,
-        GITHUB_REF_NAME: "release-ci/tooling",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_RUN_ID: "77",
-        GITHUB_SHA: SHA,
-        RELEASE_PROFILE: "stable",
-        RERUN_GROUP: "all",
-        TARGET_SHA,
-      },
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const restored = JSON.parse(readFileSync(output, "utf8")) as typeof sealed;
-    expect(restored).toMatchObject({
-      attemptEvidenceVersion: 3,
-      parentRunAttempt: 1,
-      sha256: sealed.sha256,
-    });
-    expect(restored.candidate).toEqual(candidate);
-    expect(restored).toMatchObject({ candidate: { publisher: candidate.publisher } });
-    const phasedKeys = new Set([
-      "pluginPrereleaseIndependent",
-      "pluginPrereleaseCandidate",
-      "releaseChecksIndependent",
-      "releaseChecksCandidate",
-    ]);
-    expect(restored.children.filter((entry) => phasedKeys.has(entry.key))).toEqual(
-      sealed.children.filter((entry) => phasedKeys.has(entry.key)),
-    );
-    expect(readFileSync(githubOutput, "utf8")).toContain("source_parent_attempt=1\n");
-  });
+        parentRunAttempt: 1,
+        sha256: sealed.sha256,
+      });
+      expect(restored.candidate).toEqual(candidate);
+      expect(restored).toMatchObject({ candidate: { publisher: candidate.publisher } });
+      expect(restored.gates).toEqual(sealed.gates);
+      expect(releasePlanGateFailures(restored.gates)).toHaveLength(
+        dockerPreflightResult === "success" ? 0 : 1,
+      );
+      const phasedKeys = new Set([
+        "pluginPrereleaseIndependent",
+        "pluginPrereleaseCandidate",
+        "releaseChecksIndependent",
+        "releaseChecksCandidate",
+      ]);
+      expect(restored.children.filter((entry) => phasedKeys.has(entry.key))).toEqual(
+        sealed.children.filter((entry) => phasedKeys.has(entry.key)),
+      );
+      expect(readFileSync(githubOutput, "utf8")).toContain("source_parent_attempt=1\n");
+    },
+  );
 
   it.each([
     {

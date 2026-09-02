@@ -1047,7 +1047,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	11
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
-extensions/qa-lab/src/providers/mock-openai/server.ts	18
+extensions/qa-lab/src/providers/mock-openai/server.ts	16
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
 extensions/qa-lab/src/qa-bus-protocol.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
@@ -1838,15 +1838,13 @@ src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
 src/agents/embedded-agent-runner/tool-result-truncation.ts	22
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
-src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
+src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	5
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
-src/agents/embedded-agent-subscribe.handlers.ts	10
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
-src/agents/embedded-agent-subscribe.ts	5
 src/agents/embedded-agent-tool-media.ts	10
 src/agents/embedded-agent-tool-results.ts	16
 src/agents/embedded-agent-utils.ts	3
@@ -2118,7 +2116,7 @@ src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-memory.ts	7
+src/auto-reply/reply/agent-runner-memory.ts	6
 src/auto-reply/reply/agent-runner-result-complete.ts	3
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
@@ -3260,7 +3258,7 @@ src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	14
+src/logging/logger.ts	13
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3

@@ -181,11 +181,8 @@ suite.define(() => {
     await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}chat`);
 
-    const sidebar = page.locator("openclaw-app-sidebar");
-    await sidebar.locator(".sidebar-agent-card__main").click();
-    // Capture the brief cue in Chromium before the click; a loaded runner can
-    // resume after its timer has already removed the class.
-    const cue = await page.evaluateHandle(() => {
+    // Record the 600ms cue before clicking; a host-side poll can arrive after it expires.
+    const observedCue = await page.evaluateHandle(() => {
       const state = {
         active: false,
         background: "",
@@ -196,48 +193,47 @@ suite.define(() => {
         value: "",
       };
       const observer = new MutationObserver(() => {
-        const element = document.querySelector(".agent-chat__composer-combobox > textarea");
-        if (!(element instanceof HTMLTextAreaElement) || !element.isConnected) {
+        const textarea = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+        if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
           return;
         }
-        const inputElement = element.closest<HTMLElement>(".agent-chat__input");
-        if (
-          !inputElement?.classList.contains("agent-chat__input--prefill-attention") ||
-          element !== document.activeElement ||
-          element.value !== "What can you do?"
-        ) {
-          return;
-        }
-        const style = getComputedStyle(inputElement);
+        const style = getComputedStyle(input);
         Object.assign(state, {
           active: true,
           background: style.backgroundColor,
           boxShadow: style.boxShadow,
           duration: style.animationDuration,
-          focused: true,
+          focused: textarea === document.activeElement,
           name: style.animationName,
-          value: element.value,
+          value: textarea.value,
         });
         observer.disconnect();
       });
-      observer.observe(document, {
+      observer.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ["class"],
         childList: true,
         subtree: true,
       });
-      return { state, observer };
+      return { state, disconnect: () => observer.disconnect() };
     });
-    const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-    const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
-    let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
+
     try {
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-agent-card__main").click();
       await sidebar
         .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
         .click();
+
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
+      let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
       await expect
         .poll(async () => {
-          const state = await cue.evaluate((capture) => capture.state);
+          const state = await observedCue.evaluate((cue) => cue.state);
           cueStyle = {
             background: state.background,
             boxShadow: state.boxShadow,
@@ -255,11 +251,11 @@ suite.define(() => {
           })),
         )
         .toEqual({ focused: true, value: "What can you do?" });
+      return { context, cueStyle, input, page };
     } finally {
-      await cue.evaluate((capture) => capture.observer.disconnect());
-      await cue.dispose();
+      await observedCue.evaluate((cue) => cue.disconnect());
+      await observedCue.dispose();
     }
-    return { context, cueStyle, input, page };
   }
 
   it("focuses and highlights the composer from the agent capabilities action", async () => {

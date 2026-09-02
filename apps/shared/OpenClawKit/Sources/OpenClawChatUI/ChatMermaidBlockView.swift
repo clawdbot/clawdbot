@@ -19,6 +19,10 @@ struct ChatMermaidBlockView: View {
     @State private var token: UUID?
     @State private var generation = UUID()
     @State private var showSource = false
+    #if os(macOS)
+    @State private var isHovered = false
+    @FocusState private var copyIsFocused: Bool
+    #endif
     /// Keep the selected preview stable while rotation re-renders the inline diagram.
     @State private var expanded: PreviewSelection?
 
@@ -36,11 +40,23 @@ struct ChatMermaidBlockView: View {
                     self.copySource()
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .frame(width: 44, height: 44)
+                        .frame(width: self.controlSize, height: self.controlSize)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Copy diagram source")
+                #if os(macOS)
+                .help("Copy diagram source")
+                .focused(self.$copyIsFocused)
+                .opacity(self.isHovered || self.copyIsFocused ? 1 : 0)
+                #endif
                 Menu {
+                    #if os(macOS)
+                    Button {
+                        self.copySource()
+                    } label: {
+                        Text("Copy diagram source").font(OpenClawChatTypography.body)
+                    }
+                    #endif
                     Button {
                         self.showSource.toggle()
                     } label: {
@@ -65,9 +81,15 @@ struct ChatMermaidBlockView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .frame(width: 44, height: 44)
+                        .frame(width: self.controlSize, height: self.controlSize)
                 }
                 .accessibilityLabel("Diagram options")
+                #if os(macOS)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Diagram options")
+                #endif
             }
             .foregroundStyle(.secondary)
             if self.showSource {
@@ -105,9 +127,18 @@ struct ChatMermaidBlockView: View {
         .onChange(of: self.request, initial: true) { _, _ in self.render() }
         .onDisappear { self.cancel() }
         #if os(macOS)
+        .onHover { self.isHovered = $0 }
         .sheet(item: self.$expanded) { self.preview($0) }
         #else
         .fullScreenCover(item: self.$expanded) { self.preview($0) }
+        #endif
+    }
+
+    private var controlSize: CGFloat {
+        #if os(macOS)
+        28
+        #else
+        44
         #endif
     }
 
@@ -226,6 +257,9 @@ private struct ChatMermaidPreviewView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close diagram preview")
+                #if os(macOS)
+                .keyboardShortcut(.cancelAction)
+                #endif
             }
             if self.failed {
                 Text("Diagram preview unavailable")
@@ -237,7 +271,9 @@ private struct ChatMermaidPreviewView: View {
         }
         .background(OpenClawChatTheme.assistantBubble)
         #if os(macOS)
-        .frame(minWidth: 500, minHeight: 350)
+        .frame(minWidth: 500, idealWidth: 900, minHeight: 350, idealHeight: 600)
+        // Mac sheets default to a form width; fit both axes so Expand honors the ideal size.
+        .presentationSizing(.fitted)
         #endif
     }
 }

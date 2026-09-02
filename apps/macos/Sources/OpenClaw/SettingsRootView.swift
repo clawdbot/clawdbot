@@ -57,7 +57,6 @@ struct SettingsRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .defaultAppStorage(AppDefaults.standard)
-        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
