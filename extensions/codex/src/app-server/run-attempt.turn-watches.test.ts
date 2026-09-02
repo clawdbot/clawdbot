@@ -891,17 +891,28 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       dynamicToolsFingerprint: "[]",
     });
 
-    // Turn 1: resume an existing thread, then never deliver turn/completed.
-    const firstHarness = createStartedThreadHarness(async (method) =>
-      method === "thread/resume" ? threadStartResult("thread-existing") : undefined,
+    // Turn 1: resume an existing thread, then remain active until the execution deadline.
+    const firstHarness = createStartedThreadHarness(
+      async (method) =>
+        method === "thread/resume" ? threadStartResult("thread-existing") : undefined,
+      { persistedThreads: ["thread-existing"] },
     );
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.timeoutMs = 60_000;
     const firstRun = runCodexAppServerAttempt(firstParams);
-    await firstHarness.waitForMethod("turn/start");
+    await Promise.race([firstRun, firstHarness.waitForMethod("turn/start")]);
     expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
 
     await vi.advanceTimersByTimeAsync(60_000);
+    await firstHarness.waitForMethod("turn/interrupt");
+    // The real wire requires native terminal confirmation, not only an interrupt acknowledgement.
+    await firstHarness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
     const firstResult = await firstRun;
     expect(readAttemptTerminal(firstResult).timedOut).toBe(true);
     expect(readAttemptTerminal(firstResult).promptError).toBe(
@@ -918,22 +929,26 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
 
     // Confirmed interruption retains native context; only a new user admission resumes it.
-    const secondHarness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/resume") {
-        return threadStartResult("thread-existing");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-2");
-      }
-      return undefined;
-    });
+    firstHarness.close();
+    const secondHarness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-existing");
+        }
+        if (method === "turn/start") {
+          return turnStartResult("turn-2");
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
     const secondParams = createParams(sessionFile, workspaceDir, {
       prompt: "Continue after inspecting the work already performed.",
       runId: "run-2",
     });
     secondParams.trigger = "user";
     const secondRun = runCodexAppServerAttempt(secondParams);
-    await secondHarness.waitForMethod("turn/start");
+    await Promise.race([secondRun, secondHarness.waitForMethod("turn/start")]);
     expect(secondHarness.requests.some(({ method }) => method === "thread/start")).toBe(false);
     expect(secondHarness.requests).toContainEqual({
       method: "thread/resume",
