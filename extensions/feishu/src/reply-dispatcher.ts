@@ -33,6 +33,7 @@ import type { MentionTarget } from "./mention-target.types.js";
 import {
   consumeFeishuPresentationFallbackMarker,
   renderFeishuReplyPayload,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -998,26 +999,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const cardHeader = resolveCardHeader(agentId, identity);
     const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
+    const useRecoveryCard = withinCardTableLimit(content);
     return await sendChunkedTextReply({
       text: content,
-      useCard: true,
+      useCard: useRecoveryCard,
       infoKind,
       header: cardHeader,
       note: cardNote,
       chunkMentions: requiredMentionTargets,
       sendChunk: async ({ chunk, mentions }) =>
-        await sendStructuredCardFeishu({
-          cfg,
-          to: sendTarget,
-          text: chunk,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          allowTopLevelReplyFallback,
-          accountId,
-          header: cardHeader,
-          note: cardNote,
-          ...(mentions ? { mentions } : {}),
-        }),
+        useRecoveryCard
+          ? await sendStructuredCardFeishu({
+              cfg,
+              to: sendTarget,
+              text: chunk,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+              header: cardHeader,
+              note: cardNote,
+              ...(mentions ? { mentions } : {}),
+            })
+          : await sendMessageFeishu({
+              cfg,
+              to: sendTarget,
+              text: chunk,
+              preparedPostText: true,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              allowTopLevelReplyFallback,
+              accountId,
+              ...(mentions ? { mentions } : {}),
+            }),
     });
   };
 
@@ -1385,7 +1399,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         hasText &&
         (renderMode === "card" ||
           (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-          (renderMode === "auto" && shouldUseCard(text)));
+          (renderMode === "auto" && shouldUseCard(text))) &&
+        withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
