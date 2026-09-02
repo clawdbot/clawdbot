@@ -19,6 +19,7 @@ Goal: let OpenClaw sit in WhatsApp groups, wake up only when pinged, and keep th
 ## Behavior
 
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping: a real WhatsApp @-mention (`mentionedJids`), a configured regex pattern, the bot's E.164 digits anywhere in the text, or a quoted reply to one of the bot's messages (except shared-number self-chat setups). `always` wakes the agent on every message, but the injected group prompt tells it to reply only when it adds value and to return the exact silent token `NO_REPLY` (case-insensitive) otherwise. Defaults come from config (`channels.whatsapp.groups` `requireMention`) and can be overridden per group via `/activation`.
+- Temporary listen windows: groups that normally require mentions can opt into `listenAfterMentionMs`. After a valid mention, follow-up messages in the same allowed group are admitted until the window expires; each admitted follow-up extends the window up to `listenAfterMentionMaxMs`. `/activation mention` clears the current window.
 - Group allowlist: when `channels.whatsapp.groups` is set, only listed group JIDs are admitted (include `"*"` to allow all); messages from unlisted groups are dropped with a log hint.
 - Group policy: `channels.whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` uses `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Default is `allowlist` (blocked until you add senders).
 - Per-group sessions: session keys look like `agent:<agentId>:whatsapp:group:<jid>` (non-default accounts append `:thread:whatsapp-account-<accountId>`), so directives such as `/verbose on`, `/trace on`, or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched.
@@ -36,7 +37,11 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
   channels: {
     whatsapp: {
       groups: {
-        "*": { requireMention: true },
+        "*": {
+          requireMention: true,
+          listenAfterMentionMs: 600000, // 10 minutes
+          listenAfterMentionMaxMs: 1800000, // 30 minutes
+        },
       },
       historyLimit: 50, // pending group context window (default 50)
     },

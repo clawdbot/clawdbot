@@ -27,6 +27,12 @@ import {
   createChannelHistoryWindow,
   resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
+import {
+  armGroupListenWindow,
+  clearGroupListenWindow,
+  resolveGroupListenWindowConfig,
+  resolveGroupListenWindowState,
+} from "./group-listen-window.js";
 import { noteGroupMember } from "./group-members.js";
 
 export type GroupHistoryEntry = {
@@ -231,7 +237,31 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     sessionKey: params.sessionKey,
     conversationId,
   });
-  const requireMention = activation !== "always";
+  const baseRequireMention = activation !== "always";
+  const listenWindowConfig = baseRequireMention
+    ? resolveGroupListenWindowConfig({
+        cfg: params.cfg,
+        accountId: inboundPolicy.account.accountId,
+        conversationId,
+      })
+    : undefined;
+  if (owner && activationCommand.hasCommand && activationCommand.mode === "mention") {
+    clearGroupListenWindow({
+      agentId: params.agentId,
+      accountId: inboundPolicy.account.accountId,
+      sessionKey: params.sessionKey,
+      conversationId,
+    });
+  }
+  const listenWindowActive =
+    listenWindowConfig !== undefined &&
+    resolveGroupListenWindowState({
+      agentId: params.agentId,
+      accountId: inboundPolicy.account.accountId,
+      sessionKey: params.sessionKey,
+      conversationId,
+    }) !== undefined;
+  const requireMention = baseRequireMention && !listenWindowActive;
   const replyContext = getReplyContext(params.msg, params.authDir);
   const sharedNumberSelfChat = params.selfChatMode === true;
   // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
@@ -260,6 +290,19 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
+  if (
+    listenWindowConfig &&
+    !activationCommand.hasCommand &&
+    (mentionDecision.effectiveWasMentioned || listenWindowActive)
+  ) {
+    armGroupListenWindow({
+      agentId: params.agentId,
+      accountId: inboundPolicy.account.accountId,
+      sessionKey: params.sessionKey,
+      conversationId,
+      config: listenWindowConfig,
+    });
+  }
   // Carry the session activation and mention result together. Dispatch needs
   // both facts to distinguish an always-on group from a blocked unmentioned turn.
   params.msg.groupMention = { wasMentioned: effectiveWasMentioned, requireMention };

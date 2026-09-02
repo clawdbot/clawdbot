@@ -19,6 +19,10 @@ export type WhatsAppReactionLevel = ReactionLevel;
 
 export type WhatsAppGroupConfig = {
   requireMention?: boolean;
+  /** Temporarily accept follow-up messages after a mention in this group (ms). Default: disabled. */
+  listenAfterMentionMs?: number;
+  /** Maximum total duration for one listen-after-mention window (ms). */
+  listenAfterMentionMaxMs?: number;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Optional system prompt for this group. */
