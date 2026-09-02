@@ -1,8 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
-import { renderSessionOwnerAssignmentOptions } from "./session-owner-menu.ts";
 
 export type CompactSessionMenuView =
   | "root"
@@ -57,41 +55,4 @@ export function renderCompactSessionMenuFrame(body: TemplateResult | readonly Te
     <div class="session-menu__separator" role="separator"></div>
     ${body}
   `;
-}
-
-export function renderCompactSessionMenuView(params: {
-  view: CompactSessionMenuView;
-  ownerOptions: readonly SessionOwnerOption[];
-  selfOwner: SessionOwnerOption | null;
-  currentOwnerId: string | null;
-  assignOwnerDisabled: boolean;
-  assignOwnerDisabledReason?: string;
-  renderOpenIn: () => TemplateResult;
-  renderCopy: () => TemplateResult;
-  renderIcon: () => TemplateResult;
-  renderGroup: () => TemplateResult;
-}) {
-  if (params.view === "root") {
-    return nothing;
-  }
-  const body =
-    params.view === "copy"
-      ? params.renderCopy()
-      : params.view === "open-in"
-        ? params.renderOpenIn()
-        : params.view === "assign-owner"
-          ? renderSessionOwnerAssignmentOptions(
-              {
-                ownerOptions: params.ownerOptions,
-                selfOwner: params.selfOwner,
-                currentOwnerId: params.currentOwnerId,
-                disabled: params.assignOwnerDisabled,
-                disabledReason: params.assignOwnerDisabledReason,
-              },
-              true,
-            )
-          : params.view === "icon"
-            ? params.renderIcon()
-            : params.renderGroup();
-  return renderCompactSessionMenuFrame(body);
 }

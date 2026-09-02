@@ -6,7 +6,6 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -37,14 +36,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
-import {
-  detectJson,
-  jsonSummaryLabel,
-  renderMessageMarkdown,
-  resolveMessageDisplayMarkdown,
-  type AssistantMessageDisclosure,
-  type MessageActionDetails,
-} from "./chat-message-markdown.ts";
+import type { MessageActionDetails } from "./chat-message-markdown.ts";
 import {
   extractImages,
   extractMessageAttachments,
@@ -53,6 +45,14 @@ import {
   type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
+import {
+  detectJson,
+  renderMessageJson,
+  renderMessageMarkdown,
+  resolveMessageDisplayMarkdown,
+  resolveMessageMarkdownRenderOptions,
+  type AssistantMessageDisclosure,
+} from "./chat-message-text.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderToolApprovalReviews,
@@ -287,16 +287,12 @@ export function renderGroupedMessage(
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);
-  const markdownRenderOptions: MarkdownRenderOptions = {
-    assistantTranscriptRoleHeaders: role === "assistant",
-    codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
-    fileLinks: true,
+  const markdownRenderOptions = resolveMessageMarkdownRenderOptions({
+    role,
+    isStreaming: opts.isStreaming,
     interactiveImages: opts.onOpenImage !== undefined,
-    sessionLinks: true,
-    tableInteractions: "enabled",
-    linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
-  };
+    linkFavicons: Boolean(opts.fetchLinkFavicon),
+  });
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -438,16 +434,7 @@ export function renderGroupedMessage(
       : nothing}
     ${isStandaloneToolMessage ? nothing : assistantViewContent}
     ${jsonResult
-      ? html`<details
-          class="chat-json-collapse"
-          ?open=${isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls)}
-        >
-          <summary class="chat-json-summary">
-            <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-            <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-          </summary>
-          <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
-        </details>`
+      ? renderMessageJson(jsonResult, isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls))
       : bodyMarkdown
         ? renderMessageMarkdown(
             bodyMarkdown,

@@ -54,6 +54,7 @@ import {
   createGatewayProcessProjection,
   createNodeExecAliasDynamicTool,
   isCodexDynamicToolExcluded,
+  type NodeExecAvailabilityRef,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
@@ -132,6 +133,7 @@ type DynamicToolBuildParams = {
   nativeToolSurfaceEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
+  nodeExecAvailability?: NodeExecAvailabilityRef;
   sessionAgentId: string;
   policyAgentId: string;
   pluginConfig: CodexPluginConfig;
@@ -911,6 +913,7 @@ async function addNodeShellDynamicToolsIfNeeded(
     execTool,
     nodePolicy.node,
     input.runAbortController.signal,
+    input.nodeExecAvailability,
   );
   return nodeExec ? [...filteredTools, nodeExec] : filteredTools;
 }

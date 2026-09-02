@@ -830,7 +830,7 @@ describe("cron service timer regressions", () => {
         accountId: undefined,
         threadId: undefined,
         inheritSessionThread: false,
-        onDeliveryAttempt: expect.any(Function),
+        onDeliverySettled: expect.any(Function),
       });
     } finally {
       vi.useRealTimers();

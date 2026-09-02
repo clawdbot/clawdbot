@@ -87,7 +87,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    emitAssistantCommentaryStreamData(ctx, assistantMessage);
+    emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
