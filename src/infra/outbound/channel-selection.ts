@@ -18,11 +18,11 @@ import {
 } from "../../utils/message-channel.js";
 import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
-  normalizeDeliverableOutboundChannel,
-  resolveOutboundChannelPlugin,
-} from "./channel-resolution.js";
-import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
+  getRuntimeVisibleChannelPlugin,
+  listRuntimeVisibleChannelPlugins,
+} from "./runtime-visible-channels.js";
 
 /** Source that explains how message channel selection chose its result. */
 type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
@@ -32,7 +32,11 @@ function resolveAvailableKnownChannel(params: {
   value?: string | null;
   agentId?: string;
 }): { channel: string; plugin: ChannelPlugin } | undefined {
-  const normalized = normalizeDeliverableOutboundChannel(params.value);
+  // Explicit ids normalize without a process-root deliverability prefilter:
+  // request-scoped registries (e.g. the message CLI's registry handle) own
+  // channel ids the process-root view has never registered, so availability
+  // is proven by the scoped resolution below instead.
+  const normalized = normalizeMessageChannel(params.value);
   if (!normalized) {
     return undefined;
   }
@@ -196,9 +200,9 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!isDeliverableMessageChannel(plugin.id)) {
-      continue;
-    }
+    // The runtime-visible list already owns scope-aware channel visibility; a
+    // process-root deliverability re-check here would drop registry-scoped
+    // channel ids the root view has never registered.
     if (await isPluginConfigured(plugin, cfg, accountResolution)) {
       plugins.push(plugin);
     }
@@ -247,7 +251,10 @@ export async function resolveMessageChannelSelection(params: {
           source: "tool-context-fallback",
         };
       }
-      if (!isDeliverableMessageChannel(normalized)) {
+      // A scoped registry can know a channel the process-root view does not,
+      // so only ids no runtime view can see are "unknown"; the rest are
+      // known-but-unavailable and must report the repairable failure.
+      if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
         throw new Error(formatUnknownChannelMessage({ channel: normalized }));
       }
       const repairHint = isConfiguredChannel(params.cfg, normalized)

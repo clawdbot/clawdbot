@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   listRuntimeVisibleChannelPlugins: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
   missingOfficialExternalChannels: new Set<string>(),
+  // Channel ids a scoped registry handle knows but the process-root view does not.
+  scopedRegistryChannelIds: new Set<string>(),
 }));
 
 const deliverableChannelIds = vi.hoisted(() => [
@@ -33,10 +35,8 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: (value?: string | null) => {
-    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
-    return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
-  },
+  // Mirrors the real resolver: deliverable and scoped-registry ids resolve,
+  // ids no runtime view knows do not.
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
@@ -44,6 +44,8 @@ vi.mock("./runtime-visible-channels.js", () => ({
   // Defaults to the process-root list; scoped-registry tests override it.
   listRuntimeVisibleChannelPlugins: (...args: unknown[]) =>
     mocks.listRuntimeVisibleChannelPlugins(...args) ?? mocks.listChannelPlugins(...args),
+  getRuntimeVisibleChannelPlugin: (channel: string) =>
+    mocks.scopedRegistryChannelIds.has(channel) ? { id: channel } : undefined,
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
@@ -130,10 +132,13 @@ describe("listConfiguredMessageChannels", () => {
     errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.listRuntimeVisibleChannelPlugins.mockReset();
     mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
-      id: channel,
-    }));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      deliverableChannelIds.includes(channel) || mocks.scopedRegistryChannelIds.has(channel)
+        ? { id: channel }
+        : undefined,
+    );
   });
 
   afterEach(() => {
@@ -142,7 +147,7 @@ describe("listConfiguredMessageChannels", () => {
 
   it.each([
     {
-      plugins: [makePlugin({ id: "not-a-channel" }), makePlugin({ id: "alpha", accountIds: [] })],
+      plugins: [makePlugin({ id: "alpha", accountIds: [] })],
       expected: [],
       expectedErrors: 0,
     },
@@ -226,16 +231,27 @@ describe("listConfiguredMessageChannels", () => {
     await listWithAccounts(["account-1"]);
     expect(errorSpy).toHaveBeenCalledTimes(1026);
   });
+
+  it("lists a scoped-registry channel the process-root view does not know", async () => {
+    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([
+      makePlugin({ id: "scopex", resolveAccount: () => ({ enabled: true }) }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(["scopex"]);
+  });
 });
 
 describe("resolveMessageChannelSelection", () => {
   beforeEach(() => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.listRuntimeVisibleChannelPlugins.mockReset();
     mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
-      id: channel,
-    }));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      deliverableChannelIds.includes(channel) || mocks.scopedRegistryChannelIds.has(channel)
+        ? { id: channel }
+        : undefined,
+    );
     mocks.missingOfficialExternalChannels.clear();
   });
 
@@ -529,6 +545,18 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
+  it("resolves an explicit channel that only the scoped registry handle knows", async () => {
+    mocks.scopedRegistryChannelIds.add("scopex");
+
+    const selection = await expectResolvedSelection({ cfg: {} as never, channel: "scopex" });
+
+    expect(selection).toMatchObject({
+      channel: "scopex",
+      configured: [],
+      source: "explicit",
+    });
+  });
+
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },
@@ -541,6 +569,16 @@ describe("resolveMessageChannelSelection", () => {
       },
       params: { cfg: {} as never, channel: "alpha" },
       expectedMessage: "Channel is unavailable: alpha",
+    },
+    {
+      // A scoped registry handle knows this id even though the process-root
+      // view does not, so the failure is unavailability, not an unknown channel.
+      setup: () => {
+        mocks.scopedRegistryChannelIds.add("scopex");
+        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+      },
+      params: { cfg: {} as never, channel: "scopex" },
+      expectedMessage: "Channel is unavailable: scopex",
     },
     {
       setup: () => {
@@ -604,9 +642,11 @@ describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () 
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.listRuntimeVisibleChannelPlugins.mockReset();
     mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
-      id: channel,
-    }));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      deliverableChannelIds.includes(channel) || mocks.scopedRegistryChannelIds.has(channel)
+        ? { id: channel }
+        : undefined,
+    );
   });
 
   it("defaults to the single configured channel seen only through the runtime-visible list", async () => {
@@ -625,5 +665,15 @@ describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () 
     await expect(expectResolvedSelection({ cfg: {} as never })).rejects.toThrow(
       "Channel is required (no configured channels detected).",
     );
+  });
+
+  it("selects a single configured channel that only the scoped registry knows", async () => {
+    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([
+      makePlugin({ id: "scopex", resolveAccount: () => ({ enabled: true }) }),
+    ]);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never });
+    expect(selection.channel).toBe("scopex");
+    expect(selection.source).toBe("single-configured");
   });
 });
