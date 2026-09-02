@@ -373,11 +373,11 @@ Buttons come from the semantic `presentation` payload (in normal agent replies a
 
 The options an `ask_user` question offers are also rendered as buttons, and tapping one answers
 that question directly. The question stays answerable by typing, and an option the Gateway does
-not index — the "Other…" choice, or a question that is multi-select, secret, or does not offer two
-to four distinct options — stays in the prose instead. Other typed presentation actions (`command`, `callback`) are not
-rendered as buttons on Mattermost: a click here reaches the agent as a message rather than
-running the action, so those stay readable text instead of becoming a control that does
-something other than what it says.
+not index stays in the prose instead: the "Other…" choice, and any prompt that asks more than one
+question or whose question is multi-select, secret, or does not offer two to four distinct options.
+Every other typed presentation action (`command`, `callback`, `approval`) stays readable text on
+Mattermost rather than becoming a button: a click here reaches the agent as a message rather than
+running the action, so a control would do something other than what it says.
 
 ```text
 message action=send channel=mattermost target=channel:<channelId> presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"yes"},{"label":"No","value":"no"}]}]}
