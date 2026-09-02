@@ -93,8 +93,10 @@ openclaw devices approve <requestId>
 openclaw nodes status
 ```
 
-Device approval admits the connection only. Approve the node's declared
-command surface as well, or the node stays connected with no usable commands:
+Device approval admits the connection only, and the paused node does not
+reconnect on its own after `PAIRING_REQUIRED`. Restart node mode in the app
+(or restart the app) so it reconnects, then approve the node's declared
+command surface, or the node stays connected with no usable commands:
 
 ```powershell
 openclaw nodes pending
