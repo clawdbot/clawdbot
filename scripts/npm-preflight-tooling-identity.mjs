@@ -254,13 +254,22 @@ export function resolveFullReleaseNpmPreflight({ runGh = runReleaseToolingGh, ..
   return { descriptor, producer, run, artifact };
 }
 
-/** @param {Parameters<typeof resolveFullReleaseNpmPreflight>[0] & {outputDir: string, token: string, fetchImpl?: typeof fetch}} options */
-export async function downloadFullReleaseNpmPreflight({ outputDir, token, fetchImpl, ...options }) {
+/** @param {Parameters<typeof resolveFullReleaseNpmPreflight>[0] & {outputDir: string, token: string, fetchImpl?: typeof fetch, archivePath?: string, deadlineMs?: number}} options */
+export async function downloadFullReleaseNpmPreflight({
+  outputDir,
+  token,
+  fetchImpl,
+  archivePath,
+  deadlineMs,
+  ...options
+}) {
   const resolved = resolveFullReleaseNpmPreflight(options);
   const { descriptor, producer, artifact } = resolved;
   const { archiveBytes } = await downloadExactActionsArtifactArchive({
     token,
     fetchImpl,
+    archivePath,
+    deadlineMs,
     expected: {
       repository: options.repository,
       artifactId: Number(descriptor.artifact.id),

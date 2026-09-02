@@ -784,7 +784,7 @@ describe.each([
     },
   );
 
-  it.each(["valid", "archive changed", "manifest changed"])(
+  it.each(["valid", "archive changed", "manifest changed", "deadline exceeded"])(
     "downloads only the exact qualified archive (%s)",
     async (outcome) => {
       const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
@@ -821,21 +821,27 @@ describe.each([
       if (outcome === "archive changed") {
         delivered.writeUInt8(delivered.readUInt8(0) ^ 1, 0);
       }
+      const requests: string[] = [];
       const fetchImpl: typeof fetch = async (url) => {
         const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        requests.push(requestUrl);
         return requestUrl.endsWith("/zip")
           ? new Response(new Uint8Array(delivered))
           : Response.json(metadata);
       };
-      const outputDir = join(tempDirs.make("qualified-npm-preflight-"), "qualified");
-      const download = downloadFullReleaseNpmPreflight({
+      const root = tempDirs.make("qualified-npm-preflight-");
+      const outputDir = join(root, "qualified");
+      const downloadOptions = {
         ...resolutionInput,
         manifest: selected,
         outputDir,
         token: "test-artifact-token",
         runGh: reader({}, metadata),
         fetchImpl,
-      });
+        archivePath: join(root, "555.zip"),
+        deadlineMs: Date.now() + (outcome === "deadline exceeded" ? -1 : 10_000),
+      };
+      const download = downloadFullReleaseNpmPreflight(downloadOptions);
       if (outcome === "valid") {
         await expect(download).resolves.toMatchObject({
           producer: { runId: RUN_ID, runAttempt: "1" },
@@ -848,11 +854,22 @@ describe.each([
             "utf8",
           ),
         ).toBe("{}");
+        const retriedDir = join(root, "retried");
+        await downloadFullReleaseNpmPreflight({ ...downloadOptions, outputDir: retriedDir });
+        expect(readFileSync(join(retriedDir, manifest.tarballName))).toEqual(tarballBytes);
+        expect(requests.filter((url) => url.endsWith("/zip"))).toHaveLength(1);
       } else {
         await expect(download).rejects.toThrow(
-          outcome === "archive changed" ? "digest" : "qualified descriptor",
+          outcome === "archive changed"
+            ? "digest"
+            : outcome === "deadline exceeded"
+              ? "deadline exceeded"
+              : "qualified descriptor",
         );
         expect(existsSync(outputDir)).toBe(false);
+        if (outcome === "deadline exceeded") {
+          expect(requests).toHaveLength(0);
+        }
       }
     },
   );

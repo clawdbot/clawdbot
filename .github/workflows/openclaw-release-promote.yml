@@ -1,0 +1,176 @@
+name: OpenClaw Release Button
+
+on:
+  workflow_dispatch:
+    inputs:
+      prepared_artifact:
+        description: Exact readiness artifact JSON from a successful OpenClaw Release Prepare run
+        required: true
+        type: string
+      openclaw_npm_resume_run_id:
+        description: Recovery only — successful original core npm run, validated by the existing publisher
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: openclaw-release-button-${{ fromJSON(inputs.prepared_artifact).artifactId }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Dispatch the prepared release once
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      request: ${{ steps.dispatch.outputs.request }}
+      release_run_id: ${{ steps.dispatch.outputs.release_run_id }}
+      release_tag: ${{ steps.dispatch.outputs.release_tag }}
+      npm_dist_tag: ${{ steps.dispatch.outputs.npm_dist_tag }}
+      source_sha: ${{ steps.dispatch.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+      - name: Dispatch existing protected publisher
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+          OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
+        run: |
+          printf '%s\n' "$PREPARED_ARTIFACT" > "$RUNNER_TEMP/prepared-artifact.json"
+          node scripts/openclaw-release-ready.mjs dispatch-publish \
+            --artifact "$RUNNER_TEMP/prepared-artifact.json" --output "$RUNNER_TEMP/release-button" \
+            --openclaw-npm-resume-run-id "$OPENCLAW_NPM_RESUME_RUN_ID"
+      - name: Retain publication dispatch receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-button-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-button/dispatch.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  verify:
+    name: Join publication and verify ClawHub downloads
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+      - name: Verify the original publication, without redispatching
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REQUEST: ${{ needs.publish.outputs.request }}
+        run: |
+          printf '%s\n' "$RELEASE_REQUEST" > "$RUNNER_TEMP/release-request.json"
+          node scripts/openclaw-release-ready.mjs verify \
+            --request "$RUNNER_TEMP/release-request.json" --output "$RUNNER_TEMP/release-button"
+      - name: Retain readback evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-button-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-button/clawhub-public-verification/evidence.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Report publication state
+        if: always()
+        env:
+          RELEASE_RUN_ID: ${{ needs.publish.outputs.release_run_id }}
+          VERIFICATION_OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo '## Release publication'
+            echo
+            echo "Publisher: https://github.com/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID"
+            echo
+            if [[ "$VERIFICATION_OUTCOME" == success ]]; then
+              echo 'Publication and canonical ClawHub downloads verified.'
+            else
+              echo 'Publication may already be visible. If the original publisher succeeded, rerun only failed verification jobs. If it failed, inspect child outcomes before a new button run with the same prepared_artifact and openclaw_npm_resume_run_id when core npm succeeded. A published core version without a successful child requires core-owner reconciliation. Do not rebuild or repeat an uncertain dispatch to fix a failed download.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  finalize:
+    name: Make the verified GitHub release visible
+    needs: [publish, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout exact activation tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Setup trusted Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.publish.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.publish.outputs.source_sha }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.publish.outputs.npm_dist_tag }}
+          RELEASE_REQUEST: ${{ needs.publish.outputs.request }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          if [[ "$actual_sha" != "$SOURCE_SHA" ]]; then
+            echo 'Release tag moved after publication; refusing activation.' >&2
+            exit 1
+          fi
+          expected_prerelease=false
+          expected_latest=false
+          if [[ "$RELEASE_TAG" == *-alpha.* || "$RELEASE_TAG" == *-beta.* ]]; then
+            expected_prerelease=true
+          elif [[ "$RELEASE_NPM_DIST_TAG" == latest ]]; then
+            expected_latest=true
+          fi
+          # Approval can outlive the protected tooling tag or publisher attempt.
+          # Revalidate both immediately before making the release visible.
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$GITHUB_REF_NAME" --workflow-full-ref "$GITHUB_REF" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" \
+            --release-publish-run-id "$(jq -er '.releaseRunId' <<< "$RELEASE_REQUEST")" \
+            --release-publish-run-attempt "$(jq -er '.releaseRunAttempt' <<< "$RELEASE_REQUEST")" \
+            --release-publish-ref "$(jq -er '.tooling.ref' <<< "$RELEASE_REQUEST")" \
+            --release-publish-full-ref "$(jq -er '.tooling.fullRef' <<< "$RELEASE_REQUEST")" \
+            --release-publish-parent-state-policy active-or-success
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --prerelease="$expected_prerelease" --latest="$expected_latest"
+          release_json="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
+          if [[ "$(jq -r '.isDraft' <<< "$release_json")" != false || "$(jq -r '.isPrerelease' <<< "$release_json")" != "$expected_prerelease" ]]; then
+            echo 'Published GitHub release state differs from the prepared release.' >&2
+            exit 1
+          fi
+          echo "Verified release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

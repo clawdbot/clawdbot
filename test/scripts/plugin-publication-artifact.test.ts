@@ -9,11 +9,13 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   createPluginPublicationArtifact,
   downloadActionsArtifactArchive,
@@ -427,6 +429,60 @@ function writeWorkflowRunMetadata(workflowRunPath: string): void {
   );
 }
 
+function createDownloadFixture() {
+  const zip = createZip([{ bytes: Buffer.from("proof"), name: "proof.txt" }]);
+  const expected = {
+    artifactDigest: `sha256:${sha256(zip)}`,
+    artifactExpiresAt: "2099-01-01T00:00:00Z",
+    artifactId: ARTIFACT_ID,
+    artifactName: ARTIFACT_NAME,
+    artifactSizeBytes: zip.length,
+    repository: REPOSITORY,
+    runStatePolicy: "completed-success",
+    runAttempt: RUN_ATTEMPT,
+    runId: RUN_ID,
+    workflowEvent: "workflow_dispatch",
+    workflowHeadBranch: "main",
+    workflowPath: WORKFLOW_PATH,
+    workflowSha: WORKFLOW_SHA,
+  };
+  const artifactMetadata = {
+    id: ARTIFACT_ID,
+    name: ARTIFACT_NAME,
+    expired: false,
+    expires_at: expected.artifactExpiresAt,
+    digest: expected.artifactDigest,
+    size_in_bytes: zip.length,
+    workflow_run: { id: RUN_ID, head_sha: WORKFLOW_SHA },
+  };
+  const workflowRun = {
+    id: RUN_ID,
+    run_attempt: RUN_ATTEMPT,
+    head_sha: WORKFLOW_SHA,
+    head_branch: "main",
+    event: "workflow_dispatch",
+    path: WORKFLOW_PATH,
+    status: "completed",
+    conclusion: "success",
+    repository: { full_name: REPOSITORY },
+    head_repository: { full_name: REPOSITORY },
+  };
+  const fetchImpl = async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
+      return Response.json(artifactMetadata);
+    }
+    if (url.endsWith(`/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`)) {
+      return Response.json(workflowRun);
+    }
+    if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
+      return new Response(new Uint8Array(zip));
+    }
+    return new Response("unexpected", { status: 404 });
+  };
+  return { zip, expected, artifactMetadata, workflowRun, fetchImpl };
+}
+
 function replaceArtifactZip(fixture: ReturnType<typeof createFixture>, files: ZipFile[]): void {
   const zip = createZip(files);
   fixture.zip = zip;
@@ -787,30 +843,7 @@ describe("plugin publication artifact", () => {
   });
 
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {
-    const zip = createZip([{ bytes: Buffer.from("proof"), name: "proof.txt" }]);
-    const artifactMetadata = {
-      id: ARTIFACT_ID,
-      name: ARTIFACT_NAME,
-      expired: false,
-      digest: `sha256:${sha256(zip)}`,
-      size_in_bytes: zip.length,
-      workflow_run: {
-        id: RUN_ID,
-        head_sha: WORKFLOW_SHA,
-      },
-    };
-    const workflowRun = {
-      id: RUN_ID,
-      run_attempt: RUN_ATTEMPT,
-      head_sha: WORKFLOW_SHA,
-      head_branch: "main",
-      event: "workflow_dispatch",
-      path: WORKFLOW_PATH,
-      status: "completed",
-      conclusion: "success",
-      repository: { full_name: REPOSITORY },
-      head_repository: { full_name: REPOSITORY },
-    };
+    const { zip, expected, artifactMetadata, workflowRun } = createDownloadFixture();
     const callCounts = { archive: 0, artifact: 0, run: 0 };
     const urls: string[] = [];
     const fetchImpl = (async (input: string | URL | Request) => {
@@ -841,20 +874,7 @@ describe("plugin publication artifact", () => {
     }) as typeof fetch;
 
     const result = await downloadActionsArtifactArchive({
-      expected: {
-        artifactDigest: `sha256:${sha256(zip)}`,
-        artifactId: ARTIFACT_ID,
-        artifactName: ARTIFACT_NAME,
-        artifactSizeBytes: zip.length,
-        repository: REPOSITORY,
-        runStatePolicy: "completed-success",
-        runAttempt: RUN_ATTEMPT,
-        runId: RUN_ID,
-        workflowEvent: "workflow_dispatch",
-        workflowHeadBranch: "main",
-        workflowPath: WORKFLOW_PATH,
-        workflowSha: WORKFLOW_SHA,
-      },
+      expected,
       fetchImpl,
       maxArchiveBytes: 1024 * 1024,
       retryAttempts: 3,
@@ -867,6 +887,168 @@ describe("plugin publication artifact", () => {
     expect(urls).toContain(
       `https://api.github.com/repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`,
     );
+  });
+
+  it.each([401, 403, 404, 410])(
+    "does not retry permanent HTTP %i artifact failures",
+    async (status) => {
+      const { expected } = createDownloadFixture();
+      let requests = 0;
+      await expect(
+        downloadActionsArtifactArchive({
+          expected,
+          fetchImpl: async () => {
+            requests += 1;
+            return new Response("unavailable", { status });
+          },
+          retryDelayMs: 1,
+          token: "test-token",
+        }),
+      ).rejects.toThrow(`HTTP ${status}`);
+      expect(requests).toBe(1);
+    },
+  );
+
+  it.each([downloadActionsArtifactArchive, downloadExactActionsArtifactArchive])(
+    "does not retry before Retry-After when it exceeds the shared deadline (%#)",
+    async (download) => {
+      const fixture = createDownloadFixture();
+      let requests = 0;
+      await expect(
+        download({
+          expected: fixture.expected,
+          deadlineMs: Date.now() + 500,
+          fetchImpl: async (input: string | URL | Request) => {
+            requests += 1;
+            return requests === 1
+              ? new Response("rate limited", { status: 429, headers: { "retry-after": "60" } })
+              : fixture.fetchImpl(input);
+          },
+          retryDelayMs: 1,
+          token: "test-token",
+        }),
+      ).rejects.toThrow(/deadline/u);
+      expect(requests).toBe(1);
+    },
+  );
+
+  it("does not retry or retain an archive whose bytes contradict its approved digest", async () => {
+    const fixture = createDownloadFixture();
+    const archivePath = path.join(tempDir(), "retained.zip");
+    const corrupt = Buffer.from(fixture.zip);
+    corrupt.writeUInt32LE(0, 0);
+    let archiveRequests = 0;
+    await expect(
+      downloadActionsArtifactArchive({
+        archivePath,
+        expected: fixture.expected,
+        fetchImpl: async (input: string | URL | Request) => {
+          if (String(input).endsWith("/zip")) {
+            archiveRequests += 1;
+            return new Response(new Uint8Array(corrupt));
+          }
+          return fixture.fetchImpl(input);
+        },
+        retryDelayMs: 1,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(/digest/u);
+    expect(archiveRequests).toBe(1);
+    expect(existsSync(archivePath)).toBe(false);
+  });
+
+  it("recovers HTTP transfers and reuses only verified bytes after revalidating the producer", async () => {
+    const fixture = createDownloadFixture();
+    const archivePath = path.join(tempDir(), "retained.zip");
+    let artifactRequests = 0;
+    let archiveRequests = 0;
+    let retryAt = 0;
+    const server = createServer((request, response) => {
+      if (request.url?.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
+        artifactRequests += 1;
+        if (artifactRequests === 1) {
+          retryAt = Date.now() + 1000;
+          response.writeHead(429, { "retry-after": "1" }).end("rate limited");
+        } else if (Date.now() < retryAt) {
+          response.writeHead(400).end("retried before Retry-After");
+        } else {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(fixture.artifactMetadata));
+        }
+      } else if (request.url?.endsWith(`/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`)) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(fixture.workflowRun));
+      } else if (request.url?.endsWith("/zip")) {
+        archiveRequests += 1;
+        response.writeHead(302, { location: `/payload-${archiveRequests}` }).end();
+      } else if (request.url?.startsWith("/payload-")) {
+        response.writeHead(200, { "content-length": String(fixture.zip.length) });
+        if (archiveRequests === 1) {
+          response.write(fixture.zip.subarray(0, 16));
+          setImmediate(() => response.destroy());
+        } else {
+          response.end(fixture.zip);
+        }
+      } else {
+        response.writeHead(404).end();
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("HTTP artifact fixture did not bind a TCP port.");
+      }
+      const origin = `http://127.0.0.1:${address.port}`;
+      const download = () =>
+        downloadActionsArtifactArchive({
+          archivePath,
+          expected: fixture.expected,
+          fetchImpl: (input: string | URL | Request, init?: RequestInit) =>
+            fetch(new URL(new URL(String(input)).pathname, origin), init),
+          retryDelayMs: 1,
+          token: "test-token",
+        });
+      await download();
+      expect(readFileSync(archivePath)).toEqual(fixture.zip);
+      await download();
+      expect(archiveRequests).toBe(2);
+      fixture.workflowRun.conclusion = "cancelled";
+      await expect(download()).rejects.toThrow("immutable publication tuple");
+      expect(archiveRequests).toBe(2);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("refuses changed retained bytes instead of overwriting them on re-entry", async () => {
+    const fixture = createDownloadFixture();
+    const archivePath = path.join(tempDir(), "retained.zip");
+    const corrupt = Buffer.from(fixture.zip);
+    corrupt.writeUInt32LE(0, 0);
+    writeFileSync(archivePath, corrupt);
+    let archiveRequests = 0;
+    await expect(
+      downloadActionsArtifactArchive({
+        archivePath,
+        expected: fixture.expected,
+        fetchImpl: async (input: string | URL | Request) => {
+          if (String(input).endsWith("/zip")) {
+            archiveRequests += 1;
+          }
+          return fixture.fetchImpl(input);
+        },
+        token: "test-token",
+      }),
+    ).rejects.toThrow(/digest/u);
+    expect(archiveRequests).toBe(0);
+    expect(readFileSync(archivePath)).toEqual(corrupt);
   });
 
   it("reuses only an exact successful producer job from the current or a prior attempt", async () => {

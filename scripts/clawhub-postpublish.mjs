@@ -13,6 +13,7 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
+  readBoundedRegularFile,
   validateActionsArtifactBinding,
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
@@ -123,8 +124,10 @@ async function downloadArtifact(artifact, run, context, maxArchiveBytes) {
       workflowPath: run.path.split("@")[0],
     },
   });
+  await mkdir(context.archiveDir, { recursive: true });
   return await downloadExactActionsArtifactArchive({
     ...context,
+    archivePath: join(context.archiveDir, `${artifact.id}.zip`),
     maxArchiveBytes,
     expected: {
       repository: REPOSITORY,
@@ -180,7 +183,7 @@ export async function verifyClawHubPostpublish({
     ref: trigger?.head_branch,
   };
   requireSuccessfulRun(trigger, expectedParent);
-  const context = { token, fetchImpl };
+  const context = { token, fetchImpl, archiveDir: join(outputDir, "archives") };
   const parent = await githubJson(`actions/runs/${runId}/attempts/${runAttempt}`, context);
   requireSuccessfulRun(parent, expectedParent);
   const artifacts = await listRunArtifacts(runId, context);
@@ -329,6 +332,10 @@ export async function verifyClawHubPostpublish({
   const downloaded = await downloadClawHubTransactions({
     identity,
     ...context,
+    archivePath: join(
+      context.archiveDir,
+      `transactions-${identity.runId}-${identity.runAttempt}.zip`,
+    ),
     runGhJson: runGh
       ? (path) => JSON.parse(runGh(["api", `repos/${REPOSITORY}/${path}`, "--method", "GET"]))
       : undefined,
@@ -379,8 +386,26 @@ export async function verifyClawHubPostpublish({
           throw new Error("ClawHub package artifact must contain one root tarball.");
         }
         const artifactDir = join(outputDir, String(matches[0].id));
-        await mkdir(artifactDir);
-        await writeFile(join(artifactDir, fileName), bytes, { flag: "wx" });
+        await mkdir(artifactDir, { recursive: true });
+        const tarballPath = join(artifactDir, fileName);
+        try {
+          await writeFile(tarballPath, bytes, { flag: "wx", mode: 0o600 });
+        } catch (error) {
+          if (error?.code !== "EEXIST") {
+            throw error;
+          }
+          // Retained output is reusable content, never publication authority.
+          // Refuse modified or symlinked files instead of overwriting evidence.
+          const retained = readBoundedRegularFile(tarballPath, {
+            label: "Retained ClawHub package",
+            maxBytes: 120 * 1024 * 1024,
+          });
+          if (!retained.equals(bytes)) {
+            throw new Error(`Retained ClawHub package bytes mismatch: ${entry.name}.`, {
+              cause: error,
+            });
+          }
+        }
         const packed = readPackedClawHubTransaction({
           artifactDir,
           packageName: entry.name,

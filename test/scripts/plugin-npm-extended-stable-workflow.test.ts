@@ -143,7 +143,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(preflightCheckout.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       path: ".release-tooling",
-      "sparse-checkout": "packages/normalization-core\nscripts\n",
+      "sparse-checkout": "packages/normalization-core\nscripts\nsrc/plugins\n",
     });
     const pack = step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact");
     expect(pack.run).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
@@ -284,17 +284,20 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     const preview = workflow().jobs?.preview_plugins_npm;
     const previewSteps = preview?.steps ?? [];
     const trusted = step(preview, "Validate ref is on a trusted publish branch");
-    expect(previewSteps.slice(0, 7).map((candidate) => candidate.name)).toEqual([
+    let prerequisiteIndex = -1;
+    for (const prerequisite of [
       "Prepare Git owner",
       "Checkout",
       "Checkout trusted planning tooling",
       "Resolve checked-out ref",
       "Verify trusted preflight tooling identity",
       "Validate ref is on a trusted publish branch",
-      "Setup Node environment",
-    ]);
+    ]) {
+      const index = previewSteps.indexOf(step(preview, prerequisite));
+      expect(index, prerequisite).toBeGreaterThan(prerequisiteIndex);
+      prerequisiteIndex = index;
+    }
     const trustedIndex = previewSteps.indexOf(trusted);
-    expect(trustedIndex).toBe(5);
     for (const candidate of previewSteps.slice(0, trustedIndex)) {
       expect(candidate.uses?.startsWith("./"), candidate.name).not.toBe(true);
       expect(candidate.run ?? "", candidate.name).not.toMatch(/\b(?:bun|npm|pnpm)\b/u);
@@ -311,7 +314,16 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(toolingIdentity.run).toContain('--workflow-ref "$WORKFLOW_REF"');
     expect(toolingIdentity.run).toContain('--workflow-full-ref "$WORKFLOW_FULL_REF"');
     expect(toolingIdentity.run).toContain('--workflow-sha "$WORKFLOW_SHA"');
-    expect(step(preview, "Setup Node environment").uses).toBe("./.github/actions/setup-node-env");
+    const sourceSetup = step(preview, "Setup Node environment");
+    const preparedSetup = step(preview, "Setup trusted Node for prepared publication");
+    const preparedPlan = step(preview, "Read qualified npm preparation");
+    expect(sourceSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(sourceSetup.if).toBe("inputs.prepared_artifact == ''");
+    expect(preparedSetup.if).toBe("inputs.prepared_artifact != ''");
+    expect(preparedPlan.if).toBe(preparedSetup.if);
+    expect(previewSteps.indexOf(sourceSetup)).toBeGreaterThan(trustedIndex);
+    expect(previewSteps.indexOf(preparedSetup)).toBeGreaterThan(trustedIndex);
+    expect(previewSteps.indexOf(preparedPlan)).toBeGreaterThan(previewSteps.indexOf(preparedSetup));
     expect(trusted.env).toMatchObject({
       PREFLIGHT_ONLY:
         "${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}",
@@ -580,17 +592,14 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(publish.env?.NPM_TOKEN).toBeUndefined();
     const bootstrapCheck = step(
       parsed.jobs?.publish_plugins_npm,
-      "Check bootstrap npm package version",
+      "Check immutable npm package version",
     );
-    expect(bootstrapCheck.if).toContain("npm-token-bootstrap");
-    expect(bootstrapCheck.run).toContain("fetchNpmRegistryPackumentWithRetry");
-    expect(bootstrapCheck.run).toContain("publishedDist.integrity !== expectedIntegrity");
-    expect(bootstrapCheck.run).toContain("already_published=true");
+    expect(bootstrapCheck.run).toContain("plugin-npm-prepared-release.mjs registry");
+    expect(bootstrapCheck.run).toContain('--tarball "$TARBALL_PATH"');
+    expect(bootstrapCheck.run).toContain('--allow-missing true --github-output "$GITHUB_OUTPUT"');
     const bootstrap = step(parsed.jobs?.publish_plugins_npm, "Publish approved bootstrap tarball");
     expect(bootstrap.if).toContain("npm-token-bootstrap");
-    expect(bootstrap.if).toContain(
-      "steps.bootstrap_npm_package_version.outputs.already_published != 'true'",
-    );
+    expect(bootstrap.if).toContain("steps.npm_package_version.outputs.already_published != 'true'");
     expect(bootstrap.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
     expect(bootstrap.env?.PACKAGE_NAME).toContain("publication_evidence.outputs.package_name");
     expect(bootstrap.run).not.toContain("@openclaw/meta-provider");
@@ -642,11 +651,16 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
       path: ".release-tooling",
     });
     expect(
-      step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").uses,
-    ).toBe("./.github/actions/setup-node-env");
+      parsed.jobs?.publish_plugins_npm?.steps?.some(
+        (entry) => entry.uses === "./.github/actions/setup-node-env",
+      ),
+    ).toBe(false);
+    expect(step(parsed.jobs?.preview_plugin_pack, "Qualify packed plugin runtime").run).toContain(
+      "collectPluginNpmPublishedRuntimeErrors",
+    );
     expect(
-      step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").if,
-    ).toBeUndefined();
+      step(parsed.jobs?.publish_plugins_npm, "Verify immutable npm registry readback").run,
+    ).toContain("plugin-npm-prepared-release.mjs registry");
     expect(
       parsed.jobs?.publish_plugins_npm?.steps?.some(
         (entry) => entry.with?.path === ".publication-target",

@@ -53,6 +53,11 @@ on:
         required: false
         default: false
         type: boolean
+      prepared_artifact:
+        description: Exact prepared ClawHub manifest artifact tuple; promotes its tarballs without rebuilding.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   # Validation gets its own slot; real publication remains serialized by target.
@@ -69,6 +74,7 @@ jobs:
   preview_plugins_clawhub:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     outputs:
       ref_revision: ${{ steps.ref.outputs.sha }}
@@ -80,6 +86,8 @@ jobs:
       missing_trusted_publisher_count: ${{ steps.plan.outputs.missing_trusted_publisher_count }}
       skipped_published_count: ${{ steps.plan.outputs.skipped_published_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      publish_matrix: ${{ steps.plan.outputs.publish_matrix }}
+      has_publish_candidates: ${{ steps.plan.outputs.has_publish_candidates }}
       bootstrap_matrix: ${{ steps.plan.outputs.bootstrap_matrix }}
       missing_trusted_publisher_matrix: ${{ steps.plan.outputs.missing_trusted_publisher_matrix }}
     steps:
@@ -286,13 +294,21 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Node environment
+        if: inputs.prepared_artifact == ''
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Setup Node for prepared planning
+        if: inputs.prepared_artifact != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Validate publishable plugin metadata
+        if: inputs.prepared_artifact == ''
         env:
           TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
@@ -322,10 +338,29 @@ jobs:
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
           HEAD_REF: ${{ steps.ref.outputs.sha }}
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
+          if [[ "${DRY_RUN}" == "true" && -n "${PREPARED_ARTIFACT}" ]]; then
+            echo "ClawHub preparation and prepared-artifact promotion are mutually exclusive." >&2
+            exit 1
+          fi
+          if [[ "${DRY_RUN}" == "true" && "${PUBLISH_SCOPE}" == "all-publishable" && -n "${RELEASE_PLUGINS// }" ]]; then
+            echo "All-publishable ClawHub preparation must include the complete source roster; use selected scope to restrict packages." >&2
+            exit 1
+          fi
           mkdir -p .local
-          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+          if [[ -n "${PREPARED_ARTIFACT}" ]]; then
+            printf '%s' "${PREPARED_ARTIFACT}" > .local/clawhub-prepared-descriptor.json
+            node .release-tooling/scripts/clawhub-prepared-artifact.mjs resolve \
+              --descriptor .local/clawhub-prepared-descriptor.json \
+              --output .local/clawhub-matrix.json
+            jq '{all: ., candidates: map(select(.alreadyPublished | not)), bootstrapCandidates: [], missingTrustedPublisher: [], skippedPublished: map(select(.alreadyPublished))}' \
+              .local/clawhub-matrix.json > .local/plugin-clawhub-release-plan.json
+          elif [[ -n "${PUBLISH_SCOPE}" ]]; then
             plan_args=(--selection-mode "${PUBLISH_SCOPE}")
             if [[ -n "${RELEASE_PLUGINS}" ]]; then
               plan_args+=(--plugins "${RELEASE_PLUGINS}")
@@ -339,7 +374,19 @@ jobs:
 
           cat .local/plugin-clawhub-release-plan.json
 
-          candidate_count="$(jq -r '.candidates | length' .local/plugin-clawhub-release-plan.json)"
+          # Preparation freezes every selected package. Registry presence may
+          # change before promotion; existing versions require byte readback.
+          if [[ "${DRY_RUN}" == "true" || -n "${PREPARED_ARTIFACT}" ]]; then
+            jq '.all' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
+          else
+            jq '.candidates' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
+          fi
+          if [[ "${DRY_RUN}" == "true" || -n "${PREPARED_ARTIFACT}" ]]; then
+            jq --arg suffix "-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              'map(.artifactName += $suffix)' .local/clawhub-matrix.json > .local/clawhub-attempt-matrix.json
+            mv .local/clawhub-attempt-matrix.json .local/clawhub-matrix.json
+          fi
+          candidate_count="$(jq 'length' .local/clawhub-matrix.json)"
           bootstrap_candidate_count="$(jq -r '.bootstrapCandidates | length' .local/plugin-clawhub-release-plan.json)"
           missing_trusted_publisher_count="$(jq -r '.missingTrustedPublisher | length' .local/plugin-clawhub-release-plan.json)"
           skipped_published_count="$(jq -r '.skippedPublished | length' .local/plugin-clawhub-release-plan.json)"
@@ -355,7 +402,9 @@ jobs:
           if [[ "${missing_trusted_publisher_count}" != "0" ]]; then
             has_missing_trusted_publisher="true"
           fi
-          matrix_json="$(jq -c '.candidates' .local/plugin-clawhub-release-plan.json)"
+          matrix_json="$(jq -c '.' .local/clawhub-matrix.json)"
+          publish_matrix_json="$(jq -c --arg dry_run "${DRY_RUN}" 'map(select($dry_run == "true" or (.alreadyPublished | not)) | del(.prepared))' .local/clawhub-matrix.json)"
+          has_publish_candidates="$(jq 'length > 0' <<<"${publish_matrix_json}")"
           bootstrap_matrix_json="$(jq -c '.bootstrapCandidates' .local/plugin-clawhub-release-plan.json)"
           missing_trusted_publisher_matrix_json="$(jq -c '.missingTrustedPublisher' .local/plugin-clawhub-release-plan.json)"
 
@@ -368,6 +417,8 @@ jobs:
             echo "has_bootstrap_candidates=${has_bootstrap_candidates}"
             echo "has_missing_trusted_publisher=${has_missing_trusted_publisher}"
             echo "matrix=${matrix_json}"
+            echo "publish_matrix=${publish_matrix_json}"
+            echo "has_publish_candidates=${has_publish_candidates}"
             echo "bootstrap_matrix=${bootstrap_matrix_json}"
             echo "missing_trusted_publisher_matrix=${missing_trusted_publisher_matrix_json}"
           } >> "$GITHUB_OUTPUT"
@@ -399,7 +450,7 @@ jobs:
           exit 1
 
       - name: Fail manual publish when target versions already exist
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.prepared_artifact == '' && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'
         run: |
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
@@ -478,10 +529,12 @@ jobs:
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   pack_plugins_clawhub_artifacts:
+    name: Pack ClawHub package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_clawhub, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     strategy:
       fail-fast: false
@@ -499,6 +552,7 @@ jobs:
           fi
 
       - name: Checkout
+        if: inputs.prepared_artifact == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -506,6 +560,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Node environment
+        if: inputs.prepared_artifact == ''
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -514,6 +569,7 @@ jobs:
           install-deps: "true"
 
       - name: Install pinned ClawHub CLI wrapper
+        if: inputs.prepared_artifact == ''
         run: |
           set -euo pipefail
           cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
@@ -525,6 +581,7 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
       - name: Pack ClawHub package artifact
+        if: inputs.prepared_artifact == ''
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
@@ -535,13 +592,115 @@ jobs:
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
         run: bash scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}"
 
+      - name: Checkout trusted artifact tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          sparse-checkout: scripts
+          fetch-depth: 1
+
+      - name: Setup Node for prepared promotion
+        if: inputs.prepared_artifact != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Restore exact prepared ClawHub tarball
+        if: inputs.prepared_artifact != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+          PACKAGE_ENTRY: ${{ toJson(matrix.plugin) }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${PREPARED_ARTIFACT}" > "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
+          printf '%s' "${PACKAGE_ENTRY}" > "$RUNNER_TEMP/clawhub-prepared-package.json"
+          node .release-tooling/scripts/clawhub-prepared-artifact.mjs restore \
+            --descriptor "$RUNNER_TEMP/clawhub-prepared-descriptor.json" \
+            --package "$RUNNER_TEMP/clawhub-prepared-package.json" \
+            --directory "$RUNNER_TEMP/clawhub-package-artifact"
+
+      - name: Verify already-published ClawHub package before adoption
+        if: matrix.plugin.alreadyPublished && (inputs.dry_run || inputs.prepared_artifact != '')
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+        run: |
+          node .release-tooling/scripts/verify-clawhub-published-artifact.mjs \
+            --expected-artifact-dir "$RUNNER_TEMP/clawhub-package-artifact" \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --publish-tag "$PACKAGE_TAG" \
+            --output "$RUNNER_TEMP/clawhub-adoption.json"
+
+      - name: Retain verified ClawHub adoption
+        if: matrix.plugin.alreadyPublished && (inputs.dry_run || inputs.prepared_artifact != '')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.plugin.artifactName }}-adoption
+          path: ${{ runner.temp }}/clawhub-adoption.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload ClawHub package artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.plugin.artifactName }}
           path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
+
+  seal_prepared_clawhub:
+    name: Seal prepared ClawHub packages
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
+    if: always() && inputs.dry_run && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/release-publish/')) && needs.preview_plugins_clawhub.result == 'success' && (needs.pack_plugins_clawhub_artifacts.result == 'success' || needs.pack_plugins_clawhub_artifacts.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted artifact tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Download prepared ClawHub packages
+        if: needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: clawhub-package-*
+          path: ${{ runner.temp }}/clawhub-prepared-packages
+      - name: Seal complete prepared ClawHub inventory
+        id: seal
+        env:
+          DRY_RUN: "true"
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          PACKAGE_MATRIX: ${{ needs.preview_plugins_clawhub.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PACKAGE_MATRIX" > "$RUNNER_TEMP/clawhub-prepared-matrix.json"
+          node scripts/clawhub-prepared-artifact.mjs seal \
+            --matrix "$RUNNER_TEMP/clawhub-prepared-matrix.json" \
+            --directory "$RUNNER_TEMP/clawhub-prepared-packages" \
+            --output "$RUNNER_TEMP/clawhub-prepared/prepared-clawhub.json"
+      - name: Upload prepared ClawHub manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ runner.temp }}/clawhub-prepared/prepared-clawhub.json
+          if-no-files-found: error
+          retention-days: 30
 
   seal_clawhub_transactions:
     name: Seal ClawHub package transactions
@@ -595,7 +754,7 @@ jobs:
 
   approve_plugins_clawhub_release:
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, seal_clawhub_transactions]
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions:
@@ -613,7 +772,7 @@ jobs:
         seal_clawhub_transactions,
         approve_plugins_clawhub_release,
       ]
-    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
+    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
     uses: openclaw/clawhub/.github/workflows/package-publish.yml@db2a12c4625ffa162910a3e6aa2cb786ced89e2f # reviewed parent receipt contract
     permissions:
       actions: read
@@ -623,7 +782,7 @@ jobs:
       fail-fast: false
       max-parallel: 32
       matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
+        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.publish_matrix) }}
     with:
       trusted_tooling_identity_json: ${{ needs.seal_clawhub_transactions.outputs.identity }}
       wait_for_publication: false

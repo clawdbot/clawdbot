@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { isPluginPublicationEnabled } from "./plugin-publication-target.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 
 export type PluginPackageJson = {
@@ -79,13 +80,6 @@ type PublishablePluginPackageSource = Pick<
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const SAFE_CLAWHUB_EXTENSION_ID = /^[a-z0-9][a-z0-9._-]*$/;
-
-/** Explicit core ownership defers staged external publication until the plugin is externalized. */
-function isPluginExternalPublicationDeferred(packageJson: {
-  openclaw?: { build?: { bundledDist?: unknown } };
-}): boolean {
-  return packageJson.openclaw?.build?.bundledDist === true;
-}
 
 function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
@@ -270,9 +264,8 @@ export function collectPublishablePluginPackagesFromCandidates(
       candidates
         .filter(
           (candidate) =>
-            !isPluginExternalPublicationDeferred(candidate.packageJson) &&
-            (candidate.packageJson.openclaw?.release?.publishToNpm === true ||
-              candidate.packageJson.openclaw?.release?.publishToClawHub === true),
+            isPluginPublicationEnabled(candidate.packageJson, "npm") ||
+            isPluginPublicationEnabled(candidate.packageJson, "clawhub"),
         )
         .map((candidate) => ({
           extensionId: candidate.extensionId,
@@ -291,14 +284,7 @@ export function collectPublishablePluginPackagesFromCandidates(
     if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
       continue;
     }
-    if (isPluginExternalPublicationDeferred(packageJson)) {
-      continue;
-    }
-    const enabled =
-      target === "npm"
-        ? packageJson.openclaw?.release?.publishToNpm === true
-        : packageJson.openclaw?.release?.publishToClawHub === true;
-    if (!enabled) {
+    if (!isPluginPublicationEnabled(packageJson, target)) {
       continue;
     }
     if (target === "clawhub" && !SAFE_CLAWHUB_EXTENSION_ID.test(extensionId)) {

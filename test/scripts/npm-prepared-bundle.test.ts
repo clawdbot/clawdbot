@@ -735,7 +735,7 @@ describe("prepared npm bundle", () => {
         const artifact = proof.archives.get("79")!;
         artifact.archive = Buffer.alloc(artifact.archive.length);
       },
-      "GitHub Actions artifact digest",
+      "GitHub Actions artifact download digest",
     ],
     [
       "SDK proof rebound to another tag",

@@ -600,8 +600,122 @@ For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or `tel
 
 ## Regular release publish automation
 
+### Prepare once, then use the release button
+
+For a complete regular beta or stable release, use `OpenClaw Release Prepare`
+before publication and `OpenClaw Release Button` when ready to publish. Both run
+from the same frozen `release-publish/<sha12>-<id>` tooling tag. The existing
+release tag, successful npm preflight, exact Full Release Validation attempt,
+reviewed SDK acknowledgement when required, and stable Windows source evidence
+must already be available. This does not create a version or release tag.
+
+Run `pnpm release:candidate` with `--publish-workflow-ref` set to that protected
+tag. Its evidence bundle and terminal output include a **prepare once** command
+for complete regular releases. After creating the frozen release tag, run that
+command. It dispatches the existing npm and ClawHub preflight workflows in
+parallel, builds and qualifies their final package bytes, and seals a readiness
+receipt only after every package can be downloaded and verified. Preparation
+does not publish packages or change public selectors.
+
+Every ClawHub package must already have the normal trusted-publisher binding.
+Preparation refuses to issue a readiness receipt for packages needing bootstrap
+or publisher repair; use the existing ClawHub owner workflow to finish that setup
+first. The button rechecks this prerequisite before starting any plugin writer.
+
+When preparation succeeds, copy its summary's `prepared_artifact` JSON into
+**OpenClaw Release Button**, selecting the same protected tooling tag. This is
+the only input needed for a new publication: the receipt contains the release tag,
+channel, validation references, complete package inventories, and exact artifact
+IDs, digests, producer runs and attempts. The button invokes the existing
+protected publisher; existing environment approvals and registry authority
+checks remain in force. The receipt seals plugin readiness; the existing parent
+revalidates the core npm, Full Release Validation, and Windows evidence before
+dispatching publication.
+
+The publisher verifies the complete prepared npm and ClawHub package set before
+starting any plugin writer. Plugin jobs restore and upload those exact bytes;
+they do not install source dependencies, rebuild, or repack them. Packages that
+are already present must match the prepared integrity and canonical public
+tarball before they can be adopted. Core npm and Docker retain their existing
+prepared-artifact and release-evidence checks. Because ClawHub's publication
+authorization depends on terminal parent success, the outer button waits for
+the publisher and then verifies ClawHub's canonical public downloads. Only then
+does it make the GitHub draft release visible.
+
+This button covers core and plugin npm, ClawHub, the existing Docker/Windows
+contracts, and GitHub release visibility. It does **not** claim that independent
+macOS signing/feed promotion, Android completion, app-store submission, or
+website publication is ready. Those owners retain their existing release steps.
+Alpha, extended-stable, selected-plugin repairs, and historical releases without
+a readiness receipt continue to use their existing owner workflows.
+
+### Recover a failed download
+
+Transient network failures, interrupted responses, HTTP 408/429, and retryable server
+errors receive bounded retries with backoff and `Retry-After` handling. Each
+retry requests the original artifact ID again, obtaining a fresh signed URL.
+Transfers have a shared deadline; permanent authentication/not-found failures,
+identity drift, and digest/size mismatches stop instead of selecting another
+artifact. Complete verified ZIPs can be reused within the same runner, but only
+after fresh producer checks and a fresh local hash. An interrupted file restarts;
+this does not assume GitHub supports byte-range resumption. A new runner may
+download the same immutable bytes again.
+
+Preparation retains `request.json` before its first dispatch and after each
+acknowledgement. A `null` child ID means **unconfirmed**, not that no run exists.
+After inspecting Actions, fill both `npmRunId` and `clawhubRunId` with the exact
+positive numeric child IDs. Start a new **OpenClaw Release Prepare** run on the
+same protected tooling tag with the same `publish_inputs` and this JSON as
+`preparation_request`. It adopts those runs without dispatching any workflow;
+the seal still verifies their source, tooling, complete rosters, and package bytes.
+If a child never existed, start only that missing owner: **Plugin NPM Release**
+with `preflight_only=true` and `trusted_publisher_preflight=false`, or **Plugin
+ClawHub Release** with `dry_run=true`. Use the same protected tooling tag, exact
+source SHA as `ref`, and `publish_scope=all-publishable`, then supply both IDs.
+Never repeat an uncertain dispatch. This JSON is an explicit selection of runs
+to qualify, not cryptographic proof of original dispatch lineage.
+
+| Failure                                                                   | Recovery                                                                                                                                                                                 |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Outer readiness seal/download fails after both child preparations succeed | On **OpenClaw Release Prepare**, rerun **Verify and seal prepared publication**. It reuses the child run IDs, resolves their current attempts once, and does not dispatch another build. |
+| A linked non-publishing npm or ClawHub preparation fails                  | Choose **Re-run all jobs** on that child, including resolution and every pack/preflight job. After the complete attempt succeeds, rerun only the outer seal.                             |
+| Preparation dispatch stops partway through or loses a response            | Inspect Actions and recover with `preparation_request` as described above. A missing acknowledgement is not permission to repeat the dispatch.                                           |
+| Publisher download fails before writes                                    | Start an explicit new **OpenClaw Release Button** run with the same `prepared_artifact`. No version bump or repack is needed.                                                            |
+| The button's final ClawHub readback fails after an upload                 | Treat publication as possibly visible and verification as pending. Rerun the button's failed verification job; its successful dispatch job is not repeated.                              |
+| A publisher itself partially fails                                        | Inspect the original publisher and its core child. Recover through a new button run, supplying `openclaw_npm_resume_run_id` when core npm is already published, as described below.      |
+| Artifact expired/deleted or integrity differs                             | Stop and explicitly prepare and qualify a new receipt. Deleted Actions artifact IDs cannot be restored; never silently use a newer successful run.                                       |
+| Publication dispatch response is lost                                     | Inspect the original publisher and child outcomes before an explicit recovery request. Mutation requests are not automatically retried.                                                  |
+
+Use **Re-run failed jobs**, not **Re-run all jobs**, after the button has
+dispatched publication. Its dispatch job refuses a second attempt; verification
+and final visibility can be retried independently without another registry
+upload. Separate button runs are still separate operator publication requests,
+not a global exactly-once transaction across registries.
+
+A parent workflow attempt and its child receipts are one authorization unit.
+The button never substitutes a newer parent attempt for its recorded dispatch.
+For prepared publication recovery, start a **new button run** with the same
+`prepared_artifact` and protected tooling tag. If core npm is already published,
+set the optional `openclaw_npm_resume_run_id` to its **successful original
+OpenClaw NPM Release child**. If npm contains the core version but that child
+failed, stop and preserve the original run and artifact evidence. The existing
+core owner rejects republishing an existing version and requires a successful
+child for resume; this case needs maintainer reconciliation/core-owner repair,
+not a button retry. All other frozen inputs and prepared artifacts remain unchanged.
+The new button records its new recovery parent, waits for that exact attempt to
+succeed, verifies canonical ClawHub downloads, and then activates the GitHub
+release. Do not adopt a replacement parent into the original button or bypass
+this path with a manual finalizer.
+
+A rerun child preparation must seal the complete package set from successful
+pack/preflight jobs in that same attempt. Reusing previous-attempt jobs or
+rerunning only the child's seal is rejected; rerun all jobs in that
+non-publishing child, then rerun only the outer seal.
+
+### Direct publication and owner recovery
+
 For beta, `latest`, plugin, GitHub Release, and platform publication,
-`OpenClaw Release Publish` is the normal mutating entrypoint. The monthly
+`OpenClaw Release Publish` remains the protected mutating owner. The monthly
 `.33+` Gateway extended-stable path does not use this orchestrator. The
 regular workflow orchestrates the trusted-publisher workflows in the order the
 release needs:

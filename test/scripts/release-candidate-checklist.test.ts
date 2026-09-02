@@ -8,6 +8,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
+import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-ready.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
@@ -1482,6 +1483,69 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("round-trips the prepared command into the full release button contract", () => {
+    const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
+    const windowsNodeInstallerDigests = JSON.stringify({
+      "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
+      "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
+    });
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.9.2",
+        "--npm-dist-tag",
+        "latest",
+        "--publish-workflow-ref",
+        publishWorkflowRef,
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
+        "--windows-node-tag",
+        "v0.6.3",
+      ]),
+      fullReleaseRunAttempt: 2,
+      windowsNodeInstallerDigests,
+    };
+    const command = buildPublishCommand(options, undefined, "prepare");
+    // A shell-local gh captures real argument decoding without dispatching anything.
+    const args = execFileSync("bash", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+      .split("\0")
+      .filter(Boolean);
+    expect(args.slice(0, 7)).toEqual([
+      "workflow",
+      "run",
+      "openclaw-release-prepare.yml",
+      "--repo",
+      "openclaw/openclaw",
+      "--ref",
+      publishWorkflowRef,
+    ]);
+    const field = args[args.indexOf("-f") + 1] ?? "";
+    expect(field.startsWith("publish_inputs=")).toBe(true);
+    const preparedInputs = validateReleaseButtonInputs(
+      JSON.parse(field.slice("publish_inputs=".length)),
+    );
+    expect(preparedInputs).toMatchObject({
+      tag: "v2026.9.2",
+      npm_dist_tag: "latest",
+      preflight_run_id: "222",
+      full_release_validation_run_id: "111",
+      full_release_validation_run_attempt: "2",
+      plugin_sdk_api_acknowledgement: "a1b2c3d4",
+      windows_node_tag: "v0.6.3",
+      windows_node_installer_digests: windowsNodeInstallerDigests,
+      plugin_publish_scope: "all-publishable",
+      release_evidence_mode: "full-release-validation",
+      wait_for_clawhub: "true",
+    });
   });
 
   it("validates Plugin SDK acknowledgement digests", () => {

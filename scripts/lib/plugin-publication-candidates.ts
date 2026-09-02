@@ -8,6 +8,7 @@ import type {
 // Any change here can alter the package inventory for both registries. Range
 // selectors and workflow triggers must keep this closure in sync.
 export const PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS = [
+  "scripts/lib/bounded-response.mjs",
   "package.json",
   "pnpm-lock.yaml",
   "packages/normalization-core/src",
@@ -15,6 +16,7 @@ export const PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS = [
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/plugin-publication-target.mjs",
   "scripts/lib/release-version.mjs",
 ] as const;
 
@@ -33,6 +35,7 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/tsx-cli-shim.mjs",
   "scripts/tsx.mjs",
   "scripts/plugin-npm-publish.sh",
+  "scripts/plugin-npm-prepared-release.mjs",
   "scripts/plugin-npm-release-check.ts",
   "scripts/plugin-npm-release-plan.ts",
   "scripts/plugin-publication-artifact.mjs",

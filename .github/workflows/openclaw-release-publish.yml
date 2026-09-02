@@ -11,6 +11,10 @@ on:
         description: Successful OpenClaw NPM Release preflight run id, required for OpenClaw npm or all-publishable plugin publication
         required: false
         type: string
+      prepared_plugins:
+        description: Exact npm and ClawHub artifact descriptors supplied by OpenClaw Release Button; empty preserves the existing release/repair path
+        required: false
+        type: string
       plugin_sdk_api_acknowledgement:
         description: 8-character digest from the Plugin SDK API diff report when the release changes the SDK
         required: false
@@ -575,29 +579,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
-          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
-          rm -rf "${preflight_dir}"
-          mkdir -p "${preflight_dir}"
-
-          download_named_artifact() {
-            local artifact_name="$1"
-            local artifact_dir="${2:-$preflight_dir}"
-            for attempt in 1 2 3; do
-              if gh run download "${PREFLIGHT_RUN_ID}" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --name "${artifact_name}" \
-                --dir "${artifact_dir}"; then
-                return 0
-              fi
-              if [[ "$attempt" != "3" ]]; then
-                echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
-                sleep $((attempt * 10))
-              fi
-            done
-            return 1
-          }
-
+          resolution=""
           full_release_preflight=false
           if [[ "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
             full_manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
@@ -605,30 +587,11 @@ jobs:
               --resolve-full-release-manifest "$full_manifest" \
               --repository "$GITHUB_REPOSITORY" --run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
               --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$EXPECTED_SHA" \
-              --workflow-sha "$(jq -r .workflowSha "$full_manifest")" --output-dir "$preflight_dir")"
+              --workflow-sha "$(jq -r .workflowSha "$full_manifest")")"
             PREFLIGHT_RUN_ID="$(jq -r .producer.runId <<<"$resolution")"
             preflight_run="$(jq -c .run <<<"$resolution")"
-            resolved_name="$(jq -r .artifact.name <<<"$resolution")"
             full_release_preflight=true
-          elif download_named_artifact "${preferred_name}"; then
-            resolved_name="${preferred_name}"
           else
-            echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
-            mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
-              --jq '.artifacts[] | select(.expired != true) | .name' |
-              grep '^openclaw-npm-preflight-' || true)
-            if [[ "${#matches[@]}" != "1" ]]; then
-              echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
-              printf 'Available preflight candidates:\n' >&2
-              printf -- '- %s\n' "${matches[@]:-<none>}" >&2
-              exit 1
-            fi
-            resolved_name="${matches[0]}"
-            download_named_artifact "${resolved_name}"
-          fi
-          echo "name=${resolved_name}" >> "$GITHUB_OUTPUT"
-
-          if [[ "$full_release_preflight" != "true" ]]; then
             preflight_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}")"
           fi
           preflight_attempt="$(jq -r '.run_attempt // ""' <<<"$preflight_run")"
@@ -681,12 +644,102 @@ jobs:
           echo "run_id=${PREFLIGHT_RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "run_attempt=${preflight_attempt}" >> "$GITHUB_OUTPUT"
           echo "workflow_path=${preflight_path}" >> "$GITHUB_OUTPUT"
-          sdk_evidence_dir="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence"
-          rm -rf "$sdk_evidence_dir"
-          mkdir -p "$sdk_evidence_dir"
-          download_named_artifact \
-            "plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${preflight_attempt}" \
-            "$sdk_evidence_dir"
+          node --input-type=module - "$preflight_run" "$resolution" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+          import { dirname, join } from 'node:path';
+          import { downloadExactActionsArtifactArchive, inspectActionsArtifactZipWithPolicy, readPublicationArtifactArchive } from './.release-validation-tooling/scripts/lib/actions-artifact-archive.mjs';
+          import { downloadFullReleaseNpmPreflight } from './.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs';
+
+          const env = process.env;
+          const producer = JSON.parse(process.argv[2]);
+          const qualified = process.argv[3] ? JSON.parse(process.argv[3]) : null;
+          const deadlineMs = Date.now() + 4 * 60_000;
+          const pages = JSON.parse(execFileSync('gh', [
+            'api', `repos/${env.GITHUB_REPOSITORY}/actions/runs/${producer.id}/artifacts?per_page=100`,
+            '--paginate', '--slurp',
+          ], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, timeout: 60_000 }));
+          const artifacts = pages.flatMap((page) => page.artifacts);
+          if (pages.length === 0 || pages.some((page) => page.total_count !== artifacts.length)) {
+            throw new Error('Preflight artifact inventory is incomplete or changed during selection.');
+          }
+          const preferredName = `openclaw-npm-preflight-${env.RELEASE_TAG}`;
+          const candidates = artifacts.filter((artifact) => artifact.expired === false && artifact.name.startsWith('openclaw-npm-preflight-'));
+          const preferred = candidates.filter((artifact) => artifact.name === preferredName);
+          // FRV records the exact independent producer and artifact. Historical
+          // aliases are discovery-only; a failed transfer never selects other bytes.
+          const preflight = qualified ? [qualified.artifact] : preferred.length > 0 ? preferred : candidates;
+          const sdkName = `plugin-sdk-api-release-diff-${producer.id}-${producer.run_attempt}`;
+          const sdk = artifacts.filter((artifact) => artifact.expired === false && artifact.name === sdkName);
+          if (preflight.length !== 1 || sdk.length !== 1) {
+            throw new Error(`Expected ${preferredName} or one historical preflight, and exactly one ${sdkName}.`);
+          }
+          const archivesDir = join(env.RUNNER_TEMP, 'openclaw-npm-preflight-archives');
+          mkdirSync(archivesDir, { recursive: true });
+          for (const [artifact, directory, expectedEntries] of [
+            [preflight[0], 'openclaw-npm-preflight-manifest', undefined],
+            [sdk[0], 'openclaw-plugin-sdk-api-evidence', ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json']],
+          ]) {
+            const outputDir = join(env.RUNNER_TEMP, directory);
+            const archivePath = join(archivesDir, `${artifact.id}.zip`);
+            if (qualified && artifact === preflight[0]) {
+              rmSync(outputDir, { recursive: true, force: true });
+              await downloadFullReleaseNpmPreflight({
+                manifest: JSON.parse(readFileSync(join(env.RUNNER_TEMP, 'full-release-validation-manifest/full-release-validation-manifest.json'), 'utf8')),
+                repository: env.GITHUB_REPOSITORY,
+                runId: env.FULL_RELEASE_VALIDATION_RUN_ID,
+                runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+                sourceSha: env.EXPECTED_SHA,
+                toolingSha: producer.head_sha,
+                outputDir,
+                token: env.GH_TOKEN,
+                archivePath,
+                deadlineMs,
+              });
+              continue;
+            }
+            const download = {
+              token: env.GH_TOKEN,
+              deadlineMs,
+              archivePath,
+              expected: {
+                artifactId: artifact.id,
+                artifactName: artifact.name,
+                artifactDigest: artifact.digest,
+                artifactSizeBytes: artifact.size_in_bytes,
+                artifactExpiresAt: artifact.expires_at,
+                repository: env.GITHUB_REPOSITORY,
+                runId: producer.id,
+                runAttempt: producer.run_attempt,
+                workflowSha: producer.head_sha,
+                workflowPath: producer.path.split('@')[0],
+                workflowEvent: 'workflow_dispatch',
+                workflowHeadBranch: producer.head_branch,
+                runStatePolicy: 'completed-success',
+              },
+              archivePolicy: {
+                expectedEntries,
+                minEntries: 1,
+                maxEntries: 1024,
+                allowPath: () => true,
+                maxEntryBytes: () => 256 * 1024 * 1024,
+              },
+            };
+            // The FRV owner above verifies the exact producer attempt and qualified
+            // workflow ref. SDK bytes share that producer and retain their own tuple.
+            const files = qualified
+              ? inspectActionsArtifactZipWithPolicy((await downloadExactActionsArtifactArchive(download)).archiveBytes, download.archivePolicy)
+              : (await readPublicationArtifactArchive(download)).files;
+            rmSync(outputDir, { recursive: true, force: true });
+            mkdirSync(outputDir, { recursive: true });
+            for (const [name, bytes] of files) {
+              const file = join(outputDir, name);
+              mkdirSync(dirname(file), { recursive: true });
+              writeFileSync(file, bytes, { flag: 'wx' });
+            }
+          }
+          appendFileSync(env.GITHUB_OUTPUT, `name=${preflight[0].name}\n`);
+          NODE
 
       - name: Validate OpenClaw npm preflight manifest
         id: manifest
@@ -1277,6 +1330,29 @@ jobs:
           # the trusted harness install instead of the frozen target checkout.
           ln -s .release-harness/node_modules node_modules
 
+      - name: Verify all prepared plugin bytes before publication
+        if: inputs.prepared_plugins != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { prefetchPreparedPlugins } from './.release-harness/scripts/openclaw-release-ready.mjs';
+          const env = process.env;
+          if (env.PLUGIN_PUBLISH_SCOPE !== 'all-publishable' || env.PLUGINS) {
+            throw new Error('Prepared publication must retain the complete selected roster.');
+          }
+          await prefetchPreparedPlugins({
+            plugins: JSON.parse(env.PREPARED_PLUGINS), inputs: { npm_dist_tag: env.RELEASE_NPM_DIST_TAG },
+            sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, sourceRoot: process.cwd(),
+            outputDir: `${env.RUNNER_TEMP}/prepared-release-packages`, token: env.GH_TOKEN,
+          });
+          NODE
+
       - name: Resolve ClawHub release plan
         id: clawhub_plan
         env:
@@ -1289,6 +1365,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1324,6 +1401,9 @@ jobs:
           )
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
+          fi
+          if [[ -n "${PREPARED_PLUGINS}" ]]; then
+            plan_args+=(--prepared-artifact "$(jq -cer '.clawhub' <<< "$PREPARED_PLUGINS")")
           fi
 
           CLAWHUB_REGISTRY="${CLAWHUB_REGISTRY:-https://clawhub.ai}" \
@@ -1449,6 +1529,7 @@ jobs:
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
+          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1501,6 +1582,12 @@ jobs:
           fi
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
+          if [[ -n "${PREPARED_PLUGINS}" ]]; then
+            npm_args+=(-f prepared_artifact="$(jq -cer '.npm' <<< "$PREPARED_PLUGINS")")
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" == extended-stable ]]; then
+            npm_args+=(-f npm_dist_tag=extended-stable)
+          fi
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
           fi
@@ -1946,7 +2033,9 @@ jobs:
   finalize_github_release:
     name: Finalize GitHub release
     needs: [publish, publish_docker]
-    if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
+    # Prepared releases become visible in the outer button workflow, after this
+    # parent succeeds and ClawHub's terminal publication can be verified.
+    if: ${{ always() && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -1956,13 +2045,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           expected_prerelease=false
+          expected_latest=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
             expected_prerelease=true
+          elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
+            expected_latest=true
           fi
-          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --draft=false --prerelease="${expected_prerelease}" --latest="${expected_latest}"
           release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease)"
           if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] || \
             [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then

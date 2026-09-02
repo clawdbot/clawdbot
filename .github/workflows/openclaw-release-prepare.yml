@@ -1,0 +1,133 @@
+name: OpenClaw Release Prepare
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_inputs:
+        description: Frozen publication inputs JSON from the release candidate checklist
+        required: true
+        type: string
+      preparation_request:
+        description: Recovery only — retained request JSON with both explicitly identified child run IDs
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  prepare:
+    name: Start or recover exact npm and ClawHub preparation
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      request: ${{ steps.dispatch.outputs.request }}
+      source_sha: ${{ steps.dispatch.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+      - name: Dispatch non-publishing preparation
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_INPUTS: ${{ inputs.publish_inputs }}
+          PREPARATION_REQUEST: ${{ inputs.preparation_request }}
+        run: |
+          printf '%s\n' "$PUBLISH_INPUTS" > "$RUNNER_TEMP/publish-inputs.json"
+          args=(--inputs "$RUNNER_TEMP/publish-inputs.json" --output "$RUNNER_TEMP/release-ready")
+          if [[ -n "$PREPARATION_REQUEST" ]]; then
+            printf '%s\n' "$PREPARATION_REQUEST" > "$RUNNER_TEMP/recovered-preparation.json"
+            args+=(--request "$RUNNER_TEMP/recovered-preparation.json")
+          fi
+          node scripts/openclaw-release-ready.mjs dispatch-prepare "${args[@]}"
+      - name: Retain exact preparation dispatches
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-preparation-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-ready/request.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Show partial preparation recovery
+        if: failure()
+        run: |
+          if [[ -f "$RUNNER_TEMP/release-ready/request.json" ]]; then
+            {
+              echo '## Preparation dispatch needs inspection'
+              echo
+              echo 'A null child ID is unconfirmed, not proof that no run was created. Inspect Actions before another dispatch. Fill both exact child run IDs in this request and start OpenClaw Release Prepare with the same publish_inputs plus this preparation_request; recovery adopts those runs without dispatching builds.'
+              echo
+              echo '```json'
+              cat "$RUNNER_TEMP/release-ready/request.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  seal:
+    name: Verify and seal prepared publication
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: .release-source
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+      - name: Fetch and verify every prepared package
+        id: seal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_REQUEST: ${{ needs.prepare.outputs.request }}
+        run: |
+          printf '%s\n' "$PREPARATION_REQUEST" > "$RUNNER_TEMP/preparation-request.json"
+          node scripts/openclaw-release-ready.mjs seal \
+            --request "$RUNNER_TEMP/preparation-request.json" --source-root .release-source \
+            --output "$RUNNER_TEMP/release-ready"
+      - name: Upload immutable readiness receipt
+        id: artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release-ready/release-ready.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Show the release button input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+          ARTIFACT_NAME: ${{ steps.seal.outputs.artifact_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { runReleaseToolingGh } from './scripts/release-tooling-identity.mjs';
+          const env = process.env;
+          const artifact = JSON.parse(runReleaseToolingGh(['api', `repos/${env.GITHUB_REPOSITORY}/actions/artifacts/${env.ARTIFACT_ID}`, '--method', 'GET']));
+          const descriptor = { repository: env.GITHUB_REPOSITORY, runId: Number(env.GITHUB_RUN_ID), runAttempt: Number(env.GITHUB_RUN_ATTEMPT),
+            workflowPath: '.github/workflows/openclaw-release-prepare.yml', workflowEvent: 'workflow_dispatch',
+            workflowHeadBranch: env.GITHUB_REF_NAME, workflowSha: env.GITHUB_WORKFLOW_SHA,
+            artifactId: artifact.id, artifactName: env.ARTIFACT_NAME, artifactDigest: `sha256:${env.ARTIFACT_DIGEST}`, artifactSizeBytes: artifact.size_in_bytes };
+          appendFileSync(env.GITHUB_STEP_SUMMARY, `## Prepared npm and ClawHub publication\n\nAfter this run succeeds, run **OpenClaw Release Button** at \`${env.GITHUB_REF_NAME}\` with this \`prepared_artifact\` input:\n\n\`\`\`json\n${JSON.stringify(descriptor)}\n\`\`\`\n\nThe button publishes through the existing protected release workflow and waits for canonical ClawHub byte verification. Native app/store and website owners retain their existing release steps.\n`);
+          NODE
