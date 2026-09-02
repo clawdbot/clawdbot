@@ -415,6 +415,19 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
   }
 
+  private featuredUser() {
+    const user = this.selfUser;
+    if (!user) {
+      return null;
+    }
+    const name = this.ownProfile?.displayName?.trim() || user.name?.trim() || user.email || user.id;
+    return {
+      name,
+      email: user.email,
+      viewer: { ...user, name, watchedSessions: [] },
+    };
+  }
+
   private featuredAgent() {
     const list = this.context.agents.state.agentsList;
     const agentId = list?.defaultId ?? "main";
@@ -457,6 +470,25 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderHero() {
+    const user = this.featuredUser();
+    if (user) {
+      return renderSettingsGroup(html`
+        <section class="profile-hero">
+          <div class="profile-hero__avatar">
+            <openclaw-viewer-avatar .user=${user.viewer} variant="profile"></openclaw-viewer-avatar>
+          </div>
+          <div class="profile-hero__name">${user.name}</div>
+          <div class="profile-hero__handle">
+            ${user.email ? html`<span>${user.email}</span>` : nothing}
+            <span class="profile-hero__badge">OpenClaw</span>
+          </div>
+        </section>
+      `);
+    }
+
+    // Unidentified connections cannot be mapped to a Gateway user profile.
+    // Keep the assistant preview for those readers without presenting it as the
+    // authenticated person's profile.
     const { agentId, name, avatarUrl, textAvatar } = this.featuredAgent();
     return renderSettingsGroup(html`
       <section class="profile-hero">

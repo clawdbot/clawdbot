@@ -69,10 +69,14 @@ const testPresenceUsers = [
 ];
 
 suite.define(() => {
-  async function openProfilePage(page: Page, methodResponses: Record<string, unknown> = {}) {
+  async function openProfilePage(
+    page: Page,
+    methodResponses: Record<string, unknown> = {},
+    presenceUsers = testPresenceUsers,
+  ) {
     const gateway = await installMockGateway(page, {
       basePath,
-      presenceUsers: testPresenceUsers,
+      presenceUsers,
       methodResponses: {
         "users.self": { profile: testProfile },
         ...methodResponses,
@@ -89,10 +93,11 @@ suite.define(() => {
 
       await page.locator(".profile-hero__name").waitFor({ timeout: 10_000 });
       await expect(page.locator(".profile-hero__name").textContent()).resolves.toContain(
-        "OpenClaw",
+        "Test Person",
       );
-      await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain("@main");
-      await page.locator(".profile-hero__avatar-mascot svg").waitFor({ timeout: 5_000 });
+      await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain(
+        "test@example.com",
+      );
       await page.locator("#settings-profile-identity").waitFor({ timeout: 5_000 });
       await expect(
         page.getByRole("button", { name: /Usage statistics/u }).textContent(),
@@ -237,23 +242,27 @@ suite.define(() => {
             status: 200,
           });
         });
-        const gateway = await openProfilePage(page, {
-          "agent.identity.get": {
-            agentId: "main",
-            name: "Main agent",
-            avatar: `${basePath}/avatar/main`,
-            avatarStatus: "local",
+        const gateway = await openProfilePage(
+          page,
+          {
+            "agent.identity.get": {
+              agentId: "main",
+              name: "Main agent",
+              avatar: `${basePath}/avatar/main`,
+              avatarStatus: "local",
+            },
+            "agents.list": {
+              defaultId: "main",
+              agents: [
+                {
+                  id: "main",
+                  identity: { name: "Main agent", avatarUrl: `${basePath}/avatar/main` },
+                },
+              ],
+            },
           },
-          "agents.list": {
-            defaultId: "main",
-            agents: [
-              {
-                id: "main",
-                identity: { name: "Main agent", avatarUrl: `${basePath}/avatar/main` },
-              },
-            ],
-          },
-        });
+          [],
+        );
 
         await gateway.waitForRequest("agent.identity.get");
         const image = page.locator(".profile-hero__avatar-image");

@@ -1,4 +1,4 @@
-/* Profile settings page: featured agent and identity controls.
+/* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
 /* Hero (custom identity content inside one settings group) */
@@ -23,6 +23,17 @@
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   margin-bottom: var(--space-2);
+}
+
+.profile-hero__avatar > openclaw-viewer-avatar {
+  display: contents;
+}
+
+.profile-hero__avatar .viewer-avatar--profile {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  font-size: 42px;
 }
 
 .profile-hero__avatar-image {

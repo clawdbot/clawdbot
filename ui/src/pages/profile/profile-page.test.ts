@@ -239,6 +239,48 @@ it("renders identity before a Usage statistics link without requesting usage dat
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
 });
 
+it("shows the authenticated user in the profile hero when the default agent differs", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    githubIdentity: null,
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: profile.emails[0],
+    name: profile.displayName ?? undefined,
+  });
+  (harness.context.agents as unknown as { state: unknown }).state = {
+    agentsList: {
+      defaultId: "clipper",
+      agents: [{ id: "clipper", name: "Clipper" }],
+    },
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada"),
+  );
+
+  expect(page.querySelector(".profile-hero__handle")?.textContent).toContain("ada@example.test");
+  expect(page.querySelector(".profile-hero")?.textContent).not.toContain("Clipper");
+});
+
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
   const profile: UserProfile = {
     id: "profile-1",
