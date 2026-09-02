@@ -1,5 +1,8 @@
 import {
-  resolveMemoryIndexIdentityReason,
+  formatMemoryIndexIdentityReason,
+  formatMemoryIndexRebuildCommand,
+  formatMemoryIndexRebuildDisclosure,
+  resolveMemoryIndexIdentityDiagnostic,
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -66,13 +69,13 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const reason = resolveMemoryIndexIdentityReason(status);
-  if (!reason) {
+  const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
+  if (!diagnostic) {
     return null;
   }
   return {
-    reason,
-    fix: `Run: openclaw memory status --index --agent ${agentId}`,
+    reason: formatMemoryIndexIdentityReason(diagnostic),
+    fix: `Run: ${formatMemoryIndexRebuildCommand(agentId)}. ${formatMemoryIndexRebuildDisclosure(status.provider)}`,
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {

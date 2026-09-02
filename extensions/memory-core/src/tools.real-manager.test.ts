@@ -57,10 +57,14 @@ describe("memory_search real manager", () => {
       if (!tool) {
         throw new Error("memory_search tool missing");
       }
-      const action =
-        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
+      const actionPattern =
+        /Tell the user to run: openclaw memory status --index --agent main\. Rebuilding may call the configured embedding provider \(.+\) and can incur provider cost\./;
       const primary = await tool.execute("paused-primary", { query: "alpha" });
-      expect(primary.details).toMatchObject({ disabled: true, unavailable: true, action });
+      expect(primary.details).toMatchObject({
+        disabled: true,
+        unavailable: true,
+        action: expect.stringMatching(actionPattern),
+      });
 
       const combined = await tool.execute("paused-with-wiki", { query: "alpha", corpus: "all" });
       expect(combined.details).toMatchObject({
@@ -70,11 +74,11 @@ describe("memory_search real manager", () => {
           { corpus: "wiki", outcome: "ok" },
         ],
         warning: expect.stringContaining("Memory corpus unavailable"),
-        action,
+        action: expect.stringMatching(actionPattern),
       });
       expect(combined.content).toContainEqual({
         type: "text",
-        text: expect.stringContaining(action),
+        text: expect.stringMatching(actionPattern),
       });
       expect(combined.details).not.toHaveProperty("disabled");
       expect(combined.details).not.toHaveProperty("unavailable");

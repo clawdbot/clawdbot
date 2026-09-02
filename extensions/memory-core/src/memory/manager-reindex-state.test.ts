@@ -72,18 +72,22 @@ describe("memory reindex state", () => {
       name: "missing provenance version",
       meta: { provenanceVersion: undefined },
       reason: "index provenance classifier changed",
+      code: "provenance_version",
     },
     {
       name: "missing chunking version",
       meta: { chunkingVersion: undefined },
       reason: "index chunking implementation changed",
+      code: "chunking_version",
     },
-  ])("invalidates indexes with $name", ({ meta, reason }) => {
+  ])("invalidates indexes with $name as OpenClaw-owned", ({ meta, reason, code }) => {
     expect(
       resolveMemoryIndexIdentityState(createIdentityParams({ meta: createMeta(meta) })),
     ).toEqual({
       status: "mismatched",
       reason,
+      code,
+      owner: "openclaw",
     });
   });
 
@@ -116,6 +120,8 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: "index was built for provider openai, expected ollama",
+      code: "provider",
+      owner: "configuration",
     });
   });
 
@@ -152,14 +158,20 @@ describe("memory reindex state", () => {
     expect(resolveMemoryIndexIdentityState({ ...params, provider: { id: "other" } })).toEqual({
       status: "mismatched",
       reason: "index was built for provider openai, expected other",
+      code: "provider",
+      owner: "configuration",
     });
     expect(resolveMemoryIndexIdentityState({ ...params, configuredScopeHash: "other" })).toEqual({
       status: "mismatched",
       reason: "index scope changed",
+      code: "scope",
+      owner: "configuration",
     });
     expect(resolveMemoryIndexIdentityState({ ...params, vectorReady: true })).toEqual({
       status: "mismatched",
       reason: "index vector dimensions are missing",
+      code: "vector_dims",
+      owner: "configuration",
     });
   });
 
@@ -184,6 +196,8 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: `index was built for model ${indexedModel}, expected ${currentModel}`,
+      code: "model",
+      owner: "configuration",
     });
   });
 
@@ -224,6 +238,8 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: "index provider settings changed",
+      code: "provider_settings",
+      owner: "configuration",
     });
   });
 

@@ -622,7 +622,9 @@ describe("memory_search unavailable payloads", () => {
       stale: true,
       warning:
         "Memory index is stale: embedding request timed out. Search results may be incomplete.",
-      action: "Run: openclaw memory status --index --agent main",
+      action: expect.stringMatching(
+        /^Run: openclaw memory status --index --agent main\. Rebuilding /,
+      ),
     });
   });
 
@@ -678,6 +680,8 @@ describe("memory_search unavailable payloads", () => {
       indexIdentity: {
         status: "mismatched",
         reason,
+        code: "provider",
+        owner: "configuration",
       },
     });
 
@@ -691,12 +695,42 @@ describe("memory_search unavailable payloads", () => {
 
     expectUnavailableMemorySearchDetails(result.details, {
       error: reason,
-      warning:
-        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
-      action:
-        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
+      warning: `Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings (${reason}).`,
+      action: expect.stringMatching(
+        /^Tell the user to run: openclaw memory status --index --agent main\. Rebuilding /,
+      ),
     });
     expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("attributes an OpenClaw-owned index format change instead of blaming configuration", async () => {
+    setMemorySearchImpl(async () => []);
+    const reason = "index provenance classifier changed";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+        code: "provenance_version",
+        owner: "openclaw",
+      },
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("paused-index-openclaw", { query: "hidden thread codename" });
+
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: reason,
+      warning: `Tell the user: memory search is paused because this OpenClaw version changed the memory index format (${reason}); no configuration change is needed.`,
+      action: expect.stringMatching(
+        /^Tell the user to run: openclaw memory status --index --agent main\. Rebuilding /,
+      ),
+    });
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 

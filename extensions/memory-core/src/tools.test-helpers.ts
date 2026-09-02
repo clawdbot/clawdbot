@@ -60,7 +60,7 @@ export function expectUnavailableMemorySearchDetails(
   params: {
     error: string;
     warning: string;
-    action: string;
+    action: unknown;
   },
 ) {
   expect(details).toEqual({

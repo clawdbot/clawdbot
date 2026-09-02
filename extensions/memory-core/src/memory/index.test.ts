@@ -728,7 +728,12 @@ describe("memory index", () => {
           return await realReaddir(...args);
         });
       try {
-        await expect(manager.sync({ reason: "cli", force: true })).rejects.toBe(scanError);
+        await expect(manager.sync({ reason: "cli", force: true })).rejects.toMatchObject({
+          name: "MemorySourceScanError",
+          path: fixture.paths.workspace,
+          code: "EIO",
+          cause: scanError,
+        });
       } finally {
         readdirSpy.mockRestore();
       }
@@ -1146,6 +1151,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
+        code: "model",
+        owner: "configuration",
       });
       providerFixture.embedBatchCalls = 0;
 
@@ -1168,6 +1175,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
+        code: "model",
+        owner: "configuration",
       });
     } finally {
       await nextManager.close?.();
@@ -1323,6 +1332,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "missing",
         reason: "index metadata is missing",
+        code: "metadata_missing",
+        owner: "openclaw",
       });
 
       const results = await nextManager.search("alpha");
@@ -1390,6 +1401,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "missing",
         reason: "index metadata is missing",
+        code: "metadata_missing",
+        owner: "openclaw",
       });
       const row = db.prepare("SELECT model FROM memory_index_chunks LIMIT 1").get();
       expect(row?.model).toBe("semantic-embed");
@@ -1479,6 +1492,8 @@ describe("memory index", () => {
         expect(status.custom?.indexIdentity).toEqual({
           status: "missing",
           reason: "index metadata is missing",
+          code: "metadata_missing",
+          owner: "openclaw",
         });
       } finally {
         await nextManager.close?.();
@@ -2039,6 +2054,8 @@ describe("memory index", () => {
         expect(nextManager.status().custom?.indexIdentity).toEqual({
           status: "mismatched",
           reason: "index was built for model old-embed, expected new-embed",
+          code: "model",
+          owner: "configuration",
         });
         const results = await nextManager.search("alpha");
         expect(results).toStrictEqual([]);
