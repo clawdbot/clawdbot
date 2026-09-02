@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.151.0`. The plugin ships and manages
-  `@openai/codex` `0.151.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.152.1`. The plugin ships and manages
+  `@openai/codex` `0.152.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
