@@ -20,8 +20,6 @@ import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
 import "./viewer-facepile.ts";
 
-const MAX_VISIBLE_ATTRIBUTION_FACES = 3;
-
 function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;
 }
@@ -307,7 +305,7 @@ function renderSessionAttribution({
         ? html`<openclaw-viewer-facepile
             .staticParticipants=${remainingParticipants}
             .totalCount=${otherCount}
-            .maxVisible=${MAX_VISIBLE_ATTRIBUTION_FACES - 1}
+            .maxVisible=${remainingParticipants.length}
             .personActivity=${personActivity}
           ></openclaw-viewer-facepile>`
         : nothing}

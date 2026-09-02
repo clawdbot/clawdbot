@@ -77,6 +77,8 @@
 }
 
 .session-hovercard__attribution-avatars {
+  --session-hovercard-face-gap: -5px;
+
   display: inline-flex;
   align-items: center;
   flex: none;
@@ -84,7 +86,20 @@
 }
 
 .session-hovercard__attribution-avatars .viewer-facepile {
-  margin-left: -5px;
+  margin-left: var(--session-hovercard-face-gap);
+  transition: margin-left 120ms ease;
+}
+
+.session-hovercard__attribution-avatars
+  .viewer-facepile
+  > openclaw-tooltip:not(:first-child)
+  .viewer-avatar {
+  margin-left: var(--session-hovercard-face-gap);
+  transition: margin-left 120ms ease;
+}
+
+.session-hovercard__attribution:is(:hover, :focus-within) .session-hovercard__attribution-avatars {
+  --session-hovercard-face-gap: 2px;
 }
 
 .session-hovercard__attribution-copy {
