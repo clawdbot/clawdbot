@@ -11,6 +11,7 @@ import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -105,8 +106,9 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   const basePluginIds = metadata.plugins
     .filter(
       (plugin) =>
-        (plugin.providers.length > 0 ||
-          plugin.modelCatalog !== undefined ||
+        (manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ||
+          plugin.cliBackends.length > 0 ||
+          Boolean(plugin.setup?.cliBackends?.length) ||
           Boolean(plugin.activation?.onAgentHarnesses?.length)) &&
         isManifestPluginAvailableForControlPlane({
           snapshot: metadata,
