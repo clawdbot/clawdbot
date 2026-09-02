@@ -23,7 +23,7 @@ import {
 } from "./plugin-thread-config.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
-  captureExclusiveSharedCodexAppServerClient,
+  captureCodexAppServerClientLifetime,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
@@ -141,7 +141,7 @@ export async function releaseCodexBoundLiveThread(
     const client = previous?.client ?? options.client;
     const assertPrevious =
       previous && options.assertCurrent
-        ? captureExclusiveSharedCodexAppServerClient(client, "connection")
+        ? captureCodexAppServerClientLifetime(client, "connection")
         : undefined;
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);

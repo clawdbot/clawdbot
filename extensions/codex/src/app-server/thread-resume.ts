@@ -25,13 +25,23 @@ export async function resumeCodexAppServerThread(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
-  /** Identifies ownership rejection by the request's physical pre-write fence only. */
-  isPrewriteOwnershipError?: (error: unknown) => boolean;
   onSubscriptionReleased?: () => void;
   requestResume?: (request: CodexThreadResumeParams) => Promise<unknown>;
 }): Promise<CodexThreadResumeResponse> {
   const threadId = params.request.threadId;
   let response: CodexThreadResumeResponse;
+  let ownershipRejected = false;
+  const assertCurrent =
+    params.assertCurrent &&
+    (() => {
+      try {
+        params.assertCurrent?.();
+      } catch (error) {
+        // Only this physical pre-write callback proves no subscription was acquired.
+        ownershipRejected = true;
+        throw error;
+      }
+    });
   try {
     response = assertCodexThreadResumeResponse(
       await (params.requestResume
@@ -39,13 +49,13 @@ export async function resumeCodexAppServerThread(params: {
         : params.client.request("thread/resume", params.request, {
             ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
-            assertCurrent: params.assertCurrent,
+            assertCurrent,
           })),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
   } catch (error) {
     if (
-      params.isPrewriteOwnershipError?.(error) ||
+      ownershipRejected ||
       isCodexAppServerStartSelectionChangedError(error) ||
       isCodexAppServerStartupError(error) ||
       error instanceof CodexAppServerScopedRequestRejectedError ||
