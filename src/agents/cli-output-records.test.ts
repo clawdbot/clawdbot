@@ -172,12 +172,12 @@ describe("parseCliJson", () => {
       },
     },
     {
-      name: "bounds the CLI-controlled terminal reason it repeats back",
+      name: "bounds and flattens the CLI-controlled terminal reason it repeats back",
       input: {
         type: "result",
         subtype: "success",
         session_id: "session-json-long-reason",
-        terminal_reason: "x".repeat(200),
+        terminal_reason: `hook\u0007stopped\n${"x".repeat(200)}`,
         stop_reason: "y".repeat(200),
         result: "",
       },
@@ -188,10 +188,10 @@ describe("parseCliJson", () => {
         text: "",
         sessionId: "session-json-long-reason",
         usage: undefined,
-        errorText: `Claude CLI ended the turn without a reply (terminal_reason: ${"x".repeat(64)}, stop_reason: ${"y".repeat(64)}).`,
+        errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook stopped ${"x".repeat(51)}, stop_reason: ${"y".repeat(64)}).`,
         terminalFailure: {
           reason: "turn_stopped",
-          terminalReason: "x".repeat(64),
+          terminalReason: `hook stopped ${"x".repeat(51)}`,
           stopReason: "y".repeat(64),
         },
       },

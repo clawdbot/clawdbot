@@ -294,6 +294,16 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
 
 const CLI_TERMINAL_REASON_MAX_CHARS = 64;
 
+// The reason is a backend-controlled string repeated into operator- and
+// model-visible text, so collapse whitespace and control characters before it
+// can break that text apart, then bound its length.
+function normalizeCliTerminalReason(raw: string): string {
+  return truncateUtf16Safe(
+    raw.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim(),
+    CLI_TERMINAL_REASON_MAX_CHARS,
+  );
+}
+
 export function describeClaudeTurnStop(failure: {
   terminalReason: string;
   stopReason?: string;
@@ -307,7 +317,9 @@ function readClaudeTerminalFailure(
 ): CliTerminalFailure | undefined {
   const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
   const terminalReason =
-    typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
+    typeof parsed.terminal_reason === "string"
+      ? normalizeCliTerminalReason(parsed.terminal_reason)
+      : "";
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
     // Any other non-completed terminal reason is the CLI reporting that it
     // ended the turn itself. Only a reply-less result is a failure: a stopped
@@ -325,15 +337,14 @@ function readClaudeTerminalFailure(
     ) {
       return undefined;
     }
-    const stopReason = typeof parsed.stop_reason === "string" ? parsed.stop_reason.trim() : "";
+    const stopReason =
+      typeof parsed.stop_reason === "string" ? normalizeCliTerminalReason(parsed.stop_reason) : "";
     // Both fields reach operator- and model-visible failure text, so cap the
     // CLI-controlled strings here rather than injecting unbounded backend text.
     return {
       reason: "turn_stopped",
-      terminalReason: truncateUtf16Safe(terminalReason, CLI_TERMINAL_REASON_MAX_CHARS),
-      ...(stopReason
-        ? { stopReason: truncateUtf16Safe(stopReason, CLI_TERMINAL_REASON_MAX_CHARS) }
-        : {}),
+      terminalReason,
+      ...(stopReason ? { stopReason } : {}),
     };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
