@@ -532,176 +532,184 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
     },
     { sessionId, updatedAt: Date.now() },
   );
-  fs.writeFileSync(
-    path.join(codexHome, "auth.json"),
-    JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: "apikey" }),
-    "utf8",
-  );
-
-  const runtime = resolveCodexAppServerRuntimeOptions({
-    pluginConfig: { appServer: { homeScope: "user" } },
-    env: {},
-  });
-  const client = await createIsolatedCodexAppServerClient({
-    startOptions: {
-      ...runtime.start,
-      env: { ...runtime.start.env, CODEX_HOME: codexHome },
-    },
-    agentDir,
-    authProfileId: null,
-    timeoutMs: 180_000,
-  });
-
-  // Read-only observation of the production RPC payloads; the request itself is untouched.
-  const originalRequest = client.request.bind(client);
-  (client as unknown as { request: unknown }).request = async (
-    method: string,
-    params: unknown,
-    opts?: unknown,
-  ) => {
-    if (method === "thread/start") {
-      const started = params as {
-        dynamicTools?: unknown;
-        developerInstructions?: unknown;
-      };
-      const specs = started?.dynamicTools;
-      if (Array.isArray(specs)) {
-        trial.dynamicToolNames = specs.map((spec) =>
-          asText((spec as { name?: unknown })?.name, "?"),
-        );
-        trial.messageToolSpecJson = JSON.stringify(
-          specs.find((spec) => (spec as { name?: unknown })?.name === "message") ?? null,
-        );
-      }
-      // The load-bearing check: the arm's chat-context bytes must actually reach the
-      // app-server's developer instructions. If they do not, the A/B measures nothing.
-      const instructions = asText(started?.developerInstructions);
-      trial.developerInstructions = instructions;
-      trial.chatContextPresent = instructions.includes(renderChatContext(arm, scenario));
-    }
-    if (method === "turn/start") {
-      const turn = params as { input?: Array<{ type?: unknown; text?: unknown }> };
-      const submittedText = (turn.input ?? [])
-        .filter((item) => item?.type === "text")
-        .map((item) => asText(item.text))
-        .join("\n");
-      const inboundText = promptSubmission.currentInboundContext?.text?.trim() ?? "";
-      trial.currentInboundContextPresent =
-        inboundText.length > 0 && submittedText.includes(inboundText);
-    }
-    return originalRequest(method, params as never, opts as never);
-  };
-
-  const modelId = resolvedModelId;
-  const attempt = {
-    agentId: "main",
-    agentDir,
-    workspaceDir,
-    cwd: workspaceDir,
-    sessionFile: path.join(root, "session.jsonl"),
-    sessionKey: scenario.ctx.SessionKey,
-    sessionId,
-    runId: `proof-run-${arm}-${scenario.id}-${replicate}`,
-    provider: "codex",
-    modelId,
-    model: {
-      id: modelId,
-      name: modelId,
-      provider: "codex",
-      api: "openai-chatgpt-responses",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 272_000,
-      maxTokens: 8_000,
-      compat: { supportsTools: true },
-    },
-    ...promptSubmission,
-    extraSystemPrompt: buildExtraSystemPrompt(arm, scenario),
-    config: {
-      tools: { web: { search: { enabled: false } } },
-      session: { store: sessionStorePath },
-      // Account credentials the production send path checks before it hands off to the
-      // outbound adapter. The values are placeholders; the adapter is the recorder, so
-      // nothing is ever presented to a real API.
-      telegram: { accounts: { primary: { token: "proof-placeholder-token" } } },
-      discord: { accounts: { primary: { token: "proof-placeholder-token" } } },
-    },
-    thinkLevel: "medium",
-    disableTools: false,
-    timeoutMs: 300_000,
-    trigger: "user",
-    oneShotCliRun: true,
-    messageProvider: scenario.provider,
-    messageChannel: scenario.provider,
-    chatType: normalizeChatType(scenario.ctx.ChatType),
-    agentAccountId: scenario.ctx.AccountId,
-    messageTo: scenario.ctx.OriginatingTo,
-    groupId: scenario.ctx.From,
-    senderId: scenario.ctx.SenderId,
-    senderName: scenario.ctx.SenderName,
-    senderUsername: scenario.ctx.SenderUsername,
-    senderIsOwner: true,
-    currentMessageId: scenario.ctx.MessageSid,
-    sourceReplyDeliveryMode: "message_tool_only",
-    forceMessageTool: true,
-    authStorage: {},
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {},
-    onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
-      if (DUMP_EVENTS) {
-        trial.events.push(event);
-      }
-      // Codex projects dynamic-tool lifecycle on the `item` stream; the `tool` stream
-      // carries only tools whose channel progress is not suppressed. `message` is
-      // suppressed, so counting it off `tool` silently misses every call.
-      if (event.stream === "item" && event.data?.kind === "tool" && event.data?.phase === "start") {
-        const name = asText(event.data?.name, "?");
-        trial.toolCalls.push(name);
-        if (name === "message") {
-          trial.messageToolCalls += 1;
-        }
-      }
-      if (
-        event.stream === "item" &&
-        event.data?.kind === "tool" &&
-        event.data?.phase === "end" &&
-        event.data?.name === "message"
-      ) {
-        trial.messageToolOutcomes.push(asText(event.data?.status, "?"));
-      }
-      if (event.stream === "assistant" && typeof event.data?.text === "string") {
-        trial.assistantTextChars = Math.max(trial.assistantTextChars, event.data.text.length);
-      }
-    },
-  } as unknown as EmbeddedRunAttemptParams;
-
-  TRIALS_BY_RUN_ID.set(attempt.runId, trial);
-  const host = await createAgentHarnessHostCapabilitiesForTest({
-    attempt,
-    pluginId: "codex",
-  });
-  attempt.hostCapabilities = host.capabilities;
+  let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+  let host: Awaited<ReturnType<typeof createAgentHarnessHostCapabilitiesForTest>> | undefined;
   try {
-    // `hostCapabilities` is assigned above, which the declared optional type cannot see.
-    const result = await runCodexAppServerAttempt(
-      attempt as Parameters<typeof runCodexAppServerAttempt>[0],
-      {
-        bindingStore: createCodexTestBindingStore(),
-        pluginConfig: { appServer: { homeScope: "user" } },
-        clientFactory: async () => client,
-      },
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: "apikey" }),
+      "utf8",
     );
-    trial.terminal = asText((result.terminal as { kind?: unknown })?.kind, "unknown");
-  } catch (error) {
-    trial.terminal = "threw";
-    trial.error = error instanceof Error ? error.message : String(error);
+
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { homeScope: "user" } },
+      env: {},
+    });
+    client = await createIsolatedCodexAppServerClient({
+      startOptions: {
+        ...runtime.start,
+        env: { ...runtime.start.env, CODEX_HOME: codexHome },
+      },
+      agentDir,
+      authProfileId: null,
+      timeoutMs: 180_000,
+    });
+
+    // Read-only observation of the production RPC payloads; the request itself is untouched.
+    const originalRequest = client.request.bind(client);
+    (client as unknown as { request: unknown }).request = async (
+      method: string,
+      params: unknown,
+      opts?: unknown,
+    ) => {
+      if (method === "thread/start") {
+        const started = params as {
+          dynamicTools?: unknown;
+          developerInstructions?: unknown;
+        };
+        const specs = started?.dynamicTools;
+        if (Array.isArray(specs)) {
+          trial.dynamicToolNames = specs.map((spec) =>
+            asText((spec as { name?: unknown })?.name, "?"),
+          );
+          trial.messageToolSpecJson = JSON.stringify(
+            specs.find((spec) => (spec as { name?: unknown })?.name === "message") ?? null,
+          );
+        }
+        // The load-bearing check: the arm's chat-context bytes must actually reach the
+        // app-server's developer instructions. If they do not, the A/B measures nothing.
+        const instructions = asText(started?.developerInstructions);
+        trial.developerInstructions = instructions;
+        trial.chatContextPresent = instructions.includes(renderChatContext(arm, scenario));
+      }
+      if (method === "turn/start") {
+        const turn = params as { input?: Array<{ type?: unknown; text?: unknown }> };
+        const submittedText = (turn.input ?? [])
+          .filter((item) => item?.type === "text")
+          .map((item) => asText(item.text))
+          .join("\n");
+        const inboundText = promptSubmission.currentInboundContext?.text?.trim() ?? "";
+        trial.currentInboundContextPresent =
+          inboundText.length > 0 && submittedText.includes(inboundText);
+      }
+      return originalRequest(method, params as never, opts as never);
+    };
+
+    const modelId = resolvedModelId;
+    const attempt = {
+      agentId: "main",
+      agentDir,
+      workspaceDir,
+      cwd: workspaceDir,
+      sessionFile: path.join(root, "session.jsonl"),
+      sessionKey: scenario.ctx.SessionKey,
+      sessionId,
+      runId: `proof-run-${arm}-${scenario.id}-${replicate}`,
+      provider: "codex",
+      modelId,
+      model: {
+        id: modelId,
+        name: modelId,
+        provider: "codex",
+        api: "openai-chatgpt-responses",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 272_000,
+        maxTokens: 8_000,
+        compat: { supportsTools: true },
+      },
+      ...promptSubmission,
+      extraSystemPrompt: buildExtraSystemPrompt(arm, scenario),
+      config: {
+        tools: { web: { search: { enabled: false } } },
+        session: { store: sessionStorePath },
+        // Account credentials the production send path checks before it hands off to the
+        // outbound adapter. The values are placeholders; the adapter is the recorder, so
+        // nothing is ever presented to a real API.
+        telegram: { accounts: { primary: { token: "proof-placeholder-token" } } },
+        discord: { accounts: { primary: { token: "proof-placeholder-token" } } },
+      },
+      thinkLevel: "medium",
+      disableTools: false,
+      timeoutMs: 300_000,
+      trigger: "user",
+      oneShotCliRun: true,
+      messageProvider: scenario.provider,
+      messageChannel: scenario.provider,
+      chatType: normalizeChatType(scenario.ctx.ChatType),
+      agentAccountId: scenario.ctx.AccountId,
+      messageTo: scenario.ctx.OriginatingTo,
+      groupId: scenario.ctx.From,
+      senderId: scenario.ctx.SenderId,
+      senderName: scenario.ctx.SenderName,
+      senderUsername: scenario.ctx.SenderUsername,
+      senderIsOwner: true,
+      currentMessageId: scenario.ctx.MessageSid,
+      sourceReplyDeliveryMode: "message_tool_only",
+      forceMessageTool: true,
+      authStorage: {},
+      authProfileStore: { version: 1, profiles: {} },
+      modelRegistry: {},
+      onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
+        if (DUMP_EVENTS) {
+          trial.events.push(event);
+        }
+        // Codex projects dynamic-tool lifecycle on the `item` stream; the `tool` stream
+        // carries only tools whose channel progress is not suppressed. `message` is
+        // suppressed, so counting it off `tool` silently misses every call.
+        if (
+          event.stream === "item" &&
+          event.data?.kind === "tool" &&
+          event.data?.phase === "start"
+        ) {
+          const name = asText(event.data?.name, "?");
+          trial.toolCalls.push(name);
+          if (name === "message") {
+            trial.messageToolCalls += 1;
+          }
+        }
+        if (
+          event.stream === "item" &&
+          event.data?.kind === "tool" &&
+          event.data?.phase === "end" &&
+          event.data?.name === "message"
+        ) {
+          trial.messageToolOutcomes.push(asText(event.data?.status, "?"));
+        }
+        if (event.stream === "assistant" && typeof event.data?.text === "string") {
+          trial.assistantTextChars = Math.max(trial.assistantTextChars, event.data.text.length);
+        }
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    TRIALS_BY_RUN_ID.set(attempt.runId, trial);
+    host = await createAgentHarnessHostCapabilitiesForTest({
+      attempt,
+      pluginId: "codex",
+    });
+    attempt.hostCapabilities = host.capabilities;
+    try {
+      // `hostCapabilities` is assigned above, which the declared optional type cannot see.
+      const result = await runCodexAppServerAttempt(
+        attempt as Parameters<typeof runCodexAppServerAttempt>[0],
+        {
+          bindingStore: createCodexTestBindingStore(),
+          pluginConfig: { appServer: { homeScope: "user" } },
+          clientFactory: async () => client,
+        },
+      );
+      trial.terminal = asText((result.terminal as { kind?: unknown })?.kind, "unknown");
+    } catch (error) {
+      trial.terminal = "threw";
+      trial.error = error instanceof Error ? error.message : String(error);
+    }
+    return trial;
   } finally {
-    host.close();
-    await client.closeAndWait().catch(() => undefined);
+    host?.close();
+    await client?.closeAndWait().catch(() => undefined);
     fs.rmSync(root, { recursive: true, force: true });
   }
-  return trial;
 }
 
 /**
@@ -718,25 +726,26 @@ async function resolveDefaultModelId(): Promise<string> {
   const codexHome = path.join(root, "codex-home");
   fs.mkdirSync(agentDir, { recursive: true });
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "auth.json"),
-    JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: "apikey" }),
-    "utf8",
-  );
-  const runtime = resolveCodexAppServerRuntimeOptions({
-    pluginConfig: { appServer: { homeScope: "user" } },
-    env: {},
-  });
-  const client = await createIsolatedCodexAppServerClient({
-    startOptions: {
-      ...runtime.start,
-      env: { ...runtime.start.env, CODEX_HOME: codexHome },
-    },
-    agentDir,
-    authProfileId: null,
-    timeoutMs: 180_000,
-  });
+  let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
   try {
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: "apikey" }),
+      "utf8",
+    );
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { homeScope: "user" } },
+      env: {},
+    });
+    client = await createIsolatedCodexAppServerClient({
+      startOptions: {
+        ...runtime.start,
+        env: { ...runtime.start.env, CODEX_HOME: codexHome },
+      },
+      agentDir,
+      authProfileId: null,
+      timeoutMs: 180_000,
+    });
     const listed = await client.request<{
       data: Array<{ model: string; isDefault?: boolean }>;
     }>("model/list", { limit: 100, cursor: null, includeHidden: false }, { timeoutMs: 120_000 });
@@ -746,7 +755,7 @@ async function resolveDefaultModelId(): Promise<string> {
     }
     return modelId;
   } finally {
-    await client.closeAndWait().catch(() => undefined);
+    await client?.closeAndWait().catch(() => undefined);
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
