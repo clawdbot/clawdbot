@@ -557,6 +557,8 @@ retires the previous bundle.
 the migrated JSON files. It also moves applied legacy Workshop creates into
 `workshop-skills`, retargets eligible pending creates, and marks outside updates
 stale.
+Skills that were symlinked into a workspace stay where they are as workspace
+skills; Doctor marks their proposals stale instead of moving them.
 
 ## Limits
 

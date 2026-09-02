@@ -204,7 +204,22 @@ async function planWorkshopRelocation(
       continue;
     }
     const target = resolveSkillProposalTarget({ skillName: record.target.skillKey, env });
-    if (!(await pathExists(source))) {
+    let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    try {
+      sourceStat = await fs.lstat(source);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+    if (sourceStat?.isSymbolicLink()) {
+      staleReasons.set(
+        record.id,
+        `Skill Workshop no longer writes through symlinked skills; ${source} stays a workspace skill.`,
+      );
+      continue;
+    }
+    if (!sourceStat) {
       // The move is durable before metadata persistence; on rerun, adopt the existing destination.
       if (await pathExists(target.skillFile)) {
         movesBySource.set(source, { destination: target.skillDir, adopted: true });
