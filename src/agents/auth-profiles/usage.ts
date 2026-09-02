@@ -762,15 +762,20 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
     maxMs: (cfg) => cfg.billingMaxMs,
   },
   auth_permanent: {
-    // Keep high-confidence permanent-auth failures in the disabled lane, but
-    // recover much sooner than billing because some providers surface
-    // auth-looking payloads transiently during incidents.
+    // Recover quickly because some providers surface auth-looking payloads
+    // transiently during incidents.
     baseMs: (cfg) => cfg.authPermanentBackoffMs,
     maxMs: (cfg) => cfg.authPermanentMaxMs,
   },
 } as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
 
-const DEFAULT_BILLING_BACKOFF_HOURS = 5;
+// Billing (402) and auth_permanent are both operator-fixable states: the key is
+// valid, the operator recharges or replaces it. While a disabled window is
+// active the profile is never selected, so an observed success cannot clear it
+// early — the base backoff IS the post-recharge recovery time (#135835), so it
+// stays in minutes, not hours. maxMs stays generous so provider incident noise
+// misclassified as billing cannot spin hot.
+const DEFAULT_BILLING_BACKOFF_MINUTES = 10;
 const DEFAULT_BILLING_MAX_HOURS = 24;
 const DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES = 10;
 const DEFAULT_AUTH_PERMANENT_MAX_MINUTES = 60;
@@ -778,7 +783,7 @@ const DEFAULT_FAILURE_WINDOW_HOURS = 24;
 
 function resolveAuthCooldownConfig(): ResolvedAuthCooldownConfig {
   return {
-    billingBackoffMs: DEFAULT_BILLING_BACKOFF_HOURS * 60 * 60 * 1000,
+    billingBackoffMs: DEFAULT_BILLING_BACKOFF_MINUTES * 60 * 1000,
     billingMaxMs: DEFAULT_BILLING_MAX_HOURS * 60 * 60 * 1000,
     authPermanentBackoffMs: DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES * 60 * 1000,
     authPermanentMaxMs: DEFAULT_AUTH_PERMANENT_MAX_MINUTES * 60 * 1000,

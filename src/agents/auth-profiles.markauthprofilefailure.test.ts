@@ -150,7 +150,7 @@ describe("markAuthProfileFailure", () => {
     expect(typeof reloaded.usageStats?.["openai:default"]?.cooldownUntil).toBe("number");
   });
 
-  it("disables billing failures for ~5 hours by default", async () => {
+  it("disables billing failures for ~10 minutes by default (#135835)", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();
       await markAuthProfileFailure({
@@ -163,7 +163,7 @@ describe("markAuthProfileFailure", () => {
       const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
+      expectCooldownInRange(remainingMs, 9 * 60 * 1000, 11 * 60 * 1000);
     });
   });
   it("records billing backoff for inline provider api keys without creating an auth profile", async () => {
@@ -182,7 +182,31 @@ describe("markAuthProfileFailure", () => {
       expect(stats?.disabledReason).toBe("billing");
       expect(typeof stats?.disabledUntil).toBe("number");
       const remainingMs = (stats?.disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
+      expectCooldownInRange(remainingMs, 9 * 60 * 1000, 11 * 60 * 1000);
+    });
+  });
+
+  it("keeps persisted billing disabledUntil unchanged across mid-window retries", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "billing",
+        agentDir,
+      });
+
+      const firstDisabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+      expect(typeof firstDisabledUntil).toBe("number");
+
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "billing",
+        agentDir,
+      });
+
+      // A retry inside the window must not extend the lockout.
+      expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(firstDisabledUntil);
     });
   });
 
