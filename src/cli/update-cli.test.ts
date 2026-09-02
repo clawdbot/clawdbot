@@ -1957,35 +1957,71 @@ describe("update-cli", () => {
     expect(serviceStop).not.toHaveBeenCalled();
   });
 
-  it("recovers a stopped sealed service after a restart-safe failure", async () => {
-    const entrypoint = path.join(process.cwd(), "dist", "index.js");
-    const nodeRunner = path.join(fixtureRoot, "managed", "node");
+  it("recovers a stopped sealed service after staged npm installation fails", async () => {
+    const {
+      root,
+      nodeModules,
+      entrypoint,
+      serviceNode: nodeRunner,
+    } = await setupServicePackageAtPrefix({
+      prefix: createCaseDir("staging-recovery"),
+      version: "1.0.0",
+    });
     mockRunningManagedGateway([nodeRunner, entrypoint, "gateway"]);
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
     serviceDefinitionMutationCapability.mockResolvedValue({ kind: "sealed", detail: "root owner" });
+    const activateGateway = mockPackageGatewayLifecycle();
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      await activateGateway(argv);
+      return commandResult();
+    });
     const {
       maybeStopManagedServiceBeforeMutableUpdate,
       maybeRestartServiceAfterFailedMutableUpdate,
     } = await import("./update-cli/update-command-service.js");
     const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      root: process.cwd(),
-      updateInstallKind: "git",
+      root,
+      updateInstallKind: "package",
       shouldRestart: true,
       jsonMode: true,
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop: before,
-      recovery: { serviceRestartSafe: true, version: "1.0.0" },
-      jsonMode: true,
-      nodeRunner,
-      timeoutMs: 17_000,
-      invocationCwd: process.cwd(),
+    expect(before?.stopped).toBe(true);
+    const { runGlobalPackageUpdateSteps } = await import("../infra/package-update-steps.js");
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget: {
+        manager: "npm",
+        command: "npm",
+        globalRoot: nodeModules,
+        packageRoot: root,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
+      },
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      packageRoot: root,
+      runCommand: async () => ({ code: 0, stdout: nodeModules, stderr: "" }),
+      runStep: async ({ name, argv }) => {
+        expect(argv).toContain("--prefix");
+        return { name, command: argv.join(" "), cwd: root, durationMs: 0, exitCode: 1 };
+      },
+      timeoutMs: 1000,
     });
+    expect(result.failedStep?.exitCode).toBe(1);
+    expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+    await expect(
+      maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: before,
+        recovery: result.recovery,
+        jsonMode: true,
+        nodeRunner,
+        timeoutMs: 17_000,
+        invocationCwd: root,
+      }),
+    ).resolves.toBe("healthy");
     expect(freshRestartCalls()).toEqual([
       [
         [nodeRunner, entrypoint, "gateway", "restart", "--preserve-definition", "--json"],
         expect.objectContaining({
-          cwd: process.cwd(),
+          cwd: root,
           timeoutMs: 17_000,
           baseEnv: {},
           env: expect.objectContaining({ NODE_DISABLE_COMPILE_CACHE: "1" }),
@@ -5892,10 +5928,9 @@ describe("update-cli", () => {
   });
 
   it.each(["verification", "lifecycle", "shim swap"] as const)(
-    "restores package files but keeps the Gateway stopped after staged npm %s failure",
+    "gates old Gateway recovery at the swap boundary after staged npm %s failure",
     async (failure) => {
       const tempDir = tempDirs.make("openclaw-update-staged-fail-");
-      const stateCanary = path.join(tempDir, "synthetic-state-canary");
       const prefix = path.join(tempDir, "prefix");
       const nodeModules = path.join(prefix, "lib", "node_modules");
       const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
@@ -5934,7 +5969,6 @@ describe("update-cli", () => {
           if (typeof stagePrefix !== "string") {
             throw new Error("missing stage prefix");
           }
-          await fs.writeFile(stateCanary, "changed by staged install\n");
           const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
           await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
             entrySource: "export {};\n",
@@ -5992,8 +6026,21 @@ describe("update-cli", () => {
       if (failure !== "verification") {
         await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
       }
-      await expect(fs.readFile(stateCanary, "utf8")).resolves.toBe("changed by staged install\n");
-      expect(freshRestartCalls()).toEqual([]);
+      expect(freshRestartCalls()).toEqual(
+        failure === "shim swap"
+          ? []
+          : [
+              [
+                [process.execPath, entryPath, "gateway", "restart", "--preserve-definition"],
+                expect.objectContaining({ baseEnv: {} }),
+              ],
+            ],
+      );
+      expect(
+        logs.includes(
+          "Recovered managed gateway service and verified readiness after failed update.",
+        ),
+      ).toBe(failure !== "shim swap");
       expectNoSideEffects(serviceStart, serviceRestart);
     },
   );
@@ -6595,7 +6642,7 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeDefined();
   });
 
-  it("keeps a quiesced LaunchAgent stopped after unverified package lifecycle failure", async () => {
+  it("recovers a quiesced enabled LaunchAgent after staged installation fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const tempDir = tempDirs.make("openclaw-update-stopped-launchagent-failure-");
     const { nodeModules, entryPath } = await setupInstalledPackageAtNodeModules(
@@ -6608,8 +6655,11 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     mockFileBackedPathExists();
-    mockNpmGlobalRoot(nodeModules);
-    mockPackageReplacementFailure("package replacement failed");
+    mockNpmGlobalCommands(nodeModules, async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+        throw new Error("package replacement failed");
+      }
+    });
 
     try {
       await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
@@ -6622,7 +6672,15 @@ describe("update-cli", () => {
     expect(serviceStop).toHaveBeenCalledOnce();
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(freshRestartCalls()).toHaveLength(0);
+    expect(freshRestartCalls()).toEqual([
+      [
+        [nodeRunner, entryPath, "gateway", "restart", "--preserve-definition"],
+        expect.objectContaining({ timeoutMs: 17_000 }),
+      ],
+    ]);
+    expect(getLogOutput()).toContain(
+      "Recovered managed gateway service and verified readiness after failed update.",
+    );
 
     const packageInstallCallIndex = commandCalls().findIndex(
       ([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
@@ -7735,7 +7793,7 @@ describe("update-cli", () => {
       expectNoSideEffects(serviceStart, serviceRestart, runRestartScript);
       expect(lastWriteJsonCall()).toMatchObject({
         status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
     },

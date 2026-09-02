@@ -106,13 +106,19 @@ describe("package update recovery safety", () => {
 
   it.each(
     (["pnpm", "bun", "npm"] as const).flatMap((manager) =>
-      ["install exit", "install throw", "doctor throw"].map((failure) => ({ manager, failure })),
+      (["install exit", "install throw", "doctor throw"] as const).flatMap((failure) =>
+        (manager === "npm" && failure !== "doctor throw"
+          ? (["none", "replaced", "corrupt"] as const)
+          : (["none"] as const)
+        ).map((stagingSideEffect) => ({ manager, failure, stagingSideEffect })),
+      ),
     ),
   )(
-    "keeps $manager recovery stopped after $failure mutates the live tree",
-    async ({ manager, failure }) => {
+    "verifies $manager recovery after $failure with $stagingSideEffect staging side effect",
+    async ({ manager, failure, stagingSideEffect }) => {
       await withTestDir({ prefix: "openclaw-package-recovery-" }, async (base) => {
-        const globalRoot = path.join(base, "global");
+        const globalRoot =
+          manager === "npm" ? path.join(base, "lib", "node_modules") : path.join(base, "global");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
         const params = {
@@ -125,9 +131,19 @@ describe("package update recovery safety", () => {
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv }: { name: string; argv: string[] }) => {
-            await writePackageRoot(packageRoot, "2.0.0");
+            const prefix = argv[argv.indexOf("--prefix") + 1];
+            const installRoot =
+              manager === "npm" && prefix
+                ? path.join(prefix, "lib", "node_modules", "openclaw")
+                : packageRoot;
+            await writePackageRoot(installRoot, "2.0.0");
+            if (stagingSideEffect === "replaced") {
+              await writePackageRoot(packageRoot, "2.0.0");
+            } else if (stagingSideEffect === "corrupt") {
+              await fs.rm(path.join(packageRoot, "dist", "index.js"), { force: true });
+            }
             if (failure === "install throw") {
-              throw new Error("install interrupted after replacement");
+              throw new Error("install interrupted");
             }
             return {
               name,
@@ -145,15 +161,26 @@ describe("package update recovery safety", () => {
         const result = await runGlobalPackageUpdateSteps(params);
 
         expect(result.failedStep).not.toBeNull();
-        expect(result.recovery).toEqual({
-          serviceRestartSafe: false,
-          reason: "runtime-verification-failed",
-        });
+        const safe =
+          manager === "npm" && failure !== "doctor throw" && stagingSideEffect === "none";
+        expect(result.recovery).toEqual(
+          safe
+            ? { serviceRestartSafe: true, version: "1.0.0" }
+            : {
+                serviceRestartSafe: false,
+                reason: "runtime-verification-failed",
+                ...(manager === "npm" && failure === "doctor throw"
+                  ? { packageRollbackVerified: true }
+                  : {}),
+              },
+        );
+        const liveVersion =
+          manager === "npm" && stagingSideEffect !== "replaced" ? "1.0.0" : "2.0.0";
         if (failure === "doctor throw") {
-          expect(result.afterVersion).toBe("2.0.0");
+          expect(result.afterVersion).toBe(liveVersion);
         }
         expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
-          '"version":"2.0.0"',
+          `"version":"${liveVersion}"`,
         );
       });
     },
