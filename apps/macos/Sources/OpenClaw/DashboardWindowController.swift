@@ -16,6 +16,9 @@ private final class DashboardWindowContentView: NSView {
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
 private final class DashboardWindow: NSWindow {
+    /// User intent belongs to the native window, not the privileged document it hosts.
+    var userIntentGeneration: UInt64 = 0
+
     override func toggleToolbarShown(_: Any?) {}
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
@@ -1070,6 +1073,10 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.advanceWindowIntent()
+        self.advanceNavigationGeneration()
+        self.pendingNativeCommands = []
+        self.pendingNativeNavigation = nil
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
         self.onClosed?()
@@ -1154,6 +1161,7 @@ extension DashboardWindowController {
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
         if command.supersedesPendingNavigation {
+            self.advanceWindowIntent()
             self.advanceNavigationGeneration()
         }
         guard self.hasLiveContent else {
@@ -1169,9 +1177,6 @@ extension DashboardWindowController {
     }
 
     private func evaluateNativeCommand(_ command: DashboardNativeCommand) {
-        if command.supersedesPendingNavigation {
-            self.advanceNavigationGeneration()
-        }
         guard let fallback = command.legacyFallbackEventName else {
             self.webView.evaluateJavaScript(
                 "window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(command.rawValue))))")
@@ -1202,6 +1207,7 @@ extension DashboardWindowController {
     }
 
     func dispatchNativeNavigation(_ navigation: DashboardNativeNavigation) {
+        self.advanceWindowIntent()
         self.advanceNavigationGeneration()
         guard self.hasLiveContent else {
             // Navigation is state selection, so only the newest destination matters while loading.
@@ -1233,6 +1239,14 @@ extension DashboardWindowController {
             else { return }
             self.load(navigation.fallbackURL)
         }
+    }
+
+    var windowIntentGeneration: UInt64? {
+        (self.window as? DashboardWindow)?.userIntentGeneration
+    }
+
+    private func advanceWindowIntent() {
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
     }
 
     private func advanceNavigationGeneration() {
