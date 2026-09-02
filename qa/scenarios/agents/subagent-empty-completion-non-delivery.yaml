@@ -158,7 +158,7 @@ flow:
             message:
               expr: "`empty completion lost its terminal state after restart: ${JSON.stringify({ expectedTaskId: emptyTask.taskId, taskId: restoredTask?.taskId, status: restoredTask?.status, terminalOutcome: restoredTask?.terminalOutcome, deliveryStatus: restoredTask?.deliveryStatus })}`"
         - assert:
-            expr: "JSON.stringify(postRestartOutbound) === JSON.stringify(preRestartOutbound)"
+            expr: "JSON.stringify(postRestartOutbound.map((message) => message.id).sort()) === JSON.stringify(preRestartOutbound.map((message) => message.id).sort()) && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
-              expr: "`Gateway restart replayed empty completion output: before=${JSON.stringify(preRestartOutbound)} after=${JSON.stringify(postRestartOutbound)}`"
+              expr: "`Gateway restart created new or invalid empty-completion output: before=${JSON.stringify(preRestartOutbound)} after=${JSON.stringify(postRestartOutbound)}`"
       detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutbound.map((message) => String(message.text ?? '')), postRestartUnexpectedPayloadCount: postRestartOutbound.length - preRestartOutbound.length, providerMode: env.providerMode, pass: true }, null, 2)"

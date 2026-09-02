@@ -323,7 +323,7 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("requesterVisibleParentMessages.length > 0");
     expect(flow).toContain("request.plannedToolName === 'write'");
     expect(flow).toContain(
-      "JSON.stringify(postRestartOutbound) === JSON.stringify(preRestartOutbound)",
+      "JSON.stringify(postRestartOutbound.map((message) => message.id).sort())",
     );
     expect(flow).not.toContain('"call":"sleep"');
   });
