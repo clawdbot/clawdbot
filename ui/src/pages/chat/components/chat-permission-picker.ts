@@ -19,6 +19,7 @@ export type ChatPermissionPickerProps = {
   mode?: SessionPermissionMode;
   defaultMode?: SessionPermissionMode;
   onSelect: (mode: PermissionSelection) => unknown;
+  pending?: boolean;
 };
 
 function handlePermissionPickerKeydown(
@@ -90,7 +91,7 @@ function permissionSelection(value: string | undefined): PermissionSelection | u
 }
 
 export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
-  const disabled = params.disabled;
+  const disabled = params.disabled || params.pending;
   const fullAccess = (params.mode ?? params.defaultMode) === "full";
   const label = modeLabel(params.mode, params.defaultMode);
   const selectMode = (mode: PermissionSelection) => {
@@ -117,7 +118,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
       <button
         slot="trigger"
         type="button"
-        class="chat-controls__inline-select-trigger chat-controls__permission-trigger ${disabled
+        class="chat-controls__inline-select-trigger chat-controls__permission-trigger ${params.disabled
           ? "chat-controls__inline-select-trigger--disabled"
           : ""} ${params.mode ? "" : "chat-controls__permission-trigger--default"} ${fullAccess
           ? "chat-controls__permission-trigger--full"

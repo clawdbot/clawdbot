@@ -364,7 +364,8 @@ describe("chat pane composer controls", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("reports an unavailable permission update on the current session", async () => {
+  it("shows the optimistic mode and rolls back an unavailable permission update", async () => {
+    const pending = createDeferred<Record<string, never> | null>();
     const state = {
       chatRunId: "remote-worker-run",
       chatError: null,
@@ -376,7 +377,7 @@ describe("chat pane composer controls", () => {
       sessions: {
         state: { modelOverrides: {} },
         think: () => undefined,
-        patch: vi.fn(async () => null),
+        patch: vi.fn(() => pending.promise),
       },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:remote-worker",
@@ -402,16 +403,28 @@ describe("chat pane composer controls", () => {
       onModelSetup: vi.fn(),
     };
     const controls = renderChatPaneComposerControls(controlParams);
-
-    await controls.permissionPicker.onSelect("full");
-
-    expect(state.chatError).toContain("Failed to update permissions");
+    const selection = controls.permissionPicker.onSelect("full");
     const container = document.createElement("div");
+
     render(
       renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
       container,
     );
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+    expect(trigger.textContent).not.toContain("Applying permissions");
+    expect(trigger.disabled).toBe(true);
+    void controls.permissionPicker.onSelect("guarded");
+    expect(state.sessions.patch).toHaveBeenCalledOnce();
+
+    pending.resolve(null);
+    await selection;
+
+    expect(state.chatError).toContain("Failed to update permissions");
+    render(
+      renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
+      container,
+    );
     expect(trigger.textContent).toContain(t("chat.permissionControls.modes.workspace.label"));
     expect(trigger.disabled).toBe(false);
   });

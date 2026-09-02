@@ -123,6 +123,7 @@ export function renderChatPaneComposerControls(params: {
     scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
   const pendingChange = permissionChanges.get(permissionScopeKey);
   const currentChange = pendingChange?.ownsSelection() ? pendingChange : undefined;
+  const permissionPending = Boolean(currentChange || selectedSession?.permissionModePending);
   const modelCatalogState = resolveChatModelCatalogState(state);
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);
   const thinkingSession = thinkingLevelOverride
@@ -185,6 +186,7 @@ export function renderChatPaneComposerControls(params: {
       disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: currentChange ? currentChange.nextMode : selectedSession?.permissionMode,
+      pending: permissionPending,
       onSelect: async (permissionMode) => {
         if (
           !permissionAccess.allowed ||
