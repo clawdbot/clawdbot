@@ -41,7 +41,7 @@ import {
   parseCompactSplitTimingKey,
 } from "./vitest-shard-metadata.mts";
 
-type NodeTestShardGroup = {
+export type NodeTestShardGroup = {
   shard_name: string;
   timing_key?: string;
   configs: string[];
@@ -157,11 +157,6 @@ type NodeTestSplitShard = Omit<NodeTestShard, "checkName" | "runner" | "pretestB
   runner?: string;
 };
 
-type CompactBin = {
-  exclusive: boolean;
-  groups: NodeTestShardGroup[];
-};
-
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
   "test/vitest/vitest.full-core-contracts.config.ts",
   "test/vitest/vitest.full-core-bundled.config.ts",
@@ -205,8 +200,8 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Blacksmith rows with the refit Blacksmith estimates below.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 94;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 114;
+export const COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS = 94;
+const COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS = 114;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
@@ -2518,6 +2513,24 @@ function splitOversizedCompactGroup(
   }));
 }
 
+// Owners supply admission order and compatibility; placement retains the original
+// descriptors and never emits an empty job.
+export function packNodeTestGroups<Group>(
+  orderedGroups: readonly Group[],
+  canShareJob: (bin: readonly [Group, ...Group[]], group: Group) => boolean,
+): Array<[Group, ...Group[]]> {
+  const bins: Array<[Group, ...Group[]]> = [];
+  for (const group of orderedGroups) {
+    const bin = bins.find((candidate) => canShareJob(candidate, group));
+    if (bin) {
+      bin.push(group);
+    } else {
+      bins.push([group]);
+    }
+  }
+  return bins;
+}
+
 function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
@@ -2587,7 +2600,6 @@ function createCompactNodeTestShardBundles(
   for (const groups of groupsByRunner.values()) {
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
-    const bins: CompactBin[] = [];
     const sortedGroups = groups
       .flatMap(expandCompactGroup)
       .toSorted(
@@ -2595,59 +2607,48 @@ function createCompactNodeTestShardBundles(
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           a.shard_name.localeCompare(b.shard_name),
       );
-    for (const group of sortedGroups) {
+    const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
       const exclusive = isExclusiveCompactGroup(group);
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
         : usesExpandedRunnerProfile(options.runnerBackend)
           ? group.runner.includes("-8vcpu-")
-            ? COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS
-            : COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS
+            ? COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS
+            : COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS
           : group.runner.includes("-8vcpu-")
             ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;
       const family = compactGiantStripeFamily(group);
-      const bin = bins.find(
-        (candidate) =>
-          candidate.exclusive === exclusive &&
-          (family === undefined ||
-            candidate.groups.every((entry) => compactGiantStripeFamily(entry) !== family)) &&
-          candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-          estimateBinSeconds([...candidate.groups, group]) <= secondsCap,
+      return (
+        isExclusiveCompactGroup(candidate[0]) === exclusive &&
+        (family === undefined ||
+          candidate.every((entry) => compactGiantStripeFamily(entry) !== family)) &&
+        candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+        estimateBinSeconds([...candidate, group]) <= secondsCap
       );
-      if (bin) {
-        bin.groups.push(group);
-      } else {
-        bins.push({
-          exclusive,
-          groups: [group],
-        });
-      }
-    }
-
-    bins.sort((a, b) => Number(a.exclusive) - Number(b.exclusive));
+    });
+    bins.sort(
+      (a, b) => Number(isExclusiveCompactGroup(a[0])) - Number(isExclusiveCompactGroup(b[0])),
+    );
 
     for (const [index, bin] of bins.entries()) {
-      const [firstGroup] = bin.groups;
-      if (!firstGroup) {
-        throw new Error("compact node test bin cannot be empty");
-      }
+      const [firstGroup] = bin;
       const runnerClass = firstGroup.runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = firstGroup.requiresDist ? "-dist" : "";
       const checkName = `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`;
       const runner = firstGroup.runner;
       const pretestBuildMode = mergeVitestPretestBuildModes(
-        bin.groups.map((group) => group.pretestBuildMode),
+        bin.map((group) => group.pretestBuildMode),
       );
       compactJobs.push({
         checkName,
-        groups: bin.groups,
+        groups: bin,
         ...(pretestBuildMode ? { pretestBuildMode } : {}),
         requiresDist: firstGroup.requiresDist,
         runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
-        ...(bin.groups.some((group) => !group.includePatterns)
+        ...(bin.some((group) => !group.includePatterns)
           ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
           : {}),
         // Every compact bin runs its plans serially. Overlapping two Vitest
@@ -2656,7 +2657,7 @@ function createCompactNodeTestShardBundles(
         // lock-timing flakes on 8 vCPU), and the packed weights are
         // contention-inflated so serializing is roughly wall-neutral.
         planConcurrency: 1,
-        predictedSeconds: estimateBinSeconds(bin.groups),
+        predictedSeconds: estimateBinSeconds(bin),
       });
     }
   }
