@@ -72,9 +72,9 @@ function createMatrixRuntimeMediaMock(
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
     }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
-    deleteMediaBuffer: vi.fn().mockResolvedValue(undefined) as NonNullable<
-      PluginRuntime["channel"]
-    >["media"]["deleteMediaBuffer"],
+    deleteMediaBuffer: vi
+      .fn<NonNullable<PluginRuntime["channel"]>["media"]["deleteMediaBuffer"]>()
+      .mockResolvedValue(),
     ...overrides,
   };
 }
