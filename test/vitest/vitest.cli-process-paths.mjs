@@ -2,7 +2,6 @@
 // shared CLI module graph. Keep the owned list explicit so full and focused runs agree.
 export const cliProcessTestFiles = [
   "src/cli/acp-cli-exit.process.test.ts",
-  "src/cli/backup-git.process.test.ts",
   "src/cli/cli-process-child.test-helpers.test.ts",
   "src/cli/cron-output.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
