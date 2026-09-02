@@ -98,4 +98,65 @@ describe("channel dead-letter commands", () => {
       ).rejects.toThrow("is completed and cannot be resubmitted");
     });
   });
+
+  it("does not silently scope a blank --account to the default account", async () => {
+    await withTempState(async () => {
+      // The operator named "ops"; a blank value must not resolve to a different account's queue.
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      await queue.enqueue("event-1", { text: "recover me" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      const runtime = createRuntime();
+
+      await expect(
+        channelsDeadLettersListCommand({ channel: "telegram", account: "", json: true }, runtime),
+      ).rejects.toThrow("--account must not be blank");
+      expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { account: "", label: "empty" },
+    { account: " \t ", label: "whitespace" },
+  ])("rejects a $label --account before touching the queue", async ({ account }) => {
+    await withTempState(async () => {
+      const runtime = createRuntime();
+
+      await expect(
+        channelsDeadLettersListCommand({ channel: "telegram", account, json: true }, runtime),
+      ).rejects.toThrow("--account must not be blank");
+      await expect(
+        channelsDeadLettersResubmitCommand("event-1", { channel: "telegram", account }, runtime),
+      ).rejects.toThrow("--account must not be blank");
+      expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
+
+  it("still resolves an omitted --account to the default account", async () => {
+    await withTempState(async () => {
+      const queue = createChannelIngressQueue<{ text: string }>({ channelId: "telegram" });
+      await queue.enqueue("event-1", { text: "default scope" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      const runtime = createRuntime();
+
+      await channelsDeadLettersListCommand({ channel: "telegram", json: true }, runtime);
+
+      const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        accountId: string;
+        deadLetters: Array<{ id: string }>;
+      };
+      expect(output.accountId).toBe("default");
+      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
+    });
+  });
 });

@@ -20,6 +20,14 @@ const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
 );
+const channelsDeadLettersMocks = vi.hoisted(() => ({
+  channelsDeadLettersListCommand: vi.fn(
+    async (_options: { account?: string }, _runtime: unknown) => undefined,
+  ),
+  channelsDeadLettersResubmitCommand: vi.fn(
+    async (_eventId: string, _options: { account?: string }, _runtime: unknown) => undefined,
+  ),
+}));
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsCapabilitiesCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsRemoveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -48,6 +56,8 @@ vi.mock("../commands/channels.js", () => ({
   channelsCapabilitiesCommand: channelsCapabilitiesCommandMock,
   channelsRemoveCommand: channelsRemoveCommandMock,
 }));
+
+vi.mock("../commands/channels/dead-letters.js", () => channelsDeadLettersMocks);
 
 vi.mock("./channel-auth.js", () => channelAuthMocks);
 
@@ -103,6 +113,47 @@ describe("registerChannelsCli", () => {
     await registerChannelsCli(program);
 
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
+  });
+
+  // Every dead-letter leaf declares --account with a literal default, so the parser must keep an
+  // omitted flag distinguishable from one the caller supplied blank.
+  it.each([
+    ["omitted", ["channels", "dead-letters", "list", "--channel", "telegram"], "default"],
+    [
+      "explicit blank",
+      ["channels", "dead-letters", "list", "--channel", "telegram", "--account", ""],
+      "",
+    ],
+  ])("distinguishes an %s dead-letters list account", async (_label, args, expectedAccount) => {
+    const program = new Command().name("openclaw").exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    const [options] = channelsDeadLettersMocks.channelsDeadLettersListCommand.mock.calls[0] ?? [];
+    expect(options?.account).toBe(expectedAccount);
+  });
+
+  it.each([
+    [
+      "omitted",
+      ["channels", "dead-letters", "resubmit", "event-1", "--channel", "telegram"],
+      "default",
+    ],
+    [
+      "explicit blank",
+      ["channels", "dead-letters", "resubmit", "event-1", "--channel", "telegram", "--account", ""],
+      "",
+    ],
+  ])("distinguishes an %s dead-letters resubmit account", async (_label, args, expectedAccount) => {
+    const program = new Command().name("openclaw").exitOverride();
+
+    await registerChannelsCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+
+    const [, options] =
+      channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0] ?? [];
+    expect(options?.account).toBe(expectedAccount);
   });
 
   it.each([
