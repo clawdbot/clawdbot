@@ -19,6 +19,7 @@
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.DWWFIQKG.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.F25QOBDY.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.G5ZZIGWB.js",
+  "node_modules/@awesome.me/webawesome/dist/chunks/chunk.G6CPCG3F.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.HGBRCPUS.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.HKHINDC2.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.HS5AYC6E.js",
@@ -44,6 +45,7 @@
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.W7A2VLCT.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.WDIIGUNP.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.WNMOBTJK.js",
+  "node_modules/@awesome.me/webawesome/dist/chunks/chunk.WV6QXBER.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.XI4IVCQA.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.XNTP7DEQ.js",
   "node_modules/@awesome.me/webawesome/dist/chunks/chunk.XTG2LNFG.js",
@@ -55,6 +57,7 @@
   "node_modules/@awesome.me/webawesome/dist/components/dialog/dialog.js",
   "node_modules/@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
   "node_modules/@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
+  "node_modules/@awesome.me/webawesome/dist/components/popover/popover.js",
   "node_modules/@awesome.me/webawesome/dist/components/popup/popup.js",
   "node_modules/@awesome.me/webawesome/dist/components/switch/switch.js",
   "node_modules/@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
@@ -1469,9 +1472,6 @@
   "ui/src/styles/lobster-pet.css"
  ],
  "new": [
-  "node_modules/@awesome.me/webawesome/dist/chunks/chunk.G6CPCG3F.js",
-  "node_modules/@awesome.me/webawesome/dist/chunks/chunk.WV6QXBER.js",
-  "node_modules/@awesome.me/webawesome/dist/components/popover/popover.js",
   "src/cli/quote-cli-arg.ts",
   "ui/src/components/agent-select-registration.ts",
   "ui/src/components/capacity-meter.ts",
@@ -1918,6 +1918,7 @@
   "ui/src/pages/plugins/icon-loader.ts",
   "ui/src/pages/skills/library-detail.ts",
   "ui/src/pages/skills/library-events.ts",
-  "ui/src/pages/skills/library-files.ts"
+  "ui/src/pages/skills/library-files.ts",
+  "ui/src/styles/chat/composer-status.css"
  ]
 }
