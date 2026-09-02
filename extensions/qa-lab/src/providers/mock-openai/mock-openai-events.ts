@@ -4,6 +4,15 @@ import type { MockAssistantMessageSpec, StreamEvent } from "./mock-openai-contra
 import { MockResponseStream } from "./mock-openai-stream.js";
 import { buildMockFunctionCall } from "./mock-openai-tooling.js";
 
+export function buildRemoteCompactionV2Events(): StreamEvent[] {
+  const stream = new MockResponseStream("resp_mock_compaction_1");
+  stream.item({
+    type: "compaction",
+    encrypted_content: "QA_MOCK_REMOTE_COMPACTION_SUMMARY",
+  });
+  return stream.complete(16);
+}
+
 export function buildFailedResponseEvents(): StreamEvent[] {
   return new MockResponseStream(`resp_qa_failed_${Date.now()}`).fail();
 }

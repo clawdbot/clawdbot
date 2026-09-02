@@ -115,7 +115,6 @@ import {
   transcriptionTextForAudioRequest,
   writeSse,
   isRemoteCompactionV2Request,
-  buildRemoteCompactionV2Events,
   countApproxTokens,
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
@@ -142,6 +141,7 @@ import {
   resolveHeartbeatPromptReply,
 } from "./mock-openai-directives.js";
 import {
+  buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,

@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
-import { MockResponseStream } from "./mock-openai-stream.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
@@ -527,15 +526,6 @@ export function isRemoteCompactionV2Request(input: ResponsesInputItem[]) {
   // Codex sends compaction through /responses with a trigger item. Keep it
   // outside scenario dispatch so maintenance calls never become tool evidence.
   return input.some((item) => item.type === "compaction_trigger");
-}
-
-export function buildRemoteCompactionV2Events(): StreamEvent[] {
-  const stream = new MockResponseStream("resp_mock_compaction_1");
-  stream.item({
-    type: "compaction",
-    encrypted_content: "QA_MOCK_REMOTE_COMPACTION_SUMMARY",
-  });
-  return stream.complete(16);
 }
 
 export type AnthropicStreamEvent = Record<string, unknown> & {
