@@ -54,36 +54,31 @@ describe("prepared channel turn lifecycle", () => {
     );
   });
 
-  it("runs lifecycle-less prepared dispatch through the canonical turn path", async () => {
+  it("runs custom prepared dispatch from a full turn adapter", async () => {
     const events: string[] = [];
     const result = await runChannelTurn({
       channel: "test",
       raw: { id: "msg-1", text: "hello" },
       adapter: {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () => {
-          const turn = {
-            channel: "test",
-            routeSessionKey: "agent:main:test:peer",
-            storePath,
-            ctxPayload: createCtx(),
-            recordInboundSession: createRecordInboundSession(events),
-            runDispatch: async () => {
-              events.push("custom-dispatch");
-              return {
-                queuedFinal: true,
-                counts: { tool: 0, block: 0, final: 1 },
-              };
-            },
-            runDispatchLifecycle: {
-              turnAdoptionLifecycle: undefined,
-              onDispatchSkipped: vi.fn(),
-            },
-          };
-          // Model a plugin compiled before the required inbound lifecycle field existed.
-          Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
-          return turn;
-        },
+        resolveTurn: () => ({
+          channel: "test",
+          routeSessionKey: "agent:main:test:peer",
+          storePath,
+          ctxPayload: createCtx(),
+          recordInboundSession: createRecordInboundSession(events),
+          runDispatch: async () => {
+            events.push("custom-dispatch");
+            return {
+              queuedFinal: true,
+              counts: { tool: 0, block: 0, final: 1 },
+            };
+          },
+          runDispatchLifecycle: {
+            turnAdoptionLifecycle: undefined,
+            onDispatchSkipped: vi.fn(),
+          },
+        }),
       },
     });
 
@@ -99,23 +94,31 @@ describe("prepared channel turn lifecycle", () => {
     const recordInboundSession = createRecordInboundSession();
     const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
     const onFinalize = vi.fn();
+    const turnAdoptionLifecycle = { onAdopted: vi.fn(async () => undefined) };
 
     await expect(
       runChannelTurn({
         channel: "test",
         raw: { id: "msg-1", text: "hello" },
-        turnAdoptionLifecycle: { onAdopted: vi.fn(async () => undefined) },
+        turnAdoptionLifecycle,
         adapter: {
           ingest: () => ({ id: "msg-1", rawText: "hello" }),
-          resolveTurn: () =>
-            ({
+          resolveTurn: () => {
+            const turn = {
               channel: "test",
               routeSessionKey: "agent:main:test:peer",
               storePath,
               ctxPayload: createCtx(),
               recordInboundSession,
               runDispatch,
-            }) as unknown as ChannelTurnResolved,
+              runDispatchLifecycle: {
+                turnAdoptionLifecycle,
+                onDispatchSkipped: vi.fn(),
+              },
+            };
+            Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
+            return turn;
+          },
           onFinalize,
         },
       }),
