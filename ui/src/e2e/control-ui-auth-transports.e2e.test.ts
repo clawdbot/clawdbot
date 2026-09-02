@@ -1000,6 +1000,9 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {
     const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
     await waitForVisibleFailure(rejected.page, "origin not allowed");
+    const originFailure = rejected.page.locator(".login-gate__failure");
+    expect(await originFailure.getAttribute("data-kind")).toBe("origin-not-allowed");
+    expect(await originFailure.locator(".login-gate__command").count()).toBe(0);
     const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
     const rejectedEvidence = await waitForConnectionEvidence(
       (entry) =>

@@ -369,6 +369,16 @@ suite.define(() => {
       expectedTitle: "Proxy authentication required",
     },
     {
+      name: "disallowed browser origin",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "origin not allowed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+      },
+      expectedKind: "origin-not-allowed",
+      expectedTitle: "Browser origin not allowed",
+    },
+    {
       name: "pairing approval",
       error: {
         code: "NOT_PAIRED",
