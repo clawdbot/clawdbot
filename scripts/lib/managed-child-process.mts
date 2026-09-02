@@ -76,6 +76,35 @@ type ManagedCommandOutcome =
 const managedChildren = new Set<(signal: NodeJS.Signals) => void>();
 const signalHandlers = new Map<NodeJS.Signals, () => void>();
 
+/** Nested command failures retain their owner's inputs until process cleanup is verified. */
+export function hasUnjoinedWork(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  for (const current of pending) {
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      continue;
+    }
+    // Native execFileSync errors can point .error back to themselves. Skip only
+    // that identity; other aggregate members and wrapper edges still need checking.
+    seen.add(current);
+    if ("processTreeState" in current && current.processTreeState !== "terminated") {
+      return true;
+    }
+    if (current instanceof AggregateError) {
+      for (const error of current.errors) {
+        pending.push(error);
+      }
+    }
+    if ("cause" in current) {
+      pending.push(current.cause);
+    }
+    if ("error" in current) {
+      pending.push(current.error);
+    }
+  }
+  return false;
+}
+
 /** Return the conventional shell exit code for a signal. */
 export function signalExitCode(signal: NodeJS.Signals) {
   const signalNumber = signalNumberFor(signal);
