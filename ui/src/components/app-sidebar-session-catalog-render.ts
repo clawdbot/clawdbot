@@ -54,6 +54,7 @@ type SessionCatalogGroupsParams = {
   mainKey: string;
   collapsedSections: ReadonlySet<string>;
   loadingMoreCatalogIds: ReadonlySet<string>;
+  visibleSessionLimits: ReadonlyMap<string, number>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   ownerId?: string | null;
@@ -74,6 +75,7 @@ type SessionCatalogGroupsParams = {
     position?: { x: number; y: number },
   ) => void;
   onLoadMore: (catalogId: string) => void;
+  onSetVisibleSessionLimit: (sectionId: string, limit: number) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   newSessionDisabledReason?: string;
   sectionDragDisabledReason?: string;
@@ -90,6 +92,8 @@ type SessionCatalogGroupsParams = {
   onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
   isMenuOpen: (key: CatalogSessionKey) => boolean;
 };
+
+const CATALOG_SESSION_GROUP_LIMIT = 5;
 
 const CATALOG_CONTROL_SELECTORS = [
   ".sidebar-recent-session__link",
@@ -378,6 +382,45 @@ function renderCatalogHostGroup(
       (session) =>
         renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
     );
+  const renderVisibleRows = (
+    sessions: readonly SessionCatalogSession[],
+    sectionId: string,
+    projectChild = false,
+  ) => {
+    const expanded =
+      (params.visibleSessionLimits.get(sectionId) ?? CATALOG_SESSION_GROUP_LIMIT) >
+      CATALOG_SESSION_GROUP_LIMIT;
+    return renderRows(
+      expanded ? sessions : sessions.slice(0, CATALOG_SESSION_GROUP_LIMIT),
+      projectChild,
+    );
+  };
+  const renderPagination = (sessions: readonly SessionCatalogSession[], sectionId: string) => {
+    if (sessions.length <= CATALOG_SESSION_GROUP_LIMIT) {
+      return nothing;
+    }
+    const visibleLimit = params.visibleSessionLimits.get(sectionId) ?? CATALOG_SESSION_GROUP_LIMIT;
+    const expanded = visibleLimit > CATALOG_SESSION_GROUP_LIMIT;
+    const label = expanded ? t("chat.messages.showLess") : t("chat.messages.showMore");
+    return html`<div class="sidebar-session-pagination sidebar-session-pagination--catalog">
+      <button
+        type="button"
+        class="sidebar-session-pagination__button"
+        aria-label=${label}
+        @click=${() =>
+          params.onSetVisibleSessionLimit(
+            sectionId,
+            expanded ? CATALOG_SESSION_GROUP_LIMIT : sessions.length,
+          )}
+      >
+        ${label}
+      </button>
+    </div>`;
+  };
+  const flatSessions = projectGroups?.ungrouped ?? host.sessions;
+  const flatSectionId = projectGroups
+    ? `catalog-${params.projectGrouping}-ungrouped:${catalog.id}:${host.hostId}`
+    : `catalog-host:${catalog.id}:${host.hostId}`;
   // Gateway errors stay on the catalog header; node headings remain so remote rows keep their owner.
   const showHostHeading = host.kind !== "gateway";
   return html`
@@ -438,19 +481,21 @@ function renderCatalogHostGroup(
                     ${collapsed
                       ? nothing
                       : html`<div
-                          class="sidebar-session-catalog-project__sessions"
-                          role="list"
-                          aria-label=${`${host.label}: ${group.label}`}
-                        >
-                          ${renderRows(group.sessions, true)}
-                        </div>`}
+                            class="sidebar-session-catalog-project__sessions"
+                            role="list"
+                            aria-label=${`${host.label}: ${group.label}`}
+                          >
+                            ${renderVisibleRows(group.sessions, sectionId, true)}
+                          </div>
+                          ${renderPagination(group.sessions, sectionId)}`}
                   </div>
                 `;
               },
             )}
-            ${renderRows(projectGroups.ungrouped)}`
-          : renderRows(host.sessions)}
+            ${renderVisibleRows(flatSessions, flatSectionId)}`
+          : renderVisibleRows(flatSessions, flatSectionId)}
       </div>
+      ${renderPagination(flatSessions, flatSectionId)}
     </section>
   `;
 }
