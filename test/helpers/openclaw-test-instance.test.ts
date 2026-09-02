@@ -221,6 +221,25 @@ const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWA
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
 if (kind === "cli-json") {
+  if (argv[1] === "overflow-close") {
+    const splitCodePoint = Buffer.from([0xf0, 0x9f, 0xa6, 0x8a]);
+    const first = Buffer.concat([
+      Buffer.alloc(Number(argv[0]) - 2, 0x61),
+      splitCodePoint.subarray(0, 2),
+    ]);
+    await new Promise((resolve) => process.stdout.write(first, resolve));
+    await (await fetch(controlUrl + "/wait")).text();
+    await new Promise((resolve) =>
+      process.stdout.write(
+        Buffer.concat([
+          splitCodePoint.subarray(2),
+          Buffer.from("\\ntrailing overflow output\\n"),
+        ]),
+        resolve,
+      ),
+    );
+    process.exit(0);
+  }
   const json = JSON.stringify({ first: "complete", payload: "é".repeat(Number(argv[0])), providerCredentialPresent: Object.hasOwn(process.env, "OPENAI_API_KEY"), last: "complete" });
   await Promise.all([
     new Promise((resolve) => process.stdout.write(json, resolve)),
@@ -355,12 +374,26 @@ describe("openclaw test instance", () => {
     "owns complete CLI JSON and diagnostic tails (%s)",
     async (mode) => {
       await withEnvAsync({ OPENAI_API_KEY: "ambient-provider-fixture" }, async () => {
-        const { instance, readAttempts } = await createFakeGateway("cli-json");
+        const control = mode === "overflow-close" ? await createGatewayControl() : undefined;
+        const { instance, readAttempts } = await createFakeGateway(
+          "cli-json",
+          1_000,
+          1_500,
+          control ? { url: control.url } : undefined,
+        );
         // The command must not merge a removed credential back from its parent.
         delete instance.env.OPENAI_API_KEY;
         const characters =
-          mode === "complete" ? 160 * 1024 : resolveMaxOutputBytes(undefined, "stdout") / 2;
+          mode === "complete"
+            ? 160 * 1024
+            : mode === "overflow-close"
+              ? resolveMaxOutputBytes(undefined, "stdout")
+              : resolveMaxOutputBytes(undefined, "stdout") / 2;
         const command = trackOperation(instance.cli([String(characters), mode]));
+        if (control) {
+          await withTestTimeout(control.reached, 5_000, "overflow close control gate");
+          await control.release();
+        }
         if (mode !== "complete") {
           const outcome = await command.then(
             (result) => ({
@@ -373,7 +406,13 @@ describe("openclaw test instance", () => {
             throw new Error(`Expected command output overflow failure: ${JSON.stringify(outcome)}`);
           }
           expect(outcome.message).toContain("command stdout exceeded capture limit");
-          expect(outcome.message).toContain('"last":"complete"');
+          if (mode === "overflow") {
+            expect(outcome.message).toContain('"last":"complete"');
+          } else {
+            expect(outcome.message).toContain(String.fromCodePoint(0x1f98a));
+            expect(outcome.message).toContain("trailing overflow output");
+            expect(outcome.message).not.toContain("\uFFFD");
+          }
           expect(Buffer.byteLength(outcome.message)).toBeLessThan(600 * 1024);
         } else {
           const result = await command;
