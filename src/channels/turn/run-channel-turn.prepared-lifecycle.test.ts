@@ -5,7 +5,6 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { RecordInboundSession } from "../session.types.js";
 import { hasFinalChannelTurnDispatch } from "./dispatch-result.js";
 import { runChannelTurn } from "./run-channel-turn.js";
-import type { ChannelTurnResolved } from "./types.js";
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -55,13 +54,14 @@ describe("prepared channel turn lifecycle", () => {
     );
   });
 
-  it("runs custom prepared dispatch from a full turn adapter", async () => {
+  it("runs lifecycle-less prepared dispatch through the canonical turn path", async () => {
     const events: string[] = [];
     const result = await runChannelTurn({
       channel: "test",
       raw: { id: "msg-1", text: "hello" },
       adapter: {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        // @ts-expect-error Shipped plugins compiled before lifecycle ownership return this shape.
         resolveTurn: () => ({
           channel: "test",
           routeSessionKey: "agent:main:test:peer",
@@ -75,10 +75,6 @@ describe("prepared channel turn lifecycle", () => {
               counts: { tool: 0, block: 0, final: 1 },
             };
           },
-          runDispatchLifecycle: {
-            turnAdoptionLifecycle: undefined,
-            onDispatchSkipped: vi.fn(),
-          },
         }),
       },
     });
@@ -89,35 +85,6 @@ describe("prepared channel turn lifecycle", () => {
       throw new Error("expected dispatch");
     }
     expect(result.dispatchResult.queuedFinal).toBe(true);
-  });
-
-  it("runs a legacy prepared turn that omits dispatch lifecycle ownership when no adoption lifecycle is in play", async () => {
-    // Released plugin builds predating the runDispatchLifecycle contract (e.g.
-    // @openclaw/whatsapp@2026.7.1) never adopt a durable ingress claim, so
-    // there is nothing to leak here -- see openclaw/openclaw#114020, #116453.
-    const recordInboundSession = createRecordInboundSession();
-    const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
-
-    const result = await runChannelTurn({
-      channel: "test",
-      raw: { id: "msg-1", text: "hello" },
-      adapter: {
-        ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () =>
-          ({
-            channel: "test",
-            routeSessionKey: "agent:main:test:peer",
-            storePath,
-            ctxPayload: createCtx(),
-            recordInboundSession,
-            runDispatch,
-          }) as unknown as ChannelTurnResolved,
-      },
-    });
-
-    expect(recordInboundSession).toHaveBeenCalled();
-    expect(runDispatch).toHaveBeenCalled();
-    expect(result.dispatched).toBe(true);
   });
 
   it("rejects prepared turns that omit dispatch lifecycle ownership when the caller adopts a durable ingress claim", async () => {
