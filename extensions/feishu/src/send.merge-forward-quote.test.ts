@@ -91,6 +91,7 @@ describe("getMessageFeishu quoted merged-forward expansion", () => {
 
     expect(info?.content.length).toBeLessThanOrEqual(4_000);
     expect(info!.content.length).toBeLessThanOrEqual(4_000);
+    expect(info!.content).toContain("forwarded messages total]");
   });
 
   it("keeps single-item placeholder behavior for plain quoted messages", async () => {

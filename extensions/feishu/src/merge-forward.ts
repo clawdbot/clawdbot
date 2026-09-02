@@ -104,5 +104,12 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);
   }
-  return truncateUtf16Safe(lines.join("\n"), maxRenderedChars);
+  const rendered = lines.join("\n");
+  if (rendered.length <= maxRenderedChars) {
+    return rendered;
+  }
+  // Truncation is an omission the agent must see: reserve room for the marker
+  // so partial forwarded content is never mistaken for the complete list.
+  const omissionMarker = `\n[... truncated, ${subMessages.length} forwarded messages total]`;
+  return truncateUtf16Safe(rendered, maxRenderedChars - omissionMarker.length) + omissionMarker;
 }
