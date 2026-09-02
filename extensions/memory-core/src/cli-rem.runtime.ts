@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
+import {
+  resolveMemoryDreamingPluginConfigForCli,
+  resolveMemoryPluginConfig,
+  withMemoryCommand,
+} from "./cli-runtime-common.js";
 import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
@@ -46,7 +50,7 @@ export async function runMemorySessionBackfill(
       }
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig,
+        pluginConfig: resolveMemoryDreamingPluginConfigForCli(cfg),
         cfg,
       });
       let result;
@@ -133,7 +137,7 @@ export async function runMemoryRemHarness(
         return;
       }
       const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig,
+        pluginConfig: resolveMemoryDreamingPluginConfigForCli(cfg),
         cfg,
       });
       const nowMs = Date.now();
@@ -291,9 +295,8 @@ export async function runMemoryRemBackfill(
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({
-        pluginConfig,
+        pluginConfig: resolveMemoryDreamingPluginConfigForCli(cfg),
         cfg,
       });
       if (!workspaceDir) {

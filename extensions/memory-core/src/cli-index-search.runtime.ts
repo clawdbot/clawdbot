@@ -11,7 +11,7 @@ import {
   formatExtraPaths,
   formatMemoryIndexOutcome,
   resolveMemoryAgent,
-  resolveMemoryPluginConfig,
+  resolveMemoryDreamingPluginConfigForCli,
   scanMemoryManagerSources,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
@@ -214,13 +214,13 @@ export async function runMemorySearch(
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+      const dreamingPluginConfig = resolveMemoryDreamingPluginConfigForCli(cfg);
       const dreamingEnabled = resolveMemoryDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+        pluginConfig: dreamingPluginConfig,
         cfg,
       }).enabled;
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+        pluginConfig: dreamingPluginConfig,
         cfg,
       });
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
@@ -383,7 +383,7 @@ export async function runMemoryPromote(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryDreamingPluginConfigForCli(cfg),
         cfg,
       });
       if (!workspaceDir) {
@@ -561,7 +561,7 @@ export async function runMemoryPromoteExplain(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryDreamingPluginConfigForCli(cfg),
         cfg,
       });
       if (!workspaceDir) {

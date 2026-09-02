@@ -13,7 +13,7 @@ import {
   formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
-  resolveMemoryPluginConfig,
+  resolveMemoryDreamingPluginConfigForCli,
   scanMemoryManagerSources,
   withMemoryCommand,
   type MemoryManager,
@@ -77,7 +77,7 @@ function formatMemoryIndexIdentityWarning(
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
-  const pluginConfig = resolveMemoryPluginConfig(cfg);
+  const pluginConfig = resolveMemoryDreamingPluginConfigForCli(cfg);
   const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
   const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
   const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });

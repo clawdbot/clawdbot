@@ -5,6 +5,7 @@ import {
 import {
   listAgentIds,
   resolveConfiguredAgentId,
+  resolveMemoryDreamingPluginConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -103,6 +104,16 @@ function emitMemorySecretResolveDiagnostics(
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
   return asNullableRecord(entry?.config) ?? {};
+}
+// Dreaming configuration ownership follows plugins.slots.memory (the selected
+// memory plugin), not the memory-core store entry. Every Dreaming CLI resolver
+// must read through the canonical selected-memory resolver so a disabled
+// setting on the selected plugin (for example memory-lancedb) is never
+// silently overridden by memory-core defaults.
+export function resolveMemoryDreamingPluginConfigForCli(
+  cfg: OpenClawConfig,
+): Record<string, unknown> {
+  return resolveMemoryDreamingPluginConfig(cfg) ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const scriptCoverage = audit.conceptTagScripts
