@@ -1,6 +1,7 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
+import { encodeCodexTranscriptCursor } from "./session-catalog-parsing.js";
 import {
   transcriptMirrorMocks,
   nodeHostMocks,
@@ -711,7 +712,11 @@ describe("Codex supervision actions", () => {
         {
           id: "turn-1",
           items: [
-            { id: "item-1", type: "userMessage", text: "question" },
+            {
+              id: "item-1",
+              type: "userMessage",
+              content: [{ type: "text", text: "question" }],
+            },
             { id: "item-2", type: "agentMessage", text: "full answer" },
           ],
         },
@@ -736,7 +741,9 @@ describe("Codex supervision actions", () => {
         { id: "item-2", type: "agentMessage", text: "full answer" },
         { id: "item-1", type: "userMessage", text: "question" },
       ],
-      nextCursor: "turns-page-2",
+      // The turn page is fully delivered, so the cursor advances to the next
+      // upstream turn page with a fresh item offset.
+      nextCursor: encodeCodexTranscriptCursor({ turnCursor: "turns-page-2", itemOffset: 0 }),
     });
     expect(listTurnPage).toHaveBeenCalledWith({
       threadId: "thread-1",
@@ -763,7 +770,13 @@ describe("Codex supervision actions", () => {
           data: [
             {
               id: "turn-remote",
-              items: [{ id: "item-remote", type: "userMessage", text: "remote prompt" }],
+              items: [
+                {
+                  id: "item-remote",
+                  type: "userMessage",
+                  content: [{ type: "text", text: "remote prompt" }],
+                },
+              ],
             },
           ],
           nextCursor: "remote-turns-2",
@@ -791,7 +804,7 @@ describe("Codex supervision actions", () => {
         control: createControl(),
         hostId: "node:devbox",
         threadId: "thread-remote",
-        cursor: "remote-turns-1",
+        cursor: encodeCodexTranscriptCursor({ turnCursor: "remote-turns-1", itemOffset: 0 }),
         limit: 25,
       }),
     ).resolves.toEqual({
@@ -799,7 +812,7 @@ describe("Codex supervision actions", () => {
       label: "Devbox",
       threadId: "thread-remote",
       items: [{ id: "item-remote", type: "userMessage", text: "remote prompt" }],
-      nextCursor: "remote-turns-2",
+      nextCursor: encodeCodexTranscriptCursor({ turnCursor: "remote-turns-2", itemOffset: 0 }),
     });
     expect(invoke).toHaveBeenLastCalledWith({
       nodeId: "devbox",

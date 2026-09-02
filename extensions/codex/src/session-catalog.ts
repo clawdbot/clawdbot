@@ -30,7 +30,6 @@ import {
   resolveLocalCodexTerminalExecutable,
   startCodexCatalogTerminal,
 } from "./session-catalog-terminal.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
   CodexSessionCatalogControlFactory,
   CodexSessionCatalogHost,
@@ -217,7 +216,7 @@ function registerCodexSessionCatalog(params: {
     },
     read: async (request) => {
       const { agentId, source, control } = bindRequest(request);
-      const page = await readCodexSessionTranscript({
+      return await readCodexSessionTranscript({
         agentId,
         runtime: params.api.runtime,
         control,
@@ -227,7 +226,6 @@ function registerCodexSessionCatalog(params: {
         limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
         ...(source ? { source } : {}),
       });
-      return { ...page, items: page.items.map(toGenericTranscriptItem) };
     },
     continueSession: async (request) => {
       const config = params.getRuntimeConfig();

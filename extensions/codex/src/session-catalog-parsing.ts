@@ -52,6 +52,49 @@ export function readControlCursor(value: unknown, label: string): string | undef
   return value;
 }
 
+const TRANSCRIPT_CURSOR_ERROR = "invalid Codex session catalog transcript request cursor";
+
+export type CodexTranscriptCursor = { turnCursor?: string; itemOffset: number };
+
+/**
+ * The app-server pages transcripts by turn and one turn can hold thousands of
+ * items, so a page boundary falls inside a turn. The cursor carries the upstream
+ * turn cursor plus how many items of that turn page were already delivered;
+ * dropping either half replays delivered items or skips them.
+ */
+export function encodeCodexTranscriptCursor(cursor: CodexTranscriptCursor): string {
+  const payload = { ...(cursor.turnCursor ? { t: cursor.turnCursor } : {}), o: cursor.itemOffset };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+export function decodeCodexTranscriptCursor(value: unknown): CodexTranscriptCursor {
+  const cursor = readControlCursor(value, "transcript request");
+  if (cursor === undefined) {
+    return { itemOffset: 0 };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch (error) {
+    throw new CatalogParamsError(TRANSCRIPT_CURSOR_ERROR, { cause: error });
+  }
+  if (!isRecord(parsed) || !Number.isSafeInteger(parsed.o) || Number(parsed.o) < 0) {
+    throw new CatalogParamsError(TRANSCRIPT_CURSOR_ERROR);
+  }
+  const turnCursor =
+    parsed.t === undefined ? undefined : readControlCursor(parsed.t, "transcript request");
+  const decoded: CodexTranscriptCursor = {
+    ...(turnCursor ? { turnCursor } : {}),
+    itemOffset: Number(parsed.o),
+  };
+  // Re-encoding must round-trip: a non-canonical payload would otherwise carry
+  // fields past the bounded turn-cursor check.
+  if (encodeCodexTranscriptCursor(decoded) !== cursor) {
+    throw new CatalogParamsError(TRANSCRIPT_CURSOR_ERROR);
+  }
+  return decoded;
+}
+
 export function boundedCatalogString(
   value: unknown,
   maxLength: number,

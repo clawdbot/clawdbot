@@ -121,9 +121,8 @@ export type CodexSessionTranscriptPage = {
   hostId: string;
   label: string;
   threadId: string;
-  items: import("./app-server/protocol.js").CodexThreadItem[];
+  items: import("openclaw/plugin-sdk/session-catalog").SessionCatalogTranscriptItem[];
   nextCursor?: string;
-  backwardsCursor?: string;
 };
 
 export type CodexSessionCatalogParams = {

@@ -5,6 +5,7 @@ import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-e
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   sessionCatalogAdoptedSourceKey,
+  sessionCatalogPaging,
   type SessionCatalogEntrySnapshot,
   type SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
@@ -27,7 +28,10 @@ import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
+  type CodexTranscriptCursor,
+  decodeCodexTranscriptCursor,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+  encodeCodexTranscriptCursor,
   filterCatalogPageByTitle,
   MAX_TITLE_SEARCH_CATALOG_PAGES,
   MAX_CURSOR_LENGTH,
@@ -49,6 +53,7 @@ import {
   createCodexTerminalNodeHostCommand,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
+import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -434,8 +439,50 @@ function readBoundedLimit(value: unknown, key: string, fallback: number, max: nu
   return value as number;
 }
 
-function flattenTranscriptPageDesc(page: CodexThreadTurnsListResponse) {
-  return page.data.flatMap((turn) => turn.items.toReversed());
+/**
+ * Upstream turns arrive newest-first with chronological items inside each turn.
+ * The shared pager wants one chronological list so it can bound the newest
+ * suffix and hand back an offset the next request resumes from.
+ */
+function flattenTranscriptPageChronological(page: CodexThreadTurnsListResponse) {
+  return page.data.toReversed().flatMap((turn) => turn.items);
+}
+
+function boundedTranscriptPage(params: {
+  hostId: string;
+  label: string;
+  threadId: string;
+  page: CodexThreadTurnsListResponse;
+  limit: number;
+  cursor: CodexTranscriptCursor;
+}): CodexSessionTranscriptPage {
+  const items = flattenTranscriptPageChronological(params.page).map(toGenericTranscriptItem);
+  const bounded = sessionCatalogPaging.boundTranscriptPage(
+    items,
+    params.limit,
+    params.cursor.itemOffset,
+  );
+  // A partially delivered turn page resumes at the same upstream cursor; an
+  // exhausted one advances to the next turn page and restarts at offset zero.
+  const deliveredOffset = bounded.nextCursor
+    ? sessionCatalogPaging.decodeCursor(bounded.nextCursor)
+    : undefined;
+  const nextCursor =
+    deliveredOffset !== undefined
+      ? encodeCodexTranscriptCursor({
+          ...(params.cursor.turnCursor ? { turnCursor: params.cursor.turnCursor } : {}),
+          itemOffset: deliveredOffset,
+        })
+      : params.page.nextCursor
+        ? encodeCodexTranscriptCursor({ turnCursor: params.page.nextCursor, itemOffset: 0 })
+        : undefined;
+  return {
+    hostId: params.hostId,
+    label: params.label,
+    threadId: params.threadId,
+    items: bounded.items,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
 }
 
 /** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
@@ -449,25 +496,32 @@ export async function readCodexSessionTranscript(params: {
   limit: number;
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
+  const cursor = decodeCodexTranscriptCursor(params.cursor);
+  // The read RPC leaves `limit` open-ended; every provider owns its own ceiling.
+  const limit = readBoundedLimit(
+    params.limit,
+    "limit",
+    DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+    MAX_TRANSCRIPT_PAGE_LIMIT,
+  );
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     await params.control.requireEligibleThread(params.threadId);
     const listParams = {
       threadId: params.threadId,
-      limit: params.limit,
+      limit,
       sortDirection: "desc" as const,
       itemsView: "full" as const,
-      ...(params.cursor ? { cursor: params.cursor } : {}),
+      ...(cursor.turnCursor ? { cursor: cursor.turnCursor } : {}),
     };
     const response = await params.control.listTurnPage(listParams);
-    const page = parseTranscriptPage(response);
-    return {
+    return boundedTranscriptPage({
       hostId: params.hostId,
       label: params.source?.label ?? "Local Codex",
       threadId: params.threadId,
-      items: flattenTranscriptPageDesc(page),
-      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-      ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
-    };
+      page: parseTranscriptPage(response),
+      limit,
+      cursor,
+    });
   }
 
   const nodeId = params.hostId.slice("node:".length);
@@ -486,19 +540,18 @@ export async function readCodexSessionTranscript(params: {
     params: {
       agentId: params.agentId,
       threadId: params.threadId,
-      limit: params.limit,
-      ...(params.cursor ? { cursor: params.cursor } : {}),
+      limit,
+      ...(cursor.turnCursor ? { cursor: cursor.turnCursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
     scopes: ["operator.write"],
   });
-  const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
-  return {
+  return boundedTranscriptPage({
     hostId: params.hostId,
     label: nodeLabel(node),
     threadId: params.threadId,
-    items: flattenTranscriptPageDesc(page),
-    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-    ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
-  };
+    page: parseTranscriptPage(unwrapNodeInvokePayload(raw)),
+    limit,
+    cursor,
+  });
 }

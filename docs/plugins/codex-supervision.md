@@ -140,11 +140,15 @@ openclaw nodes approve <requestId>
 
 Non-archived Codex sessions also appear in the main Control UI sidebar, grouped
 by host. Select one to read its persisted transcript. The viewer uses the latest
-Codex `thread/turns/list` API with `itemsView: "full"` and loads at most 20 turns
-per request; **Load older transcript items** follows the opaque App Server cursor from the latest page.
-Loaded pages render in chronological order. The viewer never loads an unbounded
-`thread/read` history. A page above the 20 MiB transport safety ceiling fails
-closed instead of risking the node or Gateway connection.
+Codex `thread/turns/list` API with `itemsView: "full"` and returns at most 50
+transcript items per request (20 when the caller omits `limit`). One Codex turn
+can hold thousands of items, so the page cursor pairs the App Server turn cursor
+with the item offset already delivered from that turn page; **Load older
+transcript items** follows it. Loaded pages render in chronological order.
+Oversized tool payloads arrive as a 4 KiB preview marked `truncated` instead of
+whole. The viewer never loads an unbounded `thread/read` history. A page above
+the 20 MiB transport safety ceiling fails closed instead of risking the node or
+Gateway connection.
 
 Open the **Codex** group in the normal sessions sidebar. It lists the same sessions
 grouped by host. **Load more sessions** appends the next page from each host that
