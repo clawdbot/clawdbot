@@ -1,4 +1,5 @@
 // Creates backup archives while filtering volatile runtime state.
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -349,7 +350,16 @@ function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
   if (!params.linkpath || !path.isAbsolute(params.linkpath)) {
     return params.linkpath;
   }
-  const targetSourcePath = path.resolve(params.linkpath);
+  // tar supplies the first-hop readlink, while declared assets use the final
+  // realpath. Canonicalize before containment so a configured multi-hop
+  // absolute link still maps onto its declared asset; undeclared targets stay
+  // absolute and fail closed at the archive guard.
+  let targetSourcePath: string;
+  try {
+    targetSourcePath = realpathSync(params.linkpath);
+  } catch {
+    return params.linkpath;
+  }
   const targetAsset = params.assets.find((asset) =>
     isPathWithin(targetSourcePath, asset.sourcePath),
   );
@@ -360,7 +370,10 @@ function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
     .relative(targetAsset.sourcePath, targetSourcePath)
     .split(path.sep)
     .join(path.posix.sep);
-  const targetArchivePath = path.posix.join(targetAsset.archivePath, targetAssetRelativePath);
+  const targetArchivePath =
+    targetAssetRelativePath === "" || targetAssetRelativePath === "."
+      ? targetAsset.archivePath
+      : path.posix.join(targetAsset.archivePath, targetAssetRelativePath);
   return path.posix.relative(path.posix.dirname(params.archiveEntryPath), targetArchivePath);
 }
 

@@ -2978,9 +2978,12 @@ describe("createBackupArchive", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "preserves an absolute config symlink when its target is a declared backup asset",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { label: "direct", hops: 1 },
+    { label: "chained", hops: 2 },
+  ])(
+    "archives a $label absolute config symlink whose real target is a declared asset",
+    async ({ hops }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -2989,10 +2992,17 @@ describe("createBackupArchive", () => {
         },
         async (state) => {
           const outputPath = state.path("declared-config-symlink.tar.gz");
-          const externalConfigPath = state.path("nix-store", "openclaw.json");
+          const externalConfigPath = state.path("nix-store", "openclaw-default.json");
           await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
           await fs.rename(state.configPath, externalConfigPath);
-          await fs.symlink(externalConfigPath, state.configPath);
+          let linkTarget = externalConfigPath;
+          if (hops > 1) {
+            const intermediatePath = state.path("nix-store", "openclaw-link.json");
+            await fs.symlink(externalConfigPath, intermediatePath);
+            linkTarget = intermediatePath;
+          }
+          await fs.symlink(linkTarget, state.configPath);
+          const canonicalExternalConfigPath = await fs.realpath(externalConfigPath);
 
           const result = await createBackupArchive({
             output: outputPath,
@@ -3005,7 +3015,7 @@ describe("createBackupArchive", () => {
             "archived config symlink",
           );
           const externalConfigEntry = expectDefined(
-            entries.find((entry) => entry.path.endsWith("/nix-store/openclaw.json")),
+            entries.find((entry) => entry.path.endsWith("/nix-store/openclaw-default.json")),
             "archived external config target",
           );
 
@@ -3015,7 +3025,10 @@ describe("createBackupArchive", () => {
           );
           expect(result.assets).toEqual(
             expect.arrayContaining([
-              expect.objectContaining({ kind: "config", sourcePath: externalConfigPath }),
+              expect.objectContaining({
+                kind: "config",
+                sourcePath: canonicalExternalConfigPath,
+              }),
             ]),
           );
 

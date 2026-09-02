@@ -267,6 +267,8 @@ async function resolveBackupPlanFromPaths(params: {
 
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
+    // Lexically in-state config or credentials can still resolve outside state,
+    // such as a Nix store symlink. Canonical coverage retains those targets.
     ...(configInsideState && isPathWithin(containmentConfigPath, canonicalStateDir)
       ? []
       : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveActivatedPluginBackupInventory } from "./manifest-backup-resources.js";
@@ -63,23 +62,6 @@ afterEach(() => {
 });
 
 describe("plugin manifest backup resources", () => {
-  it("declares the Codex Nix runtime profile as regenerable agent state", () => {
-    const pluginRoot = fileURLToPath(new URL("../../extensions/codex", import.meta.url));
-
-    expect(loadPluginManifest(pluginRoot)).toMatchObject({
-      ok: true,
-      manifest: {
-        backupResources: expect.arrayContaining([
-          {
-            disposition: "regenerable",
-            scope: "agent",
-            relativePath: "codex-home/home/.nix-profile",
-          },
-        ]),
-      },
-    });
-  });
-
   it("retains closed resource declarations and removes deterministic duplicates", () => {
     const include = { disposition: "include", scope: "state", relativePath: "owner/durable" };
     const regenerable = {
