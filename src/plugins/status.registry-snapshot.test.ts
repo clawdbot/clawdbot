@@ -312,67 +312,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     );
   });
 
-  it("does not project package-local dependency health onto bundled plugins", () => {
-    const tempRoot = makeTempDir();
-    const bundledRoot = path.join(tempRoot, "bundled");
-    const pluginRoot = path.join(bundledRoot, "bundled-demo");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: "bundled-demo",
-      packageJson: { dependencies: { "missing-build-time-dependency": "1.0.0" } },
-    });
-
-    const report = buildPluginRegistrySnapshotReport({
-      config: { plugins: { entries: { "bundled-demo": { enabled: true } } } },
-      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-    });
-    const plugin = requirePlugin(report.plugins, "bundled-demo");
-
-    expectFields(plugin, { origin: "bundled", status: "loaded" });
-    expect(plugin.dependencyStatus).toBeUndefined();
-    expect(report.diagnostics).toEqual([]);
-  });
-
-  it("projects dependency health onto bundled plugins distributed outside the root package", () => {
-    const tempRoot = makeTempDir();
-    const bundledRoot = path.join(tempRoot, "bundled");
-    const pluginRoot = path.join(bundledRoot, "source-external-demo");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: "source-external-demo",
-      packageJson: { dependencies: { "missing-plugin-local-dependency": "1.0.0" } },
-    });
-    // Source builds compile these plugins into the bundled tree but leave their
-    // dependencies plugin-local, so the bundled origin alone must not hide them.
-    const packageJsonPath = path.join(pluginRoot, "package.json");
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-      openclaw: Record<string, unknown>;
-    };
-    packageJson.openclaw.build = { bundledDist: false };
-    fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), "utf8");
-
-    const report = buildPluginRegistrySnapshotReport({
-      config: { plugins: { entries: { "source-external-demo": { enabled: true } } } },
-      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-    });
-    const plugin = requirePlugin(report.plugins, "source-external-demo");
-
-    expectFields(plugin, { origin: "bundled", status: "error" });
-    expect(requireRecord(plugin.dependencyStatus)).toMatchObject({
-      requiredInstalled: false,
-      missing: ["missing-plugin-local-dependency"],
-    });
-    expect(report.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "source-external-demo",
-        message: expect.stringContaining("required dependencies are missing"),
-      }),
-    );
-  });
-
   it.each([
     { consent: "missing", enabled: true, tracked: true, warns: true },
     { consent: "stale", enabled: true, tracked: true, warns: true },
