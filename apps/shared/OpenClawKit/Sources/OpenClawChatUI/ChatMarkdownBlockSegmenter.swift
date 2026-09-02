@@ -168,10 +168,22 @@ enum ChatMarkdownBlockSegmenter {
             document: document,
             isComplete: isComplete)
         var extractions = mathResult.extractions
+        var proseEnd = source.lines.count
 
         for child in document.children {
             guard let lineRange = source.lineRange(for: child.range) else { continue }
             if mathResult.protectedRanges.contains(where: { $0.contains(lineRange.lowerBound) }) {
+                continue
+            }
+
+            if !isComplete,
+               child is Markdown.Paragraph,
+               source.lines[lineRange].allSatisfy({ $0.trimmingCharacters(in: .whitespaces).hasPrefix("|") }),
+               source.lines[lineRange.upperBound...].allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty })
+            {
+                // Pending headers and bare row-opening pipes must not enter
+                // prose: the parser can absorb them into a table on the next delta.
+                proseEnd = lineRange.lowerBound
                 continue
             }
 
@@ -214,12 +226,6 @@ enum ChatMarkdownBlockSegmenter {
                 guard let rendered = self.table(table, source: source, lineRange: tableRange) else {
                     continue
                 }
-                let trailingLines = source.lines[tableRange.upperBound...]
-                if !isComplete,
-                   trailingLines.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty })
-                {
-                    continue
-                }
                 extractions.append(Extraction(lineRange: tableRange, block: .table(rendered)))
                 continue
             }
@@ -259,7 +265,7 @@ enum ChatMarkdownBlockSegmenter {
             return left.lineRange.upperBound > right.lineRange.upperBound
         }
 
-        let unfolded = self.unfold(extractions, source: source, isComplete: isComplete)
+        let unfolded = self.unfold(extractions, source: source, proseEnd: proseEnd, isComplete: isComplete)
         let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
             if case .list = block { return true }
@@ -268,7 +274,7 @@ enum ChatMarkdownBlockSegmenter {
         if blocks.count > 1 || reparsesListContent,
            self.containsReferenceLink(document, source: source)
         {
-            return self.proseOnly(source.lines)
+            return self.proseOnly(Array(source.lines[..<proseEnd]))
         }
         return blocks
     }
@@ -1147,6 +1153,7 @@ extension ChatMarkdownBlockSegmenter {
     fileprivate static func unfold(
         _ extractions: [Extraction],
         source: SourceBuffer,
+        proseEnd: Int,
         isComplete: Bool) -> [UnfoldedBlock]
     {
         var unfolded: [UnfoldedBlock] = []
@@ -1178,7 +1185,7 @@ extension ChatMarkdownBlockSegmenter {
             proseStart = extraction.lineRange.upperBound
         }
 
-        appendProse(until: source.lines.count)
+        appendProse(until: proseEnd)
         return unfolded
     }
 }

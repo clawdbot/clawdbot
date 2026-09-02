@@ -962,29 +962,74 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
-    @Test func `trailing table while streaming stays prose`() {
-        let markdown = "intro\n| a | b |\n| - | - |\n| 1 | 2 |"
-        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
-    }
-
-    @Test func `trailing table with only trailing newline while streaming stays prose`() {
-        // The trailing newline is not a committed blank line: the next delta
-        // may still append rows, so the table must not render rich yet.
-        let markdown = "| a | b |\n| - | - |\n| 1 | 2 |\n"
+    @Test(arguments: ["", "\n"])
+    func `trailing table renders while rows are streaming`(suffix: String) {
+        let markdown = "intro\n| a | b |\n| - | - |\n| 1 | 2 |" + suffix
         #expect(self.segments(markdown, isComplete: false) == [
-            .prose("| a | b |\n| - | - |\n| 1 | 2 |"),
-        ])
-    }
-
-    @Test func `settled table while streaming renders as table`() {
-        let blocks = self.segments("| a | b |\n| - | - |\n| 1 | 2 |\n\nafter", isComplete: false)
-        #expect(blocks == [
+            .prose("intro"),
             .table(ChatMarkdownTable(
                 header: ["a", "b"],
                 alignments: [.leading, .leading],
                 rows: [["1", "2"]])),
-            .prose("after"),
         ])
+    }
+
+    @Test func `streamed table prefixes preserve prose and only grow table rows`() throws {
+        let markdown = """
+        This paragraph reads well.
+
+        | Surface | Owner |
+        | --- | --- |
+        | Chat | Client |
+        | Run | Gateway |
+
+        Closing paragraph.
+        """
+        var previous: [ChatMarkdownBlock] = []
+        for length in 0...markdown.count {
+            let prefix = String(markdown.prefix(length))
+            let blocks = self.segments(prefix, isComplete: false)
+            try #require(blocks.count >= previous.count, "prefix length: \(length)")
+            for (before, after) in zip(previous, blocks) {
+                switch (before, after) {
+                case let (.prose(before), .prose(after)):
+                    #expect(after.hasPrefix(before), "prefix length: \(length)")
+                case let (.table(before), .table(after)):
+                    #expect(after.rows.count >= before.rows.count, "prefix length: \(length)")
+                default:
+                    Issue.record("block changed kind at prefix length: \(length)")
+                }
+            }
+            if prefix.hasSuffix("| --- | --- |") {
+                #expect(blocks.count == 2)
+                guard case let .table(table) = blocks.last else {
+                    Issue.record("delimiter must commit the table before body rows arrive")
+                    return
+                }
+                #expect(table.rows.isEmpty)
+            }
+            previous = blocks
+        }
+        let expected: [ChatMarkdownBlock] = [
+            .prose("This paragraph reads well."),
+            .table(ChatMarkdownTable(
+                header: ["Surface", "Owner"],
+                alignments: [.leading, .leading],
+                rows: [["Chat", "Client"], ["Run", "Gateway"]])),
+            .prose("Closing paragraph."),
+        ]
+        #expect(previous == expected)
+        #expect(self.segments(markdown) == expected)
+    }
+
+    @Test func `streaming table header waits without hiding inline pipes`() {
+        let markdown = "Prose with | x inside a normal sentence.\n\n| a | b |"
+        #expect(self.segments(markdown, isComplete: false) == [
+            .prose("Prose with | x inside a normal sentence."),
+        ])
+        #expect(self.segments(markdown) == [.prose(markdown)])
+        let continuation = "Prose continues\n| x on the next line"
+        #expect(self.segments(continuation, isComplete: false) == [.prose(continuation)])
     }
 
     // MARK: - Tables

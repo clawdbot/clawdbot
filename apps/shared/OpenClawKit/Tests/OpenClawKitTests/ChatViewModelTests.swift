@@ -2672,9 +2672,14 @@ struct ChatViewModelTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.upsertQuestion(QuestionRecord(
             id: "ask_secret",
-            questions: [.init(questionid: "credential", header: "Credential", question: "Provide a key", options: [],
-                issecret: true, secretstore: .init(name: "TASK_TOKEN", kind: AnyCodable("secret")))],
-            createdatms: 1_000, expiresatms: Int.max, status: .pending))
+            questions: [.init(
+                questionid: "credential",
+                header: "Credential",
+                question: "Provide a key",
+                options: [],
+                issecret: true,
+                secretstore: .init(name: "TASK_TOKEN", kind: AnyCodable("secret")))],
+            createdatms: 1000, expiresatms: Int.max, status: .pending))
         let model = try #require(viewModel.questionCards.first)
         model.secretStoreAllowedHostsText = "uploads.example.test,\napi.example.test"
         model.setOtherText(questionID: "credential", value: "  synthetic-value  ")
@@ -4952,6 +4957,111 @@ struct ChatViewModelTests {
                 return okReplies.count == 2 && vm.messages.last?.timestamp == now + 4
             }
         }
+    }
+
+    @Test(arguments: [1, 2])
+    func `superseded pending refresh preserves an in-flight run`(refreshIndex: Int) async throws {
+        let historyGate = AsyncGate()
+        let historyStarted = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000 + 10000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload()],
+            historyResponseHook: { _, index, runIds in
+                guard index >= refreshIndex, let runId = runIds.last else { return nil }
+                _ = await historyStarted.increment()
+                await historyGate.wait()
+                return historyPayload(
+                    messages: [
+                        chatTextMessage(
+                            role: "user", text: "inspect workspace", timestamp: now,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(role: "assistant", text: "Let me inspect it.", timestamp: now + 1),
+                    ],
+                    inFlightRun: OpenClawChatInFlightRun(runId: runId, text: "Let me inspect it."))
+            },
+            sendMessageStatus: "pending")
+        await MainActor.run { vm.pendingRunRefreshDelaysMs = [20, 60000] }
+        try await loadAndWaitBootstrap(vm: vm)
+        await sendUserMessage(vm, text: "inspect workspace")
+        let runId = try await waitForLastSentRunId(transport)
+        try await waitUntil("pending history request starts") { await historyStarted.current() == 1 }
+
+        emitAssistantText(transport: transport, runId: runId, text: "Here is the result so far")
+        try await waitUntil("agent text advances ownership during history request") {
+            await MainActor.run { vm.streamingAssistantText == "Here is the result so far" }
+        }
+        await historyGate.open()
+        try await waitUntil("intermediate assistant history applies") {
+            await MainActor.run { vm.messages.contains { $0.content.first?.text == "Let me inspect it." } }
+        }
+
+        #expect(await MainActor.run { vm.pendingRunCount } == 1)
+        #expect(await MainActor.run { vm.streamingAssistantText } == "Here is the result so far")
+        await MainActor.run { vm.clearPendingRuns(reason: nil) }
+    }
+
+    @Test(arguments: ["agent-first", "delta-first", "delta-only"])
+    @MainActor
+    func `agent assistant text owns the run instead of cumulative chat buffers`(delivery: String) async throws {
+        let runId = "run-streaming"
+        let history = historyPayload(
+            inFlightRun: delivery == "delta-only" ? nil : OpenClawChatInFlightRun(runId: runId, text: "seed"))
+        let (_, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm)
+        defer { vm.detachTransport() }
+        let agent = OpenClawChatTransportEvent.agent(OpenClawAgentEventPayload(
+            runId: runId, seq: 1, stream: "assistant", ts: 1,
+            data: ["text": AnyCodable("Here is the result")]))
+        let delta = OpenClawChatTransportEvent.chat(OpenClawChatEventPayload(
+            runId: runId, sessionKey: "main", state: "delta",
+            message: chatTextMessage(role: "assistant", text: "Let me look first.Here is the result", timestamp: 1),
+            errorMessage: nil))
+
+        if delivery == "agent-first" { vm.handleTransportEvent(agent) }
+        vm.handleTransportEvent(delta)
+        if delivery != "agent-first" {
+            #expect(vm.streamingAssistantText == "Let me look first.Here is the result")
+        }
+        if delivery == "delta-only" {
+            #expect(vm.pendingRunCount == 1)
+            return
+        }
+        vm.handleTransportEvent(agent)
+        vm.handleTransportEvent(.agent(usageEvent(runId: runId, outputTokens: 10, seq: 2)))
+        vm.handleTransportEvent(delta)
+        #expect(vm.streamingAssistantText == "Here is the result")
+        await vm.refreshHistoryAfterRun()
+        #expect(vm.streamingAssistantText == "Here is the result")
+    }
+
+    @Test @MainActor func `detached transport ignores late events and in-flight history`() async throws {
+        let historyGate = AsyncGate()
+        let historyStarted = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                _ = await historyStarted.increment()
+                await historyGate.wait()
+                return historyPayload(inFlightRun: OpenClawChatInFlightRun(runId: "retired-run", text: "stale"))
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        let refresh = Task { await vm.refreshHistoryAfterRun() }
+        try await waitUntil("history starts before detachment") { await historyStarted.current() == 1 }
+        vm.detachTransport()
+        vm.detachTransport()
+        let lateEvent = OpenClawChatTransportEvent.chat(OpenClawChatEventPayload(
+            runId: "retired-run", sessionKey: "main", state: "delta",
+            message: chatTextMessage(role: "assistant", text: "late", timestamp: 1), errorMessage: nil))
+        transport.emit(lateEvent)
+        // Also cover an event already dequeued when the presentation retires.
+        vm.handleTransportEvent(lateEvent)
+        await historyGate.open()
+        let result = await refresh.value
+        #expect(!result.applied)
+        #expect(vm.pendingRunCount == 0)
+        #expect(vm.streamingAssistantText == nil)
+        #expect(vm.messages.isEmpty)
     }
 
     @Test func `completion wait refreshes history and clears pending run`() async throws {

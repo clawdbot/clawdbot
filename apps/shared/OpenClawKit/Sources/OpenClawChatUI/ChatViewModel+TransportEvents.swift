@@ -23,6 +23,7 @@ extension OpenClawChatViewModel {
     }
 
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
+        guard !self.isTransportDetached else { return }
         switch evt {
         case let .health(ok):
             let reconnected = ok && !self.healthOK
@@ -691,6 +692,7 @@ extension OpenClawChatViewModel {
         switch evt.stream {
         case "assistant":
             if let text = evt.data["text"]?.value as? String {
+                self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
                 self.updateStreamingAssistantText(text)
             }
@@ -919,8 +921,12 @@ extension OpenClawChatViewModel {
             sessionSnapshot: sessionSnapshot,
             armID: armID)
         else { return false }
+        // Live events advance ownership while history is in flight. A superseded snapshot
+        // must not let message shape retire a run the gateway still reports in flight.
+        if refresh.applied, !refresh.runSnapshotApplied { return true }
         if case let .failed(message)? = terminalState {
             if refresh.applied,
+               !refresh.hasInFlightRun,
                let timestamp,
                self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
             {
@@ -932,7 +938,7 @@ extension OpenClawChatViewModel {
             self.updateStreamingAssistantText(nil)
             return false
         }
-        if refresh.applied, refresh.runSnapshotApplied, refresh.supportsInFlightRunState {
+        if refresh.applied, refresh.supportsInFlightRunState {
             if refresh.hasInFlightRun {
                 return true
             }
@@ -965,7 +971,7 @@ extension OpenClawChatViewModel {
             self.finishPendingRun(runId: runId, terminalState: .completed)
             return false
         }
-        guard let timestamp else { return true }
+        guard !refresh.hasInFlightRun, let timestamp else { return true }
         return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
     }
 
