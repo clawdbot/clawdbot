@@ -330,7 +330,7 @@ describe("upgrade recovery result assertions", () => {
   });
 });
 
-function writeMigratedSessionState(stateDir: string): void {
+function writeMigratedSessionState(stateDir: string): undefined {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   const agentDbDir = join(stateDir, "agents", "main", "agent");
   mkdirSync(agentSessionsDir, { recursive: true });
