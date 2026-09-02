@@ -52,6 +52,8 @@ const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const DIST_PLUGIN_SDK_CORE = "dist/plugin-sdk/core.js";
 const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 const DIST_BUILD_INFO = "dist/build-info.json";
+const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
+const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
 const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
@@ -167,6 +169,8 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
     [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
     [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
     [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
+    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
+    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
@@ -179,6 +183,8 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
       DIST_CHANNEL_CATALOG,
       DIST_BUILD_INFO,
       DIST_PLUGIN_SDK_CORE,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
       DIST_OPENCLAW_ALIAS_PACKAGE,
@@ -1986,6 +1992,8 @@ describe("run-node script", () => {
     for (const missingPath of [
       DIST_CHANNEL_CATALOG,
       DIST_BUILD_INFO,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,
       DIST_LEGACY_ROOT_RUNTIME_COMPAT,
