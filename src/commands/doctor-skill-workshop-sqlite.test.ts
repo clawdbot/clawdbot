@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
 import {
   applySkillProposal,
@@ -22,7 +23,10 @@ import {
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -127,6 +131,118 @@ describe("doctor Skill Workshop SQLite migration", () => {
       },
     });
 
+    await expect(
+      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+  });
+
+  it("keeps a released legacy skill user-owned through the v16 migration and Doctor repair", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-released-workspace-"),
+    );
+    const now = "2026-09-01T00:00:00.000Z";
+    const legacyRecord = (name: string, content: string): SkillProposalRecord => ({
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: `${name}-20260901-1234567890`,
+      kind: "create",
+      status: "applied",
+      title: `Create ${name}`,
+      description: `${name} procedure`,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(content),
+      target: {
+        skillName: name,
+        skillKey: name,
+        skillDir: path.join(workspaceDir, "skills", name),
+        skillFile: path.join(workspaceDir, "skills", name, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+      appliedAt: now,
+    });
+    // v15 collection review dropped this skill and released its claim; the operator
+    // then recreated the path by hand, so it is theirs.
+    const recreatedContent =
+      "---\nname: released-skill\ndescription: Handwritten again\n---\n\n# Mine\n";
+    const released = legacyRecord("released-skill", "---\nname: released-skill\n---\n");
+    const activeContent =
+      "---\nname: active-skill\ndescription: Still Workshop-owned\n---\n\n# Active\n";
+    const active = legacyRecord("active-skill", activeContent);
+    for (const [record, content] of [
+      [released, recreatedContent],
+      [active, activeContent],
+    ] as const) {
+      await fs.mkdir(record.target.skillDir, { recursive: true });
+      await fs.writeFile(record.target.skillFile, content, "utf8");
+    }
+    // Build the shipped v15 row shape, then let the store upgrade it on next open.
+    const databasePath = openOpenClawStateDatabase({ env: testState.env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const legacy = openNodeSqliteDatabase(databasePath);
+    legacy.exec(`
+      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
+    `);
+    const insertProposal = legacy.prepare(
+      `INSERT INTO skill_workshop_proposals (
+        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
+        created_at, updated_at, draft_hash, applied_at, claim_released_time
+      ) VALUES (?, ?, 'main', ?, 'create', 'applied', ?, ?, ?, ?, ?)`,
+    );
+    for (const [record, claimReleasedTime] of [
+      [released, 1_756_684_800_000],
+      [active, null],
+    ] as const) {
+      insertProposal.run(
+        record.id,
+        JSON.stringify(record),
+        workspaceDir,
+        now,
+        now,
+        record.draftHash,
+        now,
+        claimReleasedTime,
+      );
+    }
+    legacy.exec(`
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const repaired = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+    expect(repaired.changes.join("\n")).toContain(
+      "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 0 stale",
+    );
+    await expect(fs.readFile(released.target.skillFile, "utf8")).resolves.toBe(recreatedContent);
+    await expect(
+      fs.access(path.join(resolveWorkshopSkillsDir(testState.env), "released-skill")),
+    ).rejects.toThrow();
+    await expect(
+      readSkillProposalRecord(released.id, { env: testState.env }),
+    ).resolves.toMatchObject({
+      status: "stale",
+      statusReason: expect.stringContaining("stays user-owned"),
+      target: { skillDir: released.target.skillDir },
+    });
+    await expect(fs.access(active.target.skillDir)).rejects.toThrow();
+    await expect(
+      fs.readFile(
+        path.join(resolveWorkshopSkillsDir(testState.env), "active-skill", "SKILL.md"),
+        "utf8",
+      ),
+    ).resolves.toBe(activeContent);
+    await expect(inspectLegacySkillWorkshopMigration(testState.env)).resolves.toEqual({
+      externalProposalCount: 0,
+      legacyBackupRootCount: 0,
+    });
     await expect(
       migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
     ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });

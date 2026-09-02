@@ -320,6 +320,46 @@ export function migrateConversationBindingTargets(
   return true;
 }
 
+// v15 collection cleanup released a dropped skill's claim so a path recreated by hand
+// stayed user-owned. Doctor relocates every applied create into the Workshop directory,
+// so released rows turn stale before the marker leaves with its column.
+const RELEASED_WORKSHOP_CLAIM_REASON =
+  "Skill Workshop released this skill in a collection review; the path stays user-owned.";
+
+function staleReleasedWorkshopClaims(db: DatabaseSync): void {
+  const released = db
+    .prepare(
+      "SELECT proposal_id, record_json FROM skill_workshop_proposals WHERE claim_released_time IS NOT NULL",
+    )
+    .all() as Array<{ proposal_id: string; record_json: string }>;
+  if (released.length === 0) {
+    return;
+  }
+  const staleAt = new Date().toISOString();
+  const update = db.prepare(
+    `UPDATE skill_workshop_proposals
+       SET record_json = ?, status = 'stale', updated_at = ?, stale_at = ?, status_reason = ?
+     WHERE proposal_id = ?`,
+  );
+  for (const row of released) {
+    const record = JSON.parse(row.record_json) as Record<string, unknown>;
+    const staleRecord = {
+      ...record,
+      status: "stale",
+      updatedAt: staleAt,
+      staleAt,
+      statusReason: RELEASED_WORKSHOP_CLAIM_REASON,
+    };
+    update.run(
+      JSON.stringify(staleRecord),
+      staleAt,
+      staleAt,
+      RELEASED_WORKSHOP_CLAIM_REASON,
+      row.proposal_id,
+    );
+  }
+}
+
 /** Remove row provenance after the Workshop directory becomes the ownership boundary. */
 export function migrateSkillWorkshopDirectoryOwnership(
   db: DatabaseSync,
@@ -338,6 +378,9 @@ export function migrateSkillWorkshopDirectoryOwnership(
   );
   if (proposalColumns.length === 0 && !reviewHasWorkspace) {
     return false;
+  }
+  if (proposalColumns.includes("claim_released_time")) {
+    staleReleasedWorkshopClaims(db);
   }
   db.exec("DROP INDEX IF EXISTS idx_skill_workshop_collection_reviews_workspace_time;");
   for (const column of proposalColumns) {

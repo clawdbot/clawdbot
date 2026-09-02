@@ -387,7 +387,9 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 Schema 16 removes `workspace_dir` and `claim_released_time` from
 `skill_workshop_proposals`. It also removes `workspace_dir` and
 `idx_skill_workshop_collection_reviews_workspace_time` from collection review
-history. Proposal and review rows remain intact.
+history. Proposal and review rows remain intact. A proposal whose claim a
+collection review had released becomes `stale` with a status reason, so the
+skill path it once created stays user-owned and Doctor never relocates it.
 
 Skill Workshop ownership is now the physical
 `<state-dir>/workshop-skills` directory. Startup and `openclaw doctor --fix`

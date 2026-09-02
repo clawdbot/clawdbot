@@ -1591,21 +1591,36 @@ describe("openclaw state database", () => {
       CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
     `);
-    legacy
-      .prepare(
-        `INSERT INTO skill_workshop_proposals (
-          proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
-          created_at, updated_at, draft_hash, applied_at, claim_released_time
-        ) VALUES (?, ?, 'main', '/tmp/workspace', 'create', 'applied', ?, ?, ?, ?, NULL)`,
-      )
-      .run(
-        record.id,
-        JSON.stringify(record),
-        record.createdAt,
-        record.updatedAt,
-        record.draftHash,
-        record.updatedAt,
+    const releasedRecord = {
+      ...record,
+      id: "workshop-v16-released",
+      target: {
+        skillName: "released-fixture",
+        skillKey: "released-fixture",
+        skillDir: "/tmp/workspace/skills/released-fixture",
+        skillFile: "/tmp/workspace/skills/released-fixture/SKILL.md",
+      },
+    };
+    const insertProposal = legacy.prepare(
+      `INSERT INTO skill_workshop_proposals (
+        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
+        created_at, updated_at, draft_hash, applied_at, claim_released_time
+      ) VALUES (?, ?, 'main', '/tmp/workspace', 'create', 'applied', ?, ?, ?, ?, ?)`,
+    );
+    for (const [row, claimReleasedTime] of [
+      [record, null],
+      [releasedRecord, 1_756_684_800_000],
+    ] as const) {
+      insertProposal.run(
+        row.id,
+        JSON.stringify(row),
+        row.createdAt,
+        row.updatedAt,
+        row.draftHash,
+        row.updatedAt,
+        claimReleasedTime,
       );
+    }
     legacy
       .prepare(
         `INSERT INTO skill_workshop_collection_reviews (
@@ -1637,9 +1652,35 @@ describe("openclaw state database", () => {
         )
         .get(),
     ).toBeUndefined();
-    expect(
-      migrated.db.prepare("SELECT proposal_id, record_json FROM skill_workshop_proposals").get(),
-    ).toEqual({ proposal_id: record.id, record_json: JSON.stringify(record) });
+    const proposals = migrated.db
+      .prepare(
+        "SELECT proposal_id, status, status_reason, record_json FROM skill_workshop_proposals ORDER BY proposal_id",
+      )
+      .all() as Array<{
+      proposal_id: string;
+      status: string;
+      status_reason: string | null;
+      record_json: string;
+    }>;
+    expect(proposals[0]).toEqual({
+      proposal_id: record.id,
+      status: "applied",
+      status_reason: null,
+      record_json: JSON.stringify(record),
+    });
+    // A released claim loses its column, so the row becomes stale instead of an
+    // applied create that Doctor would relocate out of the user's directory.
+    expect(proposals[1]).toMatchObject({
+      proposal_id: releasedRecord.id,
+      status: "stale",
+      status_reason: expect.stringContaining("stays user-owned"),
+    });
+    expect(JSON.parse(proposals[1]?.record_json ?? "{}")).toMatchObject({
+      status: "stale",
+      staleAt: expect.any(String),
+      statusReason: proposals[1]?.status_reason,
+      target: releasedRecord.target,
+    });
     expect(
       migrated.db
         .prepare("SELECT review_id, backup_id FROM skill_workshop_collection_reviews")
