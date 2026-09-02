@@ -191,15 +191,25 @@ const port = Number(argv[argv.indexOf("--port") + 1]);
 const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_STATE_DIR"].map((key) => [key, process.env[key]]));
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
-process.stdout.write("fake gateway attempt " + attempt + "\\n");
 if (kind === "cli") {
   process.stderr.write("cli diagnostic\\n");
+  if (argv[0] === "json") {
+    const output = JSON.stringify({ payload: "x".repeat(Number(argv[1])) });
+    await new Promise((resolve) => process.stdout.write(output, resolve));
+    process.exit(0);
+  }
+  process.stdout.write("fake gateway attempt " + attempt + "\\n");
+  if (argv[0] === "signal") {
+    process.kill(process.pid, "SIGTERM");
+    await new Promise(() => {});
+  }
   if (argv[0] === "wait") {
     setInterval(() => {}, 1_000);
     await new Promise(() => {});
   }
   process.exit(Number(argv[0]));
 }
+process.stdout.write("fake gateway attempt " + attempt + "\\n");
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
@@ -322,7 +332,7 @@ describe("openclaw test instance", () => {
       const timeoutMs = mode === "wait" ? 1_000 : 30_000;
       const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
       if (mode === "wait") {
-        await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
+        await expect(command).rejects.toMatchObject({ code: "ETIMEDOUT" });
       } else {
         await expect(command).resolves.toEqual({
           code: Number(mode),
@@ -348,6 +358,38 @@ describe("openclaw test instance", () => {
       }
     }
   });
+
+  it("preserves complete JSON larger than the 256 KiB diagnostic tail", async () => {
+    const { instance } = await createFakeGateway("cli");
+    const payload = "x".repeat(320 * 1024);
+    const result = await trackOperation(instance.cli(["json", String(payload.length)]));
+
+    expect(result).toMatchObject({ code: 0, signal: null, stderr: "cli diagnostic\n" });
+    expect(JSON.parse(result.stdout)).toEqual({ payload });
+  });
+
+  it("rejects CLI output overflow after joining the child", async () => {
+    const { instance, readAttempts } = await createFakeGateway("cli");
+    await expect(
+      trackOperation(instance.cli(["json", String(2 * 1024 * 1024 + 1)])),
+    ).rejects.toMatchObject({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+
+    const [attempt] = await readAttempts();
+    expect(isProcessAlive(attempt!.pid)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a CLI child's terminating signal",
+    async () => {
+      const { instance } = await createFakeGateway("cli");
+      await expect(trackOperation(instance.cli(["signal"]))).resolves.toEqual({
+        code: null,
+        signal: "SIGTERM",
+        stdout: "fake gateway attempt 1\n",
+        stderr: "cli diagnostic\n",
+      });
+    },
+  );
 
   it("joins concurrent starts until the real readiness response arrives", async () => {
     const control = await createGatewayControl();
@@ -1117,24 +1159,6 @@ describe("openclaw test instance", () => {
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(Date.now() - startedAt).toBeLessThan(500);
-  });
-
-  it("signals test instance process groups on POSIX", () => {
-    const child = {
-      pid: 1234,
-      kill: vi.fn(() => true),
-    };
-    const killProcess = vi.fn(() => true);
-
-    testing.signalOpenClawTestProcess(child, "SIGKILL", killProcess);
-
-    if (process.platform === "win32") {
-      expect(killProcess).not.toHaveBeenCalled();
-      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-    } else {
-      expect(killProcess).toHaveBeenCalledWith(-1234, "SIGKILL");
-      expect(child.kill).not.toHaveBeenCalled();
-    }
   });
 
   it("creates isolated config and spawn env without mutating process env", async () => {

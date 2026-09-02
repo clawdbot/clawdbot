@@ -13,7 +13,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { getRuntimeConfig, parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  parseConfigJson5,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -22,6 +27,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -61,6 +67,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -145,6 +152,15 @@ function hasUnsyncedGatewayTestSessionConfig(): boolean {
   );
 }
 
+function publishGatewayTestConfig(
+  config: OpenClawConfig = loadGatewayTestConfig(),
+): OpenClawConfig {
+  // Publish the caller's complete snapshot or the current fixture composition.
+  // Keep overrides runtime-only; real and mocked IO must agree before an await.
+  setRuntimeConfigSnapshot(config);
+  return config;
+}
+
 async function persistTestSessionConfig(): Promise<void> {
   const configPaths = new Set<string>();
   if (process.env.OPENCLAW_CONFIG_PATH) {
@@ -207,7 +223,7 @@ async function persistTestSessionConfig(): Promise<void> {
     // Suite servers may still read config from pending session-change callbacks.
     await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
   }
-  resetConfigRuntimeState();
+  publishGatewayTestConfig();
   lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
@@ -531,6 +547,7 @@ async function resetGatewayTestRuntimeOnly() {
 
 export async function prepareGatewayReplyRuntimeForTest(options?: {
   force?: boolean;
+  config?: OpenClawConfig;
 }): Promise<void> {
   if (
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
@@ -538,11 +555,9 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   ) {
     return;
   }
-  const [preparedRuntime, configRuntime] = await Promise.all([
-    import("../agents/prepared-model-runtime.js"),
-    import("../config/io.js"),
-  ]);
-  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
+  const config = publishGatewayTestConfig(options?.config);
+  const preparedRuntime = await import("../agents/prepared-model-runtime.js");
+  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: agentDiscoveryMock.enabled ? "live" : "static",
     allowGatewaySubagentBinding: true,
@@ -1274,12 +1289,11 @@ export async function rpcReq<T extends Record<string, unknown>>(
   params?: unknown,
   timeoutMs?: number,
 ) {
+  // Config publication leaves in-flight session writers owned by the Gateway.
+  publishGatewayTestConfig();
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  // Refresh mutable config fixtures, but leave in-flight session writers owned
-  // by the running Gateway; their producers publish SQLite cache updates.
-  resetConfigRuntimeState();
   if (method === "agent" || method === "chat.send") {
     await prepareGatewayReplyRuntimeForTest();
   }

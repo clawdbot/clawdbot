@@ -11,7 +11,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
-  type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { mergeUserGitHubConnection } from "./user-github-connections.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.js";
@@ -91,22 +90,6 @@ type UserProfileListRow = Pick<
 };
 
 const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
-
-function runUserProfileWriteTransaction<T>(
-  operation: (database: OpenClawStateDatabase) => T,
-  options: OpenClawStateDatabaseOptions,
-  transactionOptions: Parameters<typeof runOpenClawStateWriteTransaction>[2],
-): T {
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      const result = operation(database);
-      deferSqlitePostCommitPublication(database.db, emitUserProfilesChanged);
-      return result;
-    },
-    options,
-    transactionOptions,
-  );
-}
 
 function normalizeEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
@@ -245,7 +228,7 @@ export function setUserProfileRole(
 ): UserProfileListItem {
   ensureUserProfileRoleSchema(options);
   const now = Date.now();
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
       executeSqliteQuerySync(
@@ -255,6 +238,7 @@ export function setUserProfileRole(
           .set({ role, updated_at: now })
           .where("id", "=", profile.id),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return selectUserProfileListItemById(db, profile.id);
     },
     options,
@@ -276,7 +260,7 @@ function ensureProfileForEmailWithInitialName(
       MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
     );
   ensureUserProfilesSchema(options);
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
       const existingAlias = executeSqliteQueryTakeFirstSync(
@@ -287,6 +271,7 @@ function ensureProfileForEmailWithInitialName(
           .where("email", "=", normalizedEmail),
       );
       if (existingAlias) {
+        // Authenticated avatar reads reuse this path; unchanged identities must not refresh rosters.
         return toUserProfile(requireResolvedUserProfileById(db, existingAlias.profile_id));
       }
       const row = insertUserProfile(db, displayName, now);
@@ -298,6 +283,7 @@ function ensureProfileForEmailWithInitialName(
           created_at: now,
         }),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return toUserProfile(row);
     },
     options,
@@ -323,7 +309,7 @@ function ensureProfileForProviderIdentity(params: {
   const subject =
     params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
   ensureUserProfilesSchema(params.options);
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
       let existingQuery = kysely
@@ -352,6 +338,7 @@ function ensureProfileForProviderIdentity(params: {
               .where("provider", "=", params.provider)
               .where("subject", "=", existingIdentity.subject),
           );
+          deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
         }
         return toUserProfile(requireResolvedUserProfileById(db, existingIdentity.profile_id));
       }
@@ -366,6 +353,7 @@ function ensureProfileForProviderIdentity(params: {
           created_at: now,
         }),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return toUserProfile(row);
     },
     params.options,
@@ -432,7 +420,7 @@ function adoptDisplayNameIfEmpty(
     return toUserProfile(requireResolvedUserProfileById(db, profileId));
   }
   const now = Date.now();
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
       if (profile.display_name !== null) {
@@ -445,6 +433,7 @@ function adoptDisplayNameIfEmpty(
           .set({ display_name: displayName, updated_at: now })
           .where("id", "=", profile.id),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return toUserProfile({ ...profile, display_name: displayName, updated_at: now });
     },
     options,
@@ -468,7 +457,7 @@ async function adoptAvatarIfEmpty(params: {
     return toUserProfile(requireResolvedUserProfileById(db, params.profileId));
   }
   const now = Date.now();
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
       const profile = requireResolvedUserProfileById(transactionDb, params.profileId);
       if (profile.avatar !== null) {
@@ -487,6 +476,7 @@ async function adoptAvatarIfEmpty(params: {
           })
           .where("id", "=", profile.id),
       );
+      deferSqlitePostCommitPublication(transactionDb, emitUserProfilesChanged);
       return toUserProfile({
         ...profile,
         avatar: avatar.bytes,
@@ -546,7 +536,7 @@ export function linkEmail(
   const normalizedEmail = normalizeEmail(email);
   const now = Date.now();
   ensureUserProfilesSchema(options);
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
       const target = requireResolvedUserProfileById(db, targetProfileId);
@@ -570,6 +560,7 @@ export function linkEmail(
           db,
           kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
         );
+        deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
         return selectUserProfileListItemById(db, target.id);
       }
       if (existingAlias.profile_id === target.id) {
@@ -604,6 +595,7 @@ export function linkEmail(
             .where("id", "=", existingAlias.profile_id),
         );
       }
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return selectUserProfileListItemById(db, target.id);
     },
     options,
@@ -618,7 +610,7 @@ export function setDisplayName(
 ): UserProfileListItem {
   const now = Date.now();
   ensureUserProfilesSchema(options);
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
       executeSqliteQuerySync(
@@ -628,6 +620,7 @@ export function setDisplayName(
           .set({ display_name: name, updated_at: now })
           .where("id", "=", profile.id),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return selectUserProfileListItemById(db, profile.id);
     },
     options,
@@ -657,7 +650,7 @@ export function syncGitHubIdentity(
     githubDisplayName ?? normalizeInitialDisplayName(params.initialDisplayName);
   ensureUserProfilesSchema(options);
   ensureUserPreferencesSchema(options);
-  return runUserProfileWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const now = Date.now();
       const kysely = userProfilesDb(db);
@@ -683,6 +676,7 @@ export function syncGitHubIdentity(
           .set({ display_name: displayName, updated_at: now })
           .where("id", "=", canonicalProfileId),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return { ...profile, displayName, updatedAt: now };
     },
     options,
@@ -705,7 +699,7 @@ export function setAvatar(
   }
   const now = Date.now();
   ensureUserProfilesSchema(options);
-  const value = runUserProfileWriteTransaction(
+  const value = runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
       const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -716,6 +710,7 @@ export function setAvatar(
           .set({ avatar: bytes, avatar_mime: mime, avatar_sha256: sha256, updated_at: now })
           .where("id", "=", profile.id),
       );
+      deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
       return selectUserProfileListItemById(db, profile.id);
     },
     options,
