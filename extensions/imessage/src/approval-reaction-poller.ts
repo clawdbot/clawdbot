@@ -11,6 +11,7 @@ import {
   registerIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import { normalizeIMessageGuid } from "./approval-target-keys.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
@@ -57,16 +58,12 @@ function uniqueChatIds(chatIds: readonly number[]): number[] {
   return [...new Set(chatIds)];
 }
 
-function normalizeMessageGuid(value: string): string {
-  return value.trim().replace(/^p:\d+\//iu, "");
-}
-
 function enumerateMessageGuidCandidates(value: string): string[] {
   const trimmed = value.trim();
   if (!trimmed) {
     return [];
   }
-  const normalized = normalizeMessageGuid(trimmed);
+  const normalized = normalizeIMessageGuid(trimmed);
   return [trimmed, normalized].filter(
     (candidate, index, candidates) =>
       candidate.length > 0 && candidates.indexOf(candidate) === index,
@@ -228,7 +225,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
       }
       const target =
         pendingByMessageId.get(targetGuid) ??
-        pendingByMessageId.get(normalizeMessageGuid(targetGuid));
+        pendingByMessageId.get(normalizeIMessageGuid(targetGuid));
       if (!target) {
         continue;
       }
