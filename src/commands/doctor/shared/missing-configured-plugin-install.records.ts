@@ -4,6 +4,10 @@ import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import {
+  detectBundleManifestFormat,
+  loadBundleManifest,
+} from "../../../plugins/bundle-manifest.js";
+import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
@@ -30,7 +34,11 @@ export function isInstalledRecordMissingOnDisk(
     return true;
   }
   const resolved = resolveUserPath(installPath, env);
-  return !existsSync(path.join(resolved, "package.json"));
+  if (existsSync(path.join(resolved, "package.json"))) {
+    return false;
+  }
+  const bundleFormat = detectBundleManifestFormat(resolved);
+  return !bundleFormat || !loadBundleManifest({ rootDir: resolved, bundleFormat }).ok;
 }
 
 export function installPathsEqual(left: string, right: string): boolean {
