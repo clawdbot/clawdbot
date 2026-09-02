@@ -11,6 +11,7 @@ import {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   listSessionEntries,
+  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptContentRevisionSync,
@@ -364,6 +365,13 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
         storePath,
       })
     : [];
+  const archivedIdentitiesByName = new Map(
+    listSessionTranscriptArchivesReadOnly({
+      agentId: normalizedAgentId,
+      includeAll: true,
+      storePath,
+    }).map((archive) => [archive.archiveName, archive]),
+  );
   const cronGeneratedSessionKeys = collectCronGeneratedSessionKeys([
     ...retainedInstances.map(({ entry, sessionKey }) => ({ entry, sessionKey })),
     ...sessionEntries,
@@ -439,7 +447,10 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
         continue;
       }
       scannedArtifactPaths.add(normalizedArtifactPath);
-      const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(artifactPath));
+      const artifactName = path.basename(artifactPath);
+      const archivedIdentity = archivedIdentitiesByName.get(artifactName);
+      const primarySessionId =
+        archivedIdentity?.sessionId ?? parseUsageCountedSessionIdFromFileName(artifactName);
       if (!primarySessionId) {
         continue;
       }
@@ -451,15 +462,17 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       if (!primaryOwner && !includeUnownedArtifacts) {
         continue;
       }
-      corpusEntries.push(
-        toArtifactCorpusEntry(
+      corpusEntries.push({
+        ...toArtifactCorpusEntry(
           normalizedAgentId,
           artifactPath,
           primarySessionId,
           primaryEntry,
           includeContentRevision,
         ),
-      );
+        ...(archivedIdentity?.sessionKey ? { sessionKey: archivedIdentity.sessionKey } : {}),
+        ...(archivedIdentity ? { storePath } : {}),
+      });
     }
   }
   return corpusEntries;

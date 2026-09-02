@@ -118,7 +118,7 @@ export function sessionIngestionSourceFromCorpus(
   const scope =
     entry.transcriptSource === "sqlite"
       ? `${entry.agentId}:${sessionPath}`
-      : buildSessionScope(entry.agentId, path.basename(entry.sessionFile));
+      : buildSessionScope(entry.agentId, entry.sessionId);
   return {
     agentId: entry.agentId,
     absolutePath: entry.sessionFile,

@@ -1,6 +1,9 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Memory Core plugin module implements session search visibility behavior.
-import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  buildSessionEntry,
+  loadArchivedSessions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   resolveCanonicalMainSessionKey,
   type OpenClawConfig,
@@ -373,9 +376,15 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     const archivedOwnerAgentId = archivedOwnerMatchesScope
       ? (identity.ownerAgentId ?? scopedAgentId)
       : undefined;
+    const canonicalArchive = identity.archived
+      ? loadArchivedSessions({
+          agentId: identity.ownerAgentId ?? scopedAgentId,
+          archiveNames: [hit.path.replace(/\\/g, "/").split("/").at(-1) ?? ""],
+        })[0]
+      : undefined;
     const resolvedKeys = resolveTranscriptStemToSessionKeys({
       store: combinedSessionStore,
-      stem: identity.stem,
+      stem: canonicalArchive?.sessionId ?? identity.stem,
       ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
     });
     const keys = filterSessionKeysByScopedAgent({

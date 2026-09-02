@@ -20,6 +20,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import {
+  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -61,6 +62,7 @@ function resolveUsageCostSessionStorePath(params: {
 async function resolveUsageCostJsonlFile(
   sourcePath: string,
   sourceStats: fs.Stats,
+  canonicalSessionId?: string,
 ): Promise<UsageCostTranscriptFile> {
   // Identity and freshness belong to the source; incremental offsets and
   // byte signatures must describe the decompressed file used by readers.
@@ -70,7 +72,10 @@ async function resolveUsageCostJsonlFile(
     filePath,
     sourcePath,
     kind: "jsonl",
-    sessionId: parseUsageCountedSessionIdFromFileName(path.basename(sourcePath)) ?? undefined,
+    sessionId:
+      canonicalSessionId ??
+      parseUsageCountedSessionIdFromFileName(path.basename(sourcePath)) ??
+      undefined,
     size: stats.size,
     mtimeMs: sourceStats.mtimeMs,
     device: stats.dev,
@@ -80,7 +85,11 @@ async function resolveUsageCostJsonlFile(
 
 async function listUsageCountedTranscriptFileStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: {
+    archiveSessionIds?: ReadonlyMap<string, string>;
+    minMtimeMs?: number;
+    sessionsDir?: string;
+  },
 ): Promise<UsageCostTranscriptFile[]> {
   const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
   let entries: fs.Dirent[];
@@ -101,7 +110,11 @@ async function listUsageCountedTranscriptFileStats(
         if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
           return undefined;
         }
-        return await resolveUsageCostJsonlFile(filePath, stats);
+        return await resolveUsageCostJsonlFile(
+          filePath,
+          stats,
+          params?.archiveSessionIds?.get(entry.name),
+        );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return undefined;
@@ -169,7 +182,17 @@ export async function listUsageCountedTranscriptStats(
   agentId: string,
   params?: { minMtimeMs?: number; sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, params);
+  const archiveSessionIds = new Map(
+    listSessionTranscriptArchivesReadOnly({
+      agentId,
+      includeAll: true,
+      ...(params?.sessionsDir ? { storePath: path.join(params.sessionsDir, "sessions.json") } : {}),
+    }).map((archive) => [archive.archiveName, archive.sessionId]),
+  );
+  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, {
+    ...params,
+    archiveSessionIds,
+  });
   const sqliteBacked = listUsageCountedSqliteTranscriptStats(agentId, params);
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter(
