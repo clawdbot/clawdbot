@@ -197,7 +197,8 @@ OpenClaw adopts this fixed package path as its icon convention, matching the pat
 [Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
 consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
 portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
-render the icon without a runtime network request. Manifest-provided icon URLs are not loaded.
+render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
+loaded; provider-auth artwork remains server-owned catalog metadata.
 
 Prefer top-level `sessionRouteStateOwners` for static doctor ownership. The
 older `doctorContract.sessionRouteStateOwners: true` declaration plus a
