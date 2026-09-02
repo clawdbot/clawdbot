@@ -2034,7 +2034,11 @@ describe("worker runtime", () => {
           .filter((message) => message.role === "toolResult")
           .find((message) => message.toolName === "exec");
         expect(toolResult).toMatchObject({ isError: false });
-        const profileDir = path.join(environment.stateDir, "github-profile");
+        const profileDir = path.join(
+          environment.stateDir,
+          "github-profiles",
+          createHash("sha256").update(launch.assignment.runId).digest("hex").slice(0, 16),
+        );
         const output =
           toolResult?.content
             .filter((block) => block.type === "text")
@@ -2072,6 +2076,121 @@ describe("worker runtime", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "prevents retained processes from reading a later turn's GitHub profile",
+    async () => {
+      const { gateway, launch, workspaceDir } = await setup({
+        inferencePlans: ["background-tool", "text", "tool", "text"],
+        backgroundCommand: [
+          'printf "%s" "$GH_CONFIG_DIR" > retained-profile.txt',
+          "while [ ! -e retained-marker ]; do sleep 0.01; done",
+          '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
+          "mv retained-read.tmp retained-read.txt",
+        ].join("; "),
+        execCommand: "printf turn-b-completed",
+      });
+      launch.assignment.github = {
+        login: "worker-a",
+        token: "worker-turn-a-token",
+        branch: "openclaw/session-fixture",
+      };
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const results: WorkerProcessResult[] = [];
+      output.on("data", (chunk: Buffer) => {
+        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
+        if (result) {
+          results.push(result);
+        }
+      });
+      const command = runWorkerCommand({ managed: true, input, output });
+      const settled = vi.fn();
+      void command.then(settled, settled);
+      const scopeKey = `worker:${SESSION_ID}`;
+      const supervisor = getProcessSupervisor();
+      try {
+        input.write(
+          `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
+        );
+        await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
+        expect(results[0]).toMatchObject({
+          turnId: launch.assignment.turnId,
+          result: { status: "completed" },
+          retainWorker: true,
+        });
+        const previousProfileDir = await waitForFast(async () => {
+          const profileDir = await readFile(
+            path.join(workspaceDir, "retained-profile.txt"),
+            "utf8",
+          );
+          expect(profileDir).not.toBe("");
+          return profileDir;
+        });
+        const stateDir = process.env.OPENCLAW_STATE_DIR!;
+        const next = structuredClone(launch);
+        next.assignment.runId = "worker-next-run-2";
+        next.assignment.turnId = "worker-next-turn-2";
+        next.assignment.operationalRunInstance = createOperationalRunInstanceRef(
+          next.assignment.runId,
+        );
+        next.assignment.agentRuntimeIdentityToken = "next-test-runtime-token-2";
+        next.admission.credential = "next-test-worker-credential-2";
+        next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
+          (request) => request.messages,
+        );
+        next.assignment.github = {
+          login: "worker-b",
+          token: "worker-turn-b-token",
+          branch: "openclaw/session-fixture",
+        };
+        input.write(
+          `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
+        );
+        await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
+        expect(results[1]).toMatchObject({
+          turnId: next.assignment.turnId,
+          result: { status: "completed" },
+          retainWorker: true,
+        });
+        const execResult = gateway.acceptedTranscriptRequests
+          .flatMap((request) => request.messages)
+          .findLast((message) => message.role === "toolResult" && message.toolName === "exec");
+        expect(execResult).toMatchObject({
+          isError: false,
+          content: [{ type: "text", text: expect.stringContaining("turn-b-completed") }],
+        });
+        expect(settled).not.toHaveBeenCalled();
+
+        await writeFile(path.join(workspaceDir, "retained-marker"), "read");
+        const retainedRead = await waitForFast(() =>
+          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
+        );
+        expect(retainedRead).not.toContain(launch.assignment.github.token);
+        expect(retainedRead).not.toContain(next.assignment.github.token);
+        expect(retainedRead).toMatch(/No such file|ENOENT/u);
+        expect(retainedRead).toMatch(/exit=[1-9]\d*/u);
+        await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
+        const nextProfileDir = path.join(
+          stateDir,
+          "github-profiles",
+          createHash("sha256").update(next.assignment.runId).digest("hex").slice(0, 16),
+        );
+        const hosts = await readFile(path.join(nextProfileDir, "hosts.yml"), "utf8");
+        expect(hosts).toContain("worker-b");
+        expect(hosts).not.toContain("worker-a");
+        expect(hosts).not.toContain(launch.assignment.github.token);
+      } finally {
+        input.end();
+        try {
+          await command;
+        } finally {
+          supervisor.cancelScope(scopeKey, "manual-cancel");
+          await supervisor.waitForScope?.(scopeKey);
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "keeps exec unbound and creates no GitHub profile without a turn identity",
     async () => {
       const { gateway, launch } = await setup({
@@ -2091,11 +2210,11 @@ describe("worker runtime", () => {
           isError: false,
           content: [{ type: "text", text: expect.stringContaining("profile=unset") }],
         });
-        await expect(stat(path.join(environment.stateDir, "github-profile"))).rejects.toMatchObject(
-          {
-            code: "ENOENT",
-          },
-        );
+        await expect(
+          stat(path.join(environment.stateDir, "github-profiles")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
       } finally {
         await environment.close();
       }
@@ -2111,9 +2230,11 @@ describe("worker runtime", () => {
     };
     const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
     try {
-      await writeFile(path.join(environment.stateDir, "github-profile"), "obstruction");
+      // A file in the root's parent path cannot be repaired by removing github-profiles.
+      const blockedStateDir = path.join(environment.stateDir, "obstruction");
+      await writeFile(blockedStateDir, "obstruction");
       await expect(
-        runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
+        runWorkerDescriptor(launch, { environmentStateDir: blockedStateDir }),
       ).rejects.toThrow("Worker GitHub identity profile could not be written:");
       expect(gateway.inferenceRequests).toHaveLength(0);
     } finally {

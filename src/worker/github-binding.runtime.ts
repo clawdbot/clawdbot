@@ -1,9 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   managedGitHubIdentityEnvironment,
   writeManagedGitHubProfileFiles,
   type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { inspectPathPermissions } from "../infra/permissions.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -53,12 +55,18 @@ async function bindWorkerGitHubCheckout(cwd: string, binding: WorkerGitHubLaunch
 export async function prepareWorkerGitHubEnvironment(params: {
   binding: WorkerGitHubLaunchBinding;
   stateDir: string;
+  runId: string;
   cwd: string;
 }): Promise<PreparedGitHubToolEnvironment | undefined> {
-  const { binding, stateDir, cwd } = params;
+  const { binding, stateDir, runId, cwd } = params;
   registerSecretValueForRedaction(binding.token);
-  const profileDir = path.join(stateDir, "github-profile");
+  const profilesRoot = path.join(stateDir, "github-profiles");
+  const profileDir = path.join(profilesRoot, sha256HexPrefixCore(runId, 16));
   try {
+    // Retained workers reuse state across turns, but each turn owns one profile path.
+    // Remove earlier profiles first so an inherited path cannot expose a later credential;
+    // an earlier process keeps only the token in its own environment.
+    await fs.rm(profilesRoot, { recursive: true, force: true });
     await writeManagedGitHubProfileFiles(profileDir, binding);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
