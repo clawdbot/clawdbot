@@ -236,6 +236,10 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
+/** One wording for both paths: an answered turn appends it to the agent body, a
+ *  gated one to the history entry, so a reader is told the same thing either way. */
+export const LINE_ATTACHMENT_UNAVAILABLE_NOTICE = "[line attachment unavailable]";
+
 /**
  * Renders a message the group's mention gate kept as context instead of
  * answering. It carries the facts an answered turn would have read, so a
@@ -488,7 +492,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const agentBody = mediaUnavailable
     ? formatInboundMediaUnavailableText({
         body: rawBody,
-        notice: "[line attachment unavailable]",
+        notice: LINE_ATTACHMENT_UNAVAILABLE_NOTICE,
       })
     : rawBody;
 
