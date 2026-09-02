@@ -112,6 +112,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
+  private syncNativeOffset: (() => void) | null = null;
   private pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
@@ -122,6 +123,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     queueMicrotask(() => this.pendingInteractionAnchor === anchor && this.host.requestUpdate());
   };
   private measureConnectedRows(): void {
+    // Native input can land after takeover but before its offset observer.
+    // Refresh the offset and direction before compensating deferred row growth.
+    this.syncNativeOffset?.();
     measureConnectedTranscriptRows(this.scrollElement, this.virtualizerController.getVirtualizer());
   }
   private readonly handleGeometryCommit = (event: Event) => {
@@ -245,6 +249,16 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
         }),
       observeElementOffset: (instance, callback) => {
         const element = this.scrollElement;
+        const syncOffset = () => {
+          if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
+            return;
+          }
+          const offset = element.scrollTop;
+          if (offset !== instance.scrollOffset) {
+            callback(offset, instance.isScrolling);
+          }
+        };
+        this.syncNativeOffset = syncOffset;
         const interrupt = (event: Event) => {
           if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
             return;
@@ -260,12 +274,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           }
           this.pendingInteractionAnchor = null;
           this.cancelScroll();
-          // Native input can move the viewport before its scroll event. Publish
-          // that offset before queued remeasurement compensates against a stale fold.
-          const offset = element.scrollTop;
-          if (offset !== instance.scrollOffset) {
-            callback(offset, instance.isScrolling);
-          }
+          syncOffset();
           this.callbacks.onReaderScroll?.();
         };
         for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
@@ -292,6 +301,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           }
         });
         return () => {
+          if (this.syncNativeOffset === syncOffset) {
+            this.syncNativeOffset = null;
+          }
           cleanup?.();
           for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
             element?.removeEventListener(type, interrupt);

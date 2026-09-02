@@ -497,6 +497,25 @@ export async function completeSubagentRunAttempt(
       }
     }
 
+    const closesAsIntentionalNonDelivery =
+      entry.expectsCompletionMessage === true &&
+      executionOutcome.status === "ok" &&
+      terminalReply?.disposition === "empty" &&
+      terminalReply.code !== "message-tool-not-called" &&
+      entry.requesterTurnYielded !== true &&
+      entry.requesterSettleWake === undefined &&
+      entry.delivery?.disposition !== "intentional_non_delivery";
+    if (closesAsIntentionalNonDelivery) {
+      // Producer-owned empty success is a terminal fact, not a failed send.
+      // Close it before task finalization so no requester delivery can start.
+      entry.delivery = {
+        status: "not_required",
+        disposition: "intentional_non_delivery",
+      };
+      entry.suppressCompletionDelivery = true;
+      mutated = true;
+    }
+
     // A newer generation may share the session key. Its transcript/reply is
     // not evidence for this older run, so reconcile only the terminal task state.
     if (recoveryRequested || sessionSuperseded) {

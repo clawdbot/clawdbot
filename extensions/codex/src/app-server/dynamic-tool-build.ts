@@ -80,6 +80,15 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
   "apply_patch",
 ] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
+const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
+  "exec",
+  "process",
+  "sandbox_exec",
+  "sandbox_process",
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
+]);
 
 /** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexNodePlacementToolConstructionPlan(
@@ -551,9 +560,13 @@ export async function buildDynamicTools(
     ? webSearchPlan.webFetchHostnameAllowlist
     : undefined;
   input.onWebSearchPolicyResolved?.(webSearchAllowed);
-  const exposedTools = webSearchPlan.suppressManagedWebSearch
+  const webSearchFilteredTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
     : normalizedTools;
+  const exposedTools = placeDisabledNativeShellToolsInDirectNamespace(
+    webSearchFilteredTools,
+    input.nativeToolSurfaceEnabled,
+  );
   if (preNormalizationDiagnostics.length > 0) {
     embeddedAgentLog.warn(
       `codex app-server quarantined ${preNormalizationDiagnostics.length} unsupported runtime tool schema${preNormalizationDiagnostics.length === 1 ? "" : "s"} before dynamic tool registration`,
@@ -929,6 +942,22 @@ function shouldKeepOpenClawShellDynamicTools(
     input.sandbox?.enabled !== true &&
     nodePolicy.effectiveExecHost !== "node"
   );
+}
+/** Keeps replacement shell tools direct even when model metadata mandates Codex Code Mode. */
+function placeDisabledNativeShellToolsInDirectNamespace<
+  T extends { name: string; catalogMode?: string },
+>(tools: T[], nativeToolSurfaceEnabled: boolean | undefined): T[] {
+  if (nativeToolSurfaceEnabled !== false) {
+    return tools;
+  }
+  for (const tool of tools) {
+    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
+      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
+      // Preserve the prepared object identity while changing only its Codex catalog placement.
+      tool.catalogMode = "direct-only";
+    }
+  }
+  return tools;
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(

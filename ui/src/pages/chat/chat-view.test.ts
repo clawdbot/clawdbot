@@ -15,7 +15,7 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -43,6 +43,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
@@ -79,6 +80,18 @@ function registerChatAttachmentPayload(
   const attachment = registerStoredChatAttachmentPayload(params);
   registeredAttachmentPayloads.set(attachment.id, attachment);
   return attachment;
+}
+
+function visibleContentForMessages(messages: unknown[]): MessageGroup["visibleContent"] {
+  const groups = groupMessages(
+    messages.map((message, index) => ({ kind: "message", key: `message:${index}`, message })),
+  );
+  if (groups.some((group) => group.kind === "group" && group.visibleContent === "non-text")) {
+    return "non-text";
+  }
+  return groups.some((group) => group.kind === "group" && group.visibleContent === "text")
+    ? "text"
+    : "none";
 }
 
 const buildChatItemsMock = vi.fn(
@@ -144,6 +157,7 @@ const buildChatItemsMock = vi.fn(
               key: `group:${key}`,
               role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
               messages: [{ key: `message:${key}`, message }],
+              visibleContent: visibleContentForMessages([message]),
               timestamp: index + 1,
               isStreaming: false,
             };
@@ -159,6 +173,7 @@ const buildChatItemsMock = vi.fn(
             key: `message:${index}`,
             message,
           })),
+          visibleContent: visibleContentForMessages(props.messages),
           timestamp: 1,
           isStreaming: false,
         });
@@ -979,7 +994,8 @@ describe("chat run error", () => {
           message,
         );
         expect(alert.querySelector("details")).toBeNull();
-        expect(alert.textContent).not.toContain("Error details");
+        expect(alert.textContent).not.toContain("Details");
+        expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
         alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
         await Promise.resolve();
         expect(writeText).toHaveBeenLastCalledWith(diagnostic);
@@ -1123,28 +1139,49 @@ describe("chat run error", () => {
         "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
       const renderedDiagnostic =
         "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
-      const container = renderChatView(
-        source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
-      );
+      const onDismissError = vi.fn();
+      const onRetrySessionPlacementStartup = vi.fn();
+      const container = renderChatView({
+        ...(source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic }),
+        onDismissError,
+        onRetrySessionPlacementStartup,
+      });
 
       const alert = requireElement(container, ".chat-error", "chat run error");
       expect(alert.getAttribute("role")).toBe("alert");
       const details = requireElement(alert, "details", "error disclosure");
       expect(details.hasAttribute("open")).toBe(false);
-      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(
-        renderedDiagnostic,
-      );
+      const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
+      expect(fullDiagnostic.textContent).toBe(renderedDiagnostic);
+      expect(fullDiagnostic.getAttribute("aria-label")).toBe("Error details");
       expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
       expect(alert.textContent).toContain("🧭");
       expect(alert.querySelector("img")).toBeNull();
-      alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
-      await waitForFast(() => expect(writeText).toHaveBeenCalledWith(diagnostic));
+      const summary = requireElement(details, "summary", "error header");
+      expect(summary.textContent).toContain("Details");
+      expect(summary.textContent).not.toContain("Error details");
+      expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
+      const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
+      expect(copy).not.toBeNull();
+      for (const open of [false, true]) {
+        details.toggleAttribute("open", open);
+        copy?.click();
+        await waitForFast(() => expect(copy?.disabled).toBe(false));
+        await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+        expect(details.hasAttribute("open")).toBe(open);
+      }
+      (summary as HTMLElement).click();
+      expect(onDismissError).not.toHaveBeenCalled();
+      expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
       expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
         source === "request",
       );
       expect(
         alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
       ).not.toBeNull();
+      alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+      expect(onDismissError).toHaveBeenCalledTimes(source === "request" ? 1 : 0);
     },
   );
 
@@ -1179,12 +1216,20 @@ describe("chat run error", () => {
       "The session was created, but runner startup failed:  Provisioning failed\n  Final diagnostic line  ",
     );
     expect(alert.textContent).not.toContain("⚠");
-    alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')?.click();
+    const details = requireElement(alert, "details", "startup disclosure");
+    expect(requireElement(details, "summary", "startup header").textContent).toContain("Details");
+    expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
+      "Error details",
+    );
+    const copy = details.querySelector<HTMLButtonElement>('summary [aria-label="Copy error"]');
+    expect(copy).not.toBeNull();
+    copy?.click();
     await waitForFast(() =>
       expect(writeText).toHaveBeenCalledWith(
         "The session was created, but runner startup failed: ⚠️ Provisioning failed\n  Final diagnostic line  ",
       ),
     );
+    expect(details.hasAttribute("open")).toBe(false);
     alert.querySelector<HTMLElement>("summary")?.click();
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
     const retry = Array.from(alert.querySelectorAll("button")).find(
@@ -1769,6 +1814,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:assistant:reply-callback-cache",
         role: "assistant",
+        visibleContent: "text",
         messages: [{ key: "message:reply-callback-cache", message }],
         timestamp: 1,
         isStreaming: false,
@@ -1975,6 +2021,7 @@ describe("chat transcript rendering", () => {
         kind: "group" as const,
         key: "group:user:attachment-run",
         role: "user" as const,
+        visibleContent: "text" as const,
         messages: [
           {
             key: "user:attachment-run",
@@ -1995,6 +2042,7 @@ describe("chat transcript rendering", () => {
         kind: "group" as const,
         key: "group:assistant:attachment-run",
         role: "assistant" as const,
+        visibleContent: "non-text" as const,
         messages: [
           {
             key: "assistant:attachment-run",
@@ -2072,6 +2120,7 @@ describe("chat transcript rendering", () => {
       kind: "group",
       key: "group:user:announcement",
       role: "user",
+      visibleContent: "text",
       messages: [
         {
           key: "message:user:announcement",
@@ -2122,6 +2171,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:assistant:persisted-announcement",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "assistant:persisted-announcement",
@@ -2156,6 +2206,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:tool:announcement",
         role: "tool",
+        visibleContent: "text",
         messages: [
           {
             key: "tool:announcement",
@@ -2174,6 +2225,7 @@ describe("chat transcript rendering", () => {
         kind: "group",
         key: "group:assistant:announcement",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "assistant:announcement",
@@ -2724,6 +2776,7 @@ describe("chat transcript rendering cache", () => {
         kind: "group",
         key: "group:user:test",
         role: "user",
+        visibleContent: "text",
         messages: [{ key: "message:user:test", message: messages[0] }],
         timestamp: 1,
         isStreaming: false,
@@ -2828,6 +2881,7 @@ describe("chat transcript rendering cache", () => {
       kind: "group" as const,
       key: "group:assistant:media",
       role: "assistant",
+      visibleContent: "text" as const,
       messages: [
         {
           key: "message:assistant:media",
@@ -3068,6 +3122,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:assistant:test",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "message:assistant:test",
@@ -3081,6 +3136,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:tool:test",
         role: "tool",
+        visibleContent: "text",
         messages: [
           {
             key: "message:tool:test",
@@ -3112,6 +3168,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:assistant:reply",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:reply",
@@ -3126,6 +3183,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:tool:later",
       role: "tool",
+      visibleContent: "text",
       messages: [
         {
           key: "message:tool:later",
@@ -3178,6 +3236,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:assistant:reply",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:reply",
@@ -3224,6 +3283,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:user:run-composed",
       role: "user",
+      visibleContent: "text",
       messages: [
         {
           key: "message:user:run-composed",
@@ -3242,6 +3302,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:assistant:run-start",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:run-start",
@@ -3256,6 +3317,7 @@ describe("chat loading skeleton", () => {
       kind: "group",
       key: "group:tool:run-work",
       role: "tool",
+      visibleContent: "text",
       messages: [
         {
           key: "message:tool:run-work",
@@ -3305,6 +3367,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:user:run-composed",
         role: "user",
+        visibleContent: "text",
         messages: [
           {
             key: "message:user:run-composed",
@@ -3323,6 +3386,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:assistant:run-start",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "message:assistant:run-start",
@@ -3337,6 +3401,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:tool:run-work",
         role: "tool",
+        visibleContent: "text",
         messages: [
           {
             key: "message:tool:run-work",
@@ -3351,6 +3416,7 @@ describe("chat loading skeleton", () => {
         kind: "group",
         key: "group:assistant:run-finish",
         role: "assistant",
+        visibleContent: "text",
         messages: [
           {
             key: "message:assistant:run-finish",
@@ -3390,6 +3456,7 @@ describe("chat loading skeleton", () => {
       key: "group:assistant:first",
       runId: "run-composed",
       role: "assistant",
+      visibleContent: "text",
       messages: [
         {
           key: "message:assistant:first",

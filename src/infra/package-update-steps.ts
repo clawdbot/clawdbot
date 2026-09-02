@@ -73,6 +73,19 @@ type StagedNpmInstall = {
   installTarget: ResolvedGlobalInstallTarget;
 };
 
+type StagedNpmSwapResult =
+  | {
+      status: "committed";
+      step: PackageUpdateStepResult;
+      postVerifyStep: PackageUpdateStepResult | null;
+    }
+  | {
+      status: "failed";
+      step: PackageUpdateStepResult;
+      postVerifyStep: PackageUpdateStepResult | null;
+      packageRollbackVerified: boolean;
+    };
+
 type PackageUpdateStepsResult = {
   steps: PackageUpdateStepResult[];
   verifiedPackageRoot: string | null;
@@ -86,7 +99,7 @@ const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
 }): Promise<{
-  policy: "unflagged" | "allow-scripts" | null;
+  policy: ReturnType<typeof resolveNpmLifecyclePolicyGate>["policy"];
   failedStep: PackageUpdateStepResult | null;
 }> {
   const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
@@ -687,6 +700,31 @@ async function copyPathEntry(source: string, destination: string): Promise<void>
   await fs.chmod(destination, stat.mode);
 }
 
+async function pathEntriesMatch(left: string, right: string): Promise<boolean> {
+  const [leftStat, rightStat] = await Promise.all([
+    fs.lstat(left).catch(() => null),
+    fs.lstat(right).catch(() => null),
+  ]);
+  if (!leftStat || !rightStat) {
+    return false;
+  }
+  if (leftStat.isSymbolicLink() || rightStat.isSymbolicLink()) {
+    return (
+      leftStat.isSymbolicLink() &&
+      rightStat.isSymbolicLink() &&
+      (await fs.readlink(left)) === (await fs.readlink(right))
+    );
+  }
+  if (!leftStat.isFile() || !rightStat.isFile()) {
+    return false;
+  }
+  if ((leftStat.mode & 0o777) !== (rightStat.mode & 0o777) || leftStat.size !== rightStat.size) {
+    return false;
+  }
+  const [leftContents, rightContents] = await Promise.all([fs.readFile(left), fs.readFile(right)]);
+  return leftContents.equals(rightContents);
+}
+
 async function activateStagedNpmPackageRoot(source: string, destination: string): Promise<void> {
   const stat = await fs.lstat(source);
   if (!stat.isSymbolicLink()) {
@@ -712,7 +750,8 @@ async function swapStagedNpmInstall(params: {
   stage: StagedNpmInstall;
   installTarget: ResolvedGlobalInstallTarget;
   packageName: string;
-}): Promise<{ step: PackageUpdateStepResult; rollbackVerified: boolean }> {
+  postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
+}): Promise<StagedNpmSwapResult> {
   const startedAt = Date.now();
   const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot, {
     allowDirectNodeModulesRoot: params.installTarget.directNodeModulesRoot === true,
@@ -733,8 +772,10 @@ async function swapStagedNpmInstall(params: {
   });
   if (!targetLayout || !targetPackageRoot) {
     return {
+      status: "failed",
       step: step(1, null, "cannot resolve npm global prefix layout"),
-      rollbackVerified: false,
+      postVerifyStep: null,
+      packageRollbackVerified: false,
     };
   }
 
@@ -761,11 +802,67 @@ async function swapStagedNpmInstall(params: {
     }
   };
   let shimBackupDir: string | undefined;
+  let hadPackage = false;
+  let previousVersion: string | null = null;
+  const shims: Array<{ source: string; destination: string; backup: string | null }> = [];
   const rollback: Array<() => Promise<void>> = [];
-  let rollbackVerified = false;
+  let packageRollbackVerified = false;
+  const restoreSwap = async (): Promise<string[]> => {
+    const messages: string[] = [];
+    for (const restore of rollback.toReversed()) {
+      try {
+        await restore();
+      } catch (restoreError) {
+        packageRollbackVerified = false;
+        messages.push(`rollback failed: ${formatErrorMessage(restoreError)}`);
+      }
+    }
+    try {
+      const restoredVersion = await readPackageVersionIfPresent(targetPackageRoot);
+      if (!hadPackage || !previousVersion || restoredVersion !== previousVersion) {
+        packageRollbackVerified = false;
+        messages.push(
+          `rollback verification failed: expected package version ${previousVersion ?? "<none>"}, found ${restoredVersion ?? "<none>"}`,
+        );
+      }
+    } catch (verificationError) {
+      packageRollbackVerified = false;
+      messages.push(`rollback verification failed: ${formatErrorMessage(verificationError)}`);
+    }
+    for (const shim of shims) {
+      try {
+        const restored = shim.backup
+          ? await pathEntriesMatch(shim.backup, shim.destination)
+          : !(await pathEntryExists(shim.destination));
+        if (!restored) {
+          packageRollbackVerified = false;
+          messages.push(
+            `rollback verification failed: launcher ${shim.destination} was not restored`,
+          );
+        }
+      } catch (verificationError) {
+        packageRollbackVerified = false;
+        messages.push(
+          `rollback verification failed for launcher ${shim.destination}: ${formatErrorMessage(verificationError)}`,
+        );
+      }
+    }
+    if (!packageRollbackVerified) {
+      messages.push(
+        `Installation recovery is unverified; inspect the installation and backups in ${targetLayout.globalRoot} before restarting.`,
+      );
+    } else if (shimBackupDir) {
+      const cleanup = await discardBackup(shimBackupDir, "shim backup");
+      if (cleanup) {
+        messages.push(cleanup);
+      }
+    }
+    return messages;
+  };
   try {
-    const hadPackage = await pathEntryExists(targetPackageRoot);
-    rollbackVerified = hadPackage;
+    hadPackage = await pathEntryExists(targetPackageRoot);
+    previousVersion = hadPackage ? await readPackageVersionIfPresent(targetPackageRoot) : null;
+    packageRollbackVerified = hadPackage && previousVersion !== null;
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     const shimNames = new Set([params.packageName, "openclaw"]);
     const shimEntries =
@@ -781,7 +878,6 @@ async function swapStagedNpmInstall(params: {
           )
             .filter((entry) => shimNames.has(entry) || shimNames.has(path.parse(entry).name))
             .toSorted();
-    const shims: Array<{ source: string; destination: string; backup: string | null }> = [];
     if (shimEntries.length > 0) {
       shimBackupDir = await fs.mkdtemp(
         path.join(targetLayout.globalRoot, ".openclaw.shim-backup-"),
@@ -802,14 +898,14 @@ async function swapStagedNpmInstall(params: {
     }
     // A copy-fallback move can reject after committing its destination and
     // partially removing its source. Only a completed backup permits restoration.
-    rollbackVerified = false;
+    packageRollbackVerified = false;
     if (hadPackage) {
       await movePathWithCopyFallback({
         from: targetPackageRoot,
         sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
         to: backupRoot,
       });
-      rollbackVerified = true;
+      packageRollbackVerified = true;
     }
     rollback.push(async () => {
       await removePath(targetPackageRoot);
@@ -833,11 +929,57 @@ async function swapStagedNpmInstall(params: {
       });
       await copyPathEntry(shim.source, shim.destination);
     }
+    let postVerifyStep: PackageUpdateStepResult | null = null;
+    if (params.postVerifyStep) {
+      try {
+        postVerifyStep = await params.postVerifyStep(targetPackageRoot);
+      } catch (error) {
+        postVerifyStep = {
+          name: "post-install verification",
+          command: "verify installed package",
+          cwd: targetPackageRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: formatErrorMessage(error),
+        };
+      }
+      postVerifyStep ??= {
+        name: "post-install verification",
+        command: "verify installed package",
+        cwd: targetPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail:
+          "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+      };
+    }
+    if (postVerifyStep && isBlockingPackageUpdateStep(postVerifyStep)) {
+      const rollbackMessages = await restoreSwap();
+      return {
+        status: "failed",
+        step: packageRollbackVerified
+          ? step(
+              0,
+              [
+                `restored previous ${params.packageName} package and affected launchers after verification failed`,
+                "candidate Doctor may have changed persistent state; managed Gateway remains stopped",
+                ...rollbackMessages,
+              ]
+                .filter(Boolean)
+                .join("; "),
+              null,
+            )
+          : step(1, null, rollbackMessages.join("\n")),
+        postVerifyStep,
+        packageRollbackVerified,
+      };
+    }
     const cleanup = [
       hadPackage ? await discardBackup(backupRoot, "old package") : null,
       shimBackupDir ? await discardBackup(shimBackupDir, "shim backup") : null,
     ];
     return {
+      status: "committed",
       step: step(
         0,
         [
@@ -848,29 +990,16 @@ async function swapStagedNpmInstall(params: {
           .join("; "),
         null,
       ),
-      rollbackVerified: false,
+      postVerifyStep,
     };
   } catch (error) {
-    const errors = [formatErrorMessage(error)];
-    for (const restore of rollback.toReversed()) {
-      try {
-        await restore();
-      } catch (restoreError) {
-        rollbackVerified = false;
-        errors.push(`rollback failed: ${formatErrorMessage(restoreError)}`);
-      }
-    }
-    if (!rollbackVerified) {
-      errors.push(
-        `Installation recovery is unverified; inspect the installation and backups in ${targetLayout.globalRoot} before restarting.`,
-      );
-    } else if (shimBackupDir) {
-      const cleanup = await discardBackup(shimBackupDir, "shim backup");
-      if (cleanup) {
-        errors.push(cleanup);
-      }
-    }
-    return { step: step(1, null, errors.join("\n")), rollbackVerified };
+    const errors = [formatErrorMessage(error), ...(await restoreSwap())];
+    return {
+      status: "failed",
+      step: step(1, null, errors.join("\n")),
+      postVerifyStep: null,
+      packageRollbackVerified,
+    };
   }
 }
 
@@ -1235,38 +1364,51 @@ export async function runGlobalPackageUpdateSteps(params: {
         });
       }
       let failedVerification = verificationErrors.length > 0;
+      let postVerifyStep: PackageUpdateStepResult | null = null;
       if (stagedInstall && verificationErrors.length === 0) {
         const swap = await swapStagedNpmInstall({
           stage: stagedInstall,
           installTarget: params.installTarget,
           packageName: params.packageName,
+          postVerifyStep: params.postVerifyStep,
         });
         steps.push(swap.step);
-        failedVerification = swap.step.exitCode !== 0;
+        if (swap.postVerifyStep) {
+          steps.push(swap.postVerifyStep);
+        }
+        failedVerification = swap.status === "failed";
+        postVerifyStep = swap.postVerifyStep;
         // Verified rollback restores package files, not state changed by hooks.
-        if (swap.step.exitCode === 0) {
+        if (swap.status === "committed") {
           verifiedPackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
           afterVersion = candidateVersion;
+        } else {
+          recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            packageRollbackVerified: swap.packageRollbackVerified,
+          };
+          afterVersion = await readPackageVersionIfPresent(livePackageRoot);
         }
       }
 
-      const postVerifyStep = failedVerification
-        ? null
-        : verifiedPackageRoot
-          ? await params.postVerifyStep?.(verifiedPackageRoot)
+      if (!stagedInstall && !failedVerification) {
+        postVerifyStep = verifiedPackageRoot
+          ? ((await params.postVerifyStep?.(verifiedPackageRoot)) ?? null)
           : null;
-      if (postVerifyStep) {
-        steps.push(postVerifyStep);
-      } else if (!failedVerification && params.postVerifyStep) {
-        steps.push({
-          name: "post-install verification",
-          command: "verify installed package",
-          cwd: verifiedPackageRoot ?? process.cwd(),
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail:
-            "Required post-install verification did not produce a result; Gateway activation is unsafe.",
-        });
+        if (postVerifyStep) {
+          steps.push(postVerifyStep);
+        } else if (params.postVerifyStep) {
+          steps.push({
+            name: "post-install verification",
+            command: "verify installed package",
+            cwd: verifiedPackageRoot ?? process.cwd(),
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail:
+              "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+          });
+        }
       }
       if (
         !failedVerification &&

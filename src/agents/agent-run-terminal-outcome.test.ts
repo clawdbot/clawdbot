@@ -32,6 +32,16 @@ describe("agent run terminal outcome", () => {
   it.each([
     { label: "retryable provider failure", data: { error: "provider failed" }, definitive: false },
     {
+      label: "settled execution failure",
+      data: { error: "preparation failed", executionSettled: true },
+      definitive: true,
+    },
+    {
+      label: "unsettled execution failure",
+      data: { error: "provider failed", executionSettled: false },
+      definitive: false,
+    },
+    {
       label: "exhausted provider failure",
       data: { error: "provider failed", fallbackExhaustedFailure: true },
       definitive: true,
@@ -42,6 +52,10 @@ describe("agent run terminal outcome", () => {
     { label: "provider timeout", data: { timeoutPhase: "provider" }, definitive: true },
   ])("recognizes whether $label is a definitive lifecycle error", ({ data, definitive }) => {
     expect(isDefinitiveRunLifecycle({ phase: "error", data })).toBe(definitive);
+  });
+
+  it.each(["start", "finishing"])("does not settle the %s lifecycle phase", (phase) => {
+    expect(isDefinitiveRunLifecycle({ phase, data: { executionSettled: true } })).toBe(false);
   });
 
   it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {

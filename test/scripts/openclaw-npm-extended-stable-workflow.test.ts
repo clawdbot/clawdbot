@@ -182,7 +182,7 @@ describe("minimal npm extended-stable workflow", () => {
   it("binds intentional Plugin SDK release changes to the reported digest", () => {
     const parsed = workflow();
     const input = parsed.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
-    const qualification = workflow(preflightWorkflowPath).jobs?.verify_openclaw_npm;
+    const qualification = workflow(preflightWorkflowPath).jobs?.check_sdk_npm;
     const preflightDiff = step(qualification, "Verify Plugin SDK API changes");
     const publishProvenance = step(
       parsed.jobs?.publish_openclaw_npm,
@@ -219,12 +219,19 @@ describe("minimal npm extended-stable workflow", () => {
     expect(preflightDiff.run).not.toContain("--require-acknowledgement");
     expect(preflightDiff.run).not.toContain("--acknowledge");
     expect(preflightDiff.run).toContain(
-      '--evidence "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-evidence.json"',
+      '--evidence "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json"',
     );
     expect(trustedToolingCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(preflightDiff.run).toContain('git -C "$tooling_dir" status --porcelain');
     expect(preflightDiff.run).not.toContain('pkg.scripts?.["plugin-sdk:api:diff"]');
-    expect(preflightDiff.run).toContain('pnpm --dir "$tooling_dir" run plugin-sdk:api:diff');
+    // Corepack resolves packageManager from its working directory before pnpm
+    // receives command flags. The trusted tooling checkout must own both calls.
+    expect(preflightDiff.run).toContain('cd "$tooling_dir"');
+    expect(preflightDiff.run).toContain(
+      "pnpm install --frozen-lockfile --ignore-scripts --filter openclaw",
+    );
+    expect(preflightDiff.run).toContain('pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"');
+    expect(preflightDiff.run).not.toContain('pnpm --dir "$tooling_dir"');
     expect(publishProvenanceRun).toContain("plugin-sdk-api-release-evidence.mjs");
     expect(publishProvenanceRun).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
     expect(publishProvenanceRun).toContain('--npm-dist-tag "$RELEASE_NPM_DIST_TAG"');
@@ -355,8 +362,8 @@ describe("minimal npm extended-stable workflow", () => {
 
   it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
     const parsed = workflow(preflightWorkflowPath);
-    const preflight = parsed.jobs?.verify_openclaw_npm;
-    const metadata = step(preflight, "Validate release metadata");
+    const preflight = parsed.jobs?.check_contents_npm;
+    const metadata = step(parsed.jobs?.check_dependencies_npm, "Validate release metadata");
     const pack = step(
       parsed.jobs?.prepare_openclaw_npm,
       "Pack and seal publishable npm package set",
@@ -421,7 +428,7 @@ describe("minimal npm extended-stable workflow", () => {
       step(parsed.jobs?.check_openclaw_npm, "Check source, test types, and architecture").if,
     ).toBeUndefined();
     const verifyReleaseContents = step(
-      parsed.jobs?.verify_openclaw_npm,
+      parsed.jobs?.check_contents_npm,
       "Verify final npm package bytes and lifecycle",
     );
     expect(verifyReleaseContents.if).toBeUndefined();

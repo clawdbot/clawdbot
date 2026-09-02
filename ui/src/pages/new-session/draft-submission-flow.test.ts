@@ -744,6 +744,7 @@ describe("DraftSubmissionFlow", () => {
           sessionKey: "",
           hello: {
             auth: {
+              recoveryScope: client.recoveryScope,
               role: "operator",
               scopes: ["operator.admin", "operator.read", "operator.write"],
             },

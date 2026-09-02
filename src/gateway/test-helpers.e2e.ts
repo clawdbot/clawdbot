@@ -7,6 +7,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
 import { type HelloOk, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import {
@@ -78,24 +79,28 @@ export async function connectGatewayClient(params: {
         return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
       })(),
     });
-  return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
+  return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    const stop = (err?: Error, connectedClient?: InstanceType<typeof GatewayClient>) => {
+    const settle = (outcome: { client: GatewayClient } | { error: unknown }) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      if (err) {
-        void client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {
-          client?.stop();
-        });
-        reject(err);
+      if ("error" in outcome) {
+        // Failed acquisition still owns the client. Reject only after stop settles,
+        // preserving both errors when shutdown also fails.
+        void runQaGatewayFixture(
+          async () => {
+            throw outcome.error;
+          },
+          () => client.stopAndWait({ timeoutMs: 1_000 }),
+        ).catch(reject);
       } else {
-        resolve(connectedClient as InstanceType<typeof GatewayClient>);
+        resolve(outcome.client);
       }
     };
-    const client: InstanceType<typeof GatewayClient> | undefined = new GatewayClient({
+    const client = new GatewayClient({
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,
@@ -124,18 +129,22 @@ export async function connectGatewayClient(params: {
       onEvent: params.onEvent,
       onHelloOk: (hello) => {
         params.onHelloOk?.(hello);
-        stop(undefined, client);
+        settle({ client });
       },
-      onConnectError: (err) => stop(err),
+      onConnectError: (error) => settle({ error }),
       onClose: (code, reason) =>
-        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
+        settle({ error: new Error(`gateway closed during connect (${code}): ${reason}`) }),
     });
     const timer = setTimeout(
-      () => stop(new Error(params.timeoutMessage ?? "gateway connect timeout")),
+      () => settle({ error: new Error(params.timeoutMessage ?? "gateway connect timeout") }),
       params.timeoutMs ?? 10_000,
     );
     timer.unref();
-    client.start();
+    try {
+      client.start();
+    } catch (error) {
+      settle({ error });
+    }
   });
 }
 

@@ -533,6 +533,10 @@ class ChatControllerCommandControlsTest {
           }
         }
 
+      controller.refreshSessions(limit = 100)
+      advanceUntilIdle()
+      requests.clear()
+
       controller.renameSessionGroup(from = "Work", to = "Focus")
 
       // Membership enumeration sends the explicit high bound (absent limit is
@@ -545,8 +549,8 @@ class ChatControllerCommandControlsTest {
       assertEquals(2, patches.size)
       assertTrue(patches.any { it.contains("\"key\":\"agent:main:active\"") && it.contains("\"category\":\"Focus\"") })
       assertTrue(patches.any { it.contains("\"key\":\"agent:main:archived\"") && it.contains("\"category\":\"Focus\"") })
-      // The session list refreshes (windowed) after the fan-out.
-      assertTrue(lists.last().contains("\"limit\""))
+      // Group enumeration must not replace the requested display window.
+      assertEquals(JsonPrimitive(100), json.parseToJsonElement(lists.last()).jsonObject["limit"])
     }
 
   @Test

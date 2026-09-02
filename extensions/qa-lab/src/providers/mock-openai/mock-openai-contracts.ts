@@ -351,6 +351,9 @@ export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
   /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
   /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
+export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE = /reply to the requester after spawning/i;
+export const QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE =
+  /return no assistant output after the write/i;
 
 export function buildStrandedFinalRecoveryText(): string {
   return [
@@ -383,6 +386,7 @@ export const QA_SUBAGENT_TERMINAL_MARKERS = {
   restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
 } as const;
+export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER = "QA-SUBAGENT-EMPTY-PARENT-ACK";
 export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
 export const QA_NATIVE_STOP_DELAY_PROMPT_RE =
   /subagent recovery worker native command target proof\.\s*wait until stopped\./i;

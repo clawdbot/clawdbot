@@ -29,7 +29,7 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import {
-  validateFullReleaseNpmPreflight,
+  downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
@@ -1776,7 +1776,7 @@ export function buildTelegramArtifactInputs({
   ) {
     throw new Error(`npm preflight artifact ${artifact.name} is missing immutable identity`);
   }
-  if (String(artifact.workflowRunId) !== runId) {
+  if (!/^[1-9][0-9]*$/u.test(runId) || String(artifact.workflowRunId) !== runId) {
     throw new Error(
       `npm preflight artifact ${artifact.name} belongs to run ${artifact.workflowRunId}, not ${runId}`,
     );
@@ -1826,7 +1826,7 @@ async function runTelegramIfNeeded(
     artifact,
     manifest,
     runAttempt,
-    runId: options.npmPreflightRunId,
+    runId: String(artifact.workflowRunId),
     sourceSha,
   });
   const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
@@ -1978,7 +1978,7 @@ async function main() {
     allowShaPinnedWorkflowRef: true,
   });
   const npmUsesFullRun = options.npmPreflightRunId === options.fullReleaseRunId;
-  const { run: npmRun, source: npmPreflightSource } = npmUsesFullRun
+  const { run: selectedNpmRun, source: npmPreflightSource } = npmUsesFullRun
     ? {
         run: fullRun,
         source: { status: "passed", headSha: fullRun.headSha, workflowRef: options.workflowRef },
@@ -2007,60 +2007,6 @@ async function main() {
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
   );
-  const qualifiedPreflight = npmUsesFullRun
-    ? validateFullReleaseNpmPreflight({
-        manifest: fullManifest,
-        runId: options.fullReleaseRunId,
-        runAttempt: fullRun.runAttempt,
-        sourceSha: targetSha,
-        toolingSha: fullRun.headSha,
-      })
-    : undefined;
-  const npmArtifact = await downloadResolvedArtifact(
-    options.repo,
-    options.npmPreflightRunId,
-    qualifiedPreflight?.artifact.name ?? `openclaw-npm-preflight-${options.tag}`,
-    "openclaw-npm-preflight-",
-    npmDir,
-  );
-  if (
-    qualifiedPreflight &&
-    (String(npmArtifact.id) !== qualifiedPreflight.artifact.id ||
-      npmArtifact.digest !== `sha256:${qualifiedPreflight.artifact.digest}`)
-  ) {
-    throw new Error("npm preflight artifact differs from the immutable full validation descriptor");
-  }
-  const npmArtifactName = npmArtifact.name;
-  if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
-    throw new Error(`OpenClaw npm preflight run ${options.npmPreflightRunId} has invalid attempt.`);
-  }
-  downloadArtifact(
-    options.repo,
-    options.npmPreflightRunId,
-    `plugin-sdk-api-release-diff-${options.npmPreflightRunId}-${npmRun.runAttempt}`,
-    pluginSdkApiDir,
-  );
-  const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
-  const npmPreflightProducer = verifyNpmPreflightProducer({
-    manifest: npmManifest,
-    repository: options.repo,
-    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
-    workflowSha: npmRun.headSha,
-    runId: options.npmPreflightRunId,
-    runAttempt: npmRun.runAttempt,
-    workflowPath: String(npmRun.workflowPath).split("@", 1)[0],
-    fullReleaseManifest: fullManifest,
-    manifestSha256: sha256(join(npmDir, "preflight-manifest.json")),
-  });
-  const immutablePluginSdkApiEvidence = readJson(
-    join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
-    "immutable Plugin SDK API evidence",
-  );
-  if (!isDeepStrictEqual(npmManifest.pluginSdkApi, immutablePluginSdkApiEvidence)) {
-    throw new Error(
-      "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
-    );
-  }
   run("git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], {
     capture: true,
   });
@@ -2078,6 +2024,76 @@ async function main() {
   });
   if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
     throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
+  }
+  if (npmUsesFullRun) {
+    rmSync(npmDir, { recursive: true, force: true });
+  }
+  const qualifiedPreflight = npmUsesFullRun
+    ? await downloadFullReleaseNpmPreflight({
+        manifest: fullManifest,
+        repository: options.repo,
+        runId: options.fullReleaseRunId,
+        runAttempt: fullRun.runAttempt,
+        sourceSha: targetSha,
+        toolingSha: fullRun.headSha,
+        outputDir: npmDir,
+        token: run("gh", ["auth", "token"], { capture: true }).trim(),
+      })
+    : undefined;
+  const npmProducerRunId = qualifiedPreflight?.producer.runId ?? options.npmPreflightRunId;
+  const npmRun = qualifiedPreflight
+    ? {
+        ...selectedNpmRun,
+        databaseId: Number(npmProducerRunId),
+        runAttempt: Number(qualifiedPreflight.producer.runAttempt),
+        workflowName: qualifiedPreflight.run.name,
+        workflowPath: qualifiedPreflight.run.path,
+        headBranch: qualifiedPreflight.run.head_branch,
+        headSha: qualifiedPreflight.run.head_sha,
+        url: qualifiedPreflight.run.html_url,
+      }
+    : selectedNpmRun;
+  const npmArtifact = qualifiedPreflight
+    ? { ...qualifiedPreflight.artifact, workflowRunId: Number(npmProducerRunId) }
+    : await downloadResolvedArtifact(
+        options.repo,
+        npmProducerRunId,
+        `openclaw-npm-preflight-${options.tag}`,
+        "openclaw-npm-preflight-",
+        npmDir,
+      );
+  const npmArtifactName = npmArtifact.name;
+  if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
+    throw new Error(`OpenClaw npm preflight run ${npmProducerRunId} has invalid attempt.`);
+  }
+  downloadArtifact(
+    options.repo,
+    npmProducerRunId,
+    `plugin-sdk-api-release-diff-${npmProducerRunId}-${npmRun.runAttempt}`,
+    pluginSdkApiDir,
+  );
+  const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
+  const npmPreflightProducer = verifyNpmPreflightProducer({
+    manifest: npmManifest,
+    repository: options.repo,
+    workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
+    workflowSha: npmRun.headSha,
+    runId: npmProducerRunId,
+    runAttempt: npmRun.runAttempt,
+    workflowPath: String(npmRun.workflowPath).split("@", 1)[0],
+    fullReleaseManifest: fullManifest,
+    fullReleaseRunId: options.fullReleaseRunId,
+    fullReleaseRunAttempt: fullRun.runAttempt,
+    manifestSha256: sha256(join(npmDir, "preflight-manifest.json")),
+  });
+  const immutablePluginSdkApiEvidence = readJson(
+    join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
+    "immutable Plugin SDK API evidence",
+  );
+  if (!isDeepStrictEqual(npmManifest.pluginSdkApi, immutablePluginSdkApiEvidence)) {
+    throw new Error(
+      "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
+    );
   }
   validatePreflightManifest(npmManifest, {
     tag: options.tag,
@@ -2182,7 +2198,8 @@ async function main() {
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
     fullReleaseValidationRunAttempt: fullRun.runAttempt,
-    npmPreflightRunId: options.npmPreflightRunId,
+    npmPreflightRunId: npmProducerRunId,
+    npmPreflightAuthorizationRunId: options.npmPreflightRunId,
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
@@ -2222,7 +2239,7 @@ async function main() {
       "",
       `- target SHA: ${targetSha}`,
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
-      `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
+      `- npm preflight: ${npmProducerRunId} ${npmRun.url}`,
       ...(windowsNodeSourceRelease
         ? [
             `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${formatJsonValue(windowsNodeSourceRelease.url)}`,

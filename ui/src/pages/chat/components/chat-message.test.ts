@@ -10,6 +10,7 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts"
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -287,11 +288,21 @@ function createMessageGroup(
   overrides: Partial<MessageGroup> = {},
 ): MessageGroup {
   const timestamp = overrides.timestamp ?? messageTimestamp(message);
+  const messages = overrides.messages ?? [{ key: `${role}:${timestamp}:message`, message }];
+  const groups = groupMessages(messages.map((entry) => ({ kind: "message", ...entry }))).filter(
+    (item) => item.kind === "group",
+  );
+  const visibleContent = groups.some((group) => group.visibleContent === "non-text")
+    ? "non-text"
+    : groups.some((group) => group.visibleContent === "text")
+      ? "text"
+      : "none";
   return {
     kind: "group",
     key: `${role}:${timestamp}`,
     role,
-    messages: [{ key: `${role}:${timestamp}:message`, message }],
+    messages,
+    visibleContent,
     timestamp,
     isStreaming: false,
     ...overrides,

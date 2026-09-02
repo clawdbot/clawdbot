@@ -28,6 +28,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
+        if (evt.type !== "message_update") {
+          ctx.flushAssistantStream();
+        }
         return handler();
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);

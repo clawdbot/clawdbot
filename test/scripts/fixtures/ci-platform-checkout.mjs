@@ -924,7 +924,12 @@ async function supervise() {
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);
   }
-  if (options.performance || options.pluginRelease || options.releaseAdmission) {
+  if (
+    options.performance ||
+    options.pluginRelease ||
+    options.releaseAdmission ||
+    options.publisher
+  ) {
     fs.writeFileSync(
       path.join(bin, "timeout"),
       '#!/bin/bash\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',

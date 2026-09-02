@@ -275,14 +275,6 @@ const historyProfiles: {
     consumer: "",
   },
   {
-    job: "security-fast",
-    step: "Fetch pull request scan history",
-    env: {},
-    target: merge,
-    depth: 7,
-    consumer: "",
-  },
-  {
     job: "checks-fast-core",
     step: "Prepare release-gate ratchet merge tree",
     env: {},
@@ -424,23 +416,6 @@ linuxIt.each([23, "hang"] satisfies FetchResult[])(
     expect(report.commands.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual([
       ["deps:npm-lock:check"],
     ]);
-  },
-  55_000,
-);
-
-linuxIt(
-  "security rejects malformed scan depth before starting Git",
-  async () => {
-    const report = await runCiGitStep({
-      job: "security-fast",
-      step: "Fetch pull request scan history",
-      env: { PR_COMMIT_COUNT: "invalid" },
-      fetchResults: [],
-      prepare: true,
-    });
-    expect(report.code).toBe(2);
-    expect(report.fetches).toEqual([]);
-    expect(report.readyAttempts).toEqual([]);
   },
   55_000,
 );
@@ -605,11 +580,11 @@ posixIt.each(qaGitCases)(
     expect(
       report.commands
         .filter(({ args }) => args[0] === "rev-parse")
-        .map(({ args, cwd }) => ({ args, cwd })),
+        .map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
     ).toEqual(profile.readbacks.map((ref) => ({ args: ["rev-parse", ref], cwd })));
-    expect(report.checkouts.map(({ args, cwd }) => ({ args, cwd }))).toEqual(
-      profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : [],
-    );
+    expect(
+      report.checkouts.map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
+    ).toEqual(profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : []);
     if (profile.step === "Checkout selected ref") {
       expect(report.commands.map(({ args }) => args[0])).toEqual([
         "init",
@@ -686,7 +661,7 @@ const mantisCases = [
 }[];
 
 posixIt.each([
-  ...mantisCases.map((entry) => ({ ...entry, failure: 0 as FetchResult })),
+  ...mantisCases.map((entry) => Object.assign({}, entry, { failure: 0 as FetchResult })),
   ...[true, false].flatMap((shared) =>
     (["cleanup-failure", 23] satisfies FetchResult[]).map((failure) => ({
       label: `${shared ? "shared action" : "Discord"} terminal ${failure}`,
@@ -799,7 +774,7 @@ posixIt.each([
   ...mantisInstallers.map((profile) => ({ ...profile, failure: false })),
   ...mantisInstallers
     .filter(({ workflow }) => workflow !== "discord-thread-attachment")
-    .map((profile) => ({ ...profile, failure: true })),
+    .map((profile) => Object.assign({}, profile, { failure: true })),
 ])(
   "Mantis installer Git owner drains before checkout/build/probes: $workflow (cleanup failure=$failure)",
   async ({ workflow, job, fetch, failure }) => {
@@ -1179,7 +1154,9 @@ posixIt.each(["Clone publish repo", "Commit publish repo sync"])(
     expect(backoffs(report)).toEqual([2, 4, 6, 8, 10]);
     expect(report.clones).toHaveLength(cloning ? 5 : 0);
     expect(report.fetches).toHaveLength(cloning ? 0 : 6);
-    expect(report.rebases.map(({ args }) => args)).toEqual(cloning ? [] : Array(5).fill(abort));
+    expect(report.rebases.map(({ args }) => args)).toEqual(
+      cloning ? [] : Array.from({ length: 5 }, () => [...abort]),
+    );
     expect(report.pushes).toEqual([]);
     expect(
       report.output

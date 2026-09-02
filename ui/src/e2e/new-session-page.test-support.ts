@@ -1,6 +1,7 @@
 import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -218,6 +219,15 @@ export async function waitForCommittedNewSessionDraft(
     params.get("group")?.trim() ?? "",
   ]);
   await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+}
+
+export async function waitForGatewayRecoveryScope(page: Page, ready = true) {
+  await page.waitForFunction((expected) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: ApplicationContext };
+    };
+    return app.runtime?.context.gateway.snapshot.client?.recoveryScopeReady === expected;
+  }, ready);
 }
 
 export async function replaceGatewayClient(page: Page) {

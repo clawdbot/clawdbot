@@ -706,6 +706,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `chat.send`, `sessions.send`, and initial-turn `sessions.create` acknowledgments report admission separately from transcript persistence. Optional `messageSeq` is the one-based position from an actual committed user-turn receipt; it is absent while the input exists only in pending custody. `status: "started"` and `runStarted: true` alone do not establish a transcript row. Reconcile provisional input by its submission identity against accepted custody or canonical transcript identity, never a predicted position or matching content.
 
     - `sessions.create.fastMode` accepts `true`, `false`, or `"auto"` and persists that speed override before the initial turn starts.
+    - `sessions.title.prepare` (`{ agentId, message, model?, catalogId?, incognito? }`, `operator.write`, rate-limited as a control-plane write) returns `{ title }` from the selected agent's utility model only, without creating or renaming a session; it returns `title: null` for incognito, empty, slash-command, or unavailable-utility input and never falls back to the primary model. A client passes a ready result as `sessions.create.displayName`: a presentation title stored like a generated first-message title, so it is not unique, never claims `label`, and is ignored when adopting an existing key.
 
   </Accordion>
 

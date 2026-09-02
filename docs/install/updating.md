@@ -301,6 +301,9 @@ This avoids npm overlaying a new package onto stale files from the old one. If
 the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 
+For local tarball targets on npm 12, the archive filename and every parent
+directory must be comma-free. See [Installer path requirements](/install/installer).
+
 OpenClaw-managed npm update and plugin-update commands also clear npm's
 `min-release-age` supply-chain quarantine (or the older `before` config key)
 for the child npm process. That policy exists for general protection, but an

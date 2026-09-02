@@ -30,7 +30,12 @@ describe("buildLateResolvedMediaMessage", () => {
     });
     expect(lateMessage && buildLateMediaAttachedProjection(lateMessage).media).toEqual([
       { path: "/tmp/a.png", contentType: "image/png", kind: "image", transcribed: false },
-      { url: "https://example.test/b.jpg", contentType: "image/jpeg", kind: "image", transcribed: false },
+      {
+        url: "https://example.test/b.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+        transcribed: false,
+      },
     ]);
   });
 

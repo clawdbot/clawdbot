@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared owner for dispatch and completion around the immutable ClawHub receipt.
+# Shared owner for trusted release child dispatch, approval, and completion.
 set -euo pipefail
 
 openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
@@ -11,6 +11,52 @@ is_stable_release() {
 
 is_android_release() {
   [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+}
+
+resolve_child_workflow_ref() {
+  local workflow_full_ref="$1"
+  local workflow_sha="$2"
+  local workflow_prefix="${workflow_sha:0:12}"
+  local child_workflow_ref matching_ref_prefix matching_refs
+
+  if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
+    # Request validation already proves this is the exact live
+    # lightweight tag; dispatch revalidates it immediately before use.
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" != "refs/heads/main" ]]; then
+    echo "Publish children require trusted main, a protected release-publish tag, or a validated Tideclaw alpha branch." >&2
+    return 1
+  fi
+
+  matching_ref_prefix="$(
+    jq -rn --arg value "tags/release-publish/${workflow_prefix}-" '$value | @uri'
+  )"
+  matching_refs="$(
+    gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/${matching_ref_prefix}"
+  )"
+  if ! child_workflow_ref="$(
+    jq -er \
+      --arg prefix "${workflow_prefix}" \
+      --arg sha "${workflow_sha}" \
+      '[.[] |
+        select(.ref | test("^refs/tags/release-publish/" + $prefix + "-[1-9][0-9]*$")) |
+        select(.object.type == "commit" and .object.sha == $sha) |
+        .ref | sub("^refs/tags/"; "")
+      ] | sort | last | select(type == "string" and length > 0)' \
+      <<<"${matching_refs}"
+  )"; then
+    echo "Trusted main publication requires a direct protected release-publish tag for ${workflow_sha}." >&2
+    return 1
+  fi
+  printf '%s\n' "${child_workflow_ref}"
 }
 
 verify_child_run_sha() {
@@ -84,6 +130,12 @@ dispatch_workflow_at_ref() {
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
     '{ref: $ref, inputs: $inputs}')"
+  # Ref and asset queries can outlive native qualification. Check the attested
+  # approval's exact native attempt after those reads and immediately before POST.
+  if [[ "$workflow" == "android-release.yml" ]]; then
+    node "${BASH_SOURCE[0]%/*}/../android-native-ci.mjs" \
+      "${RUNNER_TEMP}/android-release-approval/approval.json" || return 1
+  fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
@@ -204,7 +256,7 @@ print_failed_run_summary() {
   local failed_json
 
   failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
-    --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
+    --jq '.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
   if [[ -z "${failed_json}" ]]; then
     return 0
   fi
@@ -537,7 +589,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_dir="${RUNNER_TEMP}/openclaw-npm-resume-preflight"
   rm -rf "${manifest_dir}"
   mkdir -p "${manifest_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${manifest_dir}"
@@ -545,7 +597,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_sha="$(jq -er '.releaseSha' "${manifest_path}")"
   manifest_tarball_sha="$(jq -er '.tarballSha256' "${manifest_path}")"
   if [[ "${manifest_sha}" != "${TARGET_SHA}" ]]; then
-    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
+    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_ARTIFACT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
     exit 1
   fi
   published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
@@ -950,7 +1002,7 @@ upload_dependency_evidence_release_asset() {
 
   rm -rf "${download_dir}" "${asset_path}"
   mkdir -p "${download_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${download_dir}"
@@ -1227,7 +1279,7 @@ append_release_proof_to_github_release() {
     RELEASE_TARBALL="${tarball}" \
     RELEASE_INTEGRITY="${integrity}" \
     RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
-    PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
+    PREFLIGHT_ARTIFACT_RUN_ID="${PREFLIGHT_ARTIFACT_RUN_ID}" \
     RELEASE_VALIDATION_LABEL="${proof_label}" \
     RELEASE_VALIDATION_RUN_ID="${proof_run_id}" \
     PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
@@ -1254,7 +1306,7 @@ const section = [
   `- release SHA: \`${process.env.RELEASE_SHA}\``,
   `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
   `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
-  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
+  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_ARTIFACT_RUN_ID}`,
   `- ${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}`,
   `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
   process.env.CLAWHUB_LINE,

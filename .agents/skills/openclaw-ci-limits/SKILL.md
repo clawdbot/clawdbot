@@ -205,11 +205,20 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   release compilation and the complete shared/app test workload. This adds one
   registration per eligible Blacksmith native run: up to four across the two
   active and two pending main slots, plus one for each eligible trusted PR.
-  Counting both phases in the conservative bounds gives 183 rows per main run
-  and 277 per broad PR, or `4 × 183 + 19 × 277 = 5,995` registrations in the
-  observed five-minute arrival envelope. Hosted manual and retry paths add no
-  Blacksmith registrations. Build caches are phase-owned; only the release
-  phase writes the shared SwiftPM dependency cache.
+  Build caches are phase-owned; only the release phase writes the shared
+  SwiftPM dependency cache.
+- iOS Release, Debug/simulator tests, and both screenshot shards always use
+  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
+  hosted image; do not require a failed first attempt to select that capacity.
+  Their four fixed hosted rows are excluded from the 88-row non-Node inventory;
+  conservatively count the remaining 84 rows, including other hosted/skipped
+  jobs. This gives 180 rows per main run and 274 per broad PR, or
+  `4 × 180 + 19 × 274 = 5,926` registrations in the observed five-minute
+  arrival envelope. This is not organization-wide headroom: include queued
+  carryover, adjacent repositories, and release arrivals. A complete npm
+  qualification uses six Blacksmith jobs, three more than the former serial
+  layout; parent retries reuse the existing producer. Hosted manual/retry
+  CI paths add no Blacksmith registrations.
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact

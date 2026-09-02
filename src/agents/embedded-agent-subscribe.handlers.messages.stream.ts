@@ -3,7 +3,6 @@
  */
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   parseReplyDirectives,
@@ -16,7 +15,6 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
-  AssistantStreamData,
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
@@ -229,12 +227,7 @@ export function emitAssistantCommentaryStreamData(
       ? itemId
       : resolveAssistantStreamItemId({ message });
     ctx.emitAssistantStreamData(
-      buildAssistantStreamData({
-        text,
-        replace: true,
-        phase: "commentary",
-        itemId: commentaryItemId,
-      }),
+      { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },
       { finalMessage },
     );
   }
@@ -244,6 +237,7 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
   }
+  ctx.flushAssistantStream();
   ctx.state.reasoningStreamOpen = false;
   runBestEffortCallback({
     label: "reasoning end",
@@ -253,6 +247,7 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
 }
 
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
+  ctx.flushAssistantStream();
   runBestEffortCallback({
     label: "assistant message start",
     log: ctx.log,
@@ -261,6 +256,9 @@ export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
 }
 
 export function openReasoningStream(ctx: EmbeddedAgentSubscribeContext) {
+  if (!ctx.state.reasoningStreamOpen) {
+    ctx.flushAssistantStream();
+  }
   ctx.state.reasoningStreamOpen = true;
 }
 
@@ -358,7 +356,7 @@ export function resolveStreamingReply(params: {
   previousText: string;
   previousCleaned: string;
   visibleDelta: string;
-  textIsAppend: boolean;
+  appendDelta: string | null;
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
 }): { text: string; delta: string; replace: boolean; hasText: boolean } {
   if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
@@ -375,34 +373,18 @@ export function resolveStreamingReply(params: {
     !params.parsedStreamDirectives.isSilent &&
     !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
     !/(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
-    params.parsedStreamDirectives.text === params.visibleDelta
+    params.parsedStreamDirectives.text === params.visibleDelta &&
+    params.appendDelta !== null &&
+    params.previousText === params.previousCleaned
   ) {
-    if (params.textIsAppend && params.previousText === params.previousCleaned) {
-      // Reuse the normalized prefix and small delta. Trimming the cumulative
-      // snapshot can flatten it; slicing can retain it in queued updates.
-      delta = params.previousCleaned ? params.visibleDelta.trimEnd() : params.visibleDelta.trim();
-      text = delta === params.visibleDelta ? params.next : `${params.previousCleaned}${delta}`;
-      isAppend = true;
-    } else if (params.textIsAppend && params.previousCleaned === params.previousText.trim()) {
-      text = params.next.trim();
-      isAppend = true;
-    } else {
-      const candidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
-      const normalizedNext = params.next.trim();
-      if (candidate === normalizedNext) {
-        text = normalizedNext;
-        // Appending cannot alter the prior prefix unless trimming removed its whitespace.
-        isAppend =
-          candidate.length >= params.previousCleaned.length &&
-          params.previousCleaned.trimStart().length === params.previousCleaned.length;
-      }
-    }
+    // Visibility and trim owners already prepared this exact append.
+    text = params.next;
+    delta = params.appendDelta;
+    isAppend = true;
   }
 
   text ??= parseReplyDirectives(
-    params.evtType === "text_end"
-      ? params.next.trim()
-      : splitTrailingDirective(params.next.trim()).text,
+    params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
   ).text;
   const replace = Boolean(
     !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
@@ -412,20 +394,5 @@ export function resolveStreamingReply(params: {
     delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
     replace,
     hasText: Boolean(isAppend ? text : text.trim()),
-  };
-}
-
-export function buildAssistantStreamData(
-  params: Partial<Omit<AssistantStreamData, "replace">> & { replace?: boolean; mediaUrl?: string },
-): AssistantStreamData {
-  const mediaUrls = resolveSendableOutboundReplyParts(params, { text: "" }).mediaUrls;
-  return {
-    text: params.text ?? "",
-    delta: params.delta ?? "",
-    replace: params.replace ? true : undefined,
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    managedMediaUrls: params.managedMediaUrls?.length ? params.managedMediaUrls : undefined,
-    phase: params.phase,
-    itemId: params.itemId,
   };
 }
