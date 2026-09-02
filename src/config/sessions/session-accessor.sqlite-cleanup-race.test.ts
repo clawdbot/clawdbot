@@ -862,7 +862,7 @@ describe("SQLite lifecycle cleanup races", () => {
       ids.toSorted((left, right) => left.localeCompare(right)).map((id) => [id]),
     );
   });
-  it("commits large maintenance cleanup in bounded retry-safe batches", async () => {
+  it("continues a maintenance batch after one entry changes", async () => {
     const entryCount = 66;
     const historicalSessionId = "maintenance-batch-historical-session";
     const sessionKeyById = new Map<string, string>();
@@ -926,10 +926,10 @@ describe("SQLite lifecycle cleanup races", () => {
     expect(batchSizes).toEqual([64, 2]);
     expect(result).toMatchObject({
       beforeCount: entryCount,
-      afterCount: 3,
+      afterCount: 2,
       modelRunPruned: 0,
       pruned: 0,
-      capped: 63,
+      capped: 64,
     });
     expect(loadSessionEntry({ sessionKey: racedKey ?? "", storePath })).toMatchObject({
       label: "changed during batch materialization",
