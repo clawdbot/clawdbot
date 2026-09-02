@@ -180,6 +180,10 @@ function configureExplicitOwnerProof(cfg: OpenClawConfig): OpenClawConfig {
     agents: {
       ...configured.agents,
       ownership: "explicit",
+      defaults: {
+        ...configured.agents?.defaults,
+        systemAgent: { agentId: "researcher" },
+      },
       entries: {
         ...configured.agents?.entries,
         researcher: { workspace },
@@ -386,20 +390,14 @@ describe("memory provenance through a real Gateway", () => {
       expect(typeof cursorResult.cursor).toBe("number");
       const cursor = cursorResult.cursor as number;
 
-      const dreamingJob = (await activeGateway.call("cron.add", {
-        name: "Explicit owner consolidation E2E",
-        agentId: "researcher",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
-          lightContext: true,
-        },
-        delivery: { mode: "none" },
-      })) as { id?: unknown };
+      const dreamingJob = await waitFor("managed researcher dreaming cron", async () => {
+        const cron = (await activeGateway.call("cron.list", {
+          includeDisabled: true,
+        })) as {
+          jobs?: Array<{ id?: unknown; name?: unknown; agentId?: unknown }>;
+        };
+        return cron.jobs?.find((job) => job.name === "Memory Dreaming Promotion");
+      });
       expect(typeof dreamingJob.id).toBe("string");
       const startedDreaming = (await activeGateway.call("cron.run", {
         id: dreamingJob.id,
