@@ -9,6 +9,7 @@ import {
   requireGitCommandBuffer as requireGitBuffer,
 } from "../infra/git-exec.js";
 import { formatCommandResult } from "../process/command-error.js";
+import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,
@@ -50,11 +51,15 @@ function formatGitBackupCommandResult(
   command: string,
   result: Awaited<ReturnType<typeof runGit>>,
 ): string {
-  return formatCommandResult(command, {
-    ...result,
-    stderr: result.stderr.replace(/:\/\/[^@\s]+@/gu, "://***@"),
-    stdout: result.stdout.replace(/:\/\/[^@\s]+@/gu, "://***@"),
-  });
+  return formatCommandResult(
+    command,
+    {
+      ...result,
+      stderr: result.stderr.replace(/:\/\/[^@\s]+@/gu, "://***@"),
+      stdout: result.stdout.replace(/:\/\/[^@\s]+@/gu, "://***@"),
+    },
+    { maxLength: BACKUP_RUN_ERROR_MAX_LENGTH },
+  );
 }
 
 function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: unknown): string {

@@ -224,6 +224,25 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
+it("fits both result streams within a total UTF-16 budget", () => {
+  const result = formatCommandResult(
+    "command",
+    {
+      ...failure,
+      code: 23,
+      killed: false,
+      termination: "exit",
+      stderr: "failure ".repeat(300),
+      stdout: "recovery",
+    },
+    { maxLength: 160 },
+  );
+
+  expect(result.length).toBeLessThanOrEqual(160);
+  expect(result).toContain("stderr: …");
+  expect(result).toContain("stdout: recovery");
+});
+
 it("keeps timeout ahead of an output-limit flag", () => {
   const error = createCommandError(
     "setup",

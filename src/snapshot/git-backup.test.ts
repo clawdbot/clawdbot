@@ -537,9 +537,9 @@ describe("Git-backed SQLite snapshots", () => {
     ).toBeUndefined();
   });
 
-  it("redacts and bounds credential-bearing push diagnostics", async () => {
+  it("redacts and durably preserves credential-bearing push diagnostics", async () => {
     const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
+    const { stateDir } = createStateDatabaseFixture(root);
     const repositoryPath = path.join(root, "push-repository");
     const username = ["synthetic", "user"].join("-");
     const password = ["synthetic", "password"].join("-");
@@ -552,20 +552,31 @@ describe("Git-backed SQLite snapshots", () => {
     await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
     await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
 
-    const result = await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases: [database],
-      push: true,
-    });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const result = await backupGitCreateCommand(createTestRuntime(), {
+        repository: repositoryPath,
+        global: true,
+        push: true,
+        excludeSecrets: true,
+      });
 
-    expect(result.pushWarning).toContain("stderr:");
-    expect(result.pushWarning).toContain("stdout:");
-    expect(result.pushWarning).toContain("https://***@example.invalid/repository");
-    expect(result.pushWarning).not.toContain(username);
-    expect(result.pushWarning).not.toContain(password);
-    expect(Buffer.from(result.pushWarning ?? "", "utf8").toString("utf8")).toBe(result.pushWarning);
-    expect(result.pushWarning?.length).toBeLessThanOrEqual(2_000);
+      expect(result.pushWarning).toContain("stderr:");
+      expect(result.pushWarning).toContain("stdout:");
+      expect(result.pushWarning).toContain("https://***@example.invalid/repository");
+      expect(result.pushWarning).not.toContain(username);
+      expect(result.pushWarning).not.toContain(password);
+      expect(Buffer.from(result.pushWarning ?? "", "utf8").toString("utf8")).toBe(
+        result.pushWarning,
+      );
+      expect(result.pushWarning?.length).toBeLessThanOrEqual(1_200);
+
+      const persisted = readBackupFreshness(process.env).latest?.error;
+      expect(persisted).toContain("stderr:");
+      expect(persisted).toContain("stdout:");
+      expect(persisted).toContain("https://***@example.invalid/repository");
+      expect(persisted).not.toContain(username);
+      expect(persisted).not.toContain(password);
+    });
   });
 
   it("returns an empty log without matching localized Git diagnostics", async () => {
