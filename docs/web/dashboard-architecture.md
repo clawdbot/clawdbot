@@ -217,6 +217,15 @@ network-origin grants never supply GitHub identity authority. Approval discloses
 that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
+Author guidance is conditional on a usable connected agent identity, not a
+tool-construction-time probe. `board.widget.put` verifies and revalidates that
+identity before saving HTML (including materialized Canvas documents) or
+registered widgets declaring this host capability. The same preparation owner
+serves pinning and reads, including source-config preview-credential scrubbing
+and OAuth refresh. Caller cancellation and session mutation authorization are
+rechecked before persistence; failure leaves existing content and grants intact.
+MCP App tool names use their own contract and do not trigger this preflight.
+
 The board capability owner carries the canonical agent/session privately and
 rechecks the live Gateway, ticket generation, widget revision and grant across
 awaits for both data and action paths. GitHub selects the agent override, System,
@@ -231,8 +240,12 @@ Redirects are refused. Only this Actions read permits an upstream body up to
 and projects at most 30 runs into a small response, without raw repository
 objects or secrets. A Gateway-local cache holds at most 32 successful results
 for 30 seconds; at most 32 concurrent callers can prepare or await reads.
-Singleflight followers and cache hits retain their own widget and identity
-checks, and failed reads are not cached as success. See the
+The shared transport caches only validated projections under its captured
+credential scope; this internal cache write is not delivery to a widget.
+Every caller, including the initiator, followers, and cache hits, revalidates its
+own live authority before delivery. Removing one caller does not invalidate
+another authorized caller's result, and failed transport reads are not cached
+as success. See the
 [authoring contract and example](/tools/show-widget#read-github-actions-runs).
 
 ### Modeled residual: WebRTC data channels

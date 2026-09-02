@@ -9,7 +9,6 @@ import type { BoardCapabilityAuthority } from "./board-host-tools.js";
 import { BoardGatewayUnavailableError } from "./board-view-ticket.js";
 import {
   ControlUiGitHubError,
-  discardResponse,
   fetchGitHubApi,
   readGitHubJsonResponse,
 } from "./control-ui-github-api.js";
@@ -83,6 +82,35 @@ function actionsFailure(error: unknown): Error {
   );
 }
 
+/** Pinning and reads share the same source-config scrub, refresh, and current credential check. */
+export async function prepareBoardGitHubIdentity(
+  context: GatewayRequestContext,
+  authority: Pick<BoardCapabilityAuthority, "boardSession" | "assertActive">,
+) {
+  try {
+    const config = context.getRuntimeConfig();
+    const identity = await prepareGitHubReadIdentity({
+      config,
+      sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
+      agentId: authority.boardSession.agentId,
+      getCurrentConfig: () => context.getRuntimeConfig(),
+      assertActive: authority.assertActive,
+      refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
+    });
+    await identity.revalidate();
+    return identity;
+  } catch (error) {
+    if (
+      error instanceof GitHubIdentityError ||
+      error instanceof BoardValidationError ||
+      error instanceof BoardGatewayUnavailableError
+    ) {
+      throw error;
+    }
+    throw new GitHubIdentityError("unverified");
+  }
+}
+
 export async function readBoardGitHubActions(
   params: Record<string, unknown>,
   context: GatewayRequestContext,
@@ -101,16 +129,7 @@ export async function readBoardGitHubActions(
   }
   cache.active += 1;
   try {
-    const config = context.getRuntimeConfig();
-    const identity = await prepareGitHubReadIdentity({
-      config,
-      sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
-      agentId: authority.boardSession.agentId,
-      getCurrentConfig: () => context.getRuntimeConfig(),
-      assertActive: authority.assertActive,
-      refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
-    });
-    await identity.revalidate();
+    const identity = await prepareBoardGitHubIdentity(context, authority);
     identity.assertSelected();
     const key = JSON.stringify([authority.boardSession, identity.cacheScope, request.url]);
     const cached = cache.values.get(key);
@@ -118,27 +137,20 @@ export async function readBoardGitHubActions(
       return structuredClone(cached.value);
     }
     cache.values.delete(key);
+    // Creation is synchronous, so the checked caller admits the fetch. Shared transport
+    // must not inherit that widget's lifetime; every caller gates delivery below.
     const result = await getOrCreatePromise(
       cache.pending,
       key,
       async () => {
-        identity.assertSelected();
         const response = await fetchGitHubApi(request.url, fetch, identity.token, async () => {
-          identity.assertSelected();
           // A redirect is a new target, not authority to read another repository or operation.
           throw new BoardValidationError(
             "invalid_operation",
             "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
           );
         });
-        let raw: unknown;
-        try {
-          identity.assertSelected();
-          raw = await readGitHubJsonResponse(response, ACTIONS_MAX_RESPONSE_BYTES);
-        } finally {
-          await discardResponse(response);
-        }
-        identity.assertSelected();
+        const raw = await readGitHubJsonResponse(response, ACTIONS_MAX_RESPONSE_BYTES);
         const parsed = runsSchema.safeParse(raw);
         if (
           !parsed.success ||
@@ -160,15 +172,14 @@ export async function readBoardGitHubActions(
             throw new Error("Invalid Actions run URL");
           }
         }
-        await identity.revalidate();
-        identity.assertSelected();
+        // Internal, credential-scoped cache population is not delivery. No widget owns
+        // this transport result; every caller must validate its own authority below.
         cache.values.set(key, { value: parsed.data, expiresAt: Date.now() + CACHE_TTL_MS });
         pruneMapToMaxSize(cache.values, CACHE_LIMIT);
         return parsed.data;
       },
       { evictOnSettled: true },
     );
-    // Followers have independent widget and identity authority, even on a shared result.
     await identity.revalidate();
     identity.assertSelected();
     return structuredClone(result);

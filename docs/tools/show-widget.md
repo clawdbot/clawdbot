@@ -160,8 +160,9 @@ Disabled plugins are not advertised.
 
 ### Read GitHub Actions runs
 
-Use the host binding instead of fetching GitHub directly from widget code. For
-example, give `show_widget` this input, replacing `owner/repo` in both places:
+With a usable connected agent GitHub identity, use the host binding instead of
+fetching GitHub directly from widget code. For example, give `show_widget` this
+input, replacing `owner/repo` in both places:
 
 ```json
 {
@@ -187,6 +188,13 @@ preview credential or a human's publication-only **My GitHub** connection.
 A configured but unavailable identity fails closed with reconnect guidance;
 it does not retry anonymously or fall through to another account.
 
+Before saving an HTML or registered widget declaring this binding, the Gateway
+verifies the selected identity. An unavailable identity or retired caller fails
+without replacing an existing widget, creating a pending grant, or broadcasting
+a change. Reconnect the agent's GitHub identity in Settings and retry. Pinning
+does not query Actions or verify repository permission; those checks happen on
+read. Ordinary widgets and MCP App tool names do not trigger this identity check.
+
 | Parameter             | Contract                                                                                                                                                                               |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `repository`          | Required `owner/repo`.                                                                                                                                                                 |
@@ -208,8 +216,9 @@ current Gateway, board identity, credential, repository, and filter scope.
 
 Rate limits, access denial, unavailable identity, and upstream failure return
 sanitized guidance. Redirects are refused; for a renamed repository, verify its
-new name and update both the read and grant. Widget replacement or removal,
-Gateway retirement, or identity rotation invalidates a pending read.
+new name and update both the read and grant. Each caller revalidates its widget,
+Gateway, and identity before receiving data, including shared reads and cache
+hits. Removing one widget does not fail another authorized widget's shared read.
 
 ## Security and storage
 

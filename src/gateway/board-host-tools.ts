@@ -128,6 +128,10 @@ export function captureBoardRequestAuthority(
     : undefined;
   const assertActive = () => {
     try {
+      // Retained board work also belongs to the requesting caller and session authorization.
+      invocation.signal?.throwIfAborted();
+      invocation.sessionMutationCommitGuard?.();
+      invocation.sessionMutationAuthorization?.assertCurrent();
       if (
         isGatewaySubordinateWorkAdmissionClosed() ||
         resolveGatewayContext() !== context ||

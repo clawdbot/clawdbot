@@ -1,13 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import { registerPluginDashboardCapabilities } from "../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as processExec from "../process/exec.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 
 describe("show_widget prompt", () => {
-  afterEach(() => resetPluginRuntimeStateForTest());
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    vi.restoreAllMocks();
+  });
 
   it("discovers active host capabilities with usable contracts", () => {
     const registry = createEmptyPluginRegistry();
@@ -55,6 +59,8 @@ describe("show_widget prompt", () => {
     setActivePluginRegistry(registry);
     const tool = createShowWidgetTool();
     const instructions = JSON.stringify(tool.parameters) + tool.description;
+    expect(instructions).toContain("With a usable connected agent GitHub identity");
+    expect(instructions).toContain("Identity is checked before save");
     expect(instructions).toContain("github.actions.runs");
     expect(instructions).toContain("github.actions.runs:owner/repo");
     expect(instructions).toContain("fixture.list");
@@ -73,6 +79,17 @@ describe("show_widget prompt", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(JSON.stringify(createShowWidgetTool())).not.toContain("fixture.list");
     expect(JSON.stringify(createShowWidgetTool())).not.toContain("fixture.dispatch");
+  });
+  it("constructs synchronously without probing GitHub identity", () => {
+    const http = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Unexpected HTTP probe"));
+    const native = vi
+      .spyOn(processExec, "runCommandBuffered")
+      .mockRejectedValue(new Error("Unexpected native probe"));
+    expect(createShowWidgetTool().name).toBe("show_widget");
+    expect(http).not.toHaveBeenCalled();
+    expect(native).not.toHaveBeenCalled();
   });
   it("keeps proactive single visualizations inline unless dashboard use meets its threshold", () => {
     const tool = createShowWidgetTool();

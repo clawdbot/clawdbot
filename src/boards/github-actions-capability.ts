@@ -5,7 +5,7 @@ import { BoardValidationError } from "./board-layout.js";
 export const GITHUB_ACTIONS_BINDING_ID = "github.actions.runs";
 export const GITHUB_ACTIONS_GRANT_PREFIX = `${GITHUB_ACTIONS_BINDING_ID}:`;
 export const GITHUB_ACTIONS_AUTHOR_GUIDANCE =
-  'GitHub Actions: await openclaw.data.read("github.actions.runs",{repository:"owner/repo",perPage:20}); grant capabilities.tools:["github.actions.runs:owner/repo"]. Optional workflow (ID/filename), branch, status, created (ISO day/comparison/range), excludePullRequests=true (omits PR objects); perPage 1..30. Shares private Actions metadata accessible to the board agent with the widget/session audience; uses agent, not preview or My GitHub auth. No netOrigins needed.';
+  'With a usable connected agent GitHub identity: await openclaw.data.read("github.actions.runs",{repository:"owner/repo",perPage:20}); grant capabilities.tools:["github.actions.runs:owner/repo"]. Identity is checked before save; reconnect in Settings if unavailable. Optional workflow (ID/filename), branch, status, created (ISO day/comparison/range), excludePullRequests=true (omits PR objects); perPage 1..30. Shares private Actions metadata with the widget/session audience; never preview or My GitHub auth. No netOrigins needed.';
 
 const repositorySchema = z
   .string()
