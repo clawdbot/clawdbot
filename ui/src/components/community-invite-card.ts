@@ -330,7 +330,7 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
         <div class="invite__body">
           <h2 class="invite__title">${t("communityInvite.title")}</h2>
           <p class="invite__text">
-            ${t("communityInvite.body")}<br />${t("communityInvite.bodyGreeting")}
+            ${t("communityInvite.body")} ${t("communityInvite.bodyGreeting")}
           </p>
           <a
             class="invite__cta"
