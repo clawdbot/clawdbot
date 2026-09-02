@@ -2052,6 +2052,32 @@ describe("subagent registry seam flow", () => {
     expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
   });
 
+  it("persists an isolated requester-settle wake supplied by a yielded successor", () => {
+    const requesterSettleWake = {
+      status: "pending" as const,
+      attemptCount: 0,
+      batchRunIds: ["run-yield-successor"],
+      requesterYieldBatch: true as const,
+      afterRequesterYield: true as const,
+    };
+
+    mod.registerSubagentRun({
+      runId: "run-yield-successor",
+      requesterTurnRunId: "announce:requester-settle:main:agent:main:main:run-a:yield-1",
+      task: "continue the yielded requester wake",
+      requesterSettleWake,
+    });
+    requesterSettleWake.batchRunIds.push("mutated-after-registration");
+
+    expect(findRequesterRun("run-yield-successor")?.requesterSettleWake).toEqual({
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: ["run-yield-successor"],
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+    });
+  });
+
   it("keeps runs active instead of terminally failing on recoverable wait transport errors", async () => {
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": new Error("gateway closed (1006): transport close"),

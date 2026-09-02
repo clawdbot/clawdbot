@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
-import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import {
   QA_TWO_WAVE_OBSERVED_FINAL_MARKER,
@@ -15,72 +16,13 @@ import type { QaBusMessage } from "./runtime-api.js";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const TRIGGER = "two-wave requester settle qa check";
 const REQUESTER_CONVERSATION = { id: "requester-user", kind: "direct" as const };
-const DIRECT_DELIVERY_CAPTURE_PATH =
-  "/tmp/oc-129635-continuation-proof/direct-announcement-delivery.debug.json";
-const POLICY_ORIGIN_CAPTURE_PATH =
-  "/tmp/oc-129635-continuation-proof/source-reply-policy-origin.debug.json";
-
-/**
- * Test-controlled seam: merge QA transport counts into the delivery capture artifact.
- * No raw content, no PII — only integer counts.
- */
-function mergeTransportCountsIntoCapture(state: QaBusState, outboundStartIndex: number): void {
-  try {
-    const allOutbound = state
-      .getSnapshot()
-      .messages.filter((m: { direction: string }) => m.direction === "outbound");
-    const outboundSinceTrigger = allOutbound.slice(outboundStartIndex);
-    const markerBearingCount = outboundSinceTrigger.filter((m: { text?: string }) =>
-      m.text?.includes(QA_TWO_WAVE_OBSERVED_FINAL_MARKER),
-    ).length;
-    const transportCounts = {
-      qaTransportOutboundTotalSinceTrigger: outboundSinceTrigger.length,
-      qaTransportMarkerBearingOutboundCount: markerBearingCount,
-    };
-    if (existsSync(DIRECT_DELIVERY_CAPTURE_PATH)) {
-      const existing = JSON.parse(readFileSync(DIRECT_DELIVERY_CAPTURE_PATH, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      writeFileSync(
-        DIRECT_DELIVERY_CAPTURE_PATH,
-        JSON.stringify({ ...existing, ...transportCounts }, null, 2),
-        "utf8",
-      );
-    } else {
-      writeFileSync(DIRECT_DELIVERY_CAPTURE_PATH, JSON.stringify(transportCounts, null, 2), "utf8");
-    }
-  } catch {
-    // Transport count merge must never block the test.
-  }
-}
+let outputDir: string | undefined;
 
 function writeSanitizedVerdict(verdict: Record<string, unknown>): void {
-  writeFileSync("/tmp/oc-129635-continuation-proof/verdict.json", JSON.stringify(verdict, null, 2));
-}
-
-/**
- * Reads the sanitized policy-origin capture (fixed enums/booleans only) and
- * summarizes the last event at each capture point, for correlation with the
- * direct-delivery capture. Never touches prompt/message/session data.
- */
-function readPolicyOriginSummary(): Record<string, unknown> {
-  try {
-    const raw = JSON.parse(readFileSync(POLICY_ORIGIN_CAPTURE_PATH, "utf8")) as {
-      events?: Array<Record<string, unknown>>;
-    };
-    const events = raw.events ?? [];
-    const lastByPoint = (point: string) =>
-      events.toReversed().find((e) => e.point === point) ?? null;
-    return {
-      resolvedModes: lastByPoint("get-reply-run-context.resolved-modes"),
-      sourcePolicyResolved: lastByPoint("followup-delivery.source-policy-resolved"),
-      finalDecision: lastByPoint("followup-delivery.decision"),
-      eventCount: events.length,
-    };
-  } catch {
-    return { resolvedModes: null, sourcePolicyResolved: null, finalDecision: null, eventCount: 0 };
+  if (!outputDir) {
+    throw new Error("safe verdict output directory was not initialized");
   }
+  writeFileSync(path.join(outputDir, "verdict.json"), JSON.stringify(verdict, null, 2), "utf8");
 }
 
 const SETTLE_WAKE_NEEDLE =
@@ -117,23 +59,14 @@ describe("two-wave requester-settle observed proof", () => {
     for (const cleanup of cleanups.splice(0).toReversed()) {
       await cleanup();
     }
+    if (outputDir) {
+      rmSync(outputDir, { recursive: true, force: true });
+      outputDir = undefined;
+    }
   });
 
   it("proves barrier-observed two-wave requester-settle with quiet gate", async () => {
-    writeFileSync(
-      DIRECT_DELIVERY_CAPTURE_PATH,
-      JSON.stringify({
-        schemaVersion: 2,
-        gatewayBuild: "qa-repo-cli",
-        attempts: [],
-      }),
-      "utf8",
-    );
-    writeFileSync(
-      POLICY_ORIGIN_CAPTURE_PATH,
-      JSON.stringify({ schemaVersion: 1, events: [] }, null, 2),
-      "utf8",
-    );
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "oc-129635-two-wave-"));
     // Seed a privacy-safe artifact before gateway/process work starts, so an
     // outer runner timeout still leaves a conclusive bounded diagnostic.
     writeSanitizedVerdict({
@@ -184,11 +117,6 @@ describe("two-wave requester-settle observed proof", () => {
       transport,
       transportBaseUrl: bus.baseUrl,
       controlUiEnabled: false,
-      runtimeEnvPatch: {
-        OPENCLAW_SUBAGENT_DIRECT_DELIVERY_CAPTURE_PATH:
-          "/tmp/oc-129635-continuation-proof/direct-announcement-delivery.debug.json",
-        OPENCLAW_SOURCE_REPLY_POLICY_CAPTURE_PATH: POLICY_ORIGIN_CAPTURE_PATH,
-      },
     });
     cleanups.push(() => gatewayOwner.stop().then(() => undefined));
     await transport.waitReady({ gateway });
@@ -356,8 +284,6 @@ describe("two-wave requester-settle observed proof", () => {
       });
       postFinalQuiet = true;
     } catch (error) {
-      // Merge transport counts into delivery capture if it exists
-      mergeTransportCountsIntoCapture(state, outboundStartIndex);
       const outboundSinceTrigger = state
         .getSnapshot()
         .messages.filter((message: { direction: string }) => message.direction === "outbound")
@@ -380,13 +306,9 @@ describe("two-wave requester-settle observed proof", () => {
         qaTransportMarkerBearingOutboundCount: outboundSinceTrigger.filter(
           (message: QaBusMessage) => message.text?.includes(QA_TWO_WAVE_OBSERVED_FINAL_MARKER),
         ).length,
-        policyOrigin: readPolicyOriginSummary(),
       });
       throw failureContext(error, "two-wave observed proof failed");
     }
-
-    // Merge transport counts into delivery capture (success path)
-    mergeTransportCountsIntoCapture(state, outboundStartIndex);
 
     // Write sanitized verdict (no raw payloads, no credentials)
     const verdict = {
@@ -409,11 +331,7 @@ describe("two-wave requester-settle observed proof", () => {
         wave2SettleWakeObserved &&
         finalObserved &&
         postFinalQuiet,
-      policyOrigin: readPolicyOriginSummary(),
     };
-    writeFileSync(
-      "/tmp/oc-129635-continuation-proof/verdict.json",
-      JSON.stringify(verdict, null, 2),
-    );
+    writeSanitizedVerdict(verdict);
   }, 120_000);
 });

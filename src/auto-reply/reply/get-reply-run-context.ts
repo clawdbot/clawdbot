@@ -44,7 +44,6 @@ import {
   formatActiveGoalContext,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
-import { capturePolicyOrigin } from "./policy-origin-diagnostic-capture.js";
 import { buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
@@ -145,16 +144,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           turnModelOverride: resolveTurnModelOverride(opts),
         })
       : sourceReplyDeliveryMode);
-  capturePolicyOrigin("get-reply-run-context.resolved-modes", {
-    directAgentRequestedMode: sourceReplyDeliveryMode ?? null,
-    sessionStableMode: sessionPromptSourceReplyDeliveryMode ?? null,
-    sessionStableModeSource: injectedSessionStableMode
-      ? "injected"
-      : isSyntheticTurn && sessionEntry
-        ? "resolved-session-entry"
-        : "same-as-requested",
-    isSyntheticTurn,
-  });
+
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,

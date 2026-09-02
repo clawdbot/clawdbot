@@ -35,7 +35,6 @@ import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { capturePolicyOrigin } from "./policy-origin-diagnostic-capture.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
@@ -79,11 +78,6 @@ export function resolveFollowupDeliveryDecision(params: {
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
   if (turn.sendPolicy === "deny") {
-    capturePolicyOrigin("followup-delivery.decision", {
-      queuedEffectiveMode: null,
-      sendPolicy: "deny",
-      finalSuppressionCategory: "send-policy",
-    });
     return { kind: "suppress", reason: "send-policy" };
   }
   if (
@@ -113,11 +107,7 @@ export function resolveFollowupDeliveryDecision(params: {
     requested: turn.queued.run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
     sendPolicy: turn.sendPolicy,
   });
-  capturePolicyOrigin("followup-delivery.source-policy-resolved", {
-    queuedEffectiveMode: sourcePolicy.sourceReplyDeliveryMode,
-    sessionStableMode: sourcePolicy.sessionStableSourceReplyDeliveryMode,
-    sendPolicy: turn.sendPolicy,
-  });
+
   const hasDestination = Boolean(
     (isRoutableChannel(turn.queued.originatingChannel) && turn.queued.originatingTo) ||
     opts?.onBlockReply,
@@ -148,11 +138,6 @@ export function resolveFollowupDeliveryDecision(params: {
       getReplyPayloadMetadata(execution.outcome.payload)?.deliverDespiteSourceReplySuppression !==
         true
     ) {
-      capturePolicyOrigin("followup-delivery.decision", {
-        queuedEffectiveMode: sourcePolicy.sourceReplyDeliveryMode,
-        sendPolicy: turn.sendPolicy,
-        finalSuppressionCategory: "message-tool-only",
-      });
       return { kind: "suppress", reason: "message-tool-only" };
     }
     const payloads = renderFailurePayloads(
@@ -316,20 +301,10 @@ export function resolveFollowupDeliveryDecision(params: {
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
     );
     const isDeliverable = explicitlyDeliverable.length > 0;
-    capturePolicyOrigin("followup-delivery.decision", {
-      queuedEffectiveMode: sourcePolicy.sourceReplyDeliveryMode,
-      sendPolicy: turn.sendPolicy,
-      finalSuppressionCategory: isDeliverable ? "none" : "message-tool-only",
-    });
     return isDeliverable
       ? { kind: "deliver", payloads: explicitlyDeliverable, resolved: runtimeResolved }
       : { kind: "suppress", reason: "message-tool-only" };
   }
-  capturePolicyOrigin("followup-delivery.decision", {
-    queuedEffectiveMode: sourcePolicy.sourceReplyDeliveryMode,
-    sendPolicy: turn.sendPolicy,
-    finalSuppressionCategory: payloads.length > 0 ? "none" : "silent",
-  });
   return payloads.length > 0
     ? { kind: "deliver", payloads, resolved: runtimeResolved }
     : { kind: "suppress", reason: "silent" };
