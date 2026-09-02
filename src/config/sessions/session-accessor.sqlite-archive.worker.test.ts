@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -22,10 +23,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import {
-  materializeSessionStateDeletePlans,
-  publishEncodedSessionTranscriptArchive,
-} from "./session-accessor.sqlite-archive.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
@@ -71,22 +69,26 @@ describe("SQLite transcript archive worker", () => {
       createTranscriptEvent("oversized-event", "archive me"),
     ]);
 
-    const database = openLifecycleTestDatabase(storePath);
-    const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
-    const materialized = await materializeSessionStateDeletePlans([plan]);
-    const archive = materialized[0]?.archive;
-    expect(archive).toBeTruthy();
-
-    const archivedPath = publishEncodedSessionTranscriptArchive({
-      archiveDirectory: plan.archiveDirectory,
-      archiveName: archive?.archiveName ?? "",
-      bytes: archive?.bytes ?? new Uint8Array(),
-      sha256: archive?.sha256 ?? "",
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
+    const archivedPath = result.archivedTranscripts[0]?.archivedPath ?? "";
 
     expect(Buffer.byteLength(path.basename(archivedPath), "utf8")).toBeLessThan(256);
     expect(path.basename(archivedPath)).toMatch(/^session-[a-f0-9]{32}\.jsonl\.deleted\./);
     expect(readSessionArchiveContentSync(archivedPath)).toContain("oversized-event");
+    expect(
+      openLifecycleTestDatabase(storePath)
+        .db.prepare(
+          "SELECT session_id, session_key FROM session_transcript_archives WHERE archive_name = ?",
+        )
+        .get(path.basename(archivedPath)),
+    ).toEqual({ session_id: sessionId, session_key: sessionKey });
+    await expect(
+      listUsageCountedTranscriptStats("main", { sessionsDir: path.dirname(storePath) }),
+    ).resolves.toEqual([expect.objectContaining({ sessionId })]);
   });
 
   it("keeps the event loop responsive while a transcript archive is built", async () => {

@@ -90,7 +90,7 @@ export type TranscriptArchivePublishWorkerMessage = {
   results: TranscriptArchivePublishResult[];
 };
 
-function resolveSqliteTranscriptArchivePath(params: {
+export function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
   generation?: string;
   reason: SessionArchiveReason;

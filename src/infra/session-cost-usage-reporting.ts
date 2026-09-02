@@ -66,7 +66,8 @@ export async function discoverAllSessions(params: {
     const fileName = path.basename(filePath);
     const sqliteMarker = parseSqliteSessionFileMarker(filePath);
 
-    const sessionId = sqliteMarker?.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
+    const sessionId =
+      sqliteMarker?.sessionId ?? file.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
     if (!sessionId) {
       continue;
     }

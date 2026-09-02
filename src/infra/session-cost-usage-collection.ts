@@ -23,6 +23,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import {
+  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -61,7 +62,11 @@ function resolveUsageCostSessionStorePath(params: {
 
 async function listUsageCountedTranscriptFileStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: {
+    archiveSessionIds?: ReadonlyMap<string, string>;
+    minMtimeMs?: number;
+    sessionsDir?: string;
+  },
 ): Promise<UsageCostTranscriptFile[]> {
   const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
   let entries: fs.Dirent[];
@@ -100,6 +105,7 @@ async function listUsageCountedTranscriptFileStats(
           return {
             filePath: materialized,
             kind: "jsonl",
+            sessionId: params?.archiveSessionIds?.get(entry.name),
             size: materializedStats.size,
             mtimeMs: stats.mtimeMs,
             device: materializedStats.dev,
@@ -115,6 +121,7 @@ async function listUsageCountedTranscriptFileStats(
       return {
         filePath,
         kind: "jsonl",
+        sessionId: params?.archiveSessionIds?.get(entry.name),
         size: stats.size,
         mtimeMs: stats.mtimeMs,
         device: stats.dev,
@@ -179,11 +186,22 @@ export async function listUsageCountedTranscriptStats(
   agentId: string,
   params?: { minMtimeMs?: number; sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, params);
+  const archiveSessionIds = new Map(
+    listSessionTranscriptArchivesReadOnly({
+      agentId,
+      includeAll: true,
+      ...(params?.sessionsDir ? { storePath: path.join(params.sessionsDir, "sessions.json") } : {}),
+    }).map((archive) => [archive.archiveName, archive.sessionId]),
+  );
+  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, {
+    ...params,
+    archiveSessionIds,
+  });
   const sqliteBacked = listUsageCountedSqliteTranscriptStats(agentId, params);
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter((file) => {
-    const sessionId = parseUsageCountedSessionIdFromFileName(path.basename(file.filePath));
+    const sessionId =
+      file.sessionId ?? parseUsageCountedSessionIdFromFileName(path.basename(file.filePath));
     return !sessionId || !sqliteSessionIds.has(sessionId);
   });
   return [...canonicalFileBacked, ...sqliteBacked];
