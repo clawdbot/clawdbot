@@ -838,6 +838,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
     expect(toolResults[1]?.toolCallId).toBe("call_2");
     expect(toolResults[1]?.content?.[0]?.text).toBe("second output");
+    expect(result.discarded).toEqual([input[1]]);
   });
 
   it("two real results → keeps first (unchanged behavior)", () => {

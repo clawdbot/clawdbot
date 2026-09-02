@@ -358,6 +358,15 @@ export function classifyToolUseResultPairing(
         continue;
       }
       droppedDuplicateCount += candidate.result ? 1 : 0;
+      if (candidate.result && isSyntheticMissingToolResult(candidate.result)) {
+        const discardedSource = candidate.sourceResult;
+        if (discardedSource) {
+          droppedResults.push({
+            message: discardedSource,
+            index: candidate.sourceResultIndex ?? record.index,
+          });
+        }
+      }
       candidate.result = normalizeToolResultName(record.result, candidate.name);
       candidate.sourceResult = record.sourceResult;
       candidate.sourceResultIndex = record.index;

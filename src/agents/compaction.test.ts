@@ -614,6 +614,32 @@ describe("pruneHistoryForContextShare", () => {
     expect(retainedTokens).toBeGreaterThan(0);
   });
 
+  it("accounts for synthetic results displaced across retained tool frames", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_first"),
+      {
+        ...makeToolResult(3, "call_first", "synthetic result"),
+        details: { openclawSyntheticMissingToolResult: true },
+        isError: true,
+      },
+      makeAssistantToolCall(4, "call_second"),
+      makeToolResult(5, "call_first", "real result"),
+      makeToolResult(6, "call_second", "second result"),
+    ];
+    const totalTokens = estimateMessagesTokens(messages);
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: Math.ceil(totalTokens),
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(pruned.messages).not.toContain(messages[2]!);
+    expect(pruned.droppedMessagesList).toEqual([messages[0], messages[2]]);
+    expect(pruned.droppedMessages).toBe(2);
+  });
+
   it("does not count normalized retained tool_results as dropped", () => {
     const messages: AgentMessage[] = [
       makeMessage(1, 4000),
