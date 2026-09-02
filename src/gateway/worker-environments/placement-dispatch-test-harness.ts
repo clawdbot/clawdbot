@@ -458,7 +458,7 @@ export function createHarness(
     resolveDevicePlacementRequirement: async ({ executionMode }) =>
       executionMode === "remote-exec"
         ? {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            requiredNodeCommands: ["codex.exec-server.stdio.v2"],
             consumesWorkerSlot: false,
           }
         : { requiredNodeCommands: [], consumesWorkerSlot: true },

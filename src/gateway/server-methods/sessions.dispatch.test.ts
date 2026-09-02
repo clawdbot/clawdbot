@@ -46,7 +46,7 @@ describe("sessions.dispatch", () => {
       cloudPlacement: {
         mode: "remote-exec",
         devicePlacement: {
-          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          requiredNodeCommands: ["codex.exec-server.stdio.v2"],
           consumesWorkerSlot: false,
         },
       },
@@ -441,7 +441,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         executionMode: "remote-exec",
         devicePlacement: {
-          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          requiredNodeCommands: ["codex.exec-server.stdio.v2"],
           consumesWorkerSlot: false,
         },
       }),

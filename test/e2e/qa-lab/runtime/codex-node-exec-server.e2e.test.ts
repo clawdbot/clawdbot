@@ -36,7 +36,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const COMMAND = "codex.exec-server.stdio.v1";
+const COMMAND = "codex.exec-server.stdio.v2";
 const MODEL = "mock-openai/gpt-5.6-luna";
 const SESSION_KEY = "agent:qa:codex-node-exec-server-proof";
 const SUCCESS_MARKER = "CODEX_NODE_EXEC_SUCCESS_PROOF";

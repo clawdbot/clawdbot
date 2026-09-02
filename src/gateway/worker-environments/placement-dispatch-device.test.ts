@@ -22,7 +22,7 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
 const runtimeNodeCommandPolicy = vi.hoisted(() => ({
-  commands: { allow: ["codex.exec-server.stdio.v1"] } as {
+  commands: { allow: ["codex.exec-server.stdio.v2"] } as {
     allow?: string[];
     deny?: string[];
   },
@@ -40,7 +40,8 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CODEX_COMMAND = "codex.exec-server.stdio.v1";
+const LEGACY_CODEX_COMMAND = "codex.exec-server.stdio.v1";
+const CODEX_COMMAND = "codex.exec-server.stdio.v2";
 const OPENCLAW_DEVICE_REQUIREMENT = { requiredNodeCommands: [], consumesWorkerSlot: true };
 const CODEX_DEVICE_REQUIREMENT = {
   requiredNodeCommands: [CODEX_COMMAND],
@@ -317,6 +318,12 @@ describe("device worker placement dispatch", () => {
       expectedProvisionCalls: 1,
     },
     {
+      name: "legacy exec-server protocol",
+      node: deviceProof(0, ["system.run", LEGACY_CODEX_COMMAND]),
+      deniedByGateway: false,
+      expectedProvisionCalls: 1,
+    },
+    {
       name: "required node command denied by Gateway policy",
       node: deviceProof(0),
       deniedByGateway: true,
@@ -333,7 +340,7 @@ describe("device worker placement dispatch", () => {
     }
     const request = prepareCloudNodeDispatch(harness);
 
-    await expect(harness.service.dispatch(request)).rejects.toThrow("codex.exec-server.stdio.v1");
+    await expect(harness.service.dispatch(request)).rejects.toThrow(CODEX_COMMAND);
 
     expect(harness.environments.create).toHaveBeenCalledTimes(scenario.expectedProvisionCalls);
     expect(harness.environments.attachSession).not.toHaveBeenCalled();

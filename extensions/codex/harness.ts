@@ -103,7 +103,7 @@ export function createCodexAppServerAgentHarness(
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
     },

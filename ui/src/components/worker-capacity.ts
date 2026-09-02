@@ -33,8 +33,8 @@ export function workerCapacityPresentation(params: {
   const execHost =
     params.capabilities?.some(
       (capability) =>
-        capability === "codex.exec-server" || capability === "codex.exec-server.stdio.v1",
-    ) || params.commands?.includes("codex.exec-server.stdio.v1");
+        capability === "codex.exec-server" || capability === "codex.exec-server.stdio.v2",
+    ) || params.commands?.includes("codex.exec-server.stdio.v2");
   if (!execHost) {
     return undefined;
   }

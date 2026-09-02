@@ -143,7 +143,7 @@ export function makeDispatchTestContext(
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
         workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-        commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
+        commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v2"],
       };
       return { available: true, node };
     });

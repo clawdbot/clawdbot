@@ -490,7 +490,7 @@ cloud worker is a separate, placement-owned execution path and does not require
 app-server and provider auth local, while the authorized node runs the managed,
 pinned Codex exec-server over its existing duplex connection. It requires
 explicit `gateway.nodes.commands.allow` authorization for
-`codex.exec-server.stdio.v1`, the approved pairing surface, and launch
+`codex.exec-server.stdio.v2`, the approved pairing surface, and launch
 authorization for each attempt. A deliberately selected session **Full access**
 permission can replace the critical allow-once prompt only while the exact
 admitted turn and placement remain current and both node-local `tools.exec`

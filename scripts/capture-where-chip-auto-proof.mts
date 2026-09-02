@@ -39,7 +39,7 @@ const environments = [
   sessionHost: true,
   platform: "linux",
   capabilities: ["codex.exec-server"],
-  invocableCommands: ["codex.exec-server.stdio.v1"],
+  invocableCommands: ["codex.exec-server.stdio.v2"],
 }));
 try {
   for (const mode of ["dark", "light"] as const) {
@@ -66,7 +66,7 @@ try {
                   devicePlacementSupported: true,
                   source: "model",
                   devicePlacement: {
-                    requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+                    requiredNodeCommands: ["codex.exec-server.stdio.v2"],
                     consumesWorkerSlot: false,
                   },
                 },

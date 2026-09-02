@@ -14,6 +14,23 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 
+const LEGACY_CODEX_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
+const CODEX_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v2";
+
+const CODEX_EXEC_SERVER_ALLOW_RULE: LegacyConfigRule = {
+  path: ["gateway", "nodes", "commands", "allow"],
+  message:
+    'gateway.nodes.commands.allow contains the retired Codex exec-server v1 command. Run "openclaw doctor --fix", then update and re-approve the node.',
+  match: (value) => Array.isArray(value) && value.includes(LEGACY_CODEX_EXEC_SERVER_COMMAND),
+};
+
+const CODEX_EXEC_SERVER_DENY_RULE: LegacyConfigRule = {
+  path: ["gateway", "nodes", "commands", "deny"],
+  message:
+    'gateway.nodes.commands.deny contains the retired Codex exec-server v1 command. Run "openclaw doctor --fix", then update and re-approve the node.',
+  match: (value) => Array.isArray(value) && value.includes(LEGACY_CODEX_EXEC_SERVER_COMMAND),
+};
+
 const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "port"],
   message:
@@ -80,6 +97,38 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.nodes.commands.codex-exec-server-v1->v2",
+    describe: "Replace the retired Codex node exec-server command",
+    legacyRules: [CODEX_EXEC_SERVER_ALLOW_RULE, CODEX_EXEC_SERVER_DENY_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const nodes = getRecord(gateway?.nodes);
+      const commands = getRecord(nodes?.commands);
+      if (!commands) {
+        return;
+      }
+      const changedPaths: string[] = [];
+      for (const key of ["allow", "deny"] as const) {
+        const list = commands[key];
+        if (!Array.isArray(list) || !list.includes(LEGACY_CODEX_EXEC_SERVER_COMMAND)) {
+          continue;
+        }
+        commands[key] = list.map((command) =>
+          command === LEGACY_CODEX_EXEC_SERVER_COMMAND ? CODEX_EXEC_SERVER_COMMAND : command,
+        );
+        changedPaths.push(`gateway.nodes.commands.${key}`);
+      }
+      if (changedPaths.length === 0) {
+        return;
+      }
+      changes.push(
+        `Replaced ${LEGACY_CODEX_EXEC_SERVER_COMMAND} with ${CODEX_EXEC_SERVER_COMMAND} in ${changedPaths.join(
+          " and ",
+        )}. Update and restart each Codex node, then reject and re-approve its pairing so the approved command snapshot includes v2.`,
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.tailscale.service-name-remove",
     describe: "Disable managed ingress and remove the retired Tailscale Service name",

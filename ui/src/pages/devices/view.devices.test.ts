@@ -576,7 +576,7 @@ describe("devices inventory rendering", () => {
 
   it.each([
     { caps: ["codex.exec-server"], commands: [] },
-    { caps: [], commands: ["codex.exec-server.stdio.v1"] },
+    { caps: [], commands: ["codex.exec-server.stdio.v2"] },
   ])("preserves the slot-less exec affordance through node inventory: %j", ({ caps, commands }) => {
     const container = renderDevicesContainer({
       nodes: [

@@ -30,7 +30,7 @@ describe("node-hosting preconditions", () => {
         {
           mode: "remote-exec",
           devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            requiredNodeCommands: ["codex.exec-server.stdio.v2"],
             consumesWorkerSlot: false,
           },
         },

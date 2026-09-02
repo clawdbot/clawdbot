@@ -169,7 +169,7 @@ async function acquireOpenClawExecServer(params: {
         // Capture the admitted caller's exact async scope before a detached WebSocket event.
         const channel = await runtime.nodes.openDuplex({
           nodeId: server.node.id,
-          command: "codex.exec-server.stdio.v1",
+          command: "codex.exec-server.stdio.v2",
           params: { cwd: sandbox.containerWorkdir, ...placementIdentity },
           sessionKey: sandbox.sessionKey,
           timeoutMs: 0,

@@ -83,7 +83,7 @@ describe("createReclaimedPlacementRedispatch", () => {
       executionMode: "remote-exec" as const,
     } as ReclaimedWorkerPlacement;
     const requirement = {
-      requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+      requiredNodeCommands: ["codex.exec-server.stdio.v2"],
       consumesWorkerSlot: false,
     };
     const dispatch = vi.fn(async () => ({ state: "active" }) as never);

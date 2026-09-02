@@ -184,7 +184,7 @@ the high-risk node command:
   gateway: {
     nodes: {
       commands: {
-        allow: ["codex.exec-server.stdio.v1"],
+        allow: ["codex.exec-server.stdio.v2"],
       },
     },
   },
@@ -198,8 +198,13 @@ the high-risk node command:
 }
 ```
 
+When upgrading from the previous `codex.exec-server.stdio.v1` carrier, run
+`openclaw doctor --fix` to update authored Gateway allow/deny entries. Then
+update and restart the node, reconnect it, and approve the updated pairing so
+its stored command snapshot includes `v2`. Doctor does not grant node approval.
+
 The paired node must enable session hosting and advertise the `codex.exec-server`
-capability and `codex.exec-server.stdio.v1` command. If enabling the plugin
+capability and `codex.exec-server.stdio.v2` command. If enabling the plugin
 changes an existing node's command surface, reconnect the node, inspect
 `openclaw nodes pending`, and approve the updated pairing with
 `openclaw nodes approve <requestId>`. The persistent command allowlist does not
@@ -281,7 +286,7 @@ Move Session after selecting a Codex model. Profile placement requires
 `operator.admin` and a managed Gateway worktree.
 
 Enable the Codex plugin and explicitly allow
-`codex.exec-server.stdio.v1` on the Gateway, as shown in
+`codex.exec-server.stdio.v2` on the Gateway, as shown in
 [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
 The cloud image may include the exact-version bundled Codex plugin; otherwise,
 the profile setup or image must install the matching trusted official npm Codex

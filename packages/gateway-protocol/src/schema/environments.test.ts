@@ -186,7 +186,7 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentSummarySchema, {
         ...node,
-        invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
+        invocableCommands: ["codex.exec-server.stdio.v2", "system.run"],
       }),
     ).toBe(true);
     expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands: [] })).toBe(true);

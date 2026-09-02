@@ -53,7 +53,7 @@ describe("Codex agent harness supports()", () => {
     expect(harness.cloudPlacement).toEqual({
       mode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
     });

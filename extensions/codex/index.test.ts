@@ -112,23 +112,23 @@ describe("codex plugin", () => {
         "codex.appServer.threads.list.v1",
         "codex.appServer.thread.turns.list.v1",
         "codex.terminal.resume.v1",
-        "codex.exec-server.stdio.v1",
+        "codex.exec-server.stdio.v2",
       ]),
     );
     const nodeExecServerCommand = registerNodeHostCommand.mock.calls
       .map(([command]) => command)
-      .find((command) => command.command === "codex.exec-server.stdio.v1");
+      .find((command) => command.command === "codex.exec-server.stdio.v2");
     expect(nodeExecServerCommand).toMatchObject({
-      command: "codex.exec-server.stdio.v1",
+      command: "codex.exec-server.stdio.v2",
       cap: "codex.exec-server",
       dangerous: true,
       duplex: true,
     });
     const nodeExecServerPolicy = registerNodeInvokePolicy.mock.calls
       .map(([policy]) => policy)
-      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1"));
+      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v2"));
     expect(nodeExecServerPolicy).toMatchObject({
-      commands: ["codex.exec-server.stdio.v1"],
+      commands: ["codex.exec-server.stdio.v2"],
       dangerous: true,
     });
     expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
@@ -326,7 +326,7 @@ describe("codex plugin", () => {
     expect(nodeCommands).toEqual([
       "codex.cli.sessions.list",
       "codex.cli.session.resume",
-      "codex.exec-server.stdio.v1",
+      "codex.exec-server.stdio.v2",
     ]);
     expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
     expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");

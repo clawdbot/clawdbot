@@ -9,7 +9,7 @@ import { bindDeviceWorkerAvailability } from "./worker-environments/device-provi
 import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
 
 const SESSION_KEY = "agent:main:move-source";
-const CODEX_COMMAND = "codex.exec-server.stdio.v1";
+const CODEX_COMMAND = "codex.exec-server.stdio.v2";
 const DEVICE_REQUIREMENT = { requiredNodeCommands: [CODEX_COMMAND], consumesWorkerSlot: false };
 
 describe("worker placement move destination owner", () => {

@@ -273,11 +273,11 @@ describe("Where chip", () => {
     {
       name: "allows enabled remote execution without a free worker slot",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       workerSlots: { total: 1, available: 0 },
-      invocableCommands: ["codex.exec-server.stdio.v1"],
+      invocableCommands: ["codex.exec-server.stdio.v2"],
       disabled: false,
       label: "1 of 1 slots busy",
       tone: "warn",
@@ -285,11 +285,11 @@ describe("Where chip", () => {
     {
       name: "shows slot-less remote execution without a capacity claim",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       workerSlots: undefined,
-      invocableCommands: ["codex.exec-server.stdio.v1"],
+      invocableCommands: ["codex.exec-server.stdio.v2"],
       disabled: false,
       label: "Codex exec",
       tone: undefined,
@@ -307,7 +307,7 @@ describe("Where chip", () => {
     {
       name: "disables a declared remote command that the Gateway has not enabled",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       workerSlots: { total: 1, available: 1 },
@@ -329,7 +329,7 @@ describe("Where chip", () => {
             status: "available",
             sessionHost: true,
             workerSlots,
-            capabilities: ["codex.exec-server.stdio.v1"],
+            capabilities: ["codex.exec-server.stdio.v2"],
             invocableCommands,
           },
         ],

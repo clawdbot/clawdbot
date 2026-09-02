@@ -164,7 +164,7 @@ describe("readDraftEnvironments", () => {
           id: "node:runner",
           type: "node",
           status: "available",
-          capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+          capabilities: ["codex.exec-server.stdio.v2", "camera.snap"],
           invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
         },
       ]),
@@ -173,7 +173,7 @@ describe("readDraftEnvironments", () => {
         id: "node:runner",
         type: "node",
         status: "available",
-        capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+        capabilities: ["codex.exec-server.stdio.v2", "camera.snap"],
         invocableCommands: ["camera.snap", "z.command"],
       },
     ]);

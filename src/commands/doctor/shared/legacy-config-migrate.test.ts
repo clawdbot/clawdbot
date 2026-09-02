@@ -1966,6 +1966,36 @@ describe("retired gateway Tailscale cleanup config migrate", () => {
   });
 });
 
+describe("Codex node exec-server command migrate", () => {
+  it("updates allow and deny entries while preserving sibling commands", () => {
+    const raw = {
+      gateway: {
+        nodes: {
+          commands: {
+            allow: ["camera.snap", "codex.exec-server.stdio.v1"],
+            deny: ["codex.exec-server.stdio.v1", "screen.record"],
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "gateway.nodes.commands.allow",
+      "gateway.nodes.commands.deny",
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.nodes?.commands).toEqual({
+      allow: ["camera.snap", "codex.exec-server.stdio.v2"],
+      deny: ["codex.exec-server.stdio.v2", "screen.record"],
+    });
+    expect(res.changes).toEqual([
+      expect.stringMatching(/exec-server\.stdio\.v1.*exec-server\.stdio\.v2.*re-approve/s),
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+});
+
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {

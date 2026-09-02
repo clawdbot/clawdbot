@@ -108,7 +108,7 @@ describe("new-session model runtime placement", () => {
       name: "allows opted-in remote execution",
       runtimeId: "codex",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
     },

@@ -573,7 +573,7 @@ describe("sessions.dispatch device targets", () => {
         cloudPlacement: {
           mode: "remote-exec",
           devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            requiredNodeCommands: ["codex.exec-server.stdio.v2"],
             consumesWorkerSlot: false,
           },
         },
@@ -600,12 +600,12 @@ describe("sessions.dispatch device targets", () => {
       {
         name: "missing",
         declaredCommands: ["system.run"],
-        commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+        commandPolicy: { allow: ["codex.exec-server.stdio.v2"] },
       },
       {
         name: "declared but denied",
-        declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
-        commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+        declaredCommands: ["system.run", "codex.exec-server.stdio.v2"],
+        commandPolicy: { deny: ["codex.exec-server.stdio.v2"] },
       },
     ])("rejects a $name required paired-node command before dispatch", async (scenario) => {
       useDeviceSession("codex");
@@ -660,7 +660,7 @@ describe("sessions.dispatch device targets", () => {
       const respond = await invokeSessionDispatch(
         makeDispatchTestContext({
           getRuntimeConfig: () => ({
-            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
+            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v2"] } } },
           }),
           workerPlacementDispatchService: { dispatch },
           workerSessionPlacementService: { getMany: () => new Map() },
@@ -701,7 +701,7 @@ describe("sessions.dispatch device targets", () => {
         makeDispatchTestContext({
           getRuntimeConfig: () => ({
             cloudWorkers: { profiles: { test: { provider: "multimode-cloud" } } },
-            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
+            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v2"] } } },
           }),
           workerPlacementDispatchService: { dispatch },
           workerSessionPlacementService: { getMany: () => new Map() },
@@ -713,7 +713,7 @@ describe("sessions.dispatch device targets", () => {
           executionMode: "remote-exec",
           profileId: "test",
           devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            requiredNodeCommands: ["codex.exec-server.stdio.v2"],
             consumesWorkerSlot: false,
           },
         }),

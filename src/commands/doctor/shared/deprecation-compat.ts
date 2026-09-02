@@ -388,6 +388,15 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "gateway.bind.mode values such as lan, loopback, custom, tailnet, and auto",
     docsPath: "/gateway/configuration",
   }),
+  deprecatedCompatRecord("doctor-codex-node-exec-server-v1", {
+    owner: "gateway",
+    introduced: "2026-08-31",
+    removeAfter: "2026-11-30",
+    source: "gateway.nodes.commands.allow/deny entries for codex.exec-server.stdio.v1",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.gateway.ts",
+    replacement: "codex.exec-server.stdio.v2",
+    docsPath: "/plugins/codex-harness",
+  }),
   removalPendingCompatRecord("doctor-audio-transcription-command", {
     owner: "audio",
     introduced: "2026-04-26",

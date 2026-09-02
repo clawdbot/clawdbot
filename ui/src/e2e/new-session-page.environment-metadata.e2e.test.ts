@@ -50,7 +50,7 @@ suite.define(() => {
             cloudPlacementSupported: true,
             devicePlacementSupported: true,
             devicePlacement: {
-              requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+              requiredNodeCommands: ["codex.exec-server.stdio.v2"],
               consumesWorkerSlot: false,
             },
             source: "model",
@@ -79,8 +79,8 @@ suite.define(() => {
               status: "available",
               sessionHost: true,
               workerSlots: { total: 2, available: 0 },
-              capabilities: ["codex.exec-server.stdio.v1"],
-              invocableCommands: ["codex.exec-server.stdio.v1"],
+              capabilities: ["codex.exec-server.stdio.v2"],
+              invocableCommands: ["codex.exec-server.stdio.v2"],
             },
             {
               id: "node:restricted-mac",
@@ -89,7 +89,7 @@ suite.define(() => {
               status: "available",
               sessionHost: true,
               workerSlots: { total: 2, available: 1 },
-              capabilities: ["codex.exec-server.stdio.v1"],
+              capabilities: ["codex.exec-server.stdio.v2"],
               invocableCommands: [],
             },
           ],

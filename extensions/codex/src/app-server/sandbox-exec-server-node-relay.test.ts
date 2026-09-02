@@ -185,7 +185,7 @@ describe("Codex paired-device exec-server relay", () => {
     expect(environment?.environmentId.length).toBeLessThanOrEqual(64);
     expect(openDuplex).toHaveBeenCalledWith({
       nodeId: "paired-device-1",
-      command: "codex.exec-server.stdio.v1",
+      command: "codex.exec-server.stdio.v2",
       params: {
         cwd: "/remote/managed-workspace",
         environmentId: "environment-paired-device-1",

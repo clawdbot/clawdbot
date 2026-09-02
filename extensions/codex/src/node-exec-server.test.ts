@@ -17,7 +17,7 @@ import {
 } from "./node-exec-server.js";
 
 type JsonRpcRecord = Record<string, unknown>;
-const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
+const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v2";
 
 function createManagedWorkspaceInvocation(cwd: string) {
   const placement = {

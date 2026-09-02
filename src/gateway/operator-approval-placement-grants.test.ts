@@ -150,7 +150,7 @@ function approval(id: string): NewOperatorApproval {
       sessionId: SESSION_ID,
       runId: "run-1",
       toolCallId: null,
-      toolName: "codex.exec-server.stdio.v1",
+      toolName: "codex.exec-server.stdio.v2",
     },
     audienceSessionKeys: [],
     runtimeEpoch: "runtime-1",
@@ -169,7 +169,7 @@ function resolveBinding(
 ): PlacementStandingGrantMintSpec {
   const binding = runtime.resolveBinding({
     pluginId: "codex",
-    command: "codex.exec-server.stdio.v1",
+    command: "codex.exec-server.stdio.v2",
     approvalScope: "codex.exec-server",
     agentId: "main",
     sessionKey: SESSION_KEY,
@@ -234,7 +234,7 @@ describe("placement standing grants", () => {
     const binding = resolveBinding(databaseOptions, runtime);
     expect(binding).toEqual({
       pluginId: "codex",
-      command: "codex.exec-server.stdio.v1",
+      command: "codex.exec-server.stdio.v2",
       approvalScope: "codex.exec-server",
       agentId: "main",
       sessionKey: SESSION_KEY,

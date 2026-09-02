@@ -20,6 +20,7 @@ const requiredDoctorCompatCodes = [
   "doctor-cli-backends-plugin-registration",
   "doctor-context-budget-one-knob",
   "doctor-codex-supervisor-plugin-config",
+  "doctor-codex-node-exec-server-v1",
   "doctor-message-queue-steering-modes",
   "doctor-web-search-plugin-config",
   "doctor-web-fetch-plugin-config",

@@ -160,7 +160,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
         }
         if (options.requireBuiltCli === true) {
-          const inventory = await inst.cli(["plugins", "list", "--json"]);
+          const inventory = await inst.cli(["plugins", "list", "--enabled", "--json"]);
           const plugins = parseJsonObject(inventory.stdout)?.plugins;
           if (inventory.code !== 0 || !Array.isArray(plugins)) {
             throw new Error("built CLI could not list bundled plugin artifacts");

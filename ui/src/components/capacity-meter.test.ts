@@ -93,8 +93,8 @@ describe("worker capacity meter", () => {
 
   it.each([
     { capabilities: ["codex.exec-server"], unavailable: false },
-    { capabilities: ["codex.exec-server.stdio.v1"], unavailable: false },
-    { commands: ["codex.exec-server.stdio.v1"], unavailable: false },
+    { capabilities: ["codex.exec-server.stdio.v2"], unavailable: false },
+    { commands: ["codex.exec-server.stdio.v2"], unavailable: false },
     { capabilities: ["codex.exec-server"], unavailable: true },
   ])("shows a terminal affordance for a slot-less exec host: %j", (params) => {
     const container = renderCapacity(params);

@@ -130,12 +130,12 @@ describe("device placement projection", () => {
     {
       name: "remote execution remains available when every worker slot is occupied",
       requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       environment: {
         workerSlots: { total: 2, available: 0 },
-        invocableCommands: ["codex.exec-server.stdio.v1"],
+        invocableCommands: ["codex.exec-server.stdio.v2"],
       },
       selectable: true,
     },
@@ -149,11 +149,11 @@ describe("device placement projection", () => {
     {
       name: "declaring a command does not grant Gateway invocation authority",
       requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       environment: {
-        capabilities: ["codex.exec-server.stdio.v1"],
+        capabilities: ["codex.exec-server.stdio.v2"],
         invocableCommands: [],
       },
       selectable: false,
@@ -162,7 +162,7 @@ describe("device placement projection", () => {
     {
       name: "missing command authority fails closed even when worker slots are free",
       requirement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       environment: { invocableCommands: ["camera.snap"] },

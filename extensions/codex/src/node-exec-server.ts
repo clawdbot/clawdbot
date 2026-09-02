@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
+const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v2";
 
 const CODEX_NODE_EXEC_SERVER_CAPABILITY = "codex.exec-server";
 
