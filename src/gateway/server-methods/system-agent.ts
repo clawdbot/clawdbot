@@ -48,8 +48,7 @@ import {
 import type { GatewaySystemAgentSession as SystemAgentChatSession } from "./shared-types.js";
 import {
   getSystemAgentSessionQueue,
-  reconcileSystemAgentApproval,
-  resolveDelegatedSystemAgentProposal,
+  prepareDelegatedSystemAgentApproval,
 } from "./system-agent-approval.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
@@ -584,9 +583,18 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
+        let resolveProposal:
+          | Awaited<ReturnType<typeof prepareDelegatedSystemAgentApproval>>
+          | undefined;
         try {
           if (params.delegation) {
-            await reconcileSystemAgentApproval(session, context.systemAgentApprovalManager);
+            resolveProposal = await prepareDelegatedSystemAgentApproval({
+              context,
+              sessions,
+              session,
+              sessionId,
+              delegation: params.delegation,
+            });
           }
           const turnReply = await runSystemAgentChatInput({
             engine: session.engine,
@@ -631,19 +639,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const delegation = params.delegation;
         let proposalId: string | undefined;
-        if (delegation) {
+        if (resolveProposal) {
           const proposal = session.engine.getPendingOperatorProposal();
           if (proposal) {
-            const resolution = await resolveDelegatedSystemAgentProposal({
-              context,
-              sessions,
-              session,
-              sessionId,
-              delegation,
-              proposal,
-            });
+            const resolution = await resolveProposal(proposal);
             if (resolution.kind === "completed") {
               reply = resolution.reply;
             } else {

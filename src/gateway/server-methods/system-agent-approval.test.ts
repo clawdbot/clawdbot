@@ -29,7 +29,7 @@ import {
 } from "../../system-agent/system-agent.test-helpers.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
-import { resolveDelegatedSystemAgentProposal } from "./system-agent-approval.js";
+import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -49,17 +49,28 @@ afterEach(() => {
   resetAgentRunRegistryForTest();
 });
 
+async function resolveTestProposal(
+  params: Parameters<typeof prepareDelegatedSystemAgentApproval>[0] & {
+    proposal: NonNullable<
+      ReturnType<SystemAgentChatSession["engine"]["getPendingOperatorProposal"]>
+    >;
+  },
+) {
+  const resolveProposal = await prepareDelegatedSystemAgentApproval(params);
+  return await resolveProposal(params.proposal);
+}
+
 async function queueDelegatedApproval(
-  params: Parameters<typeof resolveDelegatedSystemAgentProposal>[0],
+  params: Parameters<typeof resolveTestProposal>[0],
 ): Promise<string> {
-  const resolution = await resolveDelegatedSystemAgentProposal(params);
+  const resolution = await resolveTestProposal(params);
   if (resolution.kind !== "approval") {
     throw new Error("expected a human approval request");
   }
   return resolution.id;
 }
 
-describe("resolveDelegatedSystemAgentProposal", () => {
+describe("prepareDelegatedSystemAgentApproval", () => {
   const workerTurnClaim = (claimId: string): WorkerSessionTurnClaim => ({
     sessionId: "delegate-worker",
     claimId,
@@ -258,7 +269,7 @@ describe("resolveDelegatedSystemAgentProposal", () => {
           ...(owner === "worker" ? { workerTurnClaim: workerTurnClaim("full-turn") } : {}),
         },
         () =>
-          resolveDelegatedSystemAgentProposal({
+          resolveTestProposal({
             context,
             sessions,
             session,
@@ -426,77 +437,82 @@ describe("resolveDelegatedSystemAgentProposal", () => {
     expect(applyEffect).not.toHaveBeenCalled();
   });
 
-  it("reuses an approval for a structurally equivalent worker claim", async () => {
-    const proposal = {
-      operation: { kind: "gateway-restart" as const },
-      hash: "e".repeat(64),
-    };
-    const session = {
-      engine: {
-        getPendingOperatorProposal: () => proposal,
-        resolveOperatorApproval: vi.fn().mockResolvedValue(null),
-      },
-      lastUsedAt: 1,
-      ownerKey: "agent:main:main",
-    } as unknown as SystemAgentChatSession;
-    const sessions = new Map([["delegate-worker", session]]);
-    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
-      approvalKind: "system-agent",
-      resolveAllowedDecisions: (request) => request.allowedDecisions,
-      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-    });
-    const context = {
-      systemAgentApprovalManager: manager,
-      broadcast: vi.fn(),
-      validateAgentRuntimeApprovalAuthority: () => true,
-    } as unknown as GatewayRequestContext;
-    const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");
-    claimAgentRunDelegatedAuthority(operationalRunInstance);
+  it.each([false, true])(
+    "reuses the exact worker approval with Full Access=%s",
+    async (fullPermission) => {
+      const proposal = {
+        operation: { kind: "gateway-restart" as const },
+        hash: "e".repeat(64),
+      };
+      const session = {
+        engine: {
+          getPendingOperatorProposal: () => proposal,
+          resolveOperatorApproval: vi.fn().mockResolvedValue(null),
+        },
+        lastUsedAt: 1,
+        ownerKey: "agent:main:main",
+      } as unknown as SystemAgentChatSession;
+      const sessions = new Map([["delegate-worker", session]]);
+      const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+        approvalKind: "system-agent",
+        resolveAllowedDecisions: (request) => request.allowedDecisions,
+        validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+      });
+      const context = {
+        systemAgentApprovalManager: manager,
+        broadcast: vi.fn(),
+        validateAgentRuntimeApprovalAuthority: () => true,
+      } as unknown as GatewayRequestContext;
+      const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");
+      claimAgentRunDelegatedAuthority(operationalRunInstance);
 
-    const firstClaim = workerTurnClaim("turn-2");
-    let firstApprovalId: string | undefined;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-        workerTurnClaim: firstClaim,
-      },
-      async () => {
-        firstApprovalId = await queueDelegatedApproval({
-          context,
-          sessions,
-          session,
-          sessionId: "delegate-worker",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          proposal,
-        });
-      },
-    );
-    const secondClaim = workerTurnClaim("turn-2");
-    let secondApprovalId: string | undefined;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-        workerTurnClaim: secondClaim,
-      },
-      async () => {
-        secondApprovalId = await queueDelegatedApproval({
-          context,
-          sessions,
-          session,
-          sessionId: "delegate-worker",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          proposal,
-        });
-      },
-    );
+      const firstClaim = workerTurnClaim("turn-2");
+      let firstApprovalId: string | undefined;
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          workerTurnClaim: firstClaim,
+        },
+        async () => {
+          firstApprovalId = await queueDelegatedApproval({
+            context,
+            sessions,
+            session,
+            sessionId: "delegate-worker",
+            delegation: { agentId: "main", sessionKey: "agent:main:main" },
+            proposal,
+          });
+        },
+      );
+      const secondClaim = workerTurnClaim("turn-2");
+      let secondApprovalId: string | undefined;
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          workerTurnClaim: secondClaim,
+          fullPermission,
+        },
+        async () => {
+          secondApprovalId = await queueDelegatedApproval({
+            context,
+            sessions,
+            session,
+            sessionId: "delegate-worker",
+            delegation: { agentId: "main", sessionKey: "agent:main:main" },
+            proposal,
+          });
+        },
+      );
 
-    expect(secondApprovalId).toBe(firstApprovalId);
-    expect(manager.listPendingRecords()).toHaveLength(1);
-  });
+      expect(secondApprovalId).toBe(firstApprovalId);
+      expect(manager.listPendingRecords()).toHaveLength(1);
+      expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("Full Access delegated chat", () => {
@@ -524,9 +540,17 @@ describe("Full Access delegated chat", () => {
     pluginMetadataSnapshot?.rebindForCurrentEnv();
   });
 
-  it.each(["typed", "model tool", "planner"] as const)(
-    "applies a Full Access delegated config change without requesting approval via %s",
-    async (source) => {
+  it.each([
+    ...(["typed", "model tool", "planner"] as const).flatMap((source) =>
+      (["closed", "live", "live-restricted"] as const).map((previousRun) => ({
+        source,
+        previousRun,
+      })),
+    ),
+    { source: "typed" as const, previousRun: "storage-failure" as const },
+  ])(
+    "applies Full Access via $source without inheriting a $previousRun proposal",
+    async ({ source, previousRun }) => {
       const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -696,32 +720,56 @@ describe("Full Access delegated chat", () => {
       expect(runConfigSet).toHaveBeenCalledOnce();
       expect(manager.listPendingRecords()).toHaveLength(1);
       const pending = expectDefined(manager.listPendingRecords()[0], "restricted proposal");
-      releaseAgentRunDelegatedAuthority(authority);
-      manager.forceDenyIfRuntimeAuthorityClosed(pending.id);
-      expect(manager.getSnapshot(pending.id)?.status).toBe("cancelled");
+      if (previousRun === "closed") {
+        releaseAgentRunDelegatedAuthority(authority);
+        manager.forceDenyIfRuntimeAuthorityClosed(pending.id);
+        expect(manager.getSnapshot(pending.id)?.status).toBe("cancelled");
+      }
 
-      const replacementRun = createOperationalRunInstanceRef("delegated-replacement-full-run");
-      claimAgentRunDelegatedAuthority(replacementRun);
-      const readOnlyReply = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance: replacementRun,
-          fullPermission: true,
-        },
-        () =>
-          callChat({
-            sessionId: "delegate-full",
-            message: "config get logging.level",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          }),
-      );
+      const replacementRun = createOperationalRunInstanceRef("delegated-replacement-run");
+      const replacementAuthority = claimAgentRunDelegatedAuthority(replacementRun);
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousRun !== "closed");
+      expect(validateAgentRunDelegatedAuthority(replacementAuthority)).toBe(true);
+      const readOnly = () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            operationalRunInstance: replacementRun,
+            fullPermission: previousRun !== "live-restricted",
+          },
+          () =>
+            callChat({
+              sessionId: "delegate-full",
+              message: "config get logging.level",
+              delegation: { agentId: "main", sessionKey: "agent:main:main" },
+            }),
+        );
+      if (previousRun === "storage-failure") {
+        const forceDeny = manager.forceDenyIfRuntimeAuthorityClosed.bind(manager);
+        const storageFailure = vi
+          .spyOn(manager, "forceDenyIfRuntimeAuthorityClosed")
+          .mockImplementation((id) => {
+            if (!delegatedSession.pendingApproval) {
+              manager.forceDenyDetailed(id, "storage-corrupt", { kind: "system", id: null });
+              throw new Error("approval storage unavailable");
+            }
+            return forceDeny(id);
+          });
+        await expect(readOnly()).rejects.toThrow("approval storage unavailable");
+        expect(engine.getPendingOperatorProposal()).toBeNull();
+        storageFailure.mockRestore();
+      }
+      const readOnlyReply = await readOnly();
       expect(readOnlyReply.error).toBeUndefined();
       expect(readOnlyReply.payload).toMatchObject({
         reply: expect.stringContaining("logging.level: not set"),
       });
       expect(runConfigSet).toHaveBeenCalledOnce();
       expect(engine.getPendingOperatorProposal()).toBeNull();
+      expect(manager.listPendingRecords()).toEqual([]);
+      expect(manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousRun !== "closed");
     },
   );
 });
