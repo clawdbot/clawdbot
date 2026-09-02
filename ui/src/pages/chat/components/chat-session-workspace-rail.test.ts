@@ -37,7 +37,7 @@ describe("session workspace path actions", () => {
     expect(skeleton).toBeInstanceOf(HTMLElement);
     await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
-    expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+    expect(skeleton?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
     expect(mount.textContent).not.toContain("Loading session workspace");
   });
 
