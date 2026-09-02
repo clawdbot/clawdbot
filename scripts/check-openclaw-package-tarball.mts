@@ -334,27 +334,33 @@ function runPhase<Result>(label: string, action: () => Result): Result {
   }
 }
 
-const list = runPhase("tar list", () =>
-  spawnSync("tar", ["-tf", tarball], {
-    encoding: "utf8",
-    maxBuffer: TAR_LIST_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-  }),
-);
-if (list.status !== 0) {
-  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.error?.message || list.status}`);
+// Stream npm's gzip archives without changing cwd: tar and its decompressor must
+// retain caller PATH semantics. Only -C needs GNU tar's forward-slash encoding.
+function runTar(label: string, mode: "-tzf" | "-tvzf" | "-xzf", destination?: string) {
+  const directoryArgs = destination ? ["-C", destination.split(path.sep).join("/")] : [];
+  return runPhase(label, () => {
+    const inputFd = fs.openSync(tarball, "r");
+    try {
+      return spawnSync("tar", [mode, "-", ...directoryArgs], {
+        encoding: "utf8",
+        ...(mode === "-xzf" ? {} : { maxBuffer: TAR_LIST_MAX_BUFFER_BYTES }),
+        stdio: [inputFd, "pipe", "pipe"],
+      });
+    } finally {
+      fs.closeSync(inputFd);
+    }
+  });
 }
 
-const verboseList = runPhase("tar mode list", () =>
-  spawnSync("tar", ["-tvf", tarball], {
-    encoding: "utf8",
-    maxBuffer: TAR_LIST_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-  }),
-);
+const list = runTar("tar list", "-tzf");
+if (list.status !== 0) {
+  fail(`tar -tzf failed for ${tarball}: ${list.stderr || list.error?.message || list.status}`);
+}
+
+const verboseList = runTar("tar mode list", "-tvzf");
 if (verboseList.status !== 0) {
   fail(
-    `tar -tvf failed for ${tarball}: ${verboseList.stderr || verboseList.error?.message || verboseList.status}`,
+    `tar -tvzf failed for ${tarball}: ${verboseList.stderr || verboseList.error?.message || verboseList.status}`,
   );
 }
 
@@ -385,15 +391,10 @@ function collectTarballEntryModeErrors(verboseListing: string): string[] {
 
 const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
 try {
-  const extract = runPhase("tar extract", () =>
-    spawnSync("tar", ["-xf", tarball, "-C", extractDir], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
+  const extract = runTar("tar extract", "-xzf", extractDir);
   if (extract.status !== 0) {
     fs.rmSync(extractDir, { recursive: true, force: true });
-    fail(`tar -xf failed for ${tarball}: ${extract.stderr || extract.status}`);
+    fail(`tar -xzf failed for ${tarball}: ${extract.stderr || extract.status}`);
   }
 } catch (error) {
   fs.rmSync(extractDir, { recursive: true, force: true });
