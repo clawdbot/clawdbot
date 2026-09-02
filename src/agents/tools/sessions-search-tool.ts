@@ -55,7 +55,13 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
 const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
   sessionKey: Type.Optional(Type.String()),
-  limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
+  // No schema-level `maximum`: exceeding it here would fail generic schema
+  // validation (packages/agent-core/src/agent-loop.ts) before execute() runs,
+  // masking the actionable error below. The bound is still advertised via
+  // description and enforced with a clear message at execute time.
+  limit: optionalPositiveIntegerSchema({
+    description: `Positive integer; maximum ${SESSIONS_SEARCH_MAX_LIMIT}.`,
+  }),
 });
 
 const SessionsSearchHitSchema = Type.Object(
