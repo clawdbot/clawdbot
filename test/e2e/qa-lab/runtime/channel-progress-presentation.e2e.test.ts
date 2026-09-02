@@ -9,6 +9,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -81,7 +82,7 @@ async function startPresentationApi(
         wire.accepted = {
           id,
           action,
-          text: String(message?.text ?? message?.content ?? "").slice(0, 250),
+          text: (readStringValue(message?.text ?? message?.content) ?? "").slice(0, 250),
         };
       };
       const reply = (result: unknown, status = 200) => {
@@ -115,9 +116,9 @@ async function startPresentationApi(
           };
           const text = readChunks(body.chunks)
             .filter((chunk) => chunk.type === "markdown_text")
-            .map((chunk) => String(chunk.text ?? ""))
+            .map((chunk) => readStringValue(chunk.text) ?? "")
             .join("");
-          messages.set(ts, { ...previous, text: String(previous.text ?? "") + text });
+          messages.set(ts, { ...previous, text: (readStringValue(previous.text) ?? "") + text });
           recordAccepted(ts, operation);
           reply({ ok: true, channel: body.channel, ts });
           return;
@@ -240,7 +241,9 @@ async function startPresentationApi(
           listener,
         )
       : createServer(listener);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("presentation API did not bind a loopback port");
@@ -276,7 +279,9 @@ async function startPresentationApi(
     socket.on("error", () => upstream.destroy());
     socket.on("close", () => upstream.destroy());
   });
-  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    proxy.listen(0, "127.0.0.1", resolve);
+  });
   const proxyAddress = proxy.address();
   if (!proxyAddress || typeof proxyAddress === "string") {
     throw new Error("proxy failed to bind");
@@ -290,13 +295,13 @@ async function startPresentationApi(
       for (const socket of tunnelSockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        proxy.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        proxy.close((error) => (error ? reject(error) : resolve()));
+      });
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -402,12 +407,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
         recorderPath: path.join(directory, "provider.jsonl"),
       });
       cleanups.push(() => adapter.close());
-      let clearOrigin: (() => Promise<void>) | undefined;
       let originCleared = false;
       const api = await startPresentationApi(adapter, writes, directory, rejectStop, async () => {
-        if (!clearOrigin) {
-          throw new Error("origin-loss gate has no admitted session");
-        }
         await clearOrigin();
         originCleared = true;
       });
@@ -462,7 +463,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           })
         );
       }, `${channel} ready`);
-      clearOrigin = async () => {
+      const clearOrigin = async () => {
         const scope = {
           agentId: "qa",
           env: gateway.runtimeEnv,
@@ -530,7 +531,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         writes.filter((write) => JSON.stringify(write.body).includes(FINAL_MARKER));
       const finalMessages = () =>
         [...api.messages.values()].filter((message) =>
-          String(message.text ?? message.content ?? "").includes(FINAL_MARKER),
+          (readStringValue(message.text ?? message.content) ?? "").includes(FINAL_MARKER),
         );
       if (!rejectStop) {
         await waitForFact(() => finalMessages().length > 0, "accepted final answer");
@@ -558,7 +559,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const progressText = progressWrites
         .map(({ body }) =>
           channel === "discord"
-            ? String(body.content ?? "")
+            ? (readStringValue(body.content) ?? "")
             : [
                 body.text,
                 JSON.stringify(readChunks(body.blocks)),
@@ -604,16 +605,17 @@ describe("channel progress presentation through an isolated Gateway", () => {
                   .filter((key) => body[key] !== undefined)
                   .map((key) => [
                     key,
-                    String(
-                      typeof body[key] === "string" ? body[key] : JSON.stringify(body[key]),
-                    ).slice(0, 250),
+                    (typeof body[key] === "string" ? body[key] : JSON.stringify(body[key])).slice(
+                      0,
+                      250,
+                    ),
                   ]),
               ),
-              ...(accepted ? { accepted } : {}),
+              accepted,
             })),
             acceptedMessages: [...api.messages].slice(-80).map(([id, message]) => ({
               id,
-              text: String(message.text ?? message.content ?? "").slice(0, 250),
+              text: (readStringValue(message.text ?? message.content) ?? "").slice(0, 250),
             })),
           },
           null,
