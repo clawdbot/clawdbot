@@ -196,9 +196,12 @@ the effective authored config after includes and environment substitution, befor
 are applied.
 
 The two expectation flags are mutually exclusive. They apply only to a single `config set`
-operation and cannot be combined with batch mode or `--dry-run`. A mismatch exits with status 1,
-writes nothing, and does not print either the expected or current value. OpenClaw's config snapshot
-guard still rejects a later race between the expectation check and the final file replacement.
+operation, require a direct non-redirected config path, and cannot be combined with batch mode or
+`--dry-run`. If input or roster resolution would write a different path than the caller requested,
+such as a sibling `*Ref` path, the command exits with status 1 instead of retargeting the
+expectation. A mismatch exits with status 1, writes nothing, and does not print either the expected
+or current value. OpenClaw's config snapshot guard still rejects a later race between the
+expectation check and the final file replacement.
 
 ## `config set` modes
 

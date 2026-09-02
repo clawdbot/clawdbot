@@ -264,6 +264,15 @@ function assertConfigSetCurrentExpectation(params: {
   }
 }
 
+function assertConfigSetCurrentExpectationPath(params: {
+  operation: ConfigSetOperation;
+  writePath: readonly PathSegment[];
+}): void {
+  if (!pathEquals(params.operation.requestedPath, params.writePath)) {
+    throw new Error("conditional config set requires a direct, non-redirected config path");
+  }
+}
+
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
@@ -328,6 +337,12 @@ export async function runConfigOperations(params: {
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
+    if (currentExpectation) {
+      assertConfigSetCurrentExpectationPath({
+        operation,
+        writePath: roster.writePath(operation.setPath),
+      });
+    }
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
       const unsetResult = unsetAtPath(next, operation.setPath);

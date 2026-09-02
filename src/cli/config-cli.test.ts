@@ -1366,6 +1366,82 @@ describe("config cli", () => {
       ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
+
+    it("rejects an absent expectation when a SecretRef redirects away from the caller path", async () => {
+      const existingValue = "caller-value-present";
+      const refId = "REDIRECTED_REF_ID";
+      const resolved = {
+        channels: { discord: { accounts: [{ token: existingValue }] } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet(
+          "channels.discord.accounts[0].token",
+          "--ref-provider",
+          "default",
+          "--ref-source",
+          "env",
+          "--ref-id",
+          refId,
+          "--expect-current-absent",
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set requires a direct, non-redirected config path");
+      const output = JSON.stringify([...mockLog.mock.calls, ...mockError.mock.calls]);
+      expect(output).not.toContain(existingValue);
+      expect(output).not.toContain(refId);
+    });
+
+    it("rejects an exact expectation when a SecretRef value redirects the write path", async () => {
+      const existingValue = "caller-exact-value";
+      const refId = "REDIRECTED_EXACT_REF_ID";
+      const resolved = {
+        channels: { discord: { accounts: [{ token: existingValue }] } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet(
+          "channels.discord.accounts[0].token",
+          JSON.stringify({ source: "env", provider: "default", id: refId }),
+          "--strict-json",
+          "--expect-current-json",
+          JSON.stringify(existingValue),
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set requires a direct, non-redirected config path");
+      const output = JSON.stringify([...mockLog.mock.calls, ...mockError.mock.calls]);
+      expect(output).not.toContain(existingValue);
+      expect(output).not.toContain(refId);
+    });
+
+    it("rejects an exact expectation when roster normalization redirects the write path", async () => {
+      const existingValue = "existing-agent-name";
+      const resolved: OpenClawConfig = {
+        agents: { entries: { main: { name: existingValue } } },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigSet(
+          "agents.list[0].name",
+          "updated-agent-name",
+          "--expect-current-json",
+          JSON.stringify(existingValue),
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("conditional config set requires a direct, non-redirected config path");
+      const output = JSON.stringify([...mockLog.mock.calls, ...mockError.mock.calls]);
+      expect(output).not.toContain(existingValue);
+      expect(output).not.toContain("updated-agent-name");
+    });
   });
 
   describe("config get", () => {
